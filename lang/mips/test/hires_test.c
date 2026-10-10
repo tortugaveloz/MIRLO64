@@ -1,10 +1,11 @@
-/* The scan-out's hi-res sizes (rtl/soc/n64_video.sv, VIDEO_FRAMEBUFFER_WIDTH
- * bit 17 and _WINDOW): in turn -- every one goes out in the one 320 x 240 frame
- *   1  640 x 480 interlaced: the first field alone (the even rows), pixel pairs averaged
- *   2  640 x 240 (non-interlaced): pixel pairs averaged
- *   3  640 x 480i with a 474-row window (237 a field, a black line above)
- *   4  320 x 240
- *   5  292 x 216 inside 320 x 240 (a framebuffer smaller than its frame)
+/* The scan-out's sizes (rtl/soc/n64_video.sv: VIDEO_FRAMEBUFFER_WIDTH, _WINDOW, _HWINDOW, _SCALE and _ROWWORDS), in turn -- every
+ * one goes out in the one 640 x 240 field, as the N64's VI shows it:
+ *   1  640 x 480: Y_SCALE 2.0, the even rows (an interlaced picture's first field)
+ *   2  640 x 240: X_SCALE 1.0, Y_SCALE 1.0
+ *   3  320 x 240: X_SCALE 0.5, each pixel two clocks wide, 237 lines (a line short of the field's 240: the VI's own window)
+ *   4  292 x 216 inside it (a framebuffer smaller than its frame: Banjo-Kazooie's way)
+ *   5  440 x 330 whole: X_SCALE 0.6875, Y_SCALE 1.375 (GoldenEye's)
+ *   6  384 x 240 in a 597 clock, 222 line window at (20, 9): X_SCALE 0x20E (Mario Tennis')
  * The picture: a white frame at its edge, a diagonal, a vertical line every 16
  * pixels, a tick at each row that is a multiple of 8 on the left edge (long:
  * 64), odd rows with their blue lowered -- a weave of the two fields shows as
@@ -21,8 +22,9 @@ void trap_handler(void) { puts_("TRAP\n"); for (;;) ; }
 
 #define FB ((volatile uint16_t *)0x40C00000u)
 #define HOLD 4u                          /* twentieths of a second a size stays */
-static const struct { uint16_t w, h, win_rows, tall; } s_m[] = {
-    { 640, 480, 0, 1 }, { 640, 240, 0, 0 }, { 640, 480, 474, 1 }, { 320, 240, 0, 0 }, { 292, 216, 216, 0 },
+static const struct { uint16_t w, h, xs, ys, px0, pw, y0, rows; } s_m[] = {
+    { 640, 480, 0x400, 0x800, 0, 640, 0, 237 }, { 640, 240, 0x400, 0x400, 0, 640, 0, 0 }, { 320, 240, 0x200, 0x400, 0, 640, 0, 237 },
+    { 292, 216, 0x200, 0x400, 28, 584, 12, 216 }, { 440, 330, 0x2C0, 0x580, 0, 640, 0, 237 }, { 384, 240, 0x20E, 0x400, 20, 597, 9, 222 },
 };
 
 int main(void)
@@ -42,14 +44,13 @@ int main(void)
             FB[y * w + x] = c;                      /* (big-endian: pixel x is the word's high half when x is even) */
         }
         flush_cpu_dcache();
-        if (w >= 512u) {
-            /* (an interlaced picture's window is a field's: half its rows) */
-            const uint32_t r = s_m[i].tall ? s_m[i].win_rows / 2u : s_m[i].win_rows;
-            video_framebuffer_window_write(r ? ((240u - r) / 2u) << 8 | r << 16 : 0u);
-            video_framebuffer_width_write(w | (s_m[i].tall ? 1u << 17 : 0u));
-        } else {
-            video_framebuffer_window_write(w < 320u ? (320u - w) / 2u | ((240u - h) / 2u) << 8 | (h < 240u ? h : 0u) << 16 : 0u);
-            video_framebuffer_width_write(w < 320u ? w : 0u);
+        {
+            const uint32_t xs = s_m[i].xs, pw = s_m[i].pw, smax = ((pw - 1u) * xs) >> 10;
+            video_framebuffer_scale_write(xs | (uint32_t)s_m[i].ys << 16);
+            video_framebuffer_hwindow_write(s_m[i].px0 | pw << 16);
+            video_framebuffer_window_write((uint32_t)s_m[i].y0 << 8 | (uint32_t)s_m[i].rows << 16);
+            video_framebuffer_rowwords_write((smax + 8u) / 2u + 1u);
+            video_framebuffer_width_write(w);
         }
         puts_("size "); putc_('1' + (char)i); puts_("\n");
         timer0_uptime_latch_write(1);

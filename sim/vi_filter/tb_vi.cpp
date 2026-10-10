@@ -1,14 +1,22 @@
-// rtl/soc/n64_video.sv with MIRLO_VI_AA against a model of the N64 VI's
-// anti-alias and divot filters (the VI_filter / VI_filter_pen behaviour, with the
-// coverage of a partial pixel taken as 3: the framebuffer keeps one bit).
-//   tb_vi [seed] [divot 0/1] [partial %] [width: 320, 640 (x 480, the two fields woven) or 640p (x 240)] [dedither 0/1]
-//   TB_PAL=1: vi_pal on from the start (PAL timing: 313 lines, 1,250,000 sys clocks a field); TB_SEQ=0,1,1,0,...: vi_pal set to the
-//   n-th value at the n-th vsync (the TV system changes at the end of the field: the fields are checked line by line)
-// A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out
-// through the DMA port; a frame is taken off the pads and every pixel compared.
-// 640 / 640p: a hi-res buffer is always shown in the 320 x 240 frame (rtl/soc/n64_video.sv): the pixel (x, y) is the
-// average of the buffer's (2x, 2y) and (2x + 1, 2y) per channel, (a + b + 1) >> 1 (640: the first field's rows), and the
-// VI's filters are off for it: the model is that average << 3. The pads outside DE are 0 (one scaler slot, no frame feature bits) in every mode.
+// rtl/soc/n64_video.sv with MIRLO_VI_AA against a model of the N64 VI's picture: the window in the 640 x 240 field, the VI's
+// X_SCALE / Y_SCALE steps through the framebuffer (nearest pixel and row), and its anti-alias, dither and divot filters
+// (the VI_filter / VI_filter_pen behaviour, with the coverage of a partial pixel taken as 3: the framebuffer keeps one bit).
+//   tb_vi [seed] [divot 0/1] [partial %] [width] [dedither 0/1]
+// width: the framebuffer's pitch in pixels -- 320 (X_SCALE 0x200: doubled), 440 (GoldenEye's: 0x2C0 and Y_SCALE 0x580), 384
+// (Mario Tennis': 0x20E in a 597-clock window), 640 (hi-res, filters off: X_SCALE 0x400), or any other; `640p` a 640 x 240
+// buffer, plain 640 a 480-row one whose even rows are shown (Y_SCALE 0x800: a hi-res picture without SERRATE). A serrated
+// picture (VI_CTRL SERRATE, vi_avg) is `640s` (a 640-pitch 640 x 480 buffer, the runtime's Y_SCALE 2.0 = 0x7FF: Stadium's, libultra's
+// interlaced modes) or `1280s` (WIDTH 1280, Y_SCALE 1.0: two rows of 640 a pitch, Donkey Kong 64's): its line k is the average
+// of the picture's rows 2k and 2k + 1, per channel (a + b + 1) >> 1, 640 x 240 progressive (no 480i); `640ps`, a 240-row buffer
+// with SERRATE, is not a pair of fields and is shown as it is (as is any other pitch, `704s`).
+//   env: TB_XS, TB_YS (the steps, hex), TB_PX0, TB_PW (the window in the line, clocks), TB_Y0, TB_ROWS (its lines),
+//   TB_LOAD=n: n other masters on the SDRAM, each granted 16 words in turn (the arbiter's round robin, MAXB 16): the scan-out has a
+//   word each cycle for 16 cycles, then none for 16 n (TB_RDY=p: instead each cycle's request is taken with a probability of p %),
+//   TB_CROPV, TB_CROPR (the core's crop options), TB_PAL=1: vi_pal on from the start (PAL timing: 313 lines, 1,250,000 sys
+//   clocks a field), TB_SEQ=0,1,1,0,...: vi_pal set to the n-th value at the n-th vsync (the TV system changes at the
+//   end of the field: the fields are checked line by line), TB_DUMP=prefix, TB_V.
+// A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out through the DMA port; a frame is taken off
+// the pads and every pixel compared. The pads outside DE are 0 (one scaler slot, no frame feature bits, no 480i) in every mode.
 #include "Vn64_video.h"
 #include "verilated.h"
 #include <cstdio>
@@ -19,45 +27,58 @@
 #include <cstring>
 
 static Vn64_video *t;
-static std::vector<uint16_t> fb;
-static std::vector<uint8_t> hid;                    // each pixel's hidden two coverage bits (the RDP's plane)
-static unsigned cvg(int x, int y);
-static unsigned W = 320, H = 240;                 // the picture shown (the frame)
-static unsigned WB = 320;                         // the buffer's width (VI_WIDTH)
-static bool hi;                                   // a hi-res buffer (640): reduced to 320 x 240, the filters off
-static bool tall;                                 // 640 x 480 (the first field is shown), else 640 x 240
-static std::vector<uint16_t> fbw;                 // (the buffer; fb / hid are the picture shown)
-static std::vector<uint8_t> hidw;
+static unsigned WB = 320;                         // the buffer's pitch (VI_WIDTH)
+static unsigned XS = 0x200, YS = 0x400;           // the VI's steps
+static unsigned PX0 = 0, PW = 640, Y0 = 0, R = 240;   // the picture's window: its first clock in the line, its clocks, its first line, its lines
+static unsigned HB;                               // the buffer's rows
+static bool nofilt;                               // a hi-res picture (512 pixels or more a row): the filters are off
+static bool ser, avg;                             // SERRATE (vi_avg), and the rows' pairs are averaged (WIDTH 1280, or 640 with Y_SCALE 2.0)
+static unsigned LOAD = 0, RDY = 75;               // the SDRAM's load: TB_LOAD, TB_RDY
+static std::vector<uint16_t> fbw;                 // the buffer
+static std::vector<uint8_t> hidw;                 // each pixel's hidden two coverage bits (the RDP's plane)
 static unsigned rng = 1;
 static int pal0;                                  // TB_PAL
 static std::vector<int> seq;                      // TB_SEQ
 static int sys_of(int j) { return j <= 0 ? 0 : seq.empty() ? 0 : seq[(size_t)j < seq.size() ? j : seq.size() - 1]; }   // the system of the field F_j
 static unsigned rnd() { rng = rng * 1103515245u + 12345u; return rng >> 16; }
+static unsigned CV = 0, CR = 0;                   // TB_CROPV, TB_CROPR: the core's crop options (lines at top and bottom; right pixels, two clocks each)
 
-// the model: R6 G6 B6 (the pads: R, B their top five)
+// the model: R8 G8 B8
 struct P6 { int r, g, b; };
 static int ch(uint16_t p, int c) { return c == 0 ? (p >> 11) & 31 : c == 1 ? (p >> 6) & 31 : (p >> 1) & 31; }
 static int rowerr[480];
-static unsigned R = 0;                              // TB_ROWS: the picture's rows (VI window), the rest black
-static unsigned Y0 = 0;                             // TB_Y0: its first line on the screen
-static unsigned CV = 0, CR = 0;                     // TB_CROPV, TB_CROPR: the core's crop options (lines at top and bottom, x2 at 480; right pixels)
-static bool inpic(int x, int y) { return x >= 0 && y >= 0 && x < (int)W && y < (int)(R ? R : H); }
-static unsigned cvg(int x, int y) { return (fb[y * W + x] & 1u) << 2 | hid[y * W + x]; }
-static bool complete(int x, int y) { return cvg(x, y) == 7u; }
-static int dedither;                                // the VI's dither filter (argument 5)
-static P6 aa_px(int x, int y)
+// the pixel (x, r) of the buffer: x from the row's start, which runs on into the next row (the reads are contiguous);
+// the picture's rows are the fetched rows f(j) = (j Y_SCALE) >> 10, one per line of the window
+static unsigned frow(int j) { return ((unsigned)j * YS) >> 10; }
+// a serrated picture's pair: the picture's rows 2j and 2j + 1 (640 pixels each, whatever the pitch: a pitch of 1280 holds two of them)
+static P6 avgpx(int x, int j)
 {
-    uint16_t c = fb[y * W + x];
+    P6 o;
+    const size_t i0 = (size_t)(2 * j) * 640 + (size_t)x, i1 = i0 + 640;
+    const uint16_t a = i0 < fbw.size() ? fbw[i0] : 0, b = i1 < fbw.size() ? fbw[i1] : 0;
+    o.r = ((ch(a, 0) + ch(b, 0) + 1) >> 1) << 3; o.g = ((ch(a, 1) + ch(b, 1) + 1) >> 1) << 3; o.b = ((ch(a, 2) + ch(b, 2) + 1) >> 1) << 3;
+    return o;
+}
+static uint16_t pxv(int x, unsigned r) { size_t i = (size_t)r * WB + (size_t)x; return i < fbw.size() ? fbw[i] : 0; }
+static unsigned hidv(int x, unsigned r) { size_t i = (size_t)r * WB + (size_t)x; return i < hidw.size() ? hidw[i] : 0; }
+// a tap of the filters: the pixel (x, line j) of the window's source, in the picture if x >= 0 and the line j is a line of the window
+static bool intap(int x, int j) { return x >= 0 && j >= 0 && j < (int)R; }
+static unsigned cvg(int x, int j) { return (pxv(x, frow(j)) & 1u) << 2 | hidv(x, frow(j)); }
+static bool complete(int x, int j) { return cvg(x, j) == 7u; }
+static int dedither;                                // the VI's dither filter (argument 5)
+static P6 aa_px(int x, int j)
+{
+    uint16_t c = pxv(x, frow(j));
     P6 o;
     int *po[3] = { &o.r, &o.g, &o.b };
-    if (complete(x, y)) {                            // complete: as it is (8 bits: c << 3, the N64's), or dedithered
+    if (complete(x, j)) {                            // complete: as it is (8 bits: c << 3, the N64's), or dedithered
         for (int k = 0; k < 3; k++) {
             int cc = ch(c, k), v = cc << 3;
             if (dedither) {
                 int add = 0;
                 for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
-                    if ((!dx && !dy) || !inpic(x + dx, y + dy)) continue;
-                    int n = ch(fb[(y + dy) * W + x + dx], k);
+                    if ((!dx && !dy) || !intap(x + dx, j + dy)) continue;
+                    int n = ch(pxv(x + dx, frow(j + dy)), k);
                     add += n > cc ? 1 : n < cc ? -1 : 0;
                 }
                 v = (cc << 3) + add; if (v > 255) v = 255;
@@ -70,21 +91,36 @@ static P6 aa_px(int x, int y)
     for (int k = 0; k < 3; k++) {
         int v[6], cc = ch(c, k);
         for (int i = 0; i < 6; i++) {
-            int xx = x + dx[i], yy = y + dy[i];
-            v[i] = (inpic(xx, yy) && complete(xx, yy)) ? ch(fb[yy * W + xx], k) : cc;
+            int xx = x + dx[i], yy = j + dy[i];
+            v[i] = (intap(xx, yy) && complete(xx, yy)) ? ch(pxv(xx, frow(yy)), k) : cc;
         }
         // second smallest, second largest
         int s[6]; for (int i = 0; i < 6; i++) s[i] = v[i];
-        for (int i = 0; i < 6; i++) for (int j = i + 1; j < 6; j++) if (s[j] < s[i]) { int q = s[i]; s[i] = s[j]; s[j] = q; }
+        for (int i = 0; i < 6; i++) for (int jj = i + 1; jj < 6; jj++) if (s[jj] < s[i]) { int q = s[i]; s[i] = s[jj]; s[jj] = q; }
         int mn = s[1] < cc ? s[1] : cc, mx = s[4] > cc ? s[4] : cc;
         // the N64's, on 8-bit channels (c << 3): c8 + ((mn8 + mx8 - 2 c8) * (7 - cvg) + 4) >> 3; its top six bits
-        int c8 = cc << 3, w = 7 - (int)cvg(x, y);
+        int c8 = cc << 3, w = 7 - (int)cvg(x, j);
         int o8 = c8 + (int)floor(((double)(((mn << 3) + (mx << 3) - 2 * c8) * w) + 4.0) / 8.0);
         *po[k] = o8;
     }
     return o;
 }
 static int med3(int a, int b, int c) { int s[3] = { a, b, c }; for (int i = 0; i < 3; i++) for (int j = i + 1; j < 3; j++) if (s[j] < s[i]) { int q = s[i]; s[i] = s[j]; s[j] = q; } return s[1]; }
+// the pixel the pads show: window pixel i of line j (the source pixel (i X_SCALE) >> 10)
+static P6 model(int sx, int j, bool divot)
+{
+    if (avg) return avgpx(sx, j);
+    if (nofilt) { uint16_t c = pxv(sx, frow(j)); return P6{ ch(c, 0) << 3, ch(c, 1) << 3, ch(c, 2) << 3 }; }
+    P6 e = aa_px(sx, j);
+    if (divot) {
+        bool part = !complete(sx, j) || (sx > 0 && !complete(sx - 1, j)) || !complete(sx + 1, j);
+        if (part) {
+            P6 l = sx > 0 ? aa_px(sx - 1, j) : e, r = aa_px(sx + 1, j);
+            e.r = med3(l.r, e.r, r.r); e.g = med3(l.g, e.g, r.g); e.b = med3(l.b, e.b, r.b);
+        }
+    }
+    return e;
+}
 
 static uint64_t sys_cyc;
 static uint64_t pad_hash = 1469598103934665603ull;      // FNV over every pad word and sync of the run (NTSC: the same before and after the PAL change)
@@ -95,14 +131,15 @@ static void tick()
     t->clk = 0; if (vph == 0) t->clk_vid = 0; t->eval();
     // the DMA: a read's word 4 sys cycles on
     static std::vector<std::pair<uint64_t, uint32_t>> pend;
-    t->m_ready = (rnd() % 4) != 0;
+    static unsigned ph = 0;                          // (TB_LOAD: the cycle in the round of 16 (n + 1))
+    t->m_ready = LOAD ? (ph++ % (16 * (LOAD + 1))) < 16 : (rnd() % 100) < RDY;
     if (t->m_valid && t->m_ready) {
         uint32_t a = t->m_addr;                     // word address
         uint32_t i = a * 2, w = 0;
         if (a >= 0xDC0000u && a < 0xE00000u) {      // the hidden plane (SDRAM 0x0370_0000): pixels 16 (a - base) on
             uint32_t p0 = (a - 0xDC0000u) * 16u;
             for (uint32_t k = 0; k < 16; k++) if (p0 + k < hidw.size()) w |= (uint32_t)hidw[p0 + k] << (2 * k);
-        } else if (i + 1 < fbw.size()) w = (uint32_t)fbw[i] << 16 | fbw[i + 1];   // (the buffer: the woven one at 640)
+        } else if (i + 1 < fbw.size()) w = (uint32_t)fbw[i] << 16 | fbw[i + 1];
         pend.push_back({ sys_cyc + 4 + rnd() % 8, w });
     }
     t->m_rvalid = 0;
@@ -117,37 +154,43 @@ int main(int argc, char **argv)
     unsigned seed = argc > 1 ? atoi(argv[1]) : 1;
     int divot = argc > 2 ? atoi(argv[2]) : 0;
     int pct = argc > 3 ? atoi(argv[3]) : 30;
-    if (argc > 4 && atoi(argv[4]) == 640) { WB = 640; hi = true; tall = strcmp(argv[4], "640p") != 0; }   // hi-res: a 640 x 480 buffer (the fields woven) or 640 x 240
-    if (getenv("TB_ROWS")) R = (unsigned)atoi(getenv("TB_ROWS"));
+    bool p640 = false;                               // "640p": a 640 x 240 buffer (else a 480-row one, its even rows shown)
+    if (argc > 4) {
+        WB = (unsigned)atoi(argv[4]); p640 = strstr(argv[4], "640p") != 0; ser = strchr(argv[4], 's') != 0;
+    }
+    if (WB == 440) { XS = 0x2C0; YS = 0x580; }
+    if (WB == 384) { XS = 0x20E; YS = 0x400; PX0 = 20; PW = 597; Y0 = 9; R = 222; }
+    if (WB >= 512) { XS = 0x400; YS = p640 ? 0x400 : 0x800; }
+    if (ser && WB == 640 && !p640) YS = 0x7FF;       // (the runtime's 2.0: the 11 bits' largest)
+    if (ser && WB == 1280) YS = 0x400;
+    nofilt = WB >= 512;
+    auto env = [](const char *n, unsigned &v, int base) { if (const char *e = getenv(n)) v = (unsigned)strtoul(e, 0, base); };
+    env("TB_XS", XS, 16); env("TB_YS", YS, 16); env("TB_PX0", PX0, 10); env("TB_PW", PW, 10); env("TB_Y0", Y0, 10); env("TB_ROWS", R, 10);
+    env("TB_CROPV", CV, 10); env("TB_CROPR", CR, 10);
     dedither = argc > 5 ? atoi(argv[5]) : 0;
-    if (getenv("TB_Y0")) Y0 = (unsigned)atoi(getenv("TB_Y0"));
-    if (getenv("TB_CROPV")) CV = (unsigned)atoi(getenv("TB_CROPV"));
-    if (getenv("TB_CROPR")) CR = (unsigned)atoi(getenv("TB_CROPR"));
+    if (const char *e = getenv("TB_LOAD")) LOAD = (unsigned)atoi(e);
+    if (const char *e = getenv("TB_RDY")) RDY = (unsigned)atoi(e);
+    avg = ser && (WB == 1280 || (WB == 640 && YS >= 0x600));   // (any other pitch is not a multiple of the 640-pixel rows: the nearest row)
     rng = seed * 2654435761u + 7;
     pal0 = getenv("TB_PAL") ? atoi(getenv("TB_PAL")) : 0;
     if (const char *q = getenv("TB_SEQ")) for (; *q; q++) if (*q == '0' || *q == '1') seq.push_back(*q - '0');
-    const unsigned HB = hi && tall ? 480 : 240;      // the buffer's rows
-    fbw.resize(WB * HB); hidw.resize(WB * HB);
+    HB = frow((int)R) + 4;                           // the buffer's rows
+    if (avg && HB < 2 * R + 4) HB = 2 * R + 4;
+    const unsigned smax = (((PW - 1) * XS) >> 10);   // the window's last source pixel
+    const unsigned NW = (smax + 8) / 2 + 1;          // the words a row reads: its priming's seven pixels and the window's, and one more
+    fbw.resize((size_t)WB * HB + 4096); hidw.resize((size_t)WB * HB + 4096);
     // patches of colour with partial pixels, and noise
-    for (unsigned y = 0; y < HB; y++)
-        for (unsigned x = 0; x < WB; x++) {
-            uint16_t v = (uint16_t)(rnd() & 0xFFFE);
-            if ((rnd() % 4) && x > 0) v = fbw[y * WB + x - 1] & 0xFFFE;
-            unsigned c = (int)(rnd() % 100) >= pct ? 7u : rnd() % 7u;      // complete, or a partial coverage 0..6
-            fbw[y * WB + x] = v | (uint16_t)(c >> 2);
-            hidw[y * WB + x] = (uint8_t)(c & 3u);
-        }
-    fb.resize(W * H); hid.resize(W * H);
-    for (unsigned y = 0; y < H; y++) for (unsigned x = 0; x < W; x++) {       // the picture shown: the buffer, or reduced
-        unsigned sx = hi ? 2 * x : x, sy = hi && tall ? 2 * y : y;
-        uint16_t a = fbw[sy * WB + sx], b = hi ? fbw[sy * WB + sx + 1] : a;
-        auto av = [&](int k) { return (ch(a, k) + ch(b, k) + 1) >> 1; };
-        fb[y * W + x] = hi ? (uint16_t)(av(0) << 11 | av(1) << 6 | av(2) << 1 | ((a & b) & 1u)) : a;
-        hid[y * W + x] = hidw[sy * WB + sx];
+    for (size_t i = 0; i < fbw.size(); i++) {
+        uint16_t v = (uint16_t)(rnd() & 0xFFFE);
+        if ((rnd() % 4) && i > 0) v = fbw[i - 1] & 0xFFFE;
+        unsigned c = (int)(rnd() % 100) >= pct ? 7u : rnd() % 7u;      // complete, or a partial coverage 0..6
+        fbw[i] = v | (uint16_t)(c >> 2);
+        hidw[i] = (uint8_t)(c & 3u);
     }
     t = new Vn64_video;
-    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_width = WB; t->vi_tall = hi && tall; t->vi_black = 0;
-    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->vi_lines = 240; t->vi_x0 = 0; t->vi_y0 = Y0; t->vi_rows = R;
+    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_avg = ser; t->vi_width = WB; t->vi_black = 0;
+    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->vi_lines = 240;
+    t->vi_px0 = PX0; t->vi_pw = PW; t->vi_y0 = Y0; t->vi_rows = R == 240 ? 0 : R; t->vi_xs = XS; t->vi_ys = YS; t->vi_nw = NW;
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
     for (int i = 0; i < 200; i++) tick();
     t->rst = 0; t->rst_vid = 0;
@@ -179,10 +222,11 @@ int main(int argc, char **argv)
             hs_at = sys_cyc; hs_n++;
         }
         phs = t->vga_hsync;
-        if (!t->vga_de && !t->vga_skip && (t->vga_r || t->vga_g || t->vga_b) && outside++ < 5) printf("pads outside DE: %d %d %d\n", t->vga_r, t->vga_g, t->vga_b);
-        if (t->vga_de && !t->vga_skip) { row.push_back(t->vga_r); row.push_back(t->vga_g); row.push_back(t->vga_b); }
-        if (pde && !t->vga_de && !t->vga_skip) { rows.push_back(row); row.clear(); }
-        if (!t->vga_skip) pde = t->vga_de;
+        if (t->vga_skip && outside++ < 5) printf("vga_skip high\n");
+        if (!t->vga_de && (t->vga_r || t->vga_g || t->vga_b) && outside++ < 5) printf("pads outside DE: %d %d %d\n", t->vga_r, t->vga_g, t->vga_b);
+        if (t->vga_de) { row.push_back(t->vga_r); row.push_back(t->vga_g); row.push_back(t->vga_b); }
+        if (pde && !t->vga_de) { rows.push_back(row); row.clear(); }
+        pde = t->vga_de;
         if (!pvs && t->vga_vsync) {
             frames++;
             if (seq.empty()) {
@@ -205,52 +249,32 @@ int main(int argc, char **argv)
             if (!seq.empty()) t->vi_pal = sys_of(frames);       // (V_j asks for F_j's system)
             vs_at = sys_cyc; hs_n = 0; hs_short = 0; hs_ds.clear();
             if (frames >= 3) {
-                if (rows.size() != H) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
-                for (unsigned ys = 0; ys < rows.size() && ys < H; ys++) {
-                    if (ys < Y0) {                          // above the window: black
-                        for (unsigned x = 0; x < W * 3; x++) if (rows[ys][x]) { if (errs < 10) printf("(%u,%u) above the window\n", x / 3, ys); errs++; break; }
-                        continue;
-                    }
-                    unsigned y = ys - Y0;
-                    if (rows[ys].size() != W * 3) { printf("row %u: %zu px\n", ys, rows[ys].size() / 3); errs++; continue; }
-                    for (unsigned x = 0; x < W; x++) {
-                        if (R && y >= R) {                  // below the window: black
-                            int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
-                            if (gr || gg || gb) { if (errs < 10) printf("(%u,%u) below the window: pads %d %d %d\n", x, ys, gr, gg, gb); errs++; }
-                            continue;
-                        }
-                        unsigned cvl = CV, ph = R ? R : H;
-                        if (y < cvl || y >= ph - cvl || x >= W - CR) {     // cropped: black
-                            int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
-                            if (gr || gg || gb) { if (errs < 10) printf("(%u,%u) cropped: pads %d %d %d\n", x, ys, gr, gg, gb); errs++; }
-                            continue;
-                        }
-                        P6 e = hi ? P6{ ch(fb[y * W + x], 0) << 3, ch(fb[y * W + x], 1) << 3, ch(fb[y * W + x], 2) << 3 } : aa_px(x, y);
-                        if (divot && !hi) {
-                            bool part = !complete(x, y) || (x > 0 && !complete(x - 1, y)) || (x + 1 < W && !complete(x + 1, y));
-                            if (part) {
-                                P6 l = x > 0 ? aa_px(x - 1, y) : e, r = x + 1 < W ? aa_px(x + 1, y) : e;
-                                e.r = med3(l.r, e.r, r.r); e.g = med3(l.g, e.g, r.g); e.b = med3(l.b, e.b, r.b);
-                            }
-                        }
+                if (rows.size() != 240) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
+                for (unsigned ys = 0; ys < rows.size() && ys < 240; ys++) {
+                    if (rows[ys].size() != 640 * 3) { printf("row %u: %zu px\n", ys, rows[ys].size() / 3); errs++; continue; }
+                    // the picture's line j is the screen row Y0 + j; black outside the window, and where the crop options blank it
+                    const int j = (int)ys - (int)Y0;
+                    for (unsigned x = 0; x < 640; x++) {
+                        const int i = (int)x - (int)PX0;
+                        const bool inw = j >= 0 && j < (int)R && i >= 0 && i < (int)PW;
+                        const bool crop = !inw || (unsigned)j < CV || (unsigned)j >= R - CV || (unsigned)i >= PW - 2 * CR;
                         int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
-                        if (frames == 3 && (e.r >> 3 != ch(fb[y * W + x], 0) || e.g >> 3 != ch(fb[y * W + x], 1) || e.b >> 3 != ch(fb[y * W + x], 2) || (e.r & 7) != 0)) changed++;
+                        P6 e = crop ? P6{ 0, 0, 0 } : model((int)((unsigned)i * XS >> 10), j, divot && !nofilt);
+                        if (!crop && frames == 3 && ((e.r & 7) != 0 || (e.g & 7) != 0 || (e.b & 7) != 0 || true)) changed += (e.r != ch(pxv((int)((unsigned)i * XS >> 10), frow(j)), 0) << 3);
                         if (gr != e.r || gg != e.g || gb != e.b) {
-                            if (errs < 10) printf("[frame %d] (%u,%u) fb %04x: pads %d %d %d, model %d %d %d\n", frames, x, y, fb[y * W + x], gr, gg, gb, e.r, e.g, e.b);
+                            if (errs < 10) printf("[frame %d] (%u,%u) window (%d,%d): pads %d %d %d, model %d %d %d\n", frames, x, ys, i, j, gr, gg, gb, e.r, e.g, e.b);
                             errs++; if (getenv("TB_V")) rowerr[ys]++;
                         }
                     }
                 }
                 if (getenv("TB_V")) { for (unsigned y = 0; y < 240; y++) if (rowerr[y]) printf("  frame %d row %u: %d bad\n", frames, y, rowerr[y]); memset(rowerr, 0, sizeof rowerr); }
             }
-            // TB_DUMP=prefix: the framebuffer (RGBA5551 big-endian) and the frame off the pads (PPM)
+            // TB_DUMP=prefix: the frame off the pads (PPM)
             if (frames == 3 && getenv("TB_DUMP")) {
                 std::string pfx = getenv("TB_DUMP");
-                if (FILE *f = fopen((pfx + ".raw").c_str(), "wb")) { for (uint16_t v : fb) { uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)v }; fwrite(b, 1, 2, f); } fclose(f); }
-                if (FILE *f = fopen((pfx + ".hid").c_str(), "wb")) { fwrite(hid.data(), 1, hid.size(), f); fclose(f); }
                 if (FILE *f = fopen((pfx + "_pads.ppm").c_str(), "wb")) {
-                    fprintf(f, "P6\n%u %zu\n255\n", W, rows.size());
-                    for (auto &r : rows) for (unsigned x = 0; x < W; x++) { uint8_t px[3] = { (uint8_t)r[3 * x], (uint8_t)r[3 * x + 1], (uint8_t)r[3 * x + 2] }; fwrite(px, 1, 3, f); }
+                    fprintf(f, "P6\n640 %zu\n255\n", rows.size());
+                    for (auto &r : rows) for (unsigned x = 0; x < 640; x++) { uint8_t px[3] = { (uint8_t)r[3 * x], (uint8_t)r[3 * x + 1], (uint8_t)r[3 * x + 2] }; fwrite(px, 1, 3, f); }
                     fclose(f);
                 }
             }
@@ -263,6 +287,7 @@ int main(int argc, char **argv)
     else printf("field timing: %u intervals as predicted\n", fields_ok);
     if (fields_ok < (unsigned)(seq.empty() ? (pal0 ? 3 : nfr - 1) : seq.size())) { printf("field timing: not seen\n"); errs++; }
     printf("pad hash %016llx\n", (unsigned long long)pad_hash);
-    printf("seed %u divot %d dedither %d partial %d%% width %u%s: %s (%d mismatches; %ld pixels changed by the filters)\n", seed, divot, dedither, pct, WB, hi ? (tall ? " (x480)" : "p") : "", errs ? "FAIL" : "PASS", errs, changed);
+    printf("seed %u divot %d dedither %d partial %d%% width %u%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
+           seed, divot, dedither, pct, WB, avg ? " serrated, averaged" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
     return errs != 0;
 }

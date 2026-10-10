@@ -1,5 +1,16 @@
 # 640x480 output: what was tried, and where it is kept
 
+**Update (2026-10-10, branch `own-p240`).** The output is the VI's own: 640 x 240 progressive for every picture (the window,
+X_SCALE / Y_SCALE and WIDTH of the VI place it; a 320-wide game is doubled, GoldenEye's 440 x 330 and Mario Tennis' 384 are whole), and a
+SERRATED picture (VI_CTRL SERRATE, hi-res: Pokemon Stadium, DK64's logos) is **not** sent as 480i any more: it is the same 640 x 240 frame, scaler slot 0, each
+line the average of the picture's rows 2k and 2k + 1 -- `docs/resolution.md`, "Serrated pictures". Why: the owner's decision, "for now": supporting 480i on the
+Pocket was too hard -- its handling of an interlaced slot is not documented where the words are stated, the field signalling was not reliable in hardware, and
+after several rewrites Stadium looked wrong again (the last state, branch `own-comb`, is the commit 8717e11: variant "B", slot 1, the odd rows' field flagged
+odd and last; `tb_il`, `ORIGIN2` / `base2`, the slot-announcing and the black resynchronising frame are in its history). Averaging the pair (what a CRT mixes
+of the two fields) rather than taking the first field alone costs the SDRAM twice the reads (153,600 words a field, 36.8 MB/s; the first field alone is the old
+18.4 MB/s) and one word register and the adders in the read engine, and has no stair-step or flicker of a thin horizontal line that only one field has. If the
+bandwidth ever fell short, the fall-back is the first field alone. What follows is the history of the earlier decisions.
+
 Decision (owner, 2026-10-09): the Pocket output is ALWAYS 320x240 for now (branch `own-lores`, merged into
 `integ` at b9aeace; sources 512 wide or more are shown at half width, 2x1 average, first field only for 480
 rows, VI filters bypassed for them). To be reconsidered later.
