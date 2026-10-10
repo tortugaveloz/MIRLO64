@@ -65,9 +65,11 @@ module mirlo_regs (
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
     output logic [11:0] fb_width,
-    output logic [5:0]  fb_x0, fb_y0,   // a smaller framebuffer's place on the screen (rtl/soc/n64_video.sv)
+    output logic [7:0]  fb_y0,          // the picture's window and steps in the VI's frame (rtl/soc/n64_video.sv)
     output logic [8:0]  fb_rows,
-    output logic        fb_tall,        // (WIDTH's bit 17) a hi-res picture of 480 rows (interlaced: its first field is shown), else 240
+    output logic [9:0]  fb_px0, fb_pw,
+    output logic [10:0] fb_xs, fb_ys, fb_nw,
+    output logic        fb_tall,        // (WIDTH's bit 17, unused)
     output logic        fb_gamma,       // (WIDTH's bit 16) the scan-out's gamma correction
     output logic        fb_pal,         // (WIDTH's bit 18) the TV system before the game programs the VI's V_SYNC: 1 PAL (the ROM's region)
     input  wire         tv_pal,         // (WIDTH's bit 19, read) the TV system the scan-out is using
@@ -253,14 +255,17 @@ assign fb_length = 32'd0;
 always_ff @(posedge clk)
     if (rst) begin fb_base <= 32'h40C0_0000;
         fb_dma_enable <= 0; fb_vtg_enable <= 0; fb_mode <= 0; fb_width <= 0; fb_gamma <= 0; fb_tall <= 0; fb_pal <= 0;
-        fb_x0 <= 0; fb_y0 <= 0; fb_rows <= 0; end
+        fb_y0 <= 0; fb_rows <= 0; fb_px0 <= 0; fb_pw <= 10'd640; fb_xs <= 11'h200; fb_ys <= 11'h400; fb_nw <= 11'd170; end
     else if (wr) case (a)
         R_VIDEO_FRAMEBUFFER_DMA_BASE:   fb_base <= r_wdata;
         R_VIDEO_FRAMEBUFFER_DMA_ENABLE: fb_dma_enable <= r_wdata[0];
         R_VIDEO_FRAMEBUFFER_VTG_ENABLE: fb_vtg_enable <= r_wdata[0];
         R_VIDEO_FRAMEBUFFER_VTG_MODE:   fb_mode <= r_wdata[0];
         R_VIDEO_FRAMEBUFFER_WIDTH:      begin fb_width <= r_wdata[11:0]; fb_gamma <= r_wdata[16]; fb_tall <= r_wdata[17]; fb_pal <= r_wdata[18]; end
-        R_VIDEO_FRAMEBUFFER_WINDOW:     begin fb_x0 <= r_wdata[5:0]; fb_y0 <= r_wdata[13:8]; fb_rows <= r_wdata[24:16]; end
+        R_VIDEO_FRAMEBUFFER_WINDOW:     begin fb_y0 <= r_wdata[15:8]; fb_rows <= r_wdata[24:16]; end
+        R_VIDEO_FRAMEBUFFER_HWINDOW:    begin fb_px0 <= r_wdata[9:0]; fb_pw <= r_wdata[25:16]; end
+        R_VIDEO_FRAMEBUFFER_SCALE:      begin fb_xs <= r_wdata[10:0]; fb_ys <= r_wdata[26:16]; end
+        R_VIDEO_FRAMEBUFFER_ROWWORDS:   fb_nw <= r_wdata[10:0];
         default: ;
     endcase
 
@@ -404,7 +409,10 @@ always_ff @(posedge clk) begin
     R_VIDEO_FRAMEBUFFER_DMA_LENGTH:     r_rdata <= fb_length;
     R_VIDEO_FRAMEBUFFER_DMA_ENABLE:     r_rdata <= {31'd0, fb_dma_enable};
     R_VIDEO_FRAMEBUFFER_WIDTH:          r_rdata <= {12'd0, tv_pal, fb_pal, fb_tall, fb_gamma, 4'd0, fb_width};
-    R_VIDEO_FRAMEBUFFER_WINDOW:         r_rdata <= {7'd0, fb_rows, 2'd0, fb_y0, 2'd0, fb_x0};
+    R_VIDEO_FRAMEBUFFER_WINDOW:         r_rdata <= {7'd0, fb_rows, fb_y0, 8'd0};
+    R_VIDEO_FRAMEBUFFER_HWINDOW:        r_rdata <= {6'd0, fb_pw, 6'd0, fb_px0};
+    R_VIDEO_FRAMEBUFFER_SCALE:          r_rdata <= {5'd0, fb_ys, 5'd0, fb_xs};
+    R_VIDEO_FRAMEBUFFER_ROWWORDS:       r_rdata <= {21'd0, fb_nw};
     R_VIDEO_FRAMEBUFFER_VTG_ENABLE:     r_rdata <= {31'd0, fb_vtg_enable};
     R_VIDEO_FRAMEBUFFER_VTG_MODE:       r_rdata <= {31'd0, fb_mode};
     R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6;

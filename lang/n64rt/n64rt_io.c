@@ -84,41 +84,72 @@ static u32 s_vi_gamma;
  * Stadium's hi-res menus and its 3D screens: a frame of noise), and its gamma
  * a part of one (a band of the picture far too bright). */
 static u32 s_vi_width_cur = 320, s_vi_gamma_cur;
-/* A framebuffer smaller than the screen's 320 x 240 (Banjo-Kazooie's is 292
- * wide, 213 of its lines shown) goes out as it is, a pixel a pixel, in the
- * screen's middle with black around it (rtl/soc/n64_video.sv): its width,
- * and where on the screen it starts and how many lines it has. */
-static u32 s_vi_l = 240;                /* the mode's window: the lines it shows */
-/* A hi-res framebuffer (VI_WIDTH 512 or more: 640 wide) is shown at half its
- * width (each pixel pair averaged) in the one 320 x 240 frame (rtl/soc/n64_video.sv).
- * When the mode is interlaced -- the VI's Y scale steps two rows a line
- * (yScale 2.0), the fields' lines (237 each) being the buffer's even and odd
- * rows -- `tall` (WIDTH's bit 17) has the scan-out show the first field alone,
- * the even rows: its window is a field's rows. */
+/* What the scan-out shows (rtl/soc/n64_video.sv) is the VI's own: a 640-clock line, 240 lines, the picture's window in them
+ * (H_START / H_END and V_START / V_END, from the VI's 108 and 37 -- PAL's 128 and 95), the framebuffer's pixel
+ * (i X_SCALE) >> 10 at the window's clock i and its row (j Y_SCALE) >> 10 at its line j, the rows WIDTH pixels apart. The VI's
+ * registers as the game wrote them (the software VI) or the hardware's (n64rt_vi_hw_event) are kept here, and given
+ * to the scan-out with the field, in `vi_width_gamma`. A hi-res picture (WIDTH 512 or more) has X_SCALE 1.0 and 640 of its
+ * pixels a line; an interlaced one (Y_SCALE 2.0, or WIDTH 1280 with 1.0: two rows' pitch) its first field's rows. */
+#include "n64rt_vifit.h"
+static u32 s_vi_l = 240;                /* the mode's window: the lines it shows (V_END - V_START) / 2 */
 static u32 s_vi_ys = 0x400;             /* VI_Y_SCALE's step, 2.10 */
-static u32 s_vi_tall_cur;               /* the hi-res picture sent is 480 rows */
+static u32 s_vi_xs = 0x200;             /* VI_X_SCALE's step, 2.10 */
+static u32 s_vi_hs = 0x006C02ECu;       /* VI_H_START: start << 16 | end, in the VI's 640-pixel line (libultra's: 108 .. 748) */
+static u32 s_vi_vs = 0x002501FFu;       /* VI_V_START: start << 16 | end, in half lines (37 .. 511) */
+static u32 s_vi_tall_cur;               /* (the hi-res picture sent is 480 rows: no longer a thing) */
+/* The TV system the game's registers ask for: V_SYNC's 525 lines (512..575) NTSC, 625 (576..703) PAL, any other value (0: none yet) the ROM's region -- what
+ * rtl/soc/rcp_vi.sv's `vi_pal` is. NOT n64rt_vi_pal(), the system the scan-out is using (WIDTH bit 19): that follows at the scan-out's next frame boundary, so
+ * the window of a mode's first registers (SM64 (Europe): V_SYNC 0x271, V_START 0x5F0239, written once and never changed) was taken with NTSC's origin
+ * (37: the picture 29 lines below its place, y0 29, and cut at the bottom, 211 of its 237 lines). */
+static u32 s_vi_vsync;                  /* the last VI_V_SYNC that named a system (as rcp_vi.sv: any other value -- 0, noise -- changes nothing) */
+static void vi_note_vsync(u32 v) { const u32 k = (v & 0x3FFu) >> 6; if (k == 8u || k == 9u || k == 10u) s_vi_vsync = v; }
+static u32 vi_tv_pal(void)
+{
+    const u32 v = (s_vi_vsync & 0x3FFu) >> 6;
+    return v == 8u ? 0u : (v == 9u || v == 10u) ? 1u : n64rt_tv == 0u;
+}
+/* the window the registers say (the TV system's own origins), and the scan-out's words for it */
+static void vi_window(u32 *px0, u32 *pw, u32 *y0, u32 *rows)
+{
+    const u32 pal = vi_tv_pal();
+    const u32 hb = pal ? 128u : 108u, vb = pal ? 95u : 37u;
+    u32 hl = (s_vi_hs >> 16) & 0x3FFu, hr = s_vi_hs & 0x3FFu, vl = (s_vi_vs >> 16) & 0x3FFu, vr = s_vi_vs & 0x3FFu;
+    *px0 = 0; *pw = 640; *y0 = 0; *rows = 0;
+    if (hl < hb) hl = hb;
+    if (hr > hb + 640u) hr = hb + 640u;
+    if (hr > hl) { *px0 = hl - hb; *pw = hr - hl; }
+    if (vr > vl) {
+        u32 r = (vr - vl) / 2u, y = vl > vb ? (vl - vb) / 2u : 0u;
+        if (y < 240u) { *y0 = y; *rows = r; }          /* (a window taller than the field from y0 is fitted to it: n64rt_vi_fit) */
+    }
+}
+/* the bytes a picture of the VI's size takes from the origin: a row of the pitch, the rows its window steps through */
+static u32 vi_pic_bytes(void)
+{
+    u32 w = s_vi_width_cur == ~0u ? 320u : s_vi_width_cur & ~1u, px0, pw, y0, rows;
+    if (w < 2u) w = 320u;
+    vi_window(&px0, &pw, &y0, &rows);
+    if (!rows) rows = 240u;
+    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    n64rt_vi_fit(y0, rows, ys, &rows, &ys);
+    return w * 2u * (((rows * ys) >> 10) + 2u);
+}
 static void vi_width_gamma(void)
 {
-    u32 w = s_vi_width_cur & ~1u, x0 = 0, y0 = 0, rows = 0, tall = 0;
-    if (w >= 512u) {
-        /* the buffer's rows the mode shows: the lines of a field, times the rows a line steps (Y_SCALE), times the rows
-         * the buffer's pitch is (WIDTH 1280 -- Donkey Kong 64's interlaced mode, Y_SCALE 1.0: every other row of a
-         * 640-pixel buffer -- is two rows; libultra's own interlaced modes are WIDTH 640, Y_SCALE 2.0) */
-        const u32 pitch_rows = (w + 320u) / 640u ? (w + 320u) / 640u : 1u;
-        const u32 shown = (s_vi_l * s_vi_ys * pitch_rows + 512u) >> 10;
-        tall = shown > 300u;
-        /* (interlaced: the scan-out shows the first field, its window a field's: half the rows; a few lines short of
-         * 240 all of it, as for 240) */
-        const u32 fr = shown / 2u;
-        if (tall && fr + 6u < 240u && 240u - fr <= 63u) { rows = fr; y0 = (240u - rows) / 2u; }
-        w = 640u;
-    } else {
-        if (w >= 2u && w < 320u) x0 = (320u - w) / 2u; else w = 0;
-        if (s_vi_l >= 16u && s_vi_l < 228u) { rows = s_vi_l; y0 = (240u - rows) / 2u; }   /* (a few lines short of 240: all of the framebuffer, as it has been) */
-    }
-    s_vi_tall_cur = tall;
-    video_framebuffer_window_write(x0 | y0 << 8 | rows << 16);
-    video_framebuffer_width_write(w | (s_vi_gamma_cur ? 1u << 16 : 0u) | tall << 17 | TV_WIDTH_BIT);
+    u32 w = s_vi_width_cur & ~1u, px0, pw, y0, rows;
+    if (w < 2u || w > 4094u) w = 320u;
+    vi_window(&px0, &pw, &y0, &rows);
+    const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
+    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    n64rt_vi_fit(y0, rows, ys, &rows, &ys);
+    /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word, and one more */
+    const u32 nw = ((((pw - 1u) * xs) >> 10) + 8u) / 2u + 1u;
+    s_vi_tall_cur = 0;
+    video_framebuffer_scale_write(xs | ys << 16);
+    video_framebuffer_rowwords_write(nw);
+    video_framebuffer_hwindow_write(px0 | pw << 16);
+    video_framebuffer_window_write(y0 << 8 | rows << 16);
+    video_framebuffer_width_write(w | (s_vi_gamma_cur ? 1u << 16 : 0u) | TV_WIDTH_BIT);
 }
 void n64rt_osViSetMode(void *mode)
 {
@@ -128,7 +159,8 @@ void n64rt_osViSetMode(void *mode)
         const u32 *m = (const u32 *)mode;
         u32 l = ((m[12] & 0x3FFu) - ((m[12] >> 16) & 0x3FFu)) / 2u;
         u32 ys = m[11] & 0xFFFu;                                       /* fldRegs[0].yScale's step */
-        if (l != s_vi_l || (ys && ys != s_vi_ys)) { s_vi_l = l; if (ys) s_vi_ys = ys; s_vi_width_cur = ~0u; }       /* (taken with the width, at the next field) */
+        u32 xs = m[8] & 0xFFFu;                                        /* comRegs.xScale's step */
+        s_vi_l = l; if (ys) s_vi_ys = ys; if (xs) s_vi_xs = xs; s_vi_hs = m[7]; s_vi_vs = m[12]; s_vi_width_cur = ~0u;       /* (taken with the width, at the next field) */
     }
     s_vi_gamma = (((const u32 *)mode)[1] >> 3) & 1u;     /* comRegs.ctrl: VI_CTRL_GAMMA_ON */
     s_vi_black = 0;                          /* (libultra: a new mode's state is "mode updated" alone) */
@@ -291,7 +323,7 @@ void n64rt_vi_field(void)
          * VI at the last bytes of its 4 MiB with the picture left on: on the
          * console what is past the RDRAM reads as nothing, here it is the
          * rest of the SDRAM (never written: noise, for half a second). */
-        u32 fb = s_fb_cur & 0x7FFFFFu, bytes = s_vi_width_cur >= 512u ? 640u * (s_vi_tall_cur ? 480u : 240u) * 2u : 320u * 240u * 2u;
+        u32 fb = s_fb_cur & 0x7FFFFFu, bytes = vi_pic_bytes();
         u8 black = s_vi_black || fb + bytes > n64rt_game->mem_size + 0x1000u;
         if (black != s_vi_black_cur) {               /* (with the base: a picture comes back on its own framebuffer) */
             s_vi_black_cur = black;
@@ -1240,13 +1272,17 @@ static void vi_hw_note_origin(void) { if (s_vi_hw) fb_note(hw_rd(0x04400004u)); 
  * H_START 0 are the hardware's own. Also at start, from the registers' reset values. */
 void n64rt_vi_hw_event(void)
 {
-    const u32 w = hw_rd(0x04400008u) & 0xFFFu, vs = hw_rd(0x04400028u), ys = hw_rd(0x04400034u) & 0xFFFu;
-    s_vi_l = ((vs & 0x3FFu) - ((vs >> 16) & 0x3FFu)) / 2u;
+    const u32 w = hw_rd(0x04400008u) & 0xFFFu, vs = hw_rd(0x04400028u), ys = hw_rd(0x04400034u) & 0xFFFu, xs = hw_rd(0x04400030u) & 0xFFFu,
+              hs = hw_rd(0x04400024u);
+    vi_note_vsync(hw_rd(0x04400018u));
+    s_vi_l = ((vs & 0x3FFu) - ((vs >> 16) & 0x3FFu)) / 2u; s_vi_vs = vs;
     if (ys) s_vi_ys = ys;                              /* (0: a fade's or a repeated line's, not a mode's) */
+    if (xs) s_vi_xs = xs;
+    if (hs) s_vi_hs = hs;                              /* (0: osViBlack) */
     s_vi_width = s_vi_width_cur = w;
     vi_width_gamma();
     {
-        const u32 bytes = w >= 512u ? 640u * (s_vi_tall_cur ? 480u : 240u) * 2u : 320u * 240u * 2u, lim = n64rt_game->mem_size + 0x1000u;
+        const u32 bytes = vi_pic_bytes(), lim = n64rt_game->mem_size + 0x1000u;
         monitor_vithr_write(lim > bytes ? (lim - bytes) >> 6 : 0u);
 #ifdef N64RT_DEBUG
         static u32 s_n;
@@ -1500,12 +1536,19 @@ static void vi_write(u32 o, u32 v)
         break;
     case 0x08: s_vi_width = v & 0xFFFu; break;                        /* VI_WIDTH */
     case 0x10: mi_clr(MI_VI); break;                                  /* VI_CURRENT: clears the interrupt */
-    case 0x24: s_vi_black = v == 0u; break;                           /* VI_H_START 0: osViBlack's */
+    case 0x18: { const u32 o = s_vi_vsync; vi_note_vsync(v); if (s_vi_vsync != o) s_vi_width_cur = ~0u; break; }   /* VI_V_SYNC: the TV system's (the window's origins) */
+    case 0x24:                                                        /* VI_H_START 0: osViBlack's */
+        s_vi_black = v == 0u;
+        if (v != 0u && v != s_vi_hs) { s_vi_hs = v; s_vi_width_cur = ~0u; }
+        break;
     case 0x28: {                                                      /* VI_V_START: the lines it shows */
         u32 l = ((v & 0x3FFu) - ((v >> 16) & 0x3FFu)) / 2u;
-        if (l != s_vi_l) { s_vi_l = l; s_vi_width_cur = ~0u; }
+        if (v != s_vi_vs) { s_vi_vs = v; s_vi_l = l; s_vi_width_cur = ~0u; }
         break;
     }
+    case 0x30:                                                        /* VI_X_SCALE: the step */
+        if ((v & 0xFFFu) != 0u && (v & 0xFFFu) != s_vi_xs) { s_vi_xs = v & 0xFFFu; s_vi_width_cur = ~0u; }
+        break;
     case 0x34:                                                        /* VI_Y_SCALE: the step (an interlaced hi-res mode's is 2.0) */
         if ((v & 0xFFFu) != 0u && (v & 0xFFFu) != s_vi_ys) { s_vi_ys = v & 0xFFFu; s_vi_width_cur = ~0u; }   /* (0: a fade's or a repeated line's, not a mode's) */
         break;

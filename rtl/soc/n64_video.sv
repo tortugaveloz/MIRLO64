@@ -1,42 +1,47 @@
-// Mirlo-N64's scan-out: the N64's VI_ORIGIN framebuffer (RGB565 as MRDP
-// writes it: two pixels a word, the left one in the low half) to the
-// Pocket's video pads: 320 x 240 at 59.94 Hz (and the other sizes, below), clk_vid
-// 12.5 MHz = sys / 5.
+// Mirlo-N64's scan-out: the N64's VI_ORIGIN framebuffer (RGBA5551 as the RDP writes it, two pixels a word, the
+// left one in the high half; or MRDP's RGB565) to the Pocket's video pads, as the N64's VI sends it: a 640-wide
+// line (the VI's 640 pixel clocks between H_START 108 and H_END 748), 240 lines a field, progressive, 59.94 Hz
+// (PAL: 400 x 313 at 50 Hz), on a pixel clock of 12.5 MHz (clk_vid = sys / 5), one clock a pixel.
 //
-//  - vid: a timing generator (the 320 x 240 set is the fixed one
-//    the Pocket's scaler has been fed with); it never stalls -- a word the FIFO does not have in
-//    time shows black.
-//  - sys: at the frame boundary (the first line of vblank, from vid) the base
-//    is latched from VI_ORIGIN (a new
-//    origin never tears the frame being sent) and the frame's 38,400 words
-//    are read in order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the
-//    arbiter gives the scan-out no priority (a priority scheme was tried on
-//    the Pocket and went badly; docs/n64.md).
-//  - a hi-res framebuffer (VI_WIDTH 512 or more: 640 wide -- Pokemon Stadium's menus) is always shown in this 320 x 240
-//    frame, reduced without a buffer: a word (two pixels) is read for each pixel shown and the two are averaged (2 x 1 box;
-//    the left pixel alone, point sampling, was the first try: `havg` below); one that is 480 rows (vi_tall: VI yScale 2,
-//    both fields' rows are in the buffer from the first field's origin) shows that first field alone, the buffer's even rows (every other row is skipped by the
-//    reads). The VI's filters (below) are off for it. One pixel clock, 12.5 MHz, with video_skip.
-//  - a framebuffer smaller than the screen (VI_WIDTH under 320: Banjo-Kazooie's 292 x 213) is shown as it is, a pixel a
-//    pixel, black around it: its vi_rows rows of VI_WIDTH / 2 words are read
-//    one after the other, and on the screen the picture starts vi_x0 pixels
-//    in and vi_y0 lines down.
-//  - the FIFO crosses sys -> vid; each word carries the frame's epoch bit, so
-//    what is left of a frame is dropped by the vid side instead of resetting
-//    a dual-clock FIFO.
-//  - one frame size, the Pocket's scaler slot 0 (320 x 240): outside DE the pads are 0. `vblank` is the timing's vblank
-//    as a sys level (APF_VIDEO).
+//  - vid: a timing generator, never stalling -- a pixel the FIFO does not have in time is black. Lines of 790
+//    clocks and 264 lines make 208,560 clocks: nine of the lines in vblank lose two clocks (1,042,710 sys clocks,
+//    59.9400 Hz to 1.5 ppm), see below. The Pocket's scaler slot 0 (video.json) is 640 x 240.
+//  - the picture is the VI's own: a window of the line (VI_H_START / H_END: `vi_px0`, `vi_pw`, in pixel clocks from
+//    the VI's 108 -- Mario Tennis' is 597 wide, 20 in) and of the field (`vi_y0`, `vi_rows`: V_START / V_END), black
+//    around it. The window's pixel i (clock i) shows the framebuffer's pixel floor(i X_SCALE / 1024) (`vi_xs`, 2.10:
+//    0x200 doubles a 320-wide picture, 0x2C0 shows GoldenEye's 440 whole, 0x400 is a hi-res 640), its line j the row
+//    floor(j Y_SCALE / 1024) (`vi_ys`: 0x400 a row a line, 0x800 every other row: a hi-res picture's even rows),
+//    the rows `vi_width` pixels apart (the VI's WIDTH: a hi-res DK64's 1280 is two rows of 640). Nearest pixel and
+//    row, the VI's filters at the framebuffer's own pixels, as the VI has them (below). One path for every size.
+//    A SERRATED hi-res picture (VI_CTRL's SERRATE: Pokemon Stadium's menus, DK64's logos: 640 x 480 as two fields of 240 rows)
+//    is not sent as 480i, which the Pocket does not take reliably: it is the same 640 x 240 progressive frame, each line the
+//    average of the rows 2k and 2k + 1 of the picture (`vi_avg`; what a CRT mixes of the two fields; docs/resolution.md).
+//  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new
+//    origin never tears the frame being sent) and the frame's rows are read in
+//    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter gives
+//    the scan-out no priority (a priority scheme was tried on the Pocket and went badly; docs/n64.md). A row is
+//    `vi_nw` words from the row's first, the next row the one Y_SCALE's accumulator reaches (0, 1 or 2 pitches on;
+//    a hi-res picture reads 320 words a row: 18.4 MB/s as a 320-wide one did; the rows of a serrated one are read in pairs, a
+//    word of the one and the word of the other in turn, and the pair's average is what goes to the FIFO: 36.8 MB/s).
+//  - the FIFO crosses sys -> vid; each word carries the frame's epoch bit (what is left of a frame is dropped by
+//    the vid side instead of resetting a dual-clock FIFO) and a row-start bit (the vid side starts each row at one,
+//    dropping what the last row left).
+//  - `vblank` is the timing's vblank as a sys level (APF_VIDEO).
 //  - vi_latch: the frame boundary as a sys pulse, on the cycle of the vi_line of the line it is on (rcp_vi.sv counts
 //    the lines from it).
 //  - vi_line / vi_frame: each line's start and the frame's, as sys pulses --
 //    the frame's four lines (a quarter of a millisecond) before the frame
 //    boundary, when the base is latched: the VI interrupt, which a game answers
 //    with its new framebuffer.
-//  - OSD (a debug build: osd_en): 16 words (osd_val, sys) as hex in a box at
-//    the top left, 8 lines of two -- the only window into the running SoC
-//    without a UART, read through the HDMI capture. Read live across the
-//    clock domains (no snapshot: 512 flip-flops the device does not have):
-//    a value that changes while it is drawn may show torn for a frame.
+//  - the pads outside DE are 0: the one scaler slot is 0, video.json's 640 x 240, and every picture is progressive (no frame
+//    feature bits, no slot words).
+//
+// The picture's pixels come through a pipeline whose steps are not clocks but source pixels (`adv`): a pixel a
+// step, so that the VI's filters see the framebuffer's pixels and not the output's, however it is scaled. A line's
+// steps are the priming, in the blanking before it (a few columns of nothing, then the window's first pixels, so
+// that its first filtered pixel is out), and in the window one at each clock the X_SCALE accumulator carries.
+// The pads show what the pipeline's last register holds, which a step changes just before the window's clock the
+// new pixel is for.
 `default_nettype none
 
 module n64_video #(
@@ -51,9 +56,9 @@ module n64_video #(
     input  wire         rst_vid,
     input  wire         enable,         // sys: scan out (else black, no DMA)
     input  wire  [25:0] vi_origin,      // sys: the framebuffer's byte address (ORIGIN_MASK: its span)
+    input  wire         vi_avg,         // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): its rows 2k and 2k + 1 averaged into the line k
     output logic        vblank,         // sys
-    input  wire  [11:0] vi_width,       // sys: VI_WIDTH (512 or more: hi-res, 640 wide, shown at half its width)
-    input  wire         vi_tall,        // sys: the hi-res picture is 480 rows (interlaced: its first field is shown), else 240
+    input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
     input  wire         vi_black,       // sys: H_START 0 (osViBlack): black
     input  wire         vi_pal,         // sys: the TV system asked for: 1 PAL (625 lines, 50 Hz), 0 NTSC (and MPAL: 525 lines, 59.94 Hz)
     output logic        tv_pal,         // sys: the field being scanned out is PAL (vi_pal, taken at the frame boundary)
@@ -63,14 +68,18 @@ module n64_video #(
     input  wire         vi_dedither,    // sys: and its dither filter (VI_CTRL bit 16)
     input  wire  [4:0]  crop_v,         // sys: the core's "Crop Vertical": lines of the picture blanked at its top and its
                                         //      bottom
-    input  wire  [1:0]  crop_r,         // sys: its "Crop Right": pixels blanked at the picture's right edge
+    input  wire  [1:0]  crop_r,         // sys: its "Crop Right": pixels (of the 320 wide frame: two clocks each) blanked at the picture's right edge
     input  wire  [8:0]  vi_lines,       // sys: the lines the VI's window shows (the rest black)
-    input  wire  [5:0]  vi_x0,          // sys: the picture's left edge on the screen, pixels
-    input  wire  [5:0]  vi_y0,          // sys: its first line
-    input  wire  [8:0]  vi_rows,        // sys: its lines (0: the whole frame)
-    input  wire         osd_en,
-    input  wire         fps_en,         // the frame counter in the corner (when the OSD is off)
-    input  wire  [15:0][31:0] osd_val,  // sys
+    input  wire  [9:0]  vi_px0,         // sys: the picture's first clock in the line (H_START - 108, VI pixels)
+    input  wire  [9:0]  vi_pw,          // sys: its width in clocks (H_END - H_START)
+    input  wire  [7:0]  vi_y0,          // sys: its first line in the field
+    input  wire  [8:0]  vi_rows,        // sys: its lines (0: the whole field)
+    input  wire  [10:0] vi_xs,          // sys: the VI's X_SCALE (2.10, at most 1.0)
+    input  wire  [10:0] vi_ys,          // sys: its Y_SCALE (2.10, at most 2.0)
+    input  wire  [10:0] vi_nw,          // sys: the words a row reads (the runtime: the window's last pixel and the priming)
+    input  wire         osd_en,         // (the OSD of the 320 x 240 frame is gone: unused)
+    input  wire         fps_en,
+    input  wire  [15:0][31:0] osd_val,
     // the DMA's SDRAM port (sys): word addresses
     output logic        m_valid,
     output logic [23:0] m_addr,
@@ -89,57 +98,47 @@ module n64_video #(
     output logic        vga_hsync,
     output logic        vga_vsync,
     output logic        vga_de,
-    output logic        vga_skip        // the pixel is not this clock's (a pixel of two clocks: its second)
+    output logic        vga_skip        // (always 0: a pixel a clock)
 );
 
-// The frame the scan-out sends is the Pocket's scaler slot 0 (video.json), on a pixel clock clk_vid = sys / 5
-// (12.5 MHz): a pixel lasts two clocks (video_skip tells the scaler which one is its).
-//   320 x 240, 2 clocks a pixel, 790 clocks a line, 264 lines (nine of them 788), 59.940 Hz
-// The field is the N64's: every NTSC mode of libultra writes V_SYNC 0x20D, H_SYNC 0xC15 -- 262.5 lines of 3094 clocks of
-// the VI's 48.6818 MHz = 59.9400 Hz, which is 1,042,708.5 clocks of a 62.5 MHz clk_sys. A line of 790 clocks (395 pixels)
-// and 264 lines make 1,042,800 (59.935 Hz, 80 ppm slow: 4.8 ms a minute); SHORT_LINES of the lines in vblank (lines
-// 253..261, no picture, no sync) lose one pixel (2 clocks) -- 9 of them: 208,542 clocks of clk_vid, 1,042,710 of clk_sys,
-// 59.9400 Hz to 1.5 ppm. (SHORT_LINES = 0: the plain 790; the Pocket's scaler takes either, 47..61 Hz.) The field
-// does not move with the size, nor do the scan-out's reads (a field is 240 rows of 320 words: 18.4 MB/s). It is a
-// fixed rate whatever the registers say beyond the TV system (the Pocket's slot is one fixed 320 x 240 frame; the
-// registers of every NTSC mode are these).
-//   PAL (vi_pal: libultra's PAL modes write V_SYNC 0x271, H_SYNC 0xC69: 312.5 lines of 3178 clocks of the VI's 49.6565 MHz =
-// 20.000 ms, 50 Hz, which is 1,250,000 clocks of a 62.5 MHz clk_sys): the same slot, 400-pixel lines (800 clocks, 64 us as the
-// console's) and 313 of them; the 50 lines SHORT_V..SHORT_V+49, in vblank, lose 4 pixels (396): 263 x 800 + 50 x 792 =
-// 250,000 clocks of clk_vid, 1,250,000 of clk_sys, 50.000 Hz exactly. The picture is the same 240 lines of the same slot: a
-// PAL mode of libultra shows 237 lines too (V_START 95..569 half-lines, as NTSC's 37..511). vi_pal is taken at the frame
-// boundary (tv_pal, sys) and the timing changes at the end of that field, so the change never cuts a field short.
-logic       sub;                   // vid: the clock within a two-clock pixel
-wire        ce   = sub;            // a pixel's clock
-always_ff @(posedge clk_vid) sub <= rst_vid ? 1'b0 : ~sub;
-localparam logic [8:0] HRES = 9'd320, HSYNC_S = 9'd328, HSYNC_E = 9'd352;
+// The field's timing: 790 clocks a line (the N64's 3094 VI clocks of 48.68 MHz x 12.5 / 48.68 ... = 395 pixels of the
+// 320 x 240 frame this system has always had, whose 1,042,710 system clocks a field the runtime's VI_PERIOD counts),
+// 264 lines, nine of them (253..261, no picture, no sync) two clocks shorter: 208,542 clocks of clk_vid, 1,042,710 of
+// clk_sys, 59.9400 Hz to 1.5 ppm. PAL (libultra's PAL modes write V_SYNC 0x271, H_SYNC 0xC69: 312.5 lines of 3178 clocks of the
+// VI's 49.6565 MHz = 20.000 ms): 800-clock lines, 313 of them, the 50 lines 253..302 eight clocks shorter: 263 x 800 + 50 x 792
+// = 250,000 clocks of clk_vid, 1,250,000 of clk_sys, 50.000 Hz exactly. A PAL mode shows 237 lines too. vi_pal is taken at the
+// frame boundary (tv_pal, sys) and the timing changes at the end of that field, so the change never cuts a field short.
+localparam logic [9:0] HRES = 10'd640, HSYNC_S = 10'd656, HSYNC_E = 10'd704;
 localparam logic [9:0] SHORT_V = 10'd253;                // the first short line (both systems)
-localparam logic [9:0] VRES = 10'd240;
-// the two TV systems' constants (pal_v selects, below): the line's last pixel (the pixel count is one more), the lines that are
-// shorter (the lines of vblank from SHORT_V), by how many pixels, and the field's last line
-localparam logic [8:0] HSCAN_N = 9'd394, HSCAN_P = 9'd399;
+localparam logic [9:0] HSCAN_N = 10'd789, HSCAN_P = 10'd799;     // the line's last clock (the count is one more)
 localparam int         SHORT_LINES_N = 9, SHORT_LINES_P = 50;
-localparam logic [8:0] SHORT_PX_N = 9'd1, SHORT_PX_P = 9'd4;
+localparam logic [9:0] SHORT_PX_N = 10'd2, SHORT_PX_P = 10'd8;   // clocks
 localparam logic [9:0] VSCAN_N = 10'd263, VSCAN_P = 10'd312;
+localparam logic [9:0] VRES = 10'd240;
+// the line's schedule of the picture's pipeline (hcount): from PR_SYNC the row's start is looked for in the FIFO, from PR0 the
+// priming steps (NF empty columns, then pixels), as the line ends
+localparam logic [9:0] PR_SYNC = 10'd690, PR0 = 10'd740;
+localparam int         NF = 2;                           // the steps of nothing before the first pixel (the filters' left taps)
+localparam int         NPE = 9;                          // the priming's steps: until the first pixel's filtered value is out
 
 // ---------------------------------------------------------------- vid: timing
-logic [8:0] hcount;
+logic [9:0] hcount;
 logic [9:0] vcount;
 // the TV system of the field being generated: taken from tv_pal (sys; two flip-flops) where the field ends, so a field is whole
 logic       pal_v;
 logic [1:0] pal_s;
 always_ff @(posedge clk_vid) pal_s <= {pal_s[0], tv_pal};
-wire  [8:0] HSCAN       = pal_v ? HSCAN_P : HSCAN_N;
-wire  [8:0] SHORT_PX    = pal_v ? SHORT_PX_P : SHORT_PX_N;
+wire  [9:0] HSCAN       = pal_v ? HSCAN_P : HSCAN_N;
+wire  [9:0] SHORT_PX    = pal_v ? SHORT_PX_P : SHORT_PX_N;
 wire  [9:0] VSCAN       = pal_v ? VSCAN_P : VSCAN_N;
 wire  [9:0] SHORT_END   = SHORT_V + (pal_v ? 10'(SHORT_LINES_P) : 10'(SHORT_LINES_N)) - 10'd1;
 logic       hactive, vactive, hsync, vsync;
-logic       short_ln;               // the line vcount names (the lines SHORT_V .. SHORT_V + SHORT_LINES - 1) is a pixel short
+logic       short_ln;               // the line vcount names (the lines SHORT_V .. SHORT_V + SHORT_LINES - 1) is shorter
 always_ff @(posedge clk_vid) begin
     if (rst_vid) begin
         hcount <= 0; vcount <= 0; hactive <= 0; vactive <= 0; hsync <= 0; vsync <= 0; short_ln <= 0; pal_v <= 0;
-    end else if (ce) begin
-        hcount <= hcount + 9'd1;
+    end else begin
+        hcount <= hcount + 10'd1;
         if (hcount == 0) hactive <= 1;
         if (hcount == HRES) hactive <= 0;
         if (hcount == HSYNC_S) hsync <= 1;
@@ -158,37 +157,24 @@ always_ff @(posedge clk_vid) begin
     end
 end
 wire de = hactive & vactive;
-// MIRLO_VI_AA: the picture is fetched a line ahead of the display (the
-// filter needs the row below the one shown): fetch lines are vcount 0..VRES-1,
-// shown 1..VRES (vact_f leads vactive by a line)
-logic vact_f;
-always_ff @(posedge clk_vid)
-    if (rst_vid) vact_f <= 1'b0;
-    else if (ce && hcount == HSYNC_S) begin
-        if (vcount == VSCAN) vact_f <= 1'b1;
-        if (vcount == VRES - 10'd1) vact_f <= 1'b0;
-    end
-wire       de_f = hactive & vact_f;
-wire [9:0] vc_f = vcount + 10'd1;
-
 // the frame boundary (vid): where the next frame's base is latched and its read begins, and the vid side's epoch.
 // LATCH_EARLY lines before the last line of the frame -- not vblank's first line: the VI interrupt that the game answers with
 // its new framebuffer (vi_frame, 4 lines before the end of the picture) has all of vblank, less LATCH_EARLY lines, to
 // be answered in (the game's own libultra writes VI_ORIGIN in its retrace handler, many monitor entries long); the
-// FIFO is read ahead from the latch, and the first row is needed LATCH_EARLY + 1 lines on. (Was VRES + 1: 5 lines.)
+// FIFO is read ahead from the latch, and the first row is needed LATCH_EARLY + 1 lines on.
 localparam int LATCH_EARLY = 8;
-wire  fb_vid = ce && hcount == 0 && vcount == VSCAN - 10'(LATCH_EARLY);
+wire  fb_vid = hcount == 0 && vcount == VSCAN - 10'(LATCH_EARLY);
 logic epoch_vid;
 always_ff @(posedge clk_vid) if (rst_vid) epoch_vid <= 0; else if (fb_vid) epoch_vid <= ~epoch_vid;
 
 // ------------------------------------------------------------ vid -> sys pulses
-// the VI interrupt comes every field (264 lines, 208,542 clocks of clk_vid)
+// the VI interrupt comes every field (264 lines)
 logic t_line, t_frame, t_fb;
-wire  fld_pulse = ce && hcount == 0 && vcount == VRES - 10'd4;
+wire  fld_pulse = hcount == 0 && vcount == VRES - 10'd4;
 always_ff @(posedge clk_vid)
     if (rst_vid) begin t_line <= 0; t_frame <= 0; t_fb <= 0; end
     else begin
-        if (ce && hcount == 0) t_line <= ~t_line;
+        if (hcount == 0) t_line <= ~t_line;
         if (fld_pulse) t_frame <= ~t_frame;     // 4 lines (a quarter of a millisecond) before the frame boundary: the VI interrupt that a game answers with its new origin
         if (fb_vid) t_fb <= ~t_fb;
     end
@@ -203,94 +189,104 @@ always_ff @(posedge clk) s_vb <= {s_vb[1:0], !vactive};
 assign vblank = s_vb[2];
 always_ff @(posedge clk) begin vi_line <= s_line[2] ^ s_line[1]; vi_frame <= s_frame[2] ^ s_frame[1]; vi_latch <= fb_sys; end
 
-// sys: the frame counter's count -- VI origin changes (a frame the game
-// showed) in BCD, taken every 60 VI frames (50 in PAL: a second; the OSD's corner shows it)
-logic [25:0] org_d;
-logic [7:0]  fps_cnt, fps_bcd;
-logic [5:0]  fps_v;
-always_ff @(posedge clk) begin
-    org_d <= vi_origin;
-    if (rst) begin fps_cnt <= 0; fps_bcd <= 0; fps_v <= 0; end
-    else if (vi_frame && fps_v == (tv_pal ? 6'd49 : 6'd59)) begin fps_v <= 0; fps_bcd <= fps_cnt; fps_cnt <= 0; end
-    else begin
-        if (vi_frame) fps_v <= fps_v + 6'd1;
-        if (org_d != vi_origin)
-            fps_cnt <= fps_cnt[3:0] == 4'd9 ? {fps_cnt[7:4] + 4'd1, 4'd0} : fps_cnt + 8'd1;
-    end
-end
-
 // ------------------------------------------------------------------ sys: DMA
 logic        epoch_sys, running;
 logic [9:0]  issued, got;          // (the reads in flight are their difference)
-// the picture: its rows of `rw` words, and its place in the frame (a
-// framebuffer smaller than the frame is shown whole, a pixel a pixel, black
-// around it) -- latched at the boundary, for the vid side's window too
+// the picture, latched at the boundary: its rows, their pitch, the steps from one to the next, and what the vid side
+// draws it with (the window and the X_SCALE: static for the frame)
 logic        all;
-logic [8:0]  rw;
-logic [8:0]  orow, nr, x0_f, y0_f;
-logic        dec_f;                // the picture is a hi-res one shown at half its width (its pixel pairs averaged)
-logic [8:0]  nrm1;
-logic [8:0]  col;                  // the read's word in its row
+logic [8:0]  orow, nr, nrm1;
+logic [10:0] nw_f, stride_f, ys_f;
+logic [9:0]  px0_f, pw_f;
+logic [7:0]  y0_f;
+logic [10:0] xs_f;
+logic        nofilt_f;             // a hi-res picture (512 pixels or more a row): the filters are off
+// A serrated picture's rows are the 640-pixel rows of a hi-res picture, 320 words each, whatever the pitch (WIDTH 640 with Y_SCALE 2.0: the pitch is one
+// row, a line steps two; WIDTH 1280 with Y_SCALE 1.0: the pitch is two rows, a line steps one pitch): a line is the pair at row 2k, 2k + 1, 640 words on from the line before
+localparam logic [23:0] PROW = 24'd320, PROW2 = 24'd640, PBACK = 24'd1 - 24'd320;   // (a row's words; two; the step from the B word of a pair to the A word of the next: 1 - 320)
+logic        avg_f;                // a serrated picture: the rows 2k and 2k + 1 of the picture averaged (a pair of reads, A then B, a word of each)
+logic        bsel;                 // the next read is the pair's B word (the row one picture row on)
+logic        rtog;                 // the next word kept of a serrated frame is a pair's B word (they come back in order: A, B, A, B ...)
+logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
+logic [10:0] col;                  // the read's word in its row
 logic [23:0] raddr;                // the next read's word address
+logic [23:0] rowp;                 // the row's first word
+logic [9:0]  yacc;                 // the row step's fraction
+logic        rs_next;              // the next colour word is its row's first
 localparam int FAW = 14;           // the FIFO: 2^14 words
 logic [9:0]  drop;                 // the last frame's reads still to come back (not written)
 logic [FAW:0] wlevel;              // the FIFO's fill as sys sees it (words)
 wire         keep = m_rvalid && !fb_sys && drop == 0;
-// the next frame's picture
-wire         hires  = |vi_width[11:9];                       // 512 or more: 640 wide (vi_tall: 480 rows, else 240)
-wire         dec    = hires;                                 // every other pixel, in the 320 x 240 frame
-wire  [8:0]  vi_rw  = hires ? 9'd320 : (vi_width[8:1] == 0 || vi_width[8:1] > 8'd160) ? 9'd160 : 9'(vi_width[8:1]);
-wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;   // (a 480-row picture's: a field's rows)
-logic        il_f;                 // the picture is a 480-row one: its first field only, the buffer's even rows
+wire         hires  = |vi_width[11:9];                       // 512 or more: a hi-res picture
+wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
+// the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
+wire  [11:0] yan    = {2'b00, yacc} + {1'b0, ys_f};
+// (a serrated picture: two rows of the picture a line, whatever the accumulator)
+wire  [23:0] rowp_n = rowp + (avg_f ? PROW2 : yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
 // a word as the FIFO takes it: two pixels, the left one in the low half --
 // RGBA5551 as the game's (N64FB: its bit 0 the RDP's coverage, "complete"),
 // or MRDP's RGB565
 wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // MIRLO_VI_AA: each word goes with its pixels' hidden coverage bits (the RDP's
 // plane, 1 MiB below the RDRAM: lang/c/mrdp/mrdp.h, layout.h) -- a group's
-// word (16 pixels) is read before the group's first colour word (and at the
-// frame's start), and a tag a read tells the words back apart: the hidden
+// word (16 pixels) is read before the group's first colour word (and at each
+// row's start), and a tag a read tells the words back apart: the hidden
 // word is held, a colour word takes its pair's four bits (the even pixel's in
-// [1:0]). The FIFO word: {epoch, the pair's hidden bits, the two pixels}.
-localparam int FW = 37;
+// [1:0]). The FIFO word: {epoch, row start, the pair's hidden bits, the two pixels}.
+localparam int FW = 38;
 logic        h_next;                // the next read is the group's hidden word
 logic [31:0] hreg;
-logic [3:0]  tq [0:31];             // the reads in flight: {hidden, the colour word's place in its group}
+logic [4:0]  tq [0:31];             // the reads in flight: {row start, hidden, the colour word's place in its group}
 logic [4:0]  tq_w, tq_r;
 wire  [5:0]  tq_n = 6'(tq_w - tq_r);
-wire  [3:0]  tq_h = tq[tq_r];
+wire  [4:0]  tq_h = tq[tq_r];
 wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
 always_ff @(posedge clk) begin
     if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
-                   col <= 0; raddr <= 0; all <= 0; tv_pal <= 0; end
+                   col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; end
     else begin
         if (fb_sys) begin
             epoch_sys <= ~epoch_sys;
             running <= enable;
             tv_pal <= vi_pal;
             raddr <= vi_origin[25:2] & ORIGIN_MASK;   // SDRAM word address
-            il_f <= vi_tall;
-            orow <= 0; all <= 0;
-            rw <= vi_rw; nr <= vi_nr; nrm1 <= vi_nr - 9'd1;
-            x0_f <= 9'(vi_x0); y0_f <= 9'(vi_y0); dec_f <= dec;
+            rowp  <= vi_origin[25:2] & ORIGIN_MASK;
+            orow <= 0; all <= vi_nr == 0; yacc <= 0; rs_next <= 1'b1;
+            nr <= vi_nr; nrm1 <= vi_nr - 9'd1;
+            nw_f <= vi_nw; stride_f <= vi_width[11:1] == 0 ? 11'd160 : 11'(vi_width[11:1]); ys_f <= vi_ys;   // (a program that never set the pitch: 320)
+            px0_f <= vi_px0; pw_f <= vi_pw; y0_f <= vi_y0; xs_f <= vi_xs; nofilt_f <= hires;
+            // a serrated picture of the two pitches of its fields: WIDTH 1280 (two rows a pitch: Y_SCALE 1.0) or WIDTH 640 with Y_SCALE 2.0; a
+            // serrated 240-row buffer (WIDTH 640, Y_SCALE 1.0) is not a pair of fields, and another pitch is not a 640-pixel row's multiple:
+            // those are shown as any hi-res picture is, the nearest row
+            avg_f <= vi_avg && (vi_width[11:1] == 11'd640 || (vi_width[11:1] == 11'd320 && vi_ys >= 11'h600)); bsel <= 1'b0;
+            hid_f <= vi_aa && !hires && N64FB;
             issued <= 0; got <= 0; col <= 0;
             drop <= issued - got - 10'(m_rvalid);
-            h_next <= 1'b1;
+            h_next <= vi_aa && !hires && N64FB;
         end else begin
             if (m_valid && m_ready && m_hid) begin
                 issued <= issued + 10'd1;
                 h_next <= 1'b0;
+            end else if (m_valid && m_ready && avg_f && !bsel) begin     // a pair's A word: its B word is a row of the picture on
+                issued <= issued + 10'd1;
+                rs_next <= 1'b0;
+                bsel <= 1'b1;
+                raddr <= raddr + PROW;
             end else if (m_valid && m_ready) begin
                 issued <= issued + 10'd1;
-                raddr <= raddr + 24'd1;
-                if (raddr[2:0] == 3'd7) h_next <= 1'b1;   // the next word starts a group
-                if (col == rw - 9'd1) begin               // a row's last word
+                rs_next <= 1'b0;
+                bsel <= 1'b0;
+                raddr <= raddr + (avg_f ? PBACK : 24'd1);
+                if (col == nw_f - 11'd1) begin            // a row's last word: the next row
                     col <= 0;
-                    if (il_f) raddr <= raddr + 24'd321;   // (a 480-row picture: the next row but one)
+                    raddr <= rowp_n; rowp <= rowp_n; yacc <= yan[9:0];
                     orow <= orow + 9'd1; all <= orow == nrm1;
+                    rs_next <= 1'b1; h_next <= hid_f;
+                end else begin
+                    col <= col + 11'd1;
+                    if (raddr[2:0] == 3'd7) h_next <= hid_f;   // the next word starts a group
                 end
-                else col <= col + 9'd1;
             end
             if (keep) got <= got + 10'd1;
             if (m_rvalid && drop != 0) drop <= drop - 10'd1;
@@ -301,13 +297,40 @@ end
 always_ff @(posedge clk) begin
     if (rst) begin tq_w <= 0; tq_r <= 0; end
     else begin
-        if (m_valid && m_ready) begin tq[tq_w] <= {m_hid, raddr[2:0]}; tq_w <= tq_w + 5'd1; end
+        if (m_valid && m_ready) begin tq[tq_w] <= {rs_next, m_hid, raddr[2:0]}; tq_w <= tq_w + 5'd1; end
         if (m_rvalid) tq_r <= tq_r + 5'd1;
     end
     if (m_rvalid && tq_h[3]) hreg <= m_rdata;
 end
-wire        f_we = keep && !tq_h[3];
-wire [35:0] f_wd = {h_nib, rd_w};
+// a serrated picture's pair: the A word is kept (areg, and its row start), the B word's arrival writes the average of the two -- per
+// channel (a + b + 1) >> 1 -- of each pixel, its bit 0 (the RDP's "complete", the 565's blue's) the AND of the two
+wire         is_a = avg_f && !rtog, is_b = avg_f && rtog;
+logic [31:0] areg;
+logic        a_rs;
+always_ff @(posedge clk) begin
+    if (keep && is_a) begin areg <= rd_w; a_rs <= tq_h[4]; end
+    if (rst || fb_sys) rtog <= 1'b0; else if (keep) rtog <= ~rtog;
+end
+function automatic logic [15:0] avg_px(input logic [15:0] a, b);
+    logic [5:0] r, g, bl;
+    if (N64FB) begin                                           // RGBA5551
+        r  = 6'(a[15:11]) + 6'(b[15:11]) + 6'd1;
+        g  = 6'(a[10:6])  + 6'(b[10:6])  + 6'd1;
+        bl = 6'(a[5:1])   + 6'(b[5:1])   + 6'd1;
+        return {r[5:1], g[5:1], bl[5:1], a[0] & b[0]};
+    end else begin                                             // RGB565
+        r  = 6'(a[15:11]) + 6'(b[15:11]) + 6'd1;
+        g  = 6'(a[10:5])  + 6'(b[10:5])  + 6'd1;
+        bl = 6'(a[4:0])   + 6'(b[4:0])   + 6'd1;
+        return {r[5:1], g[5:1], bl[5:1]};
+    end
+endfunction
+// (a registered stage in front of the FIFO: the adders' path, with the epoch of the word's arrival)
+wire        f_we_n = keep && !tq_h[3] && !is_a;
+wire [36:0] f_wd_n = is_b ? {a_rs, 4'd0, avg_px(areg[31:16], rd_w[31:16]), avg_px(areg[15:0], rd_w[15:0])} : {tq_h[4], h_nib, rd_w};
+logic        f_we, f_ep;
+logic [36:0] f_wd;
+always_ff @(posedge clk) begin f_we <= !rst && f_we_n; f_wd <= f_wd_n; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
@@ -324,77 +347,98 @@ assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : raddr;   // (the p
 logic        f_rd, f_empty;
 logic [FW-1:0] f_q;
 afifo #(.W(FW), .AW(FAW)) fifo (
-    .wclk(clk), .wrst(rst), .w_en(f_we), .w_data({epoch_sys, f_wd}), .w_level(wlevel),
+    .wclk(clk), .wrst(rst), .w_en(f_we), .w_data({f_ep, f_wd}), .w_level(wlevel),
     .rclk(clk_vid), .rrst(rst_vid), .r_en(f_rd), .r_data(f_q), .r_empty(f_empty)
 );
 
-// --------------------------------------------------------------- vid: pixels
-// a word: two pixels, low half first. Stale words (the last frame's epoch)
-// are dropped whenever they come up. A word not there by its second pixel is
-// black and owed (debt): it is dropped when it arrives, so the rest of the
-// frame stays where it belongs.
-// The picture's place on the screen (latched by sys at the boundary): pixel
-// hcount - 1 of line vcount (1 up); outside it nothing is taken and the pixel
-// is black.
-logic [30:0] win_s1, win_s2;
-always_ff @(posedge clk_vid) begin win_s1 <= {dec_f, nr, y0_f[5:0], x0_f[5:0], rw}; win_s2 <= win_s1; end
-wire  [9:0]  px0 = 10'(win_s2[14:9]), py0 = 10'(win_s2[20:15]);
-wire         dec_v = win_s2[30];                       // a hi-res picture in 320 x 240: a word a pixel, its left one
-wire         inwin = (dec_v || (hcount > px0 && hcount <= px0 + {win_s2[8:0], 1'b0}))
-                     && vc_f > py0 && vc_f <= py0 + 10'(win_s2[29:21]);
-logic        half;                 // the next pixel is the word's high half
+// --------------------------------------------------------------- vid: the picture
+// the frame's parameters (static: latched by sys at the boundary)
+logic [49:0] win_s;
+always_ff @(posedge clk_vid) win_s <= {nofilt_f, nr, y0_f, px0_f, pw_f, xs_f};
+wire  [10:0] xs_v    = win_s[10:0];
+wire  [9:0]  pw_v    = win_s[20:11];
+wire  [9:0]  px0_v   = win_s[30:21];
+wire  [9:0]  py0_v   = {2'b00, win_s[38:31]};
+wire  [9:0]  nr_v    = {1'b0, win_s[47:39]};
+wire         nofilt_v = win_s[48];
+// the window's rows (the fetch lines: vcount py0 .. py0 + nr - 1; line d shows the row of line d - 1: the filters' row below
+// is the one just fetched), by line, from the priming on: nv this line fetches a row, cv the one before did (and is shown
+// now), av the one before that (the filters' row above)
+logic       nv, cv, av;
+logic [10:0] win_end;
+always_ff @(posedge clk_vid) win_end <= {1'b0, px0_v} + {1'b0, pw_v};
+wire        nv_n = vcount >= py0_v && vcount < py0_v + nr_v;
+always_ff @(posedge clk_vid)
+    if (rst_vid) begin nv <= 0; cv <= 0; av <= 0; end
+    else if (hcount == PR_SYNC) begin nv <= nv_n; cv <= nv; av <= cv; end
+// the steps of the pipeline
+logic       wpos;                   // the next pixel is the FIFO head word's right one
+logic [9:0] sx;                     // the slot (the framebuffer's pixel) the next step loads
+logic [9:0] xa;                     // X_SCALE's accumulator: its fraction (a step when it carries)
+wire  [10:0] xsum = {1'b0, xa} + xs_v;
+wire        win_act = hcount > px0_v && hcount < win_end[9:0] && (nv || cv);   // the clocks before the window's last: a step where the accumulator carries
+wire        win_adv = win_act && xsum[10];
+wire        pr_act  = hcount >= PR0 && hcount < PR0 + 10'(NPE) && (nv || cv);
+wire        flush   = pr_act && hcount < PR0 + 10'(NF);
+wire        adv     = pr_act || win_adv;
+always_ff @(posedge clk_vid) begin
+    if (hcount == px0_v) xa <= 0;
+    else if (win_act) xa <= xsum[9:0];
+end
+// the FIFO head: a word of the row (the epoch's, not a stale one's)
+wire         stale = !f_empty && f_q[FW-1] != epoch_vid;
+wire         hd_ok = !f_empty && !stale;
+wire         sync_ph = nv && hcount > PR_SYNC && hcount < PR0;
+wire         rs_drop = sync_ph && hd_ok && !f_q[FW-2];
+wire         pop_ev  = adv && !flush && nv && wpos && hd_ok;
+always_comb f_rd = stale || rs_drop || pop_ev;
 logic [15:0] pix;
 logic [1:0]  phid;                 // its hidden coverage bits (MIRLO_VI_AA)
 logic        pv;                   // pix is the picture's (else black)
-logic [15:0] debt;
-wire         stale = !f_empty && f_q[FW-1] != epoch_vid;
-wire         owed  = !f_empty && !stale && debt != 0;
-// a hi-res picture shown at half its width: the word's two pixels averaged, per channel (a + b + 1) >> 1 -- a 2 x 1 box on
-// what the word already has (no buffer); a 565 picture takes the left one
-function automatic logic [15:0] havg(input logic [15:0] a, b);
-    if (!N64FB) return a;
-    else return {5'((6'(a[15:11]) + 6'(b[15:11]) + 6'd1) >> 1), 5'((6'(a[10:6]) + 6'(b[10:6]) + 6'd1) >> 1),
-                 5'((6'(a[5:1]) + 6'(b[5:1]) + 6'd1) >> 1), a[0] & b[0]};
-endfunction
-wire         take  = de_f && inwin && (half || dec_v);  // the word's second pixel (or its only one)
-always_comb f_rd = ce && (stale || owed || (take && !f_empty));
+logic        lwe;                  // pix is to be written to the line buffers
 always_ff @(posedge clk_vid) begin
-    if (rst_vid) begin half <= 0; pix <= 0; debt <= 0; end
-    else if (ce) begin
-        if (fb_vid) begin half <= 0; debt <= 0; end
-        else if (owed && !(take && f_empty)) debt <= debt - 16'd1;
-        else if (take && f_empty && !owed) debt <= debt + 16'd1;
-        pv <= de_f && inwin;
-        if (de_f) begin
-            if (inwin && !f_empty && !stale && !owed) pix <= dec_v ? havg(f_q[15:0], f_q[31:16]) : half ? f_q[31:16] : f_q[15:0];
-            else pix <= 16'd0;
-            phid <= half ? f_q[35:34] : f_q[33:32];
-            if (inwin && !dec_v) half <= ~half;
-        end
+    if (hcount == PR_SYNC) begin wpos <= 0; sx <= 0; end
+    else if (adv && !flush) begin
+        sx <= sx + 10'd1;
+        if (nv) wpos <= ~wpos;
     end
 end
-// ---- the pixel to the pads (pq, R8 G8 B8) and the timing it goes with
-logic [23:0] pq;
-logic        de_q, hs_q, vs_q, cr_q;
-// a 5551 / 565 pixel as R8 G8 B8. The N64's VI takes a 5551 channel as its
-// five bits << 3 (the console's VI_lineProcess, angrylion's & 0xf8: white is
-// 248), the base its dedither and AA filter work on too: a pixel left as it is
-// must match its dedithered and anti-aliased neighbours (with the top bits
-// again below, a partial pixel among complete ones came out c >> 2 brighter).
-// A 565 picture (not the N64's): the top bits again below.
-function automatic logic [23:0] rgb8(input logic [15:0] p);
-    if (N64FB) return {p[15:11], 3'd0, p[10:6], 3'd0, p[5:1], 3'd0};
-    else       return {p[15:11], p[15:13], p[10:5], p[10:9], p[4:0], p[4:2]};
-endfunction
+// a word's two pixels (the hidden bits of the one) -- the pixel the step loads
+wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : wpos ? f_q[31:16] : f_q[15:0];
+wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : wpos ? f_q[35:34] : f_q[33:32];
+wire        nx_pv  = nv && hd_ok && !flush;
+
+// the filters' line buffers and windows (the column of the slot, and its two rows above)
+logic       aa_on, dd_on, dv_on;
+(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb1 [0:1023];
+(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb2 [0:1023];
+logic [18:0] lq1r, lq2r;           // the line buffers' reads
+logic        lq_c, lq_a;           // ... that were of rows in the window
+wire  [18:0] lq1 = lq_c ? lq1r : 19'd0, lq2 = lq_a ? lq2r : 19'd0;
+logic [9:0]  lwa;
+// the window: {valid, hidden 2, RGBA5551} (the coverage: {bit 0, hidden})
+logic [18:0] wa [0:3], wc [0:4], wb [0:3];
+integer wi;
+always_ff @(posedge clk_vid) if (adv) begin
+    // the pixel this step loads
+    pix <= nx_pix; phid <= nx_hid; pv <= nx_pv; lwe <= nx_pv;
+    lq1r <= lb1[sx]; lq2r <= lb2[sx];
+    lq_c <= !flush && cv; lq_a <= !flush && av;
+    lwa <= sx;
+    // the column the last step loaded: written to the line buffers and into the windows
+    if (lwe) begin lb1[lwa] <= {pv, phid, pix}; lb2[lwa] <= lq1; end
+    wa[0] <= lq2; wc[0] <= lq1; wb[0] <= {pv, phid, pix};
+    for (wi = 1; wi < 4; wi = wi + 1) begin wa[wi] <= wa[wi - 1]; wb[wi] <= wb[wi - 1]; end
+    for (wi = 1; wi < 5; wi = wi + 1) wc[wi] <= wc[wi - 1];
+end
 // ---- MIRLO_VI_AA: the N64 VI's anti-alias and divot filters (the console's
 // VI_filter / VI_filter_pen, Angrylion's), on a pixel whose coverage is not
 // complete (the RDP's three bits: bit 0 and the hidden two, fetched with it).
 // The rows above and below: two line buffers of the rows fetched (a row is
 // shown the line after it is fetched), a pixel, its hidden bits and its valid
-// bit, read on the pixel's own clock (ce) at its slot and written
-// back on the next: lb1 the row just fetched, lb2 the one before. The window:
-// three rows by five columns, column k the pixel k slots back (the centre is
-// k = 2). Taps: (x-1, x+1) above and below, (x-2, x+2) beside; one that is
+// bit, read at its slot and written back on the next step: lb1 the row just fetched, lb2 the
+// one before. The window: three rows by five columns, column k the pixel k steps back (the
+// centre is k = 2). Taps: (x-1, x+1) above and below, (x-2, x+2) beside; one that is
 // not complete or not in the picture is the centre itself. Per channel, the
 // second smallest and second largest of the six, widened to take the centre
 // in: the N64's c + ((min + max - 2c) * (7 - cvg) + 4) >> 3 on the channels'
@@ -405,31 +449,13 @@ endfunction
 // centre and -1 for each below (on the five bits), added to its eight: the
 // smooth colour the RDP's dither stood for. Then the divot filter: where
 // any of three neighbours on the line is not complete, the median of the
-// three. Delay: six pixels (the timing is delayed to match).
+// three. Delay: six steps.
 logic [1:0]  aa_s, dv_s, dd_s;
 always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], vi_divot}; dd_s <= {dd_s[0], vi_dedither}; end
-// (a hi-res picture shown at half its width, dec_v: the filters are off -- their taps are the neighbours of the full-size
-// picture, and the line buffers are a 320-wide frame's)
-wire         aa_on = aa_s[1] && N64FB && !dec_v;
-wire         dd_on = dd_s[1] && N64FB && !dec_v;
-wire         dv_on = dv_s[1] && aa_on;
-(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb1 [0:511];
-(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb2 [0:511];
-logic [18:0] lq1, lq2;
-logic [8:0]  lwa;
-wire  [8:0]  lra = hcount - 9'd1;     // the slot whose pixel pix takes on this ce
-// the window: {valid, hidden 2, RGBA5551} (the coverage: {bit 0, hidden})
-logic [18:0] wa [0:3], wc [0:4], wb [0:3];
-integer wi;
-always_ff @(posedge clk_vid) if (ce) begin
-    lq1 <= lb1[lra]; lq2 <= lb2[lra]; lwa <= lra;
-    // the slot of the last ce: pix, and what was above it
-    lb1[lwa] <= {pv, phid, pix};
-    lb2[lwa] <= lq1;
-    wa[0] <= lq2; wc[0] <= lq1; wb[0] <= {pv, phid, pix};
-    for (wi = 1; wi < 4; wi = wi + 1) begin wa[wi] <= wa[wi - 1]; wb[wi] <= wb[wi - 1]; end
-    for (wi = 1; wi < 5; wi = wi + 1) wc[wi] <= wc[wi - 1];
-end
+// (a hi-res picture: the filters are off; its pixels go through the line buffers all the same -- 1024 slots: a 640-pixel line and the priming's)
+assign aa_on = aa_s[1] && N64FB && !nofilt_v;
+assign dd_on = dd_s[1] && N64FB && !nofilt_v;
+assign dv_on = dv_s[1] && aa_on;
 // second smallest and second largest of six (11 compares)
 function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
     logic [4:0] l0, h0, l1, h1, l2, h2, sa, sb, la, lb;
@@ -470,6 +496,16 @@ wire [9:0]  mr = mm2(n0[14:10], n1[14:10], n2[14:10], n3[14:10], n4[14:10], n5[1
 wire [9:0]  mg = mm2(n0[9:5],   n1[9:5],   n2[9:5],   n3[9:5],   n4[9:5],   n5[9:5]);
 wire [9:0]  mb = mm2(n0[4:0],   n1[4:0],   n2[4:0],   n3[4:0],   n4[4:0],   n5[4:0]);
 wire        aa_px = aa_on && ctr[18] && !complete(ctr);
+// a 5551 / 565 pixel as R8 G8 B8. The N64's VI takes a 5551 channel as its
+// five bits << 3 (the console's VI_lineProcess, angrylion's & 0xf8: white is
+// 248), the base its dedither and AA filter work on too: a pixel left as it is
+// must match its dedithered and anti-aliased neighbours (with the top bits
+// again below, a partial pixel among complete ones came out c >> 2 brighter).
+// A 565 picture (not the N64's): the top bits again below.
+function automatic logic [23:0] rgb8(input logic [15:0] p);
+    if (N64FB) return {p[15:11], 3'd0, p[10:6], 3'd0, p[5:1], 3'd0};
+    else       return {p[15:11], p[15:13], p[10:5], p[10:9], p[4:0], p[4:2]};
+endfunction
 // the dedither of one channel (bits [hi:hi-4] of the 5551 word): a ring tap
 // not in the picture counts as equal
 function automatic logic [7:0] ddch(input logic [4:0] c, input logic [39:0] n, input logic [7:0] v);
@@ -490,7 +526,7 @@ wire [23:0] dd8 = {ddch(ctr[15:11], `DDN(15), rv), ddch(ctr[10:6], `DDN(10), rv)
 // the filtered pixel, its partial coverage (for divot) and whether it is the picture's
 logic [23:0] fa0, fa1, fa2;
 logic [2:0]  fe, fv;                   // [0] the newest
-always_ff @(posedge clk_vid) if (ce) begin
+always_ff @(posedge clk_vid) if (adv) begin
     fa0 <= !ctr[18] ? 24'd0 : aa_px ? {pen(ctr[15:11], mr, cw), pen(ctr[10:6], mg, cw), pen(ctr[5:1], mb, cw)}
          : dd_on ? dd8 : rgb8(ctr[15:0]);
     fe[0] <= aa_px; fv[0] <= ctr[18];
@@ -505,160 +541,11 @@ function automatic logic [7:0] med3(input logic [7:0] a, b, c);
 endfunction
 wire [23:0] dl = fv[2] ? fa2 : fa1, dr = fv[0] ? fa0 : fa1;
 wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);
-// the timing, six pixels on
-logic [5:0] de_sh, hs_sh, vs_sh, cr_sh;
-always_ff @(posedge clk_vid) if (ce) begin
+logic [23:0] pq;
+always_ff @(posedge clk_vid) if (adv)
     pq <= dv_px ? {med3(dl[23:16], fa1[23:16], dr[23:16]), med3(dl[15:8], fa1[15:8], dr[15:8]), med3(dl[7:0], fa1[7:0], dr[7:0])} : fa1;
-    de_sh <= {de_sh[4:0], de}; hs_sh <= {hs_sh[4:0], hsync}; vs_sh <= {vs_sh[4:0], vsync}; cr_sh <= {cr_sh[4:0], crop};
-end
-assign de_q = de_sh[5]; assign hs_q = hs_sh[5]; assign vs_q = vs_sh[5]; assign cr_q = cr_sh[5];
 
-// ---- the OSD
-function automatic logic [7:0] font(input logic [3:0] d, input logic [2:0] r);  // 5x7 hex digits
-    logic [4:0] f;
-    case ({d, r})
-    7'h00: f = 5'h0E;
-    7'h01: f = 5'h11;
-    7'h02: f = 5'h13;
-    7'h03: f = 5'h15;
-    7'h04: f = 5'h19;
-    7'h05: f = 5'h11;
-    7'h06: f = 5'h0E;
-    7'h08: f = 5'h04;
-    7'h09: f = 5'h0C;
-    7'h0A: f = 5'h04;
-    7'h0B: f = 5'h04;
-    7'h0C: f = 5'h04;
-    7'h0D: f = 5'h04;
-    7'h0E: f = 5'h0E;
-    7'h10: f = 5'h0E;
-    7'h11: f = 5'h11;
-    7'h12: f = 5'h01;
-    7'h13: f = 5'h02;
-    7'h14: f = 5'h04;
-    7'h15: f = 5'h08;
-    7'h16: f = 5'h1F;
-    7'h18: f = 5'h1F;
-    7'h19: f = 5'h02;
-    7'h1A: f = 5'h04;
-    7'h1B: f = 5'h02;
-    7'h1C: f = 5'h01;
-    7'h1D: f = 5'h11;
-    7'h1E: f = 5'h0E;
-    7'h20: f = 5'h02;
-    7'h21: f = 5'h06;
-    7'h22: f = 5'h0A;
-    7'h23: f = 5'h12;
-    7'h24: f = 5'h1F;
-    7'h25: f = 5'h02;
-    7'h26: f = 5'h02;
-    7'h28: f = 5'h1F;
-    7'h29: f = 5'h10;
-    7'h2A: f = 5'h1E;
-    7'h2B: f = 5'h01;
-    7'h2C: f = 5'h01;
-    7'h2D: f = 5'h11;
-    7'h2E: f = 5'h0E;
-    7'h30: f = 5'h06;
-    7'h31: f = 5'h08;
-    7'h32: f = 5'h10;
-    7'h33: f = 5'h1E;
-    7'h34: f = 5'h11;
-    7'h35: f = 5'h11;
-    7'h36: f = 5'h0E;
-    7'h38: f = 5'h1F;
-    7'h39: f = 5'h01;
-    7'h3A: f = 5'h02;
-    7'h3B: f = 5'h04;
-    7'h3C: f = 5'h08;
-    7'h3D: f = 5'h08;
-    7'h3E: f = 5'h08;
-    7'h40: f = 5'h0E;
-    7'h41: f = 5'h11;
-    7'h42: f = 5'h11;
-    7'h43: f = 5'h0E;
-    7'h44: f = 5'h11;
-    7'h45: f = 5'h11;
-    7'h46: f = 5'h0E;
-    7'h48: f = 5'h0E;
-    7'h49: f = 5'h11;
-    7'h4A: f = 5'h11;
-    7'h4B: f = 5'h0F;
-    7'h4C: f = 5'h01;
-    7'h4D: f = 5'h02;
-    7'h4E: f = 5'h0C;
-    7'h50: f = 5'h0E;
-    7'h51: f = 5'h11;
-    7'h52: f = 5'h11;
-    7'h53: f = 5'h1F;
-    7'h54: f = 5'h11;
-    7'h55: f = 5'h11;
-    7'h56: f = 5'h11;
-    7'h58: f = 5'h1E;
-    7'h59: f = 5'h11;
-    7'h5A: f = 5'h11;
-    7'h5B: f = 5'h1E;
-    7'h5C: f = 5'h11;
-    7'h5D: f = 5'h11;
-    7'h5E: f = 5'h1E;
-    7'h60: f = 5'h0E;
-    7'h61: f = 5'h11;
-    7'h62: f = 5'h10;
-    7'h63: f = 5'h10;
-    7'h64: f = 5'h10;
-    7'h65: f = 5'h11;
-    7'h66: f = 5'h0E;
-    7'h68: f = 5'h1C;
-    7'h69: f = 5'h12;
-    7'h6A: f = 5'h11;
-    7'h6B: f = 5'h11;
-    7'h6C: f = 5'h11;
-    7'h6D: f = 5'h12;
-    7'h6E: f = 5'h1C;
-    7'h70: f = 5'h1F;
-    7'h71: f = 5'h10;
-    7'h72: f = 5'h10;
-    7'h73: f = 5'h1E;
-    7'h74: f = 5'h10;
-    7'h75: f = 5'h10;
-    7'h76: f = 5'h1F;
-    7'h78: f = 5'h1F;
-    7'h79: f = 5'h10;
-    7'h7A: f = 5'h10;
-    7'h7B: f = 5'h1E;
-    7'h7C: f = 5'h10;
-    7'h7D: f = 5'h10;
-    7'h7E: f = 5'h10;
-    default: f = 5'h00;
-    endcase
-    return {1'b0, f, 2'b00};
-endfunction
-localparam int OX = 4, OY = 4;             // the box's top left (active pixels)
-wire  [9:0] ax = hcount - 10'd1 - 10'(OX), ay = vcount - 10'd1 - 10'(OY);
-wire        in_box = osd_en && de && ax < 9'(17 * 8) && ay < 9'(8 * 8);
-// the frame counter (fps_en, without the OSD): the frames the game showed --
-// VI origin changes -- over the last 60 VI frames, two decimal digits in the
-// top left corner
-logic [7:0] fps_s1, fps_s2;
-always_ff @(posedge clk_vid) begin fps_s1 <= fps_bcd; fps_s2 <= fps_s1; end
-wire        in_fps = fps_en && !osd_en && de && ax < 9'd16 && ay < 9'd8;
-logic       s1_in, s1_sp;
-logic [2:0] s1_px, s1_py;
-logic [3:0] s1_nib;
-logic       osd_in, osd_px;
-wire  [7:0] glyph = font(s1_nib, s1_py);
-always_ff @(posedge clk_vid) if (ce) begin
-    // stage 1: the character and its digit
-    s1_in <= in_box || in_fps;
-    s1_px <= ax[2:0]; s1_py <= ay[2:0];
-    s1_sp <= in_box && ax[7:3] == 5'd8;                 // the column between the two words
-    s1_nib <= in_fps ? (ax[3] ? fps_s2[3:0] : fps_s2[7:4])
-                     : osd_val[{ay[5:3], ax[7:3] > 5'd8}][4 * (7 - (ax[7:3] > 5'd8 ? ax[7:3] - 5'd9 : ax[7:3])) +: 4];
-    // stage 2: the pixel
-    osd_in <= s1_in;
-    osd_px <= !s1_sp && glyph[3'd7 - s1_px];
-end
-
+// ---- the output's window and crop
 // the VI's window (slow-changing, from sys): black while H_START is 0 --
 // libultra's osViBlack, the game's level changes, when the framebuffer is
 // being rewritten -- and below its last line (V_START..V_END: SM64 shows
@@ -666,20 +553,21 @@ end
 // would be the next framebuffer's first, or the memory past the last one)
 logic [1:0] blk_s; logic [8:0] lin_s1, lin_s2;
 always_ff @(posedge clk_vid) begin blk_s <= {blk_s[0], vi_black}; lin_s1 <= vi_lines; lin_s2 <= lin_s1; end
-// The core's video options: the picture's first and last crop_v lines and its last crop_r columns, blanked -- relative to the
-// picture (a window too), the frame and its timing unchanged. Thresholds
-// in the timing's own counts (the window's are inwin's), registered: static.
+// The core's video options: the picture's first and last crop_v lines and its last crop_r columns (of the 320-wide
+// frame this was: two clocks each), blanked -- relative to the picture (a window too), the frame and its timing unchanged. Thresholds
+// in the timing's own counts, registered: static.
 logic [6:0] cv_s1, cv_s2;
 logic [9:0] crop_top, crop_bot, crop_rgt;
 wire  [9:0] cvl = {5'd0, cv_s2[4:0]};                 // (a field's lines, as the N64's)
 always_ff @(posedge clk_vid) begin
     cv_s1 <= {crop_r, crop_v}; cv_s2 <= cv_s1;
-    crop_top <= py0 + cvl;
-    crop_bot <= py0 + 10'(win_s2[29:21]) - cvl;
-    crop_rgt <= px0 + (dec_v ? 10'(win_s2[8:0]) : {win_s2[8:0], 1'b0}) - {8'd0, cv_s2[6:5]};
+    crop_top <= py0_v + cvl;
+    crop_bot <= py0_v + nr_v - cvl;
+    crop_rgt <= win_end[9:0] - {7'd0, cv_s2[6:5], 1'b0};
 end
+// the display line d shows the row fetched at d - 1, so its window is the lines py0 + 1 .. py0 + nr
 wire  crop = blk_s[1] || vcount > {1'b0, lin_s2}      // (active lines are vcount 1..240)
-          || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt;
+          || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt || hcount <= px0_v || !cv;
 
 // The VI's gamma correction: a channel's square root, the N64's 2 sqrt(64 v)
 // on its eight bits (the console's VI_sqrt without the gamma dither's noise),
@@ -696,26 +584,21 @@ function automatic logic [7:0] gsqrt(input int v);        // 2 floor(sqrt(64 v))
 endfunction
 initial for (int v = 0; v < 256; v++) gtab[v] = gsqrt(v);
 logic [7:0] gq_r, gq_g, gq_b;          // pq through the table (pix_d's clock)
-// outputs, behind the timing by the pixel's register and the OSD's two stages.
-// Every stage moves on a pixel's clock only, so a two-clock pixel's pads hold
-// still for both; vga_skip is low on the clock the pads have just changed on
-// (core_top sends it on with the pads, one register later) and high on the other
-logic de_d, hs_d, vs_d, de_d2, hs_d2, vs_d2, cr_d, cr_d2;
+// outputs, a register behind pq
+logic de_d, hs_d, vs_d, cr_d;
 logic [23:0] pix_d;
 wire  [7:0]  o_r = gam_s[1] ? gq_r : pix_d[23:16];
 wire  [7:0]  o_g = gam_s[1] ? gq_g : pix_d[15:8];
 wire  [7:0]  o_b = gam_s[1] ? gq_b : pix_d[7:0];
 always_ff @(posedge clk_vid) begin
-    if (ce) begin
-        de_d <= de_q; hs_d <= hs_q; vs_d <= vs_q; cr_d <= cr_q;
-        de_d2 <= de_d; hs_d2 <= hs_d; vs_d2 <= vs_d; cr_d2 <= cr_d; pix_d <= pq;
-        gq_r <= gtab[pq[23:16]]; gq_g <= gtab[pq[15:8]]; gq_b <= gtab[pq[7:0]];
-        vga_de <= de_d2; vga_hsync <= hs_d2; vga_vsync <= vs_d2;
-        vga_r <= !de_d2 ? 8'd0 : osd_in ? {8{osd_px}} : cr_d2 ? 8'd0 : o_r;
-        vga_g <= !de_d2 ? 8'd0 : osd_in ? {8{osd_px}} : cr_d2 ? 8'd0 : o_g;
-        vga_b <= !de_d2 ? 8'd0 : osd_in ? {8{osd_px}} : cr_d2 ? 8'd0 : o_b;
-    end
-    vga_skip <= !ce;
+    de_d <= de; hs_d <= hsync; vs_d <= vsync; cr_d <= crop;
+    pix_d <= pq;
+    gq_r <= gtab[pq[23:16]]; gq_g <= gtab[pq[15:8]]; gq_b <= gtab[pq[7:0]];
+    vga_de <= de_d; vga_hsync <= hs_d; vga_vsync <= vs_d;
+    vga_r <= !de_d || cr_d ? 8'd0 : o_r;
+    vga_g <= !de_d || cr_d ? 8'd0 : o_g;
+    vga_b <= !de_d || cr_d ? 8'd0 : o_b;
+    vga_skip <= 1'b0;
 end
 
 endmodule

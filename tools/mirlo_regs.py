@@ -98,15 +98,19 @@ BLOCKS = [
         ("DMA_OFFSET", 0x0C, R,  1, []),
         ("VTG_ENABLE", 0x10, RW, 1, []),
         ("VTG_MODE",   0x14, RW, 1, []),            # (no effect: the frame is always 320 x 240)
-        ("WIDTH",      0x18, RW, 1, []),            # the framebuffer's width when 512 or more: a
-                                                    # hi-res one (an N64 game's 640 wide), shown at half its
-                                                    # width (every other pixel) in 320 x 240; with bit 17 (the
-                                                    # picture is 480 rows, interlaced) its first field alone (every
-                                                    # other row); bit 16: the N64 VI's gamma correction
-        # a framebuffer smaller than its frame (WIDTH: its width) on the screen, a pixel a pixel:
-        # [5:0] its left edge, pixels, [13:8] its first line, [24:16] its lines (0: the whole frame; a
-        # 480-row picture's: a field's)
+        ("WIDTH",      0x18, RW, 1, []),            # [11:0] the VI's WIDTH, the framebuffer's rows' pitch in pixels (512 or
+                                                    # more: a hi-res picture, the VI's filters off); bit 16: the N64
+                                                    # VI's gamma correction; 17: (unused); 18: PAL; 19 (read): PAL in use
+        # the scan-out is the VI's: a 640-clock line, 240 lines (rtl/soc/n64_video.sv). The picture's window in it:
+        # [15:8] its first line, [24:16] its lines (0: the whole field)
         ("WINDOW",     0x1C, RW, 1, []),
+        # [9:0] its first clock in the line (H_START - 108), [25:16] its width in clocks (H_END - H_START)
+        ("HWINDOW",    0x20, RW, 1, []),
+        # the VI's steps through the framebuffer, 2.10: [10:0] X_SCALE (a pixel of the picture steps this many
+        # 1/1024 pixels; at most 1.0), [26:16] Y_SCALE (the rows a line steps; at most 2.0)
+        ("SCALE",      0x24, RW, 1, []),
+        # [10:0] the words a row reads (the window's last pixel's, and the priming's)
+        ("ROWWORDS",   0x28, RW, 1, []),
     ]),
     # the monitor (MIRLO_MON: mips_core's MON, the runtime for a game that runs its own libultra)
     ("MONITOR", 0x0D00, [
