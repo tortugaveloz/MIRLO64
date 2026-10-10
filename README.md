@@ -1,6 +1,6 @@
 # MIRLO 64
 
-MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture (see [Building the hardware](#building-the-hardware)).
+MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
 ## Installing on the Pocket
 
