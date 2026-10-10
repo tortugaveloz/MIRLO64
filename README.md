@@ -21,4 +21,4 @@ Saves (`.sav`) appear in `Saves/mirlo/common/` when you quit a game. To update t
 
 ## License
 
-MIRLO 64 is released under the [Apache License 2.0](LICENSE). It includes and builds on third-party work under its own licenses: see [NOTICE](NOTICE).
+MIRLO 64 is released under the [Apache License 2.0](LICENSE).
