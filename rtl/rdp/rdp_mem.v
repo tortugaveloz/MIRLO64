@@ -17,7 +17,8 @@
 //                      TMEM's 16-bit word `ldst`, by `lmode` -- 0 one after
 //                      the other, 1 each word's halves to the two halves of
 //                      TMEM (32-bit RGBA), 2 `ln` 16-bit TLUT entries, each
-//                      four times over.
+//                      four times over, 3 as 1 with a YUV pair's U Y0 V Y1 as
+//                      U V to the lower half and Y0 Y1 to the upper.
 //   the write engine   a row's results back from the "new" line buffers (set
 //                      `wr_set`): a word goes when its pixels' results are in
 //                      (res_a / res_b: the results so far, by set), the
@@ -377,9 +378,10 @@ module rdp_mem (
                             lhalf <= ~lhalf; if (lhalf) lacc <= lacc + ldxt;
                             if (!m_rdata_valid || lfirst) la_v <= 1'b0;
                         end
-                        2'd1: begin
+                        2'd1, 2'd3: begin
                             tm_we <= ldst[0] ? 4'b1010 : 4'b0101; tm_wa <= {ldst[9:2], ldst[1] ^ lsw};
-                            tm_wd0 <= la[31:16]; tm_wd1 <= la[31:16]; tm_wd2 <= la[15:0]; tm_wd3 <= la[15:0];
+                            tm_wd0 <= lmode[1] ? {la[31:24], la[15:8]} : la[31:16]; tm_wd1 <= lmode[1] ? {la[31:24], la[15:8]} : la[31:16];
+                            tm_wd2 <= lmode[1] ? {la[23:16], la[7:0]} : la[15:0];   tm_wd3 <= lmode[1] ? {la[23:16], la[7:0]} : la[15:0];
                             ldst <= ldst + 11'd1; lleft <= lleft - 11'd1;
                             lhalf <= ~lhalf; if (lhalf) lacc <= lacc + ldxt;
                             if (!m_rdata_valid || lfirst) la_v <= 1'b0;

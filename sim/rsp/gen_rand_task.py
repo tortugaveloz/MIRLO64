@@ -18,6 +18,7 @@ VEC_FNS = [0x00, 0x01, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0
            0x10, 0x11, 0x13, 0x14, 0x15, 0x1D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
            0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x3F]
 LS_OPS = [0, 1, 2, 3, 4, 5, 6, 7, 11]
+ST_ONLY = [8, 9]                                # SHV, SFV
 SPECIAL = [0x7FFF, 0x8000, 0xFFFF, 0x0000, 0x0001, 0x8001, 0x4000, 0xC000]
 
 
@@ -55,9 +56,11 @@ def main():
             fn = rnd.choice(VEC_FNS)
             emit(0x4A000000 | e << 21 | rnd.randrange(32) << 16 | rnd.randrange(32) << 11 | rnd.randrange(32) << 6 | fn)
         elif k < 0.75:                                  # a vector load or store
-            op = rnd.choice(LS_OPS)
-            emit((0x32 if rnd.random() < 0.5 else 0x3A) << 26 | rnd.randrange(1, 8) << 21 | rnd.randrange(32) << 16
-                 | op << 11 | e << 7 | rnd.randrange(128))
+            st = rnd.random() < 0.5
+            op = rnd.choice(LS_OPS + ST_ONLY if st else LS_OPS)
+            el = e & 12 if op == 9 else e               # (SFV: an element a multiple of 4)
+            emit((0x3A if st else 0x32) << 26 | rnd.randrange(1, 8) << 21 | rnd.randrange(32) << 16
+                 | op << 11 | el << 7 | rnd.randrange(128))
         elif k < 0.83:                                  # MFC2 MTC2 CFC2 CTC2
             which = rnd.choice([0, 4, 2, 6])
             rd = rnd.randrange(32) if which in (0, 4) else rnd.randrange(4)

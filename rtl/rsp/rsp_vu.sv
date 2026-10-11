@@ -22,9 +22,11 @@
 //
 //   LTV, STV        a byte a cycle (every graphics microcode has them, none
 //                   runs them often)
+//   SHV, SFV        one cycle (the JPEG microcodes' YUV packing: Ogre Battle 64)
 // Not implemented (no microcode of the ROMs scanned has them -- sim/rsp/
-// rom_ucode_scan.py; they do nothing and set `unimpl`): LHV LFV LWV, SHV SFV
-// SWV, VRNDP VRNDN VMULQ VMACQ and the reserved functions.
+// rom_ucode_scan.py; they do nothing and set `unimpl`): LHV LFV LWV, SWV, SFV
+// at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ and the reserved
+// functions.
 `default_nettype none
 
 module rsp_vu #(
@@ -502,11 +504,15 @@ end
 wire  [11:0] ls_addr = a[11:0] + off_sh;
 wire  ls_packed = lsop == 5'd6 || lsop == 5'd7;
 wire  ls_tv     = (lwc2 || swc2) && lsop == 5'd11;                 // LTV, STV
-wire  ls_known  = lsop <= 5'd7 || lsop == 5'd11;
+// SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
+wire  st_hv     = swc2 && lsop == 5'd8;
+wire  st_fv     = swc2 && lsop == 5'd9 && el[1:0] == 2'd0;
+wire  ls_known  = lsop <= 5'd7 || lsop == 5'd11 || st_hv || st_fv;
 wire  [3:0]  o    = ls_addr[3:0];
 wire  [4:0]  size = 5'd1 << lsop[1:0];
-// the access's first word: LRV / SRV the block's, a packed load the 8-byte block's
-wire  [1:0]  win_w  = lsop == 5'd5 ? 2'b00 : (lwc2 && ls_packed) ? {ls_addr[3], 1'b0} : ls_addr[3:2];
+// the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV)
+// the 8-byte block's
+wire  [1:0]  win_w  = lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ls_addr[3], 1'b0} : ls_addr[3:2];
 wire  [11:0] ls_win = {ls_addr[11:4], win_w, 2'b00};
 // a load's register bytes: a run of the register's sixteen from e on -- its size's; to the 16-byte block's end
 // (LQV); or (LRV) from where the block's start comes, the bytes before the address, to the register's end
@@ -533,6 +539,8 @@ always_comb
         5'd4:          st_be[b] = 4'(b) >= o;                                     // SQV
         5'd5:          st_be[b] = 4'(b) < o;                                      // SRV
         5'd6, 5'd7:    st_be[b] = !q[3];                                          // SPV, SUV: 8 bytes
+        5'd8:          st_be[b] = !q[0];                                          // SHV: every second
+        5'd9:          st_be[b] = q[1:0] == 2'd0;                                 // SFV: every fourth
         default:       st_be[b] = {1'b0, q} < size;                               // SBV .. SDV
         endcase
     end
@@ -551,7 +559,10 @@ wire         in_tv   = st == V_TV;
 
 // a store's (and MFC2's) bytes: the register's 16 (sarr: its bytes, or for
 // SPV/SUV each lane's top 8 bits or bits 14..7 -- lane i & 7, the top 8 for
-// the first eight and SPV, the other way round for SUV) rotated to DMEM's:
+// the first eight and SPV, the other way round for SUV; for SHV bits 14..7 of
+// the 16 from byte i, {byte i [6:0], byte i + 1 [7]}; for SFV a lane's bits
+// 14..7, byte i (a multiple of 4) taking lane {e[3], i[3] ^ e[3], i[2]}:
+// lanes 0-3 for e 0, 1,2,3,0 for 4, 4-7 for 8, 5,6,7,4 for 12) rotated to DMEM's:
 // byte b takes sarr[(b + st_rot) & 15] -- by one to three bytes, then by
 // words. A store's st_rot is e - addr = (e - the offset) - rs: the part known
 // from the instruction first, then rs's low bits (the late ones: forwarded),
@@ -564,11 +575,15 @@ wire  [3:0]  st_eo  = el - off_sh[3:0];
 wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - a[3:0] : el;
 always_comb begin
     for (int i = 0; i < 16; i++) begin
-        logic [15:0] wp, wn;
+        logic [15:0] wp, wn, wh, wf;
         wp = qc[i % 8];
         wn = qc[i / 2];
-        if (st_pk) sarr[i] = ((i < 8) == (lsop == 5'd6)) ? wp[15:8] : wp[14:7];
-        else       sarr[i] = (i % 2 == 1) ? wn[7:0] : wn[15:8];
+        wh = (i % 2 == 1) ? {wn[7:0], qc[((i + 1) / 2) % 8][15:8]} : wn;
+        wf = qc[{el[3], 1'(i / 8) ^ el[3], 1'((i / 4) % 2)}];
+        if (st_pk)      sarr[i] = ((i < 8) == (lsop == 5'd6)) ? wp[15:8] : wp[14:7];
+        else if (st_hv) sarr[i] = wh[14:7];
+        else if (st_fv) sarr[i] = wf[14:7];
+        else            sarr[i] = (i % 2 == 1) ? wn[7:0] : wn[15:8];
     end
     for (int b = 0; b < 16; b++) sr1[b] = sarr[(b + int'(st_rot[1:0])) & 15];
     for (int b = 0; b < 16; b++) sb[b]  = sr1[(b + 4 * int'(st_rot[3:2])) & 15];

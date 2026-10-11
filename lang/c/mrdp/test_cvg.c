@@ -419,6 +419,30 @@ int main(void)
     tri_vleft(10 << 16);
     check("combiner: (PRIM - K4 -64) * K5 128 -> 132", 12, 3, c5551(132, 132, 132, 1));
 
+    /* 12. A YUV texture (Ogre Battle 64's JPEG backgrounds): the image's U Y0 V Y1 loaded as U V to TMEM's lower half and Y0 Y1
+     * to its upper, converted by the texture filter (1-cycle, G_TC_CONV: BI_LERP_0 off) with SET_CONVERT's K0..K3, then the
+     * combiner's (TEXEL0 - K4) * K5 + TEXEL0 -- the game's own words (EC15FD5D 3B78E42A: K 175, -43, -89, 222, 114, 42). The pair
+     * U 168, Y0 100, V 108, Y1 200: u 40, v -20, the K's 2K + 1. Texel 0 (Y 100): R 100 + (351 * -20 + 128 >> 8) = 73, G 100 +
+     * (-85 * 40 - 177 * -20 + 128 >> 8) = 101, B 100 + (445 * 40 + 128 >> 8) = 170; combined R (73 - 114) * 42 + 73 * 256 + 128
+     * >> 8 = 66, G 99, B 179. Texel 1 (Y 200, through the tile's S mask: S 0 less uls 1 wraps to 1): 173, 201, 270 -> 255;
+     * combined 183, 215, and B 278 overflows to 255. */
+    for (int k = 0; k < 2; k++) {
+        static const uint8_t yuv[8] = { 168, 100, 108, 200, 168, 100, 108, 200 };
+        setup((1u << 6) | (1u << 22) | (1u << 18));
+        memcpy(&mem[0x30000], yuv, sizeof yuv);
+        cmd(0x3D000000u | 1u << 21 | 2u << 19, 0x30000u);                         /* SET_TEXTURE_IMAGE: YUV, 16 bit */
+        cmd(0x35000000u | 1u << 21 | 2u << 19, 7u << 24);                         /* SET_TILE 7: YUV16 at TMEM 0 */
+        cmd(0x33000000u, 7u << 24 | 3u << 12);                                    /* LOAD_BLOCK: 4 texels */
+        cmd(0x35000000u | 1u << 21 | 2u << 19 | 1u << 9, k ? 1u << 4 : 0u);        /* SET_TILE 0: YUV16, line 1 (k: S mask 1) */
+        cmd(0x32000000u | (k ? 4u << 12 : 0u), 3u << 14);                         /* SET_TILE_SIZE 0 (k: uls 1) */
+        cmd(0xEC15FD5Du, 0x3B78E42Au);                                            /* SET_CONVERT */
+        /* RGB = (TEXEL0 - K4) * K5 + TEXEL0, A = 1 (cycle 1's settings; 1-cycle) */
+        cmd(0x3C000000u | (1u << 5) | 15u, (15u << 28) | (7u << 24) | (7u << 21) | (7u << 18) | (1u << 6) | (7u << 3) | 6u);
+        tri_vleft(10 << 16);
+        check(k ? "YUV: texel 1 (Y1) converted, (T - K4) * K5 + T" : "YUV: texel 0 (Y0) converted, (T - K4) * K5 + T",
+              12, 3, k ? c5551(183, 215, 255, 1) : c5551(66, 99, 179, 1));
+    }
+
     printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
     return fails != 0;
 }

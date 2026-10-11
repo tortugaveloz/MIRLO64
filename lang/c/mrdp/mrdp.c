@@ -164,6 +164,10 @@ static mrdp_rgba_t texel_expand(unsigned fmt, uint16_t v)
  *   32-bit   R G in word (...+ s) of the lower half, B A in the same word of
  *            the upper half (as the N64 keeps them: LOAD BLOCK / LOAD TILE
  *            split a 32-bit RGBA texture so)
+ *   YUV      16-bit: a pixel pair's U V in word (... + s/2) of the lower half,
+ *            its Y0 Y1 in the same word of the upper half (the loads split
+ *            the image's U Y0 V Y1 so); the texel is (U, V, Y, Y), U and V
+ *            as their bytes (offset by 128: yuv_convert takes it off)
  * and decoded by the tile's format. With the TLUT on, a texel is an index
  * whatever the tile's format: a 4-bit one with the tile's palette, an 8-bit
  * one as it is, and of a 16- or 32-bit one the first byte of its word (of the
@@ -191,6 +195,12 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
         c.b = (uint8_t)(m[0x400 | i] >> 8); c.a = (uint8_t)m[0x400 | i];
         return c;
     }
+    if (t->fmt == 1 && t->size == 2) {                                /* YUV */
+        uint32_t i = ((row + ((uint32_t)s >> 1)) ^ odd) & 0x3FF;
+        c.r = (uint8_t)(m[i] >> 8); c.g = (uint8_t)m[i];
+        c.b = c.a = (uint8_t)((s & 1) ? m[0x400 | i] : m[0x400 | i] >> 8);
+        return c;
+    }
     unsigned v = m[((row + ((uint32_t)s >> (2 - t->size))) ^ odd) & 0x7FF];
     unsigned n = (v >> (12 - 4 * (s & 3))) & 15u;                 /* the 4-bit texel */
     unsigned b = (s & 1) ? (v & 255u) : (v >> 8);                 /* the 8-bit one */
@@ -200,7 +210,7 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
     }
     if (t->size == 2) {
         if (t->fmt == 3) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
-        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (YUV: not decoded; CI 16 is read as RGBA, as in Clayfighter's logo) */
+        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as in Clayfighter's logo) */
         c.r = c.g = c.b = c.a = (uint8_t)(v >> 8);                /* I: the first byte */
     } else if (t->size == 1) {
         if (t->fmt == 3) { c.r = c.g = c.b = (uint8_t)((b >> 4) * 17u); c.a = (uint8_t)((b & 15u) * 17u); }   /* IA 4 4 */
@@ -254,7 +264,7 @@ static void tc_axis(int32_t v, unsigned lo, unsigned hi, unsigned clampbit,
     *frac = f;
 }
 
-static mrdp_rgba_t texture_sample(const mrdp_t *r, int tilei, int32_t s105, int32_t t105)
+static mrdp_rgba_t texture_sample(const mrdp_t *r, int tilei, int32_t s105, int32_t t105, int point)
 {
     const mrdp_tile_t *t = &r->tile[tilei & 7];
     int32_t s = tc_shift(s105, t->shifts), tt = tc_shift(t105, t->shiftt);
@@ -263,7 +273,7 @@ static mrdp_rgba_t texture_sample(const mrdp_t *r, int tilei, int32_t s105, int3
     tc_axis(tt, t->ult, t->lrt, t->ct, t->mt, t->maskt, &t0, &t1, &ft);
 
     mrdp_rgba_t a = tmem_fetch(r, t, s0, t0);
-    if (((r->other_h >> MRDP_H_FILT_SHIFT) & 3) == 0)   /* point */
+    if (point || ((r->other_h >> MRDP_H_FILT_SHIFT) & 3) == 0)   /* point */
         return a;
 
     /* N64 3-point filter: the triangle of the 2x2 the sample falls in */
@@ -284,6 +294,44 @@ static mrdp_rgba_t texture_sample(const mrdp_t *r, int tilei, int32_t s105, int3
     }
     return o;
 }
+
+static const mrdp_rgba_t s_no_texel = { 0, 0, 0, 0 };   /* (texture_pass's prev for the first pass) */
+#ifdef MRDP_N64
+/* The texture filter's YUV -> RGB (SET_CONVERT's K0..K3, the N64's 2K + 1 in 1/256ths), from a texel (U, V, Y, Y) as
+ * tmem_fetch gives it: R = Y + K0 V, G = Y + K1 U + K2 V, B = Y + K3 U, A = Y, U and V less 128. Each channel clamped
+ * to a byte (the hardware keeps 9 bits; the combiner's (T - K4) * K5 + T, YUV's, clamps the same pixels the same way). */
+static mrdp_rgba_t yuv_convert(const mrdp_t *r, mrdp_rgba_t c)
+{
+    int u = c.r - 128, v = c.g - 128, y = c.b;
+    int k0 = 2 * r->kc[0] + 1, k1 = 2 * r->kc[1] + 1, k2 = 2 * r->kc[2] + 1, k3 = 2 * r->kc[3] + 1;
+    mrdp_rgba_t o;
+    o.r = (uint8_t)clamp8(y + ((k0 * v + 128) >> 8));
+    o.g = (uint8_t)clamp8(y + ((k1 * u + k2 * v + 128) >> 8));
+    o.b = (uint8_t)clamp8(y + ((k3 * u + 128) >> 8));
+    o.a = (uint8_t)y;
+    return o;
+}
+static inline int tile_yuv(const mrdp_tile_t *t) { return t->fmt == 1 && t->size == 2; }
+/* One pass of the texture unit: pass 0 the tile's sample (the first cycle's), pass 1 the next tile's (a 2-cycle pixel's
+ * second, rtl/rdp rdp_pix.v's two_pass). A pass whose BI_LERP bit is off converts instead of filtering: the tile's
+ * texel at (s0, t0), or with CONVERT_ONE (G_TC_FILTCONV) pass 1 converts pass 0's texel, prev. Only a YUV tile's texel
+ * is converted (the bits are 0 -- G_TC_CONV -- in a mode a game never set; another format converted is not seen). */
+static mrdp_rgba_t texture_pass(const mrdp_t *r, int tilei, int32_t s, int32_t t, int pass, mrdp_rgba_t prev)
+{
+    uint32_t h = r->other_h;
+    int one = pass && (h & MRDP_H_CONVERT_ONE);
+    int conv = ((h >> MRDP_H_CYCLE_SHIFT) & 3) < 2 && !(h & (pass ? MRDP_H_BILERP1 : MRDP_H_BILERP0))
+               && tile_yuv(&r->tile[(one ? tilei - 1 : tilei) & 7]);
+    if (!conv) return texture_sample(r, tilei, s, t, 0);
+    return yuv_convert(r, one ? prev : texture_sample(r, tilei, s, t, 1));
+}
+#else
+static mrdp_rgba_t texture_pass(const mrdp_t *r, int tilei, int32_t s, int32_t t, int pass, mrdp_rgba_t prev)
+{
+    (void)pass; (void)prev;
+    return texture_sample(r, tilei, s, t, 0);
+}
+#endif
 
 /* ---- color combiner: (A - B) * C + D, N64 selections -------------------- */
 
@@ -791,14 +839,14 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
         else if (pr->texrect) { s = (int16_t)at[AS]; t = (int16_t)at[AT]; }
         else if (h & MRDP_H_PERSP) { s = mrdp_persp(at[AS] >> 4, (uint32_t)at[AW]); t = mrdp_persp(at[AT] >> 4, (uint32_t)at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
-        in.tex = texture_sample(r, pr->tile, s, t);
+        in.tex = texture_pass(r, pr->tile, s, t, 0, s_no_texel);
         /* TEXEL1 in the first cycle of a 2-cycle pixel: the next tile (tile + 1) at the same S, T -- the N64's
          * second texture (a skybox's day / night blend, a terrain's second layer). Its second cycle still
          * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients:
          * TEXEL0 again, one pass.) */
         in.tex1 = in.tex;
         if (pr->tex && cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
-            tex_next = texture_sample(r, (pr->tile + 1) & 7, s, t);
+            tex_next = texture_pass(r, (pr->tile + 1) & 7, s, t, 1, in.tex);
             if (cc0_uses_texel1(r)) in.tex1 = tex_next;
             have_next = 1;
         }
@@ -1028,7 +1076,7 @@ static void draw_pixel(mrdp_t *r, const prim_t *pr, int x, int y, const int32_t 
         else if (h & MRDP_H_PERSP) { s = mrdp_persp(at[AS], (uint32_t)at[AW]); t = mrdp_persp(at[AT], (uint32_t)at[AW]); }
         else { s = s105_noperp(at[AS]); t = s105_noperp(at[AT]); }
 #endif
-        in.tex = texture_sample(r, pr->tile, s, t);
+        in.tex = texture_pass(r, pr->tile, s, t, 0, s_no_texel);
         in.tex1 = in.tex;
     }
 
@@ -1406,18 +1454,25 @@ static inline uint16_t timg_hw(mrdp_t *r, uint32_t a)
 }
 /* n 32-bit words from src to TMEM's 16-bit word dst (a multiple of 4): one
  * after the other, or (a 32-bit RGBA tile) each word's halves to the two
- * halves of TMEM. dxt: LOAD BLOCK's, what a 64-bit word adds to the row count
+ * halves of TMEM, or (a 16-bit YUV tile) a pixel pair's U Y0 V Y1 as U V to the
+ * lower half and Y0 Y1 to the upper. dxt: LOAD BLOCK's, what a 64-bit word adds to the row count
  * (u1.11); odd: the row is odd throughout (LOAD TILE's). */
 static void tmem_load(mrdp_t *r, const mrdp_tile_t *t, uint32_t src, uint32_t dst, uint32_t n, uint32_t dxt, int odd)
 {
-    const int split = t->fmt == 0 && t->size == 3;
+    const int yuv = t->fmt == 1 && t->size == 2;
+    const int split = (t->fmt == 0 && t->size == 3) || yuv;
     for (uint32_t k = 0; k < n; k++) {
         uint16_t h0 = timg_hw(r, src + 4u * k), h1 = timg_hw(r, src + 4u * k + 2u);
         uint32_t j = k >> 1;                         /* (the 64-bit word of the image this is of) */
         uint32_t sw = (odd || (((j * dxt) >> 11) & 1u)) ? 2u : 0u;
         if (split) {
             uint32_t i = ((dst + k) ^ sw) & 0x3FF;
-            r->tmem16[i] = h0; r->tmem16[0x400 | i] = h1;
+            if (yuv) {
+                r->tmem16[i] = (uint16_t)((h0 & 0xFF00u) | h1 >> 8);
+                r->tmem16[0x400 | i] = (uint16_t)(h0 << 8 | (h1 & 0xFFu));
+            } else {
+                r->tmem16[i] = h0; r->tmem16[0x400 | i] = h1;
+            }
         } else {
             uint32_t i = ((dst + 2u * k) ^ sw) & 0x7FE;
             r->tmem16[i] = h0; r->tmem16[i | 1u] = h1;
@@ -1570,7 +1625,13 @@ static void execute(mrdp_t *r, const uint32_t *w)
         break;
     case MRDP_OP_SYNC_FULL: r->sync_count++; break;
 #ifdef MRDP_N64
-    case MRDP_OP_SET_CONVERT: r->k4 = (uint16_t)((w[1] >> 9) & 0x1FF); r->k5 = (uint16_t)(w[1] & 0x1FF); break;
+    case MRDP_OP_SET_CONVERT:                     /* K0..K3 signed (a YUV texel's conversion); K4, K5 the combiner's */
+        r->kc[0] = (int16_t)sext((w[0] >> 13) & 0x1FF, 9);
+        r->kc[1] = (int16_t)sext((w[0] >> 4) & 0x1FF, 9);
+        r->kc[2] = (int16_t)sext(((w[0] & 15u) << 5) | (w[1] >> 27), 9);
+        r->kc[3] = (int16_t)sext((w[1] >> 18) & 0x1FF, 9);
+        r->k4 = (uint16_t)((w[1] >> 9) & 0x1FF); r->k5 = (uint16_t)(w[1] & 0x1FF);
+        break;
 #endif
     case MRDP_OP_TEXRECT: draw_texrect(r, w, 0); break;
     case MRDP_OP_TEXRECT_FLIP: draw_texrect(r, w, 1); break;
@@ -1600,6 +1661,8 @@ static void execute(mrdp_t *r, const uint32_t *w)
     case MRDP_OP_SET_PRIM: r->prim = rgba_of(w[1]); r->prim_lod_frac = (uint8_t)w[0]; break;
     case MRDP_OP_SET_ENV: r->env = rgba_of(w[1]); break;
     case MRDP_OP_SET_COMBINE: r->combine_hi = w[0] & 0xFFFFFF; r->combine_lo = w[1]; break;
+#ifdef MRDP_N64
+#endif
     case MRDP_OP_SET_TIMG: r->timg = w[1]; r->timg_width = (w[0] & 0x3FF) + 1; r->timg_size = (w[0] >> 19) & 3; break;
     case MRDP_OP_SET_ZIMG: r->zimg = w[1]; break;
     case MRDP_OP_SET_CIMG: r->cimg = w[1]; r->cimg_width = (w[0] & 0x3FF) + 1; r->cimg_size = (w[0] >> 19) & 3; break;

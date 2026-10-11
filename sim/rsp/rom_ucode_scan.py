@@ -33,7 +33,8 @@ ST = ["SBV", "SSV", "SLV", "SDV", "SQV", "SRV", "SPV", "SUV", "SHV", "SFV", "SWV
 
 # ---- what the RTL implements
 VEC_OK = set(VEC_NAMES) - {0x02, 0x03, 0x0A, 0x0B}
-LS_OK = set(range(8)) | {11}                # LBV..LUV, SBV..SUV, LTV, STV
+LD_OK = set(range(8)) | {11}                # LBV..LUV, LTV
+ST_OK = LD_OK | {8, 9}                     # SBV..SUV, SHV, SFV (an element a multiple of 4), STV
 SPECIAL_OK = {0x00, 0x02, 0x03, 0x04, 0x06, 0x07, 0x08, 0x09, 0x0D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x2B}
 REGIMM_OK = {0x00, 0x01, 0x10, 0x11}
 OP_OK = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
@@ -67,7 +68,10 @@ def classify(w):
         sub = (w >> 11) & 31
         names = LD if op == 0x32 else ST
         if sub < 12:
-            return names[sub], sub in LS_OK, True, True
+            ok = sub in (LD_OK if op == 0x32 else ST_OK)
+            if op == 0x3A and sub == 9 and (w >> 7) & 3:
+                return "SFV (element not a multiple of 4)", False, True, True
+            return names[sub], ok, True, True
         return f"{'LWC2' if op == 0x32 else 'SWC2'} {sub}", False, False, False
     if op in OP_OK:
         return f"op {op:02x}", True, True, False
