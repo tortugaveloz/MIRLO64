@@ -596,7 +596,7 @@ int main(int argc, char **argv)
             if (sys == 20) t->reset = 0;
             t->file_size = slots[t->br_slot & 7].size;         // the core's table, by the slot the program selected
             { const long k = (sys - 200) / 4; t->ia_wr = 0;                            // (the settings: one write each, from 200 cycles in)
-              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 15u; t->ia_data = ia_list[k].second; } }
+              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 63u; t->ia_data = ia_list[k].second; } }
             // the bridge: an access (as apf_wishbone_master hands it on: the address's
             // bits 26-2, bit 28 set), its ack awaited; the reset's end after the load
             if (sys >= load_at && !br_jobs.empty()) {

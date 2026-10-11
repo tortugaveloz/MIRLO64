@@ -54,6 +54,18 @@
         "filename": "n64savedb.txt",
         "size_maximum": "0x10000",
         "address": "0x07100000"
+      },
+      {
+        "name": "Controls",
+        "id": 5,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "ctl"
+        ],
+        "size_maximum": "0x100",
+        "address": "0x07341000"
       }
     ]
   }

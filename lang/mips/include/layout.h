@@ -49,7 +49,11 @@
 #define LAYOUT_SAVE_AUX     0x43340000      /* a FlashRAM's page buffer (128 bytes) and, at + 0x100, its status word pair: the
                                              * runtime's (n64rt_io.c), what the PI's engine and the game's reads of domain 2 reach
                                              * (rtl/soc/rcp_mi.sv's PI2: its address is the RTL's, mirlo_mips.sv's io_adr) */
-#define LAYOUT_FREE         0x43341000      /* nothing yet, up to the hidden plane */
+#define LAYOUT_CTRL         0x43341000      /* slot 5: a game's own controller layout (64 bytes, lang/n64rt/n64rt_ctrl.h; a nonvolatile slot, a file per
+                                             * game as the save is: the Pocket loads it and writes it back when the core quits) */
+#define LAYOUT_CTRL_SLOT    5
+#define LAYOUT_CTRL_BYTES   64
+#define LAYOUT_FREE         0x43341100      /* nothing yet, up to the hidden plane */
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/mrdp/mrdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000

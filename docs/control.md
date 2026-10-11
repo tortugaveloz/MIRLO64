@@ -102,7 +102,7 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 ## APF_INTERACT
 
 The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+is `0x1000_0100 + 4n` (n from 0 to 21) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -111,6 +111,7 @@ each setting has an address of its own and needs no mask.
 | `INTERACT_CHANGED0` | `0x04` | R | 1 when the Pocket has written the whole word 0 since the CPU last read `INTERACT0` |
 | `INTERACT1` | `0x08` | RW | Word 1 |
 | `INTERACT_CHANGED1` | `0x0C` | R | The same for word 1 |
+| `INTERACT2` | `0x10` | R | The layout lists the Pocket wrote through the words 16 to 19 (below): `[4:0]` Normal, `[9:5]` Shift, `[14:10]` Shift: D-pad, `[19:15]` D-pad keys (each 0 is Auto), and `[28]`, `[29]`, which flip when Save for this game and Forget this game are pressed |
 
 | n | `address` | Field | The setting (`pkg/pocket/Cores/tortuga.Mirlo64/interact.json`) |
 |---|---|---|---|
@@ -118,18 +119,20 @@ each setting has an address of its own and needs no mask.
 | 1 | `0x1000_0104` | `INTERACT1`, whole | |
 | 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller 1 pak |
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
-| 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
+| 4 | `0x1000_0110` | `INTERACT0[14:10]` | Shift key |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | L button |
-| 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | not used |
+| 7 | `0x1000_011C` | `INTERACT0[29:25]` | not used |
 | 8 | `0x1000_0120` | `INTERACT1[4:0]` | not used |
-| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
+| 9 | `0x1000_0124` | `INTERACT1[9:5]` | not used |
 | 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
 | 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
-| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
-| 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
+| 12 | `0x1000_0130` | `INTERACT1[21:20]` | not used |
+| 13 | `0x1000_0134` | `INTERACT1[23:22]` | not used |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | not used |
+| 16..19 | `0x1000_0140`..`0x1000_014C` | `INTERACT2[4:0]`, `[9:5]`, `[14:10]`, `[19:15]` | Normal, Shift, Shift: D-pad, D-pad keys (a list each; 0 is Auto) |
+| 21 | `0x1000_0154` | `INTERACT2[28]`, `[29]` | Save for this game (a write of 2 flips `[29]`), Forget this game (a write of 3 flips both); a write of 1 is nothing |
 
 ## APF_VIDEO
 

@@ -66,7 +66,7 @@ module mirlo_mips #(
     input  wire   [31:0] apf_input_cont4_joy,
     input  wire   [31:0] apf_input_cont4_key,
     input  wire   [31:0] apf_input_cont4_trig,
-    input  wire    [3:0] apf_interact_address,
+    input  wire    [5:0] apf_interact_address,
     input  wire   [31:0] apf_interact_data,
     output logic  [31:0] apf_interact_q,
     input  wire          apf_interact_wr,
