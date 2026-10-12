@@ -3,9 +3,9 @@
  *   1  640 x 480: Y_SCALE 2.0, the even rows (an interlaced picture's first field)
  *   2  640 x 240: X_SCALE 1.0, Y_SCALE 1.0
  *   3  320 x 240: X_SCALE 0.5, each pixel two clocks wide, 237 lines (a line short of the field's 240: the VI's own window)
- *   4  292 x 216 inside it (a framebuffer smaller than its frame: Banjo-Kazooie's way)
- *   5  440 x 330 whole: X_SCALE 0.6875, Y_SCALE 1.375 (GoldenEye's)
- *   6  384 x 240 in a 597 clock, 222 line window at (20, 9): X_SCALE 0x20E (Mario Tennis')
+ *   4  292 x 216 inside it (a framebuffer smaller than its frame)
+ *   5  440 x 330 whole: X_SCALE 0.6875, Y_SCALE 1.375
+ *   6  384 x 240 in a 597 clock, 222 line window at (20, 9): X_SCALE 0x20E
  * The picture: a white frame at its edge, a diagonal, a vertical line every 16
  * pixels, a tick at each row that is a multiple of 8 on the left edge (long:
  * 64), odd rows with their blue lowered -- a weave of the two fields shows as
