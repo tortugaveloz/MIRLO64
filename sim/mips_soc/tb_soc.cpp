@@ -187,6 +187,8 @@ static bool o_cstat, o_ctrace, o_excstat, o_pcprof;
 static long o_pcprof_from, o_rcpstat;
 static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
+static bool o_pad_load = true;          // PAD.., PAD_MASH are to be read (at the start, and again by a run from a checkpoint)
+static FILE *o_ailog; static bool o_ailog_load = true;   // AILOG likewise (a run from a checkpoint: its own file, or none)
 static void opts_load()
 {
     o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
@@ -197,6 +199,7 @@ static void opts_load()
     o_pcprof = getenv("PCPROF") != nullptr; o_pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
     o_rcpstat = getenv("RCPSTAT") ? atol(getenv("RCPSTAT")) : 0;
     o_rcp_ilo = o_rcp_ihi = 0;
+    if (ck_run) { o_pad_load = true; o_ailog = nullptr; o_ailog_load = true; }
     if (const char *e = getenv("RCPSTAT_IDLE")) { o_rcp_ilo = strtoul(e, 0, 0); o_rcp_ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : o_rcp_ilo + 8; }
 }
 static void cpu_trace_step()
@@ -629,9 +632,10 @@ int main(int argc, char **argv)
             {
                 struct Seg { long a, b; unsigned k, j; };
                 static std::vector<Seg> pad[4];
-                static bool init;
-                if (!init) {
-                    init = true;
+                const bool pad_load = o_pad_load;
+                if (pad_load) {
+                    o_pad_load = false;
+                    for (int c = 0; c < 4; c++) pad[c].clear();
                     static const char *const names[4] = { "PAD", "PAD2", "PAD3", "PAD4" };
                     for (int c = 0; c < 4; c++) if (const char *e = getenv(names[c])) {
                         long a, b; unsigned k, j; int n;
@@ -655,6 +659,7 @@ int main(int argc, char **argv)
                 // PAD_MASH=from,period,hold,keys: controller 1's keys (hex) held `hold` fields in every `period`, from the field `from` on
                 // (PAD_MASH_TO=n: up to the field n)
                 { static long mf = -1, mp, mh, mto; static unsigned mk;
+                  if (pad_load) mf = -1;
                   if (mf == -1) { mf = -2; if (const char *e = getenv("PAD_MASH")) { if (sscanf(e, "%ld,%ld,%ld,%x", &mf, &mp, &mh, &mk) != 4) mf = -2; } mto = getenv("PAD_MASH_TO") ? atol(getenv("PAD_MASH_TO")) : -1; }
                   if (mf >= 0 && frames >= mf && (mto < 0 || frames <= mto) && (frames - mf) % mp < mh) keys[0] |= mk; }
                 t->cont1_key = keys[0]; t->cont2_key = keys[1]; t->cont3_key = keys[2]; t->cont4_key = keys[3];
@@ -749,7 +754,8 @@ int main(int argc, char **argv)
             // S <step> the runtime's resampler step, O <word> <silence> a word the AI wrote to the FIFO, I its interrupt,
             // R the reader started over (dry for a while), W <addr> <value> a game's write to an AI register (sys cycle first)
             {
-                static FILE *al = getenv("AILOG") ? fopen(getenv("AILOG"), "w") : nullptr;
+                if (o_ailog_load) { o_ailog_load = false; o_ailog = getenv("AILOG") ? fopen(getenv("AILOG"), "w") : nullptr; }
+                FILE *const al = o_ailog;
                 static int prst = 0;
                 if (al) {
                     auto *r = t->rootp;
@@ -866,7 +872,7 @@ int main(int argc, char **argv)
                 // to the dump's last 64 bytes (the header's address), the RDRAM as it is
                 static int phalt = 1;
                 int halt = t->audio_state & 1;
-                static const char *rd2 = getenv("RSPDUMP");
+                const char *rd2 = getenv("RSPDUMP");
                 static long n2;
                 if (rd2 && phalt && !halt) {
                     auto &dm = t->rootp->soc_sim_top__DOT__soc__DOT__rsp__DOT__dmem__DOT__mem;
@@ -920,7 +926,8 @@ int main(int argc, char **argv)
                 // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
                 // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
                 // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again
-                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF) or at each use (PAD_FILE, RAMDUMP ...).
+                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF, PAD.., PAD_MASH, AILOG: the run's own file, none
+                // unless named) or at each use (PAD_FILE, RAMDUMP, RSPDUMP and its RSPDUMP_CTL ...).
                 // <dir>/quit ends the copies.
                 if (const char *ck = getenv("CKPT")) {
                     static const std::string cdir = std::string(ck).substr(0, std::string(ck).find(','));
@@ -938,7 +945,7 @@ int main(int argc, char **argv)
                                     std::string run = go + ".run";
                                     rename(go.c_str(), run.c_str());
                                     if (fork() == 0) {
-                                        unsetenv("CKPT");
+                                        unsetenv("CKPT"); unsetenv("AILOG");
                                         long more = 30;
                                         if (FILE *f = fopen(run.c_str(), "r")) {
                                             char ln[1024];
