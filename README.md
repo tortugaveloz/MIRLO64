@@ -13,8 +13,8 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Video**: 320 x 240, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
 * **Memory**: 8 MiB of RAM for every game, as a console with the Expansion Pak.
-* **Controllers**: up to four (2 to 4 through the Dock), with a menu to map the Pocket's buttons and sticks to the N64 pad.
-* **Accessories and saves**: Controller Pak, Transfer Pak (with a Game Boy cartridge in the Pocket's slot), and EEPROM, SRAM and FlashRAM saves.
+* **Controllers**: up to four through the Dock, controls are customizable.
+* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included.
 
