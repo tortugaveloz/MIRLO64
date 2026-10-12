@@ -1,0 +1,18 @@
+{
+  "quartus": "25.1std.0 Build 1129 10/21/2025 SC Lite Edition",
+  "sources": "fda7007de8bf1515be1f59ed58c9f24c4d25290c812aef7b9ac25b05c775052c",
+  "fits": [
+    {
+      "seed": 4,
+      "worst_slack_ns": 0.065,
+      "alms": 17810,
+      "date": "2026-10-12"
+    },
+    {
+      "seed": 7,
+      "worst_slack_ns": 0.008,
+      "alms": 17797,
+      "date": "2026-10-12"
+    }
+  ]
+}

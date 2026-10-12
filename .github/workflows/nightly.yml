@@ -1,0 +1,74 @@
+# The nightly build: every night at 00:00 (Europe/Madrid) the core is built from the default branch with the fit
+# recorded in projects/fits.json (no seed is searched for) and published as an artifact, kept for two weeks. The
+# artifact is the tree a user copies onto the Pocket's SD card: downloaded, it is the zip to unpack there.
+# The job fails, and publishes nothing, if that fit does not close timing with the sources as they are.
+#
+# It runs on a self-hosted runner labelled `quartus`: a machine with Quartus Prime Lite 25.1std (QUARTUS_BIN, or
+# ~/altera/25.1std/quartus/bin), a GCC for MIPS (MIPS_CC, MIPS_BIN), Python 3, meson and ninja.
+name: Nightly
+
+on:
+  schedule:
+    # GitHub's schedule is in UTC: 22:00 is midnight in Madrid in summer, 23:00 in winter. The first step lets
+    # through the one of the two that is midnight there.
+    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, quartus]
+    timeout-minutes: 180
+    steps:
+      - name: Is it midnight in Madrid?
+        id: when
+        run: |
+          if [ "${{ github.event_name }}" != schedule ] || [ "$(TZ=Europe/Madrid date +%H)" = 00 ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.when.outputs.run == 'yes'
+        with:
+          submodules: recursive
+
+      - name: Build
+        if: steps.when.outputs.run == 'yes'
+        id: build
+        run: |
+          tools/nightly.sh "$RUNNER_TEMP/nightly"
+          zip=$(ls "$RUNNER_TEMP"/nightly/tortuga.Mirlo64_nightly_*.zip)
+          name=$(basename "$zip" .zip)
+          rm -rf "$RUNNER_TEMP/sd" && mkdir -p "$RUNNER_TEMP/sd"
+          python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$RUNNER_TEMP/sd"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the zip
+        if: steps.when.outputs.run == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.name }}
+          path: ${{ runner.temp }}/sd
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: The compile's log and reports, if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-failure-${{ github.run_id }}
+          path: |
+            projects_a2_nightly.compile.log
+            projects_a2_nightly/output_files/*.summary
+            projects_a2_nightly/output_files/*.rpt
+          retention-days: 14
+          if-no-files-found: ignore

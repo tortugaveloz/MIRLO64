@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack the SD-card release zip: the core as it sits on the Pocket's SD card.
 
-    tools/make_release.py <mirlo.rev> <n64rt.sys> <out.zip>
+    tools/make_release.py <mirlo.rev> <n64rt.sys> <out.zip> [<version> [<date>]]
 
 <mirlo.rev> is the bit-reversed bitstream (tools/package_bitstream.py) and
 <n64rt.sys> the runtime (lang/n64rt: `make -C lang/n64rt`, then
@@ -17,7 +17,10 @@ zip holds, from the SD card's root:
 
 so a user unzips it onto the card's root and is done. Entries are written in
 a fixed order with a fixed date, so the same inputs give the same zip.
+<version> and <date> (YYYY-MM-DD), when given, are what the zip's core.json
+says of itself instead of the repository's (a nightly build's name and day).
 """
+import json
 import os
 import sys
 import zipfile
@@ -42,9 +45,11 @@ def add_dir(z, name):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4 or len(sys.argv) > 6:
         sys.exit(__doc__)
-    rev, sys_file, out = sys.argv[1:]
+    rev, sys_file, out = sys.argv[1:4]
+    version = sys.argv[4] if len(sys.argv) > 4 else None
+    date = sys.argv[5] if len(sys.argv) > 5 else None
     files = []
     for d, _, names in os.walk(PKG):
         for n in names:
@@ -65,7 +70,14 @@ def main():
             add_dir(z, d)
         for rel, p in files:
             with open(p, "rb") as f:
-                add(z, rel, f.read())
+                data = f.read()
+            if rel == CORE + "/core.json" and version:
+                core = json.loads(data)
+                core["core"]["metadata"]["version"] = version
+                if date:
+                    core["core"]["metadata"]["date_release"] = date
+                data = (json.dumps(core, indent=2) + "\n").encode()
+            add(z, rel, data)
     print(f"{out}: {len(files)} files")
     for rel, _ in files:
         print("  " + rel)
