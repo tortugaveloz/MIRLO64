@@ -48,20 +48,7 @@ Saves (`.sav`) appear in `Saves/mirlo/common/` when you quit a game. To update t
 
 ### The games' format
 
-A game must be a `.z64` file: big-endian, starting with the bytes `80 37 12 40`. A `.v64` or `.n64` file is the same game in another byte order, and this script converts it (`python3 conv.py game.n64 game.z64`):
-
-```python
-import sys
-src, dst = sys.argv[1:3]
-d = bytearray(open(src, "rb").read())
-if d[:4] == bytes.fromhex("37804012"):      # .v64: bytes swapped in pairs
-    d[0::2], d[1::2] = d[1::2], d[0::2]
-elif d[:4] == bytes.fromhex("40123780"):    # .n64: each 32-bit word reversed
-    d[0::4], d[1::4], d[2::4], d[3::4] = d[3::4], d[2::4], d[1::4], d[0::4]
-elif d[:4] != bytes.fromhex("80371240"):    # .z64 already
-    sys.exit("not a Nintendo 64 game in a known byte order")
-open(dst, "wb").write(d)
-```
+A game must be a `.z64` file: big-endian, starting with the bytes `80 37 12 40`. A `.v64` or `.n64` file is the same game in another byte order, and has to be converted to `.z64` first.
 
 ## Using the core
 
