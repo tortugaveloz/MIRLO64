@@ -1,0 +1,19 @@
+# The machine the nightly build runs on (.github/workflows/nightly.yml): a GitHub Actions runner with what the build
+# needs but Quartus, which is the host's own installation, mounted read-only (tools/ci/runner.sh).
+#   podman build -t mirlo-runner tools/ci        (or docker)
+FROM docker.io/library/ubuntu:24.04
+ARG RUNNER_VERSION=2.338.0
+ENV DEBIAN_FRONTEND=noninteractive LANG=en_US.UTF-8
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git make gcc libc6-dev gcc-mips-linux-gnu binutils-mips-linux-gnu \
+        python3 meson ninja-build locales libglib2.0-0t64 \
+    && locale-gen en_US.UTF-8 && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/actions-runner && cd /opt/actions-runner \
+    && curl -fsSL https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz | tar xz \
+    && ./bin/installdependencies.sh && rm -rf /var/lib/apt/lists/*
+# Quartus is mounted here; the runner's own files (its registration, its work directory) are the volume /runner
+ENV QUARTUS_BIN=/opt/quartus/bin RUNNER_ALLOW_RUNASROOT=1
+VOLUME /runner
+WORKDIR /runner
+COPY entry.sh /entry.sh
+ENTRYPOINT ["/entry.sh"]

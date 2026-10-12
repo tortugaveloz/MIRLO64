@@ -13,7 +13,8 @@ W=$(cd "$(dirname "$0")/.." && pwd)
 cd "$W"
 OUT=$(mkdir -p "${1:-$W/nightly}" && cd "${1:-$W/nightly}" && pwd)
 seed=$(tools/fits.py seed)
-tools/fits.py check || echo "nightly: the recorded seed ($seed) is tried all the same"
+stale=
+tools/fits.py check || { stale=1; echo "nightly: the recorded seed ($seed) is tried all the same"; }
 
 echo "nightly: the C library, the boot ROM, the bitstream's images, the runtime"
 make -C lang/mips -f lib.mk VARIANT=game
@@ -33,6 +34,7 @@ if ! tools/fits.py verify projects_a2_nightly; then
     exit 1
 fi
 grep -h "Logic utilization" projects_a2_nightly/output_files/mirlo.fit.summary
+[ -z "$stale" ] || echo "nightly: seed $seed closes with these sources too: tools/fits.py record projects_a2_nightly makes the record theirs"
 
 day=$(date +%Y-%m-%d)
 commit=$(git rev-parse --short HEAD)

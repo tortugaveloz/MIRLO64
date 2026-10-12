@@ -4,13 +4,15 @@
 # The job fails, and publishes nothing, if that fit does not close timing with the sources as they are.
 #
 # It runs on a self-hosted runner labelled `quartus`: a machine with Quartus Prime Lite 25.1std (QUARTUS_BIN, or
-# ~/altera/25.1std/quartus/bin), a GCC for MIPS (MIPS_CC, MIPS_BIN), Python 3, meson and ninja.
+# ~/altera/25.1std/quartus/bin), a GCC for MIPS (MIPS_CC, MIPS_BIN), Python 3, meson and ninja. tools/ci has that
+# machine as a container (tools/ci/runner.sh).
 name: Nightly
 
 on:
   schedule:
     # GitHub's schedule is in UTC: 22:00 is midnight in Madrid in summer, 23:00 in winter. The first step lets
-    # through the one of the two that is midnight there.
+    # through the one of the two that is midnight there (by which of them this run is, not by the clock: a
+    # scheduled run can start late).
     - cron: '0 22 * * *'
     - cron: '0 23 * * *'
   workflow_dispatch:
@@ -30,7 +32,11 @@ jobs:
       - name: Is it midnight in Madrid?
         id: when
         run: |
-          if [ "${{ github.event_name }}" != schedule ] || [ "$(TZ=Europe/Madrid date +%H)" = 00 ]; then
+          case "$(TZ=Europe/Madrid date +%z)" in
+            +0200) midnight='0 22 * * *' ;;
+            *)     midnight='0 23 * * *' ;;
+          esac
+          if [ "${{ github.event_name }}" != schedule ] || [ "${{ github.event.schedule }}" = "$midnight" ]; then
             echo "run=yes" >> "$GITHUB_OUTPUT"
           else
             echo "run=no" >> "$GITHUB_OUTPUT"
