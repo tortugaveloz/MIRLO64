@@ -284,17 +284,6 @@ static void vi_field_common(void)
 {
     s_fields++;
     if (s_watch_on) watch_check();
-#ifdef N64RT_PSRAM
-    {   /* (a core with the RDP's depth in the PSRAM and not what a game draws onto its
-         * depth image: said once, the first time one does) */
-        static u8 said;
-        if (!said && (s_fields & 63u) == 0u &&
-            (*(const volatile u32 *)(uintptr_t)N64RT_PSRAM_STATE & 0xFFFF0200u) == 0x50520200u) {
-            said = 1;
-            n64rt_log("n64rt: the game draws onto its depth image, which this core's RDP does not do (MIRLO_Z_CDRAW): its depth will be wrong there\n");
-        }
-    }
-#endif
 #ifdef N64RT_STATS
     if (s_fields % 60u == 0u) { extern void n64rt_stats_log(u32); n64rt_stats_log(s_fields); }
 #endif
@@ -462,8 +451,7 @@ static s32 pi_copy(u32 dev, void *dram, u32 size, s32 dir)
                   (unsigned long)dev, (unsigned long)size);
         return -1;
     }
-    if (n64rt_game->rom_tail && off + size > n64rt_game->rom_tail) n64rt_rom_copy(d, off, size);   /* (some of it in the PSRAM) */
-    else copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
+    copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
     n64rt_late_poll();
     return 0;
 }
@@ -1574,7 +1562,7 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
     return n <= 126u && n <= 0x800u - (pa & 0x7FFu) ? n : (n + 1u) & ~1u;
 }
 /* A cartridge DMA by the engine, if it can do it (1): words of the SDRAM to words of the SDRAM. Into the RDRAM from the ROM
- * (wholly in the SDRAM: not the PSRAM's part of a ROM) and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
+ * and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
  * of any length, and from domain 2 (the save's memory; a FlashRAM's array, or its status words); from the RDRAM into
  * domain 2 (an SRAM, a FlashRAM's page buffer). Without PI2 only whole words, word-aligned at both ends, from the ROM. It
  * ends in the PI interrupt, the engine's. The game's D-cache lines over an RDRAM destination go first: the engine writes
@@ -1593,7 +1581,6 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     } else if (!rd && cpa >= 0x10000000u && cpa < 0x1FC00000u) {    /* the ROM */
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
-        if (n64rt_game->rom_tail && off + size > n64rt_game->rom_tail) goto soft;
         src = n64rt_game->rom_sdram + off;
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;

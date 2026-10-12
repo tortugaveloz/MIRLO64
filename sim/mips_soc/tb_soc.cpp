@@ -298,7 +298,7 @@ struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::
 static Slot slots[8];
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
 static const uint32_t FILE_SDRAM_END = 49u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_SDRAM
-static const uint32_t FILE_PSRAM_END = 65u << 20;   // and LAYOUT_FILE_MAX)
+static const uint32_t FILE_DROP_END = 65u << 20;    // and LAYOUT_FILE_MAX)
 static const int PROG_SLOT = 3;                     // with ROM=: the program's (data.json's "Runtime")
 static bool read_file(const char *path, std::vector<uint8_t> &d)
 {
@@ -339,7 +339,7 @@ struct BrJob { int slot; bool write; uint32_t addr; size_t off, len; };
 static std::deque<BrJob> br_jobs;
 static size_t br_pos;
 // The chips' models against the files, each byte where the bridge's map puts
-// its address: the SDRAM below 49 MiB, the PSRAM's second die up to 65 MiB,
+// its address: the SDRAM below 49 MiB, nothing from there up to 65 MiB (the bridge drops it),
 // else the SDRAM at the address's low 26 bits. `end`: less what a program
 // changes -- the first megabyte and the saves.
 static long verify(const char *when, bool end)
@@ -351,7 +351,7 @@ static long verify(const char *when, bool end)
         for (size_t i = 0; i < d.size(); i += 4) {
             uint32_t a = slots[k].addr + (uint32_t)i, got, want = be32(d, i);
             if (end && a < (1u << 20)) continue;
-            if (a < FILE_SDRAM_END || a >= FILE_PSRAM_END) got = rd_word((a & 0x3FFFFFFu) / 4);
+            if (a < FILE_SDRAM_END || a >= FILE_DROP_END) got = rd_word((a & 0x3FFFFFFu) / 4);
             else {
                 continue;
             }

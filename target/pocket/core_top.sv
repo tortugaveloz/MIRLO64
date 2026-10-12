@@ -275,7 +275,6 @@ module core_top (
   assign port_tran_sd_dir        = 1'b0;  // SD is input and not used
 
   // tie off the rest of the pins we are not using
-  // (the PSRAMs are not used: rtl/soc/psram.sv is not instantiated)
   assign cram0_a                 = 'h0;
   assign cram0_dq                = {16{1'bZ}};
   assign cram0_clk               = 0;

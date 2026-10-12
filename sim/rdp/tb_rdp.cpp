@@ -112,55 +112,6 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
 }
 static uint64_t st_cyc[32];
 
-#ifdef TB_ZPORT
-// The depth memory (rtl/rdp built with RDP_Z_PORT; the bench with -DTB_ZPORT):
-// the same bytes as the rest (the comparison is of all the memory), timed as
-// the SoC's PSRAM pair (rtl/soc/psram_z.sv) -- a run of consecutive words is
-// a burst: TB_ZOV cycles from its first command to its first word (8), then
-// a word every TB_ZCW cycles (1: two chips side by side; 2: one), ended by
-// `last`, by a command that does not follow, by none being there, or at
-// the PSRAM's row (128 words); TB_ZGAP cycles before the next (2). A read's
-// word is there the cycle after it is taken. TB_ZIDEAL=1: no cost at all.
-static struct {
-    int st, cnt; bool we; uint32_t next; uint64_t n_burst, n_word, n_cyc;
-    std::deque<Rd> reads;
-} zp;
-static unsigned z_ov = 8, z_cw = 1, z_gap = 2; static bool z_ideal;
-static void z_before()
-{
-    top->z_ready = 0;
-    bool v = top->z_valid, we = top->z_we; uint32_t a = top->z_addr & (MSIZE - 4);
-    if (z_ideal) { top->z_ready = 1; }
-    else switch (zp.st) {
-    case 0: if (v) { zp.st = 1; zp.cnt = (int)z_ov; zp.we = we; zp.next = a; zp.n_burst++; } break;
-    case 1: if (--zp.cnt <= 0) { zp.st = 2; zp.cnt = 0; } break;
-    case 2:
-        if (zp.cnt > 0) { zp.cnt--; break; }                          // (the word's second half)
-        if (v && we == zp.we && a == zp.next) { top->z_ready = 1; }
-        else { zp.st = 3; zp.cnt = (int)z_gap; }
-        break;
-    default: if (--zp.cnt <= 0) zp.st = 0; break;
-    }
-    if (zp.st) zp.n_cyc++;
-    bool rv = !zp.reads.empty() && zp.reads.front().due <= cycles;
-    top->z_rvalid = rv;
-    if (rv) top->z_rdata = be32(rtl_mem + zp.reads.front().addr);
-    top->z_idle = zp.st == 0 && zp.reads.empty();
-}
-static void z_after(bool take, bool we, uint32_t a, uint32_t d, uint32_t m, bool last, bool rv)
-{
-    if (rv) zp.reads.pop_front();
-    if (!take) return;
-    a &= MSIZE - 4;
-    zp.n_word++;
-    if (we) { for (int b = 0; b < 4; b++) if (m & (8u >> b)) rtl_mem[a + b] = (uint8_t)(d >> (24 - 8 * b)); }
-    else zp.reads.push_back({ cycles + 1, a });
-    if (z_ideal) return;
-    zp.next = a + 4;
-    zp.cnt = (int)z_cw - 1;
-    if (last || ((zp.next >> 2) & 127u) == 0) { zp.st = 3; zp.cnt = (int)z_gap; }
-}
-#endif
 
 static void tick()
 {
@@ -188,14 +139,7 @@ static void tick()
     bool rv = !reads.empty() && reads.front().due <= cycles;
     top->m_rdata_valid = rv;
     if (rv) top->m_rdata = be32(rtl_mem + (reads.front().addr & (MSIZE - 4)));
-#ifdef TB_ZPORT
-    z_before();
-#endif
     top->clk = 0; top->eval();
-#ifdef TB_ZPORT
-    bool zt = top->z_valid && top->z_ready, zwe = top->z_we, zl = top->z_last, zrv = top->z_rvalid;
-    uint32_t za = top->z_addr, zd = top->z_wdata, zm = top->z_wmask;
-#endif
     bool cmd_take = top->cmd_valid && top->cmd_ready;
     bool mc = top->m_cmd_valid && top->m_cmd_ready;
     uint32_t maddr = top->m_cmd_addr; bool mwe = top->m_cmd_we;
@@ -204,9 +148,6 @@ static void tick()
     if (prof) st_cyc[top->rootp->rdp_top__DOT__st & 31]++;
     top->clk = 1; top->eval();
     cycles++;
-#ifdef TB_ZPORT
-    z_after(zt, zwe, za, zd, zm, zl, zrv);
-#endif
     if (cmd_take) {
         // TB_CMDT=<file>: the cycle each command word is taken (rdp_flow.py)
         static FILE *ct = getenv("TB_CMDT") ? fopen(getenv("TB_CMDT"), "w") : nullptr;
@@ -224,11 +165,7 @@ static void tick()
         n_wr++;
     }
 }
-#ifdef TB_ZPORT
-static bool rtl_idle() { return cmdq.empty() && top->idle && reads.empty() && wr_addrs.empty() && zp.st == 0 && zp.reads.empty(); }
-#else
 static bool rtl_idle() { return cmdq.empty() && top->idle && reads.empty() && wr_addrs.empty(); }
-#endif
 
 static std::vector<uint32_t> cmds;
 static std::set<unsigned> kinds;
@@ -404,7 +341,7 @@ static void rand_stream(unsigned seed, int n)
             // TB_RAND_CZ=1: and, one time in three, the depth image as the colour image,
             // as a game clears its Z buffer: fill mode, a colour, a few rectangles (or a
             // triangle), then the colour image again. TB_RAND_CZ=2: the depth image stays
-            // the colour image for whatever comes (an RTL with RDP_Z_CDRAW)
+            // the colour image for whatever comes
             static const int cz = getenv("TB_RAND_CZ") ? atoi(getenv("TB_RAND_CZ")) : 0;
             uint32_t w = 0x3F000000u | (gr(6) ? 2u : gr(4)) << 19 | cw1;
             if (cz == 1 && gr(3) == 0) {
@@ -451,12 +388,6 @@ int main(int argc, char **argv)
     sdram = getenv("TB_SDRAM") != nullptr; if (getenv("TB_CPU")) cpu_pct = (unsigned)atoi(getenv("TB_CPU"));
     if (getenv("TB_LAT")) mem_lat = (unsigned)atoi(getenv("TB_LAT"));
     if (getenv("TB_STALL")) mem_stall = (unsigned)atoi(getenv("TB_STALL"));
-#ifdef TB_ZPORT
-    if (getenv("TB_ZOV")) z_ov = (unsigned)atoi(getenv("TB_ZOV"));
-    if (getenv("TB_ZCW")) z_cw = (unsigned)atoi(getenv("TB_ZCW"));
-    if (getenv("TB_ZGAP")) z_gap = (unsigned)atoi(getenv("TB_ZGAP"));
-    z_ideal = getenv("TB_ZIDEAL") != nullptr;
-#endif
     rsp_mem = (uint8_t *)malloc(SIZE); rtl_mem = (uint8_t *)malloc(MSIZE); mdl_mem = (uint8_t *)malloc(MSIZE);
     static rsp_t s;
     static mrdp_t mdl;
@@ -500,9 +431,6 @@ int main(int argc, char **argv)
         if (top) delete top;
         top = new Vrdp_top;
         cmdq.clear(); reads.clear(); wr_addrs.clear();
-#ifdef TB_ZPORT
-        zp.st = 0; zp.reads.clear(); zp.n_burst = zp.n_word = zp.n_cyc = 0;
-#endif
         top->rst = 1;
         for (int i = 0; i < 8; i++) tick();
         top->rst = 0;
@@ -578,10 +506,6 @@ int main(int argc, char **argv)
                top->sync_count, mdl.sync_count, top->load_count, mdl.load_count, top->unknown_ops, mdl.unknown_ops,
                (unsigned long long)mdl.pixels_drawn, diff ? "MISMATCH" : "RTL == model\n");
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
-#ifdef TB_ZPORT
-        printf("\n    depth memory: %llu words in %llu runs, busy %llu cycles%s", (unsigned long long)zp.n_word, (unsigned long long)zp.n_burst, (unsigned long long)zp.n_cyc,
-               top->z_cdraw ? "; DRAWN ONTO THE DEPTH IMAGE, not by a fill (z_cdraw: this RTL has no RDP_Z_CDRAW)" : "");
-#endif
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
         if (prof) {
             static const char *nm[20] = { "idle (waiting for commands)", "triangle start", "row", "setup", "read the span's Z", "read the span's colour", "pixels", "drain the pipeline",

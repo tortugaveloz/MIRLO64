@@ -454,7 +454,7 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // and, with MAP_HI, 0x6000_0000 - 0x7FFF_FFFF, where it has nothing either once
 // the monitor owns the RCP and there is no audio core: a game can map its code
 // at 0x7000_0000 and run from there.)
-// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there -- the PSRAM is not in it -- and a game can map its code
+// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there, and a game can map its code
 // there and jump to it. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
 localparam bit MAP_HI = TLB_RAM && MON;
 function automatic logic kseg01(input logic [31:0] va);

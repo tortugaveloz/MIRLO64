@@ -1,4 +1,4 @@
-// MRDP -- Mirlo's N64-style rasterizer (docs/mrdp.md). The contract is the C
+// MRDP -- Mirlo's N64-style rasterizer. The contract is the C
 // model, lang/c/mrdp/mrdp.c: for the same command stream the RTL writes the
 // same memory.
 //
@@ -186,7 +186,7 @@ module mrdp_top (
     reg         pix_valid;
     reg  [9:0]  pix_x;
     // AA_EN: the N64's coverage (lang/c/mrdp/mrdp.c draw_triangle_aa)
-    // AA_EN: the crack grow (docs/mrdp.md)
+    // AA_EN: the crack grow
     localparam COVERAGE = 1'b0;
     reg         t_aa;               // this triangle has AA_EN
     reg  [2:0]  t_grow;             // TRI_R: the edges that grow (H, M, L; microcode GRW)

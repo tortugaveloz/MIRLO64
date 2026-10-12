@@ -22,7 +22,6 @@
 `default_nettype none
 
 `include "mirlo_mips_init.svh"
-// The Pocket's PSRAMs are not used by this SoC (rtl/soc/psram.sv is not instantiated).
 
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
@@ -228,7 +227,7 @@ wire x_rsp   = x_addr[31:8] == 24'h2000_00;
 wire x_audio = 1'b0;
 wire x_tcm   = 1'b0;
 wire x_grom  = 1'b0;
-typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_PSX, X_PSZ, X_PSZR, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART } xst_t;
+typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART } xst_t;
 // the monitor level's memory (MIRLO_MON: mon_ram.sv): 2 KiB at 0xFFFF_8000
 wire x_mon = x_addr[31:11] == 21'h1FFFF0;
 logic [31:0] mon_rd;
@@ -285,15 +284,6 @@ logic        d_req, d_we, d_ack;
 logic [23:0] d_adr;
 logic [3:0]  d_sel;
 logic [31:0] d_wdata;
-// the PSRAMs: 0x50 a ROM's end, 0x51 state and settings, 0x52 the depth memory
-wire x_ps    = 1'b0;
-localparam bit PS_Z = 1'b0;
-localparam bit PS_ZRDP = 1'b0;
-wire           rz_cdraw = 1'b0;
-localparam bit PS_ROM64 = 1'b0;
-logic        ps_cx_ack, ps_zt_ready, ps_zt_rvalid, ps_ready, ps_wait_err;
-logic [31:0] ps_x_rdata, ps_z_rdata;
-logic [3:0]  ps_cfg;
 mon_ram monram (.clk, .we(xs == X_MON && x_we), .a(x_addr[10:2]), .wd(x_wdata), .be(x_strb), .rd(mon_rd));
 wire geom_load = xs == X_IDLE && x_req && !x_ack && x_grom && x_we && x_strb == 4'hF;
 logic        xr_go;                                  // the CPU's register access, this cycle
@@ -311,7 +301,7 @@ logic        rsp_h_ready;
 wire         rsp_x_go = xs == X_RSP && (!rx_we || rsp_h_ready);
 always_ff @(posedge clk) begin
     x_ack <= 0;
-    if (rst) begin xs <= X_IDLE; bus_errors <= 0; ps_cfg <= 4'b0101; end
+    if (rst) begin xs <= X_IDLE; bus_errors <= 0; end
     else case (xs)
     X_IDLE: if (x_req && !x_ack) begin
         if (x_regs) xs <= X_REGS;
@@ -326,15 +316,6 @@ always_ff @(posedge clk) begin
         else if (x_d2 || x_rom) begin if (x_we && (x_rom || d2_flash)) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
         else if (x_grom) begin x_rdata <= 0; x_ack <= 1; end
         else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
-        else if (x_ps) begin
-            if (x_addr[25:24] == 2'd0) xs <= X_PSX;
-            else if (x_addr[25:24] == 2'd2) xs <= X_PSZ;
-            else begin
-                if (x_we) ps_cfg <= x_wdata[3:0];
-                x_rdata <= {16'h5052, 6'd0, rz_cdraw, PS_ZRDP, PS_ROM64, PS_Z, ps_wait_err, ps_ready, ps_cfg};
-                x_ack <= 1;
-            end
-        end
         else begin x_rdata <= 0; x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
@@ -353,9 +334,6 @@ always_ff @(posedge clk) begin
     X_TCM:  xs <= X_TCMD;
     X_TCMD: begin x_rdata <= t_dat_r; x_ack <= 1; xs <= X_IDLE; end
     X_RSP:  if (rsp_x_go) begin x_rdata <= rsp_x_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_PSX:  if (ps_cx_ack) begin x_rdata <= ps_x_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_PSZ:  if (ps_zt_ready) begin if (x_we) begin x_rdata <= 0; x_ack <= 1; xs <= X_IDLE; end else xs <= X_PSZR; end
-    X_PSZR: if (ps_zt_rvalid) begin x_rdata <= ps_z_rdata; x_ack <= 1; xs <= X_IDLE; end
     default: xs <= X_IDLE;
     endcase
 end
@@ -542,7 +520,7 @@ assign p_urgent[2] = 0;
 // docs/mips.md has them ("The memory of an N64 game"). A write:
 //   below 49 MiB        to the SDRAM, at that address: the program and the
 //                       ROM's first 48 MiB
-//   49 MiB to 65 MiB    dropped (no PSRAM second die: a 64 MiB ROM's last 16)
+//   49 MiB to 65 MiB    dropped (what a ROM has past its first 48 MiB)
 //   anything else       to the SDRAM, at the address's low 26 bits
 // A read is always the SDRAM's, at the address's low 26 bits: the Pocket
 // reads back the nonvolatile slots, and nothing of a ROM.
@@ -555,11 +533,11 @@ assign p_urgent[2] = 0;
 // starts, and the save slots of a data.json older than this map (they were
 // at the RDRAM's top) are read back as they were loaded -- with any game that
 // leaves that memory alone.
-logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd, ps_br_done;
+logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd;
 wire  [6:0]  br_mib    = wishbone_master_adr[24:18];
 wire         br_ps     = br_mib[6:4] == 3'd3 ? br_mib[3:0] != 4'd0 : br_mib == 7'h40;      // 0x31 to 0x40
 wire         br_rd     = br_mib[6:3] == 4'b0111;                                           // 0x38 to 0x3F
-wire         br_x      = br_ps && wishbone_master_we;                                      // the PSRAM's, or dropped: it ends the access
+wire         br_x      = br_ps && wishbone_master_we;                                      // dropped: it ends the access
 wire         br_ps_req = wishbone_master_cyc && wishbone_master_stb && br_x && (!br_rd || pa_done) &&
                          !br_ps_ack && !br_ps_ackd;                                        // (the master drops its request after the ack)
 // MIRLO_PI: the PI's engine (rcp_mi.sv) is a second master of this port, while the bridge is idle (pa_dma: its access)
@@ -593,7 +571,7 @@ port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req : wishbone_master_cyc && (!br_x ||
     .p_valid(p_valid[4]), .p_we(p_we[4]), .p_addr(p_addr[4]), .p_wdata(p_wdata[4]), .p_be(p_be[4]),
     .p_ready(p_ready[4]), .p_rvalid(p_rvalid[4]), .p_rdata);
 always_ff @(posedge clk) begin
-    br_ps_ack  <= PS_ROM64 ? ps_br_done : br_ps_req;
+    br_ps_ack  <= br_ps_req;
     br_ps_ackd <= br_ps_ack;
     if (!wishbone_master_cyc) pa_done <= 1'b0;          // (a write to both: the SDRAM has it)
     else if (pa_ack && !pa_dma && br_x) pa_done <= 1'b1;
@@ -602,11 +580,6 @@ assign wishbone_master_ack   = br_x ? br_ps_ack : pa_ack && !pa_dma;
 assign wishbone_master_dat_r = pa_dat_r;
 assign wishbone_master_err = 1'b0;
 assign p_urgent[4] = 0;
-
-// ---------------------------------------------------------------- the PSRAMs
-assign ps_br_done = 1'b0;
-assign ps_cx_ack = 1'b0; assign ps_zt_ready = 1'b0; assign ps_zt_rvalid = 1'b0; assign ps_ready = 1'b0; assign ps_wait_err = 1'b0;
-assign ps_x_rdata = '0; assign ps_z_rdata = '0;
 
 // ---------------------------------------------------------------- the VI (MIRLO_VI: rcp_vi.sv)
 // With MONITOR.CTL's VI bit the scan-out's base, gamma and black are the VI registers'; else the CSRs'

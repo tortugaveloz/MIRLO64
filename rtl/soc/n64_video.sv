@@ -19,7 +19,7 @@
 //  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new
 //    origin never tears the frame being sent) and the frame's rows are read in
 //    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter gives
-//    the scan-out no priority (a priority scheme was tried on the Pocket and went badly; docs/n64.md). A row is
+//    the scan-out no priority (a priority scheme was tried on the Pocket and went badly). A row is
 //    `vi_nw` words from the row's first, the next row the one Y_SCALE's accumulator reaches (0, 1 or 2 pitches on;
 //    a hi-res picture reads 320 words a row: 18.4 MB/s as a 320-wide one did; the rows of a serrated one are read in pairs, a
 //    word of the one and the word of the other in turn, and the pair's average is what goes to the FIFO: 36.8 MB/s).

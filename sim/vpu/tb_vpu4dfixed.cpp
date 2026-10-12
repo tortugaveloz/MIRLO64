@@ -1,5 +1,5 @@
 // Verilator testbench for rtl/vpu/Vpu4DFixed.v -- the parallel fixed-point
-// matrix-vector CFU (docs/geometry_core.md).
+// matrix-vector CFU.
 //
 // Checks the RTL against a bit-exact fixed-point reference model in plain C
 // (matching the RTL's own round-half-up-via-arithmetic-shift and saturation):

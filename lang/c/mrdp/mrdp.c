@@ -1,5 +1,5 @@
-/* MRDP bit-exact reference model -- see mrdp.h (the contract) and
- * docs/mrdp.md (the design). Integer arithmetic only; every shift, round and
+/* MRDP bit-exact reference model -- see mrdp.h (the contract).
+ * Integer arithmetic only; every shift, round and
  * clamp here is what the RTL does. */
 #include "mrdp.h"
 #include "mrdp_setup.h"

@@ -2,7 +2,7 @@
  *
  * This file is the contract. The RTL (rtl/mrdp/) must produce the same
  * memory writes, word for word, for the same command stream; the host
- * simulator runs the real game through it. docs/mrdp.md has the design.
+ * simulator runs the real game through it.
  *
  * Commands are 64-bit (two 32-bit words, high word first) with the N64 RDP's
  * opcodes in bits [61:56] and, where a field exists on the N64, the N64's bit

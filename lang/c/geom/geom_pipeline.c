@@ -1260,7 +1260,7 @@ static inline int mrdp_rejects(const geom_vertex_fx_t *v0, const geom_vertex_fx_
     return mrdp_cull(v0->x, v0->y, v1->x, v1->y, v2->x, v2->y);
 }
 
-/* MRDP (docs/mrdp.md): cull, then state + an N64 triangle command. */
+/* MRDP: cull, then state + an N64 triangle command. */
 static void mrdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
                          const geom_vertex_fx_t *v2, int ortho_like, const geom_edges_t *e)
 {

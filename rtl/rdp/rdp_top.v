@@ -1,7 +1,7 @@
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/mrdp/mrdp.c built with MRDP_N64: for the same command stream the RTL
-// writes the same memory. From MRDP (rtl/mrdp, docs/mrdp.md), which draws the
+// writes the same memory. From MRDP (rtl/mrdp), which draws the
 // geometry core's triangles: here the triangles are the N64's (0x08..0x0F),
 // TMEM is the N64's 4 KiB loaded by LOAD BLOCK / LOAD TILE / LOAD TLUT and
 // decoded by the tile's format when sampled, texture rectangles, 2-cycle and
@@ -15,8 +15,6 @@
 // through mrdp_pix at one a clock, then the span is written back (only the
 // pixels that passed). State commands wait for the previous primitive to
 // finish, so the pixel pipeline never sees a state change mid-flight.
-// (RDP_Z_PORT: with the depth memory's port; RDP_Z_CDRAW: and with whatever a
-// game draws onto its depth image, not its fills alone)
 module rdp_top (
     input  wire        clk,
     input  wire        rst,
@@ -38,25 +36,6 @@ module rdp_top (
     input  wire        m_rdata_valid,
     input  wire [31:0] m_rdata,
 
-`ifdef RDP_Z_PORT
-    // the depth memory (rdp_zmem.v): a word a command, at the word's address
-    // in the N64's memory; `last` ends a run of consecutive words. What goes
-    // there: the depth spans, and the fills of a colour image that is the
-    // depth image (a game clears its Z buffer so). Anything else drawn to
-    // that image goes there with RDP_Z_CDRAW alone: without, it is drawn in
-    // the N64's memory, where nothing looks for it, and z_cdraw says so.
-    output wire        z_valid,
-    input  wire        z_ready,
-    output wire        z_we,
-    output wire [31:0] z_addr,          // byte address, 4-aligned
-    output wire [31:0] z_wdata,
-    output wire [3:0]  z_wmask,
-    output wire        z_last,
-    input  wire        z_rvalid,
-    input  wire [31:0] z_rdata,
-    input  wire        z_idle,          // nothing of what was asked is still on its way
-    output reg         z_cdraw,         // a primitive that is not a fill was drawn onto the depth image, and RDP_Z_CDRAW is not in
-`endif
 
     // status
     output reg  [31:0] sync_count,      // SYNC FULLs completed (everything before in DRAM)
@@ -190,14 +169,7 @@ module rdp_top (
     wire [31:0] mw_data;
     wire [9:0]  pix_lb_ra;
     wire [31:0] zlb_rd, clb_rd;
-`ifdef RDP_Z_PORT
-    wire        zo_we;
-    wire [9:0]  zo_addr;
-    wire [31:0] zo_data;
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(zo_we), .waddr(zo_addr), .wdata(zo_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
-`else
     mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
-`endif
     mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(clb_rd));
     reg         zn_we, cn_we, msk_we;
     reg  [9:0]  nb_wa;
@@ -209,11 +181,7 @@ module rdp_top (
     wire [31:0] znew_rd;
     wire [35:0] cnew_rd;
     wire [1:0]  zm_rd, cm_rd;
-`ifdef RDP_Z_PORT
-    wire [9:0]  zn_ra;
-`else
     wire [9:0]  zn_ra = mem_lb_ra;
-`endif
     mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
     mrdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(nb_wa), .wdata(cn_wd), .wbe(nb_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
     // the raw hidden-bit buffers (rdp_mem): the span's groups' words, by {set,
@@ -348,7 +316,6 @@ module rdp_top (
     // a set's old buffers are not written while the last pixels of the row
     // that had them are still ahead of the pipe's read of them
     reg  [3:0]  old_hold [0:1];
-`ifndef RDP_Z_PORT
     rdp_mem mem (
         .clk(clk), .rst(rst),
         .rd_valid(rq_pend && old_hold[rq_set] == 4'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
@@ -366,100 +333,6 @@ module rdp_top (
         .m_wdata_valid(m_wdata_valid), .m_wdata_ready(m_wdata_ready), .m_wdata(m_wdata), .m_wdata_we(m_wdata_we),
         .m_rdata_valid(m_rdata_valid), .m_rdata(m_rdata),
         .rd_busy(rd_busy), .wr_busy(wr_busy), .wr_seti(wr_seti), .writes_pending(mem_wpend));
-`else
-    // ---- with the depth memory. A primitive's depth spans are rdp_zmem's,
-    // its colour spans and the loads rdp_mem's, on the N64's memory. Drawn to
-    // a colour image that is the depth image (cz), a fill is rdp_zmem's too
-    // (a run a row); anything else is, with RDP_Z_CDRAW, rdp_mem's whole,
-    // depth spans and all, with its port turned to the depth memory (lz) a
-    // word at a time -- and without, lz is never set: synthesis takes that
-    // way out, some 200 LUTs. The two engines' commands reach the depth
-    // memory in the order of the primitives: one that changes hands waits for
-    // the other's to be taken; a load turns rdp_mem's port back.
-    reg         cz, lz;
-    reg  [1:0]  zany;               // a pixel of the row in a set has passed the depth test
-    wire        zm_use_rd = !rq_load && rq_z && !lz;
-    wire        lg_use_rd = rq_load || rq_c || rq_h || (rq_z && lz);
-    wire        zm_use_wr = cz ? (wq_fill || (wq_z && !lz)) : wq_z;
-    wire        lg_use_wr = !(cz && wq_fill);
-    wire        lg_rd_ready, zm_rd_ready, lg_wr_ready, zm_wr_ready, lg_rd_busy, zm_rd_busy, lg_wr_busy, zm_wr_busy;
-    wire        lg_wpend, zm_cpend;
-    wire        rd_take = rq_pend && old_hold[rq_set] == 4'd0 && hz_ok && lg_rd_ready && zm_rd_ready;
-    wire        wr_take = wq_pend && lg_wr_ready && zm_wr_ready;
-    assign rd_ready = lg_rd_ready && zm_rd_ready;
-    assign wr_ready = lg_wr_ready && zm_wr_ready;
-    assign rd_busy = lg_rd_busy || zm_rd_busy;
-    assign wr_busy = lg_wr_busy || zm_wr_busy;
-    wire [9:0]  lg_z_have, zm_z_have;
-    assign z_have = lz ? lg_z_have : zm_z_have;
-    wire        zm_lbw_we;
-    wire [9:0]  zm_lbw_addr, zm_lb_ra;
-    wire [31:0] zm_lbw_data;
-    assign zo_we   = lz ? mw_z_we : zm_lbw_we;
-    assign zo_addr = lz ? mw_addr : zm_lbw_addr;
-    assign zo_data = lz ? mw_data : zm_lbw_data;
-    assign zn_ra   = lz ? mem_lb_ra : zm_lb_ra;
-    // rdp_mem's port: the N64's memory, or (lz) the depth memory, a write's data with its command
-    wire        lg_cmd_valid, lg_cmd_we, lg_wdata_valid, lg_cmd_ready, lg_wdata_ready, lg_rvalid;
-    wire [31:0] lg_cmd_addr, lg_wdata, lg_rdata;
-    wire [3:0]  lg_wdata_we;
-    wire        zm_valid, zm_we, zm_last, zm_ready;
-    wire [20:0] zm_addr;
-    wire [31:0] zm_wdata;
-    wire [3:0]  zm_wmask;
-    wire        lg_zv = lz && lg_cmd_valid && (!lg_cmd_we || lg_wdata_valid);
-    assign m_cmd_valid   = !lz && lg_cmd_valid;
-    assign m_cmd_we      = lg_cmd_we;
-    assign m_cmd_addr    = lg_cmd_addr;
-    assign m_wdata_valid = !lz && lg_wdata_valid;
-    assign m_wdata       = lg_wdata;
-    assign m_wdata_we    = lg_wdata_we;
-    assign z_valid = zm_valid || lg_zv;
-    assign z_we    = zm_valid ? zm_we : lg_cmd_we;
-    assign z_addr  = zm_valid ? {9'd0, zm_addr, 2'b00} : lg_cmd_addr;
-    assign z_wdata = zm_valid ? zm_wdata : lg_wdata;
-    assign z_wmask = zm_valid ? zm_wmask : lg_wdata_we;
-    assign z_last  = zm_valid ? zm_last : 1'b1;
-    assign zm_ready = z_ready;
-    wire   lg_ztake = lg_zv && !zm_valid && z_ready;
-    assign lg_cmd_ready   = lz ? lg_ztake : m_cmd_ready;
-    assign lg_wdata_ready = lz ? (lg_ztake && lg_cmd_we) : m_wdata_ready;
-    assign lg_rvalid = lz ? z_rvalid : m_rdata_valid;
-    assign lg_rdata  = lz ? z_rdata : m_rdata;
-    assign mem_wpend = lg_wpend || zm_cpend || !z_idle;
-    // nothing of rdp_mem's is on its way to its port; nothing of rdp_zmem's waits to be taken
-    wire lg_none = !lg_cmd_valid && !lg_wpend;
-    rdp_mem mem (
-        .clk(clk), .rst(rst),
-        .rd_valid(rd_take && lg_use_rd), .rd_ready(lg_rd_ready), .rd_load(rq_load), .rd_z(rq_z && lz), .rd_c(rq_c), .rd_h(rq_h),
-        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set),
-        .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
-        .z_have(lg_z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
-        .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
-        .wr_valid(wr_take && lg_use_wr), .wr_ready(lg_wr_ready), .wr_fill(wq_fill), .wr_z(wq_z && lz),
-        .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set),
-        .res_a(res_q[0]), .res_b(res_q[1]),
-        .lbr_addr(mem_lb_ra), .lbr_zdata(znew_rd), .lbr_cdata(cnew_rd), .lbr_zmask(zm_rd), .lbr_cmask(cm_rd),
-        .hlbr_addr(mem_hl_ra), .hlbr_data(mem_hl_rd),
-        .tm_we(tm_we), .tm_wa(tm_wa), .tm_wd0(tm_wd0), .tm_wd1(tm_wd1), .tm_wd2(tm_wd2), .tm_wd3(tm_wd3),
-        .m_cmd_valid(lg_cmd_valid), .m_cmd_ready(lg_cmd_ready), .m_cmd_we(lg_cmd_we), .m_cmd_addr(lg_cmd_addr),
-        .m_wdata_valid(lg_wdata_valid), .m_wdata_ready(lg_wdata_ready), .m_wdata(lg_wdata), .m_wdata_we(lg_wdata_we),
-        .m_rdata_valid(lg_rvalid), .m_rdata(lg_rdata),
-        .rd_busy(lg_rd_busy), .wr_busy(lg_wr_busy), .wr_seti(wr_seti), .writes_pending(lg_wpend));
-    rdp_zmem zmem (
-        .clk(clk), .rst(rst),
-        .rd_valid(rd_take && zm_use_rd), .rd_ready(zm_rd_ready),
-        .rd_zbase(rq_zbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set),
-        .z_have(zm_z_have), .lbw_we(zm_lbw_we), .lbw_addr(zm_lbw_addr), .lbw_data(zm_lbw_data),
-        .wr_valid(wr_take && zm_use_wr), .wr_ready(zm_wr_ready), .wr_fill(wq_fill),
-        .wr_zbase(wq_fill ? wq_cbase : wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set),
-        .res_a(res_q[0]), .res_b(res_q[1]), .any_a(zany[0]), .any_b(zany[1]),
-        .lbr_addr(zm_lb_ra), .lbr_zdata(znew_rd), .lbr_zmask(zm_rd),
-        .z_valid(zm_valid), .z_ready(zm_ready), .z_we(zm_we), .z_addr(zm_addr),
-        .z_wdata(zm_wdata), .z_wmask(zm_wmask), .z_last(zm_last),
-        .z_rvalid(z_rvalid && !lz), .z_rdata(z_rdata),
-        .rd_busy(zm_rd_busy), .wr_busy(zm_wr_busy), .cmd_pending(zm_cpend));
-`endif
 
     // ======================================================================
     // shared multiplier: 32 x 32 signed, two cycles
@@ -479,19 +352,6 @@ module rdp_top (
                S_XL = 5'd19;
     reg [4:0]  st;
     reg        row_wq;              // the row's write-back has been asked for
-`ifdef RDP_Z_PORT
-    // the primitive about to start: its colour image is the depth image; and
-    // it is not a fill, so rdp_mem draws it whole on the depth memory
-    wire       draw_cz = cimg[23:0] == zimg[23:0];
-    wire       draw_cd = draw_cz && !(op == 6'h36 && cyc == 2'd3);
-`ifdef RDP_Z_CDRAW
-    wire       draw_lz = draw_cd;
-`else
-    wire       draw_lz = 1'b0;
-`endif
-    wire       op_draw = is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36;
-    wire       op_load = op == 6'h30 || op == 6'h33 || op == 6'h34;
-`endif
     // the row's next pixel: its word in the span, and whether what it reads of
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xs[0]} + px_cnt) >> 1;
@@ -749,9 +609,6 @@ module rdp_top (
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
             timg_size <= 2'd0; cimg_ok <= 1'b0;
-`ifdef RDP_Z_PORT
-            cz <= 1'b0; lz <= 1'b0; z_cdraw <= 1'b0;
-`endif
         end else begin
             // ---- the engines take their requests
             if (rq_pend && rd_ready && old_hold[rq_set] == 4'd0 && hz_ok) rq_pend <= 1'b0;
@@ -773,9 +630,6 @@ module rdp_top (
                 nb_be <= px_x[0] ? 2'b01 : 2'b10;       // the even pixel in [31:16]
                 cn_we <= px_cpass;
                 zn_we <= px_zpass;
-`ifdef RDP_Z_PORT
-                if (px_zpass) zany[px_set] <= 1'b1;
-`endif
                 res_n[px_set] <= res_n[px_set] + 11'd1;
             end
 
@@ -819,20 +673,7 @@ module rdp_top (
 
             // ---- execute
             case (st)
-`ifdef RDP_Z_PORT
-            // (a primitive whose engine on the depth memory is not the last
-            // one's waits for that one's commands to be taken; rdp_mem's port
-            // is turned only with nothing of its own on the way)
-            S_IDLE: if (exec_go && (op_draw || op_load) &&
-                        (((op_draw && draw_lz) != lz && !lg_none) || (op_draw && draw_lz && zm_cpend))) begin
-            end else if (exec_go) begin
-                if (op_draw) begin
-                    cz <= draw_cz; lz <= draw_lz;
-                    if (draw_cz && cyc != 2'd3 && !draw_lz && cimg_ok) z_cdraw <= 1'b1;       // (a fill is rdp_zmem's, whatever its shape)
-                end else if (op_load) lz <= 1'b0;
-`else
             S_IDLE: if (exec_go) begin
-`endif
                 exec_go <= 1'b0;
                 busy_exec <= 1'b1;
                 if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && !cimg_ok) begin
@@ -1111,9 +952,6 @@ module rdp_top (
                         wq_pend <= 1'b1; wq_fill <= 1'b0; wq_z <= z_upd; wq_set <= set_cur;
                         wq_cbase <= cimg + row_off; wq_zbase <= zimg + row_off; wq_x0 <= xs; wq_x1 <= xe;
                         res_n[set_cur] <= 11'd0; res_d[set_cur] <= 11'd0; res_q[set_cur] <= 11'd0;
-`ifdef RDP_Z_PORT
-                        zany[set_cur] <= 1'b0;
-`endif
                         row_wq <= 1'b1;
                     end
                 end else if (pix_go) begin

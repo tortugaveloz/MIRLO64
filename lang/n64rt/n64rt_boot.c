@@ -406,9 +406,8 @@ static void late_apply(int all)
  * n64rt_boot_rom) or as one game file (tools/make_mirlo_game.py: the port's
  * program and the ROM as block ROM0, the port's Makefile's
  * ROM0@0x100000=<rom.z64>; n64rt_boot_game_file). The ROM is read where
- * that leaves it (layout.h): what the Pocket loaded below 49 MiB is in the
- * SDRAM, the rest -- a 64 MiB ROM's last 16 MiB -- in the PSRAM, where the
- * bridge wrote it. Nothing is moved. The port links its boot stack below
+ * that leaves it (layout.h), in the SDRAM: a ROM of up to 48 MiB. Nothing
+ * is moved. The port links its boot stack below
  * N64RT_ROM_FILE_OFF (--defsym=_fstack=0x400FFFF0). */
 #define FILE_SDRAM 0x40000000u
 static void no_rom(const char *msg) __attribute__((noreturn));
@@ -421,106 +420,38 @@ static void no_rom(const char *msg)
 /* the word the Pocket loaded at an offset from the program's start */
 static u32 file_word(u32 off)
 {
-    if (off < LAYOUT_FILE_SDRAM) return *(const volatile u32 *)(uintptr_t)(FILE_SDRAM + off);
-    return *(const volatile u32 *)(uintptr_t)(N64RT_ROM_PSRAM + (off - LAYOUT_FILE_SDRAM));
+    return *(const volatile u32 *)(uintptr_t)(FILE_SDRAM + off);
 }
 u32 n64rt_rom_word(u32 off)
 {
-    const n64rt_game_t *g = n64rt_game;
-    if (g->rom_tail && off >= g->rom_tail) return *(const volatile u32 *)(uintptr_t)(N64RT_ROM_PSRAM + (off - g->rom_tail));
-    return *(const volatile u32 *)(uintptr_t)(g->rom_sdram + off);
+    return *(const volatile u32 *)(uintptr_t)(n64rt_game->rom_sdram + off);
 }
-void n64rt_rom_copy(void *dst, u32 off, u32 size)
-{
-    u8 *d = dst;
-    u32 w = 0, have = ~0u;
-    for (u32 i = 0; i < size; i++) {
-        u32 a = off + i;
-        if ((a & ~3u) != have) { have = a & ~3u; w = n64rt_rom_word(have); }
-        d[i] = (u8)(w >> (24u - 8u * (a & 3u)));
-    }
-}
-/* The RDP's depth memory (a core with MIRLO_Z_PSRAM: the PSRAM's state has
- * bit 6): its bursts tried with a few words, with the datasheet's latency and
- * then a clock either way for a write and for a read, and the first setting
- * that works kept. None: the chips do not answer as the core expects, and
- * depth will be wrong -- said in the log; psram_test (lang/mips/test) shows
- * it on the screen. */
-__attribute__((unused)) static void psram_depth_check(void)
-{
-    volatile u32 *st = (volatile u32 *)(uintptr_t)N64RT_PSRAM_STATE;
-    volatile u32 *w = (volatile u32 *)(uintptr_t)0x52000000u;
-    if ((*st & 0xFFFF0100u) == 0x50520100u) printf("n64rt: the RDP's depth is in the PSRAM\n");
-    if ((*st & 0xFFFF0050u) != 0x50520050u) return;
-    static const u8 order[9] = { 5, 4, 6, 1, 9, 0, 2, 8, 10 };      /* (write | read << 2; 1 each first) */
-    static const u32 at[5] = { 0, 1, 127, 128, 0x2ABCDE };
-    for (int k = 0; k < 9; k++) {
-        int ok = 1;
-        *st = order[k];
-        for (int i = 0; i < 5; i++) w[at[i]] = 0xC0DE0000u + at[i] * 2654435761u;
-        for (int i = 0; i < 5; i++) if (w[at[i]] != 0xC0DE0000u + at[i] * 2654435761u) ok = 0;
-        if (ok) {
-            if (k) printf("n64rt: the depth memory's bursts work with latency setting %u, not the datasheet's\n", order[k]);
-            return;
-        }
-    }
-    *st = 5u;
-    printf("n64rt: the depth memory (PSRAM) does not answer: the RDP's depth will be wrong\n");
-}
-
 /* what both ways in begin with */
-static int boot_checks(void)
+static void boot_checks(void)
 {
     /* A core of another memory layout (its boot ROM has no mark: layout.h)
      * has the saves' slots elsewhere, in what is the RDRAM here: nothing is
      * run on it, so the Pocket reads back from them what it loaded. */
     if (*(const volatile u32 *)(uintptr_t)(0xBFC00000u + LAYOUT_MARK_OFS) != LAYOUT_MARK)
         no_rom("This program needs a newer Mirlo core, with its data.json: nothing was started. The saves are as they were.");
-#ifdef N64RT_PSRAM
-    psram_depth_check();
-    return (*(const volatile u32 *)(uintptr_t)N64RT_PSRAM_STATE & 0xFFFF0090u) == 0x50520090u;
-#else
-    /* (the PSRAM is not in this system, and 0x5000_0000 - 0x5FFF_FFFF is the game's to map: nothing of the runtime's reads there) */
-    return 0;
-#endif
 }
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
-static void rom_at(n64rt_game_t *g, u32 off, u32 size, int psram)
+static void rom_at(n64rt_game_t *g, u32 off, u32 size)
 {
-    if (off < N64RT_ROM_FILE_OFF || (off & 3u) || size < 0x1000u || size > N64RT_ROM_MAX || off > LAYOUT_FILE_MAX - size)
-        no_rom("no ROM at 1 MiB of what the Pocket loaded, or one of more than 64 MiB");
-    if (off + size > LAYOUT_FILE_SDRAM && !psram)
-        no_rom("a ROM of more than 48 MiB needs the core with the PSRAM (MIRLO_ROM64)");
+    if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_SDRAM || (off & 3u) || size < 0x1000u)
+        no_rom("no ROM at 1 MiB of what the Pocket loaded");
+    if (size > LAYOUT_FILE_SDRAM - off) no_rom("ROM exceeds maximum file size of 48 MiB.");
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
-    g->rom_tail = off + size > LAYOUT_FILE_SDRAM ? LAYOUT_FILE_SDRAM - off : 0;
-#ifdef N64RT_DEBUG
-    if (g->rom_tail) {
-        /* (what a simulation compares with the file: words either side of
-         * where the PSRAM's part starts and the last one, and a copy that
-         * starts in the SDRAM and ends in the PSRAM) */
-        const n64rt_game_t *was = n64rt_game;
-        n64rt_game = g;
-        u8 b[16];
-        const u32 t = g->rom_tail, at[4] = { t - 4u, t, t + 0x00800000u, size - 4u };
-        n64rt_rom_copy(b, t - 6u, 16);
-        printf("n64rt: a ROM of %lu bytes, from %08lx on in the PSRAM: words", (unsigned long)size, (unsigned long)t);
-        for (int i = 0; i < 4; i++) if (at[i] < size) printf(" %08lx=%08lx", (unsigned long)at[i], (unsigned long)n64rt_rom_word(at[i]));
-        printf("; bytes at %08lx:", (unsigned long)(t - 6u));
-        for (int i = 0; i < 16; i++) printf(" %02x", b[i]);
-        printf("\n");
-        n64rt_game = was;
-    }
-#endif
 }
 
 void n64rt_boot_game_file(n64rt_game_t *g)
 {
-    const int psram = boot_checks();
+    boot_checks();
     u32 fsz = apf_bridge_file_size_read();
-    if (fsz < 64u || fsz > LAYOUT_FILE_MAX) no_rom("no game file, or one of more than 65 MiB");
-    if (fsz > LAYOUT_FILE_SDRAM && !psram) no_rom("the game file is more than 49 MiB: it needs the core with the PSRAM (MIRLO_ROM64)");
+    if (fsz < 64u) no_rom("no game file");
+    if (fsz > LAYOUT_FILE_SDRAM) no_rom("ROM exceeds maximum file size of 48 MiB.");
     u32 ft[8];
     for (u32 i = 0; i < 8u; i++) ft[i] = file_word(fsz - 32u + 4u * i);
     if (memcmp(&ft[4], "MIRLODATA", 10) != 0 || ft[3] != 1u) no_rom("no game file footer");
@@ -531,7 +462,7 @@ void n64rt_boot_game_file(n64rt_game_t *g)
         if (memcmp(&tag, "ROM0", 4) == 0) { off = file_word(table + 16u * i + 4u); size = file_word(table + 16u * i + 8u); }
     }
     if (off >= fsz || size > fsz - off) no_rom("no ROM0 block in the game file");
-    rom_at(g, off, size, psram);
+    rom_at(g, off, size);
     n64rt_run(g);
 }
 
@@ -558,11 +489,11 @@ const char *n64rt_func_name(u32 i) { return i < N64RT_NFUNCS ? s_names[i] : "?";
 
 /* The other way in: the ROM is a file of its own -- data slot 0, a .z64 as
  * it is -- which the Pocket loaded at N64RT_ROM_FILE_OFF, where a game file
- * has its ROM0; rom_size is the file's. Sets g->rom_sdram, rom_size and
- * rom_tail, then n64rt_run(g). */
+ * has its ROM0; rom_size is the file's. Sets g->rom_sdram and rom_size,
+ * then n64rt_run(g). */
 void n64rt_boot_rom(n64rt_game_t *g, u32 rom_size)
 {
-    const int psram = boot_checks();
-    rom_at(g, N64RT_ROM_FILE_OFF, rom_size, psram);
+    boot_checks();
+    rom_at(g, N64RT_ROM_FILE_OFF, rom_size);
     n64rt_run(g);
 }
