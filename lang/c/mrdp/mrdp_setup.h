@@ -395,7 +395,7 @@ static inline int mrdp_setup_triangle(uint32_t *out, mrdp_vtx_t *va, mrdp_vtx_t 
     return mrdp_put_attrs(out, n, flags, val, ddx, dde, ddy);
 }
 
-/* ---- TRI_V / TRI_G: the per-attribute half in MRDP (docs/mrdp.md) --------- *
+/* ---- TRI_V / TRI_G: the per-attribute half in MRDP --------- *
  *
  * The geom core computed the gradients of every attribute in C: ~1000 of the
  * ~2350 cycles a triangle cost it. TRI_V carries the edges, four plane

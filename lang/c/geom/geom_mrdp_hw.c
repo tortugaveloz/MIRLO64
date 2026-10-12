@@ -1,4 +1,4 @@
-/* The geom core's MRDP transport (docs/mrdp.md): command words into MRDP's
+/* The geom core's MRDP transport: command words into MRDP's
  * FIFO over the cmd_data CSR, and the texture staging ring. */
 #include <stdint.h>
 #include "generated_csr_addrs.h"

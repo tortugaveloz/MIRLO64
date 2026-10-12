@@ -11,7 +11,7 @@
 //    origin never tears the frame being sent) and the frame's 38,400 words
 //    are read in order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the
 //    arbiter gives the scan-out no priority (a priority scheme was tried on
-//    the Pocket and went badly; docs/n64.md).
+//    the Pocket and went badly).
 //  - a hi-res framebuffer (VI_WIDTH 512 or more: 640 wide -- Pokemon Stadium's menus) is always shown in this 320 x 240
 //    frame, reduced without a buffer: a word (two pixels) is read for each pixel shown and the two are averaged (2 x 1 box;
 //    the left pixel alone, point sampling, was the first try: `havg` below); one that is 480 rows (vi_tall: VI yScale 2,

@@ -10,7 +10,7 @@ Mirlo draws 3D with two cores and a rasterizer:
 - **Geometry core** (`VexRiscvGeom`, `rv32im`, no FPU, firmware in
   `../geom/`): walks the GDL, transforms, lights and clips the vertices with its
   vector unit (a CFU) and sets up each triangle for MRDP.
-- **MRDP** (`../../../rtl/mrdp/`, `../../../docs/mrdp.md`): an N64-style
+- **MRDP** (`../../../rtl/mrdp/`): an N64-style
   rasterizer. It draws into RGB565 framebuffers in SDRAM with a 16-bit depth
   buffer.
 
