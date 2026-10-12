@@ -446,7 +446,7 @@ void n64rt_rom_copy(void *dst, u32 off, u32 size)
  * that works kept. None: the chips do not answer as the core expects, and
  * depth will be wrong -- said in the log; psram_test (lang/mips/test) shows
  * it on the screen. */
-static void psram_depth_check(void)
+__attribute__((unused)) static void psram_depth_check(void)
 {
     volatile u32 *st = (volatile u32 *)(uintptr_t)N64RT_PSRAM_STATE;
     volatile u32 *w = (volatile u32 *)(uintptr_t)0x52000000u;
@@ -476,8 +476,13 @@ static int boot_checks(void)
      * run on it, so the Pocket reads back from them what it loaded. */
     if (*(const volatile u32 *)(uintptr_t)(0xBFC00000u + LAYOUT_MARK_OFS) != LAYOUT_MARK)
         no_rom("This program needs a newer Mirlo core, with its data.json: nothing was started. The saves are as they were.");
+#ifdef N64RT_PSRAM
     psram_depth_check();
     return (*(const volatile u32 *)(uintptr_t)N64RT_PSRAM_STATE & 0xFFFF0090u) == 0x50520090u;
+#else
+    /* (the PSRAM is not in this system, and 0x5000_0000 - 0x5FFF_FFFF is the game's to map: nothing of the runtime's reads there) */
+    return 0;
+#endif
 }
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
 static void rom_at(n64rt_game_t *g, u32 off, u32 size, int psram)
