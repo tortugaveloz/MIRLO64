@@ -10,7 +10,7 @@ zip holds, from the SD card's root:
 
     Cores/tortuga.Mirlo64/   the core definition (pkg/pocket), mirlo.rev,
                              LICENSE.txt, NOTICE.txt
-    Platforms/mirlo.json     the platform (category Console) and its image
+    Platforms/mirlo.json     the platform (Console > Nintendo 64) and its image
     Platforms/_images/mirlo.bin
     Assets/mirlo/common/     n64rt.sys, n64savedb.txt (pkg/pocket) and
                              PUT_ROMS_HERE.txt: where the games go
