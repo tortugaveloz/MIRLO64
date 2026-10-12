@@ -310,10 +310,10 @@ module rdp_pix (
     reg        u5_cs, u5_ms, u5_ct, u5_mt;
     reg [8:0]  u6_tmem, u6_line;
     reg [1:0]  u6_size, u8t_size;
-    reg        u8_size0;
+    reg        u8_size0, u8_size1;
     reg [3:0]  u8_pal;
     reg [2:0]  u8t_fmt;
-    wire       tlut_on = other_h[15] && !u8t_size[1];
+    wire       tlut_on = other_h[15];
     reg        v1;
     reg [9:0]  x1;
     reg [16:0] p1;
@@ -559,7 +559,8 @@ module rdp_pix (
     end
 
     // ======================================================================
-    // P8: TMEM's words arrive; a 4- or 8-bit texel is the TLUT's address
+    // P8: TMEM's words arrive; with the TLUT on a texel is its address (a 4-bit texel with the tile's palette, an 8-bit one, the
+    // first byte of a 16- or 32-bit one's word)
     // ======================================================================
     reg        v8;
     reg [9:0]  x8;
@@ -570,8 +571,8 @@ module rdp_pix (
     reg [15:0] depth8;
     always @(posedge clk) begin
         v8 <= v7 & ~rst; x8 <= x7; bs8 <= bs7; ph8 <= ph7;
-        // the TLUT index (4- and 8-bit texels)
-        u8_size0 <= ph7 ? t1_size[0] : t_size[0]; u8_pal <= ph7 ? t1_pal : t_pal;
+        // the TLUT index
+        u8_size0 <= ph7 ? t1_size[0] : t_size[0]; u8_size1 <= ph7 ? t1_size[1] : t_size[1]; u8_pal <= ph7 ? t1_pal : t_pal;
         sl0_8 <= sl0_7; sl1_8 <= sl1_7; sl2_8 <= sl2_7;
         fs8 <= fs7; ft8 <= ft7; up8 <= up7;
         shade8 <= shade7; depth8 <= depth7;
@@ -582,7 +583,7 @@ module rdp_pix (
         reg [3:0] n;
         begin
             n = sl == 2'd0 ? v[15:12] : sl == 2'd1 ? v[11:8] : sl == 2'd2 ? v[7:4] : v[3:0];
-            tl_idx = u8_size0 ? (sl[0] ? v[7:0] : v[15:8]) : {u8_pal, n};
+            tl_idx = u8_size1 ? v[15:8] : u8_size0 ? (sl[0] ? v[7:0] : v[15:8]) : {u8_pal, n};
         end
     endfunction
     assign tl_a0 = tl_idx(tm_q0, sl0_8);

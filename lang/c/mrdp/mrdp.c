@@ -164,9 +164,13 @@ static mrdp_rgba_t texel_expand(unsigned fmt, uint16_t v)
  *   32-bit   R G in word (...+ s) of the lower half, B A in the same word of
  *            the upper half (as the N64 keeps them: LOAD BLOCK / LOAD TILE
  *            split a 32-bit RGBA texture so)
- * and decoded by the tile's format. With the TLUT on, a 4- or 8-bit texel is
- * an index: its colour is the 16-bit word 4*index of the upper half (LOAD
- * TLUT writes every entry four times, as the N64).
+ * and decoded by the tile's format. With the TLUT on, a texel is an index
+ * whatever the tile's format: a 4-bit one with the tile's palette, an 8-bit
+ * one as it is, and of a 16- or 32-bit one the first byte of its word (of the
+ * lower half) -- a game that loads its depth image as a texture and takes a
+ * table's entry by the depth's top byte. Its colour is the 16-bit word
+ * 4*index of the upper half (LOAD TLUT writes every entry four times, as the
+ * N64).
  * On an odd row the two halves of each 64-bit word change places (the word
  * found is word ^ 2), as they did when the row was loaded -- the N64's, which
  * shows when a load's rows are not the tile's: a LOAD BLOCK with dxt 0 loads
@@ -179,8 +183,10 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
     uint32_t row = (uint32_t)t->tmem * 4u + (uint32_t)tt * (uint32_t)t->line * 4u;
     const uint32_t odd = (tt & 1) ? 2u : 0u;
     mrdp_rgba_t c = { 0, 0, 0, 0 };
+    const unsigned tlut = (r->other_h & MRDP_H_TLUT_EN) != 0, tlut_fmt = (r->other_h & MRDP_H_TLUT_IA) ? 1 : 0;
     if (t->size == 3) {
         uint32_t i = ((row + (uint32_t)s) ^ odd) & 0x3FF;
+        if (tlut) return texel_expand(tlut_fmt, m[0x400 | ((unsigned)(m[i] >> 8) << 2)]);
         c.r = (uint8_t)(m[i] >> 8); c.g = (uint8_t)m[i];
         c.b = (uint8_t)(m[0x400 | i] >> 8); c.a = (uint8_t)m[0x400 | i];
         return c;
@@ -188,9 +194,9 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
     unsigned v = m[((row + ((uint32_t)s >> (2 - t->size))) ^ odd) & 0x7FF];
     unsigned n = (v >> (12 - 4 * (s & 3))) & 15u;                 /* the 4-bit texel */
     unsigned b = (s & 1) ? (v & 255u) : (v >> 8);                 /* the 8-bit one */
-    if ((r->other_h & MRDP_H_TLUT_EN) && t->size < 2) {
-        unsigned idx = t->size == 0 ? ((unsigned)t->palette << 4 | n) : b;
-        return texel_expand((r->other_h & MRDP_H_TLUT_IA) ? 1 : 0, m[0x400 | (idx << 2)]);
+    if (tlut) {
+        unsigned idx = t->size == 0 ? ((unsigned)t->palette << 4 | n) : t->size == 1 ? b : v >> 8;
+        return texel_expand(tlut_fmt, m[0x400 | (idx << 2)]);
     }
     if (t->size == 2) {
         if (t->fmt == 3) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */

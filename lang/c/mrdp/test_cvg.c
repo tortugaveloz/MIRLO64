@@ -334,6 +334,27 @@ int main(void)
         check(k ? "2-cycle: TEXEL1 in the second cycle is the tile's sample (red)" : "2-cycle: TEXEL0 in the second cycle is the next tile's sample (green)",
               12, 3, k ? c5551(255, 0, 0, 1) : c5551(0, 255, 0, 1));
     }
+    /* 11. With the TLUT on a 16-bit texel is an index too: the first byte of its word (a game loads its depth image as a
+     * texture and takes a table's entry by the depth's top byte). A 4 x 1 texture of 0x4C37 in tile 0; the table's entry 0x4C
+     * green, 0x37 (the word's other byte) red, all the others blue. */
+    setup((1u << 6) | (1u << 22) | (1u << 18));
+    for (unsigned i = 0; i < 4; i++) { mem[0x30000 + 2 * i] = 0x4C; mem[0x30000 + 2 * i + 1] = 0x37; }
+    for (unsigned i = 0; i < 256; i++) {
+        const uint16_t e = i == 0x4C ? c5551(0, 255, 0, 1) : i == 0x37 ? c5551(255, 0, 0, 1) : c5551(0, 0, 255, 1);
+        mem[0x31000 + 2 * i] = (uint8_t)(e >> 8); mem[0x31000 + 2 * i + 1] = (uint8_t)e;
+    }
+    cmd(0x3D000000u | 2u << 19, 0x31000u);                                    /* the table: 256 entries into TMEM's upper half */
+    cmd(0x35000000u | 256u, 7u << 24);                                        /* SET_TILE 7: TMEM 256 */
+    cmd(0x30000000u, 7u << 24 | (255u << 2) << 12);                           /* LOAD_TLUT 0..255 */
+    cmd(0x3D000000u | 2u << 19, 0x30000u);
+    cmd(0x35000000u | 2u << 19, 7u << 24);
+    cmd(0x33000000u, 7u << 24 | 3u << 12);
+    cmd(0x35000000u | 2u << 19 | 1u << 9, 0);                                 /* SET_TILE 0: RGBA16 */
+    cmd(0x32000000u, 3u << 14 | 0u << 12 | 0u);
+    cmd(0x3C000000u | (15u << 5) | 31u, (15u << 24) | (7u << 21) | (7u << 18) | (1u << 6) | (7u << 3) | 1u);   /* RGB = TEXEL0, A = TEXEL0 */
+    cmd(0x2F000000u | (1u << 15) | (3u << 6) | (3u << 4), (1u << 6) | (1u << 22) | (1u << 18));   /* TLUT on (RGBA16 entries) */
+    tri_vleft(10 << 16);
+    check("TLUT on, a 16-bit texel: the entry of its first byte", 12, 3, c5551(0, 255, 0, 1));
 
     printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
     return fails != 0;
