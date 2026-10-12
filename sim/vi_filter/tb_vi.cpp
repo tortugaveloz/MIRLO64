@@ -2,11 +2,11 @@
 // X_SCALE / Y_SCALE steps through the framebuffer (nearest pixel and row), and its anti-alias, dither and divot filters
 // (the VI_filter / VI_filter_pen behaviour, with the coverage of a partial pixel taken as 3: the framebuffer keeps one bit).
 //   tb_vi [seed] [divot 0/1] [partial %] [width] [dedither 0/1]
-// width: the framebuffer's pitch in pixels -- 320 (X_SCALE 0x200: doubled), 440 (GoldenEye's: 0x2C0 and Y_SCALE 0x580), 384
-// (Mario Tennis': 0x20E in a 597-clock window), 640 (hi-res, filters off: X_SCALE 0x400), or any other; `640p` a 640 x 240
+// width: the framebuffer's pitch in pixels -- 320 (X_SCALE 0x200: doubled), 440 (0x2C0 and Y_SCALE 0x580), 384
+// (0x20E in a 597-clock window), 640 (hi-res, filters off: X_SCALE 0x400), or any other; `640p` a 640 x 240
 // buffer, plain 640 a 480-row one whose even rows are shown (Y_SCALE 0x800: a hi-res picture without SERRATE). A serrated
-// picture (VI_CTRL SERRATE, vi_avg) is `640s` (a 640-pitch 640 x 480 buffer, the runtime's Y_SCALE 2.0 = 0x7FF: Stadium's, libultra's
-// interlaced modes) or `1280s` (WIDTH 1280, Y_SCALE 1.0: two rows of 640 a pitch, Donkey Kong 64's): its line k is the average
+// picture (VI_CTRL SERRATE, vi_avg) is `640s` (a 640-pitch 640 x 480 buffer, the runtime's Y_SCALE 2.0 = 0x7FF: libultra's
+// interlaced modes) or `1280s` (WIDTH 1280, Y_SCALE 1.0: two rows of 640 a pitch): its line k is the average
 // of the picture's rows 2k and 2k + 1, per channel (a + b + 1) >> 1, 640 x 240 progressive (no 480i); `640ps`, a 240-row buffer
 // with SERRATE, is not a pair of fields and is shown as it is (as is any other pitch, `704s`).
 //   env: TB_XS, TB_YS (the steps, hex), TB_PX0, TB_PW (the window in the line, clocks), TB_Y0, TB_ROWS (its lines),

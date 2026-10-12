@@ -563,8 +563,8 @@ n64rt_mon_slow:
     # (__osSetTimerIntr, with its interrupts off; the timer's handler, at EXL) and Count would pass Compare, which then
     # waits a wrap (91 s). With its interrupts on the game is in neither, and Count keeps the monitor's time: it is the
     # console's clock, and what the monitor does for the game takes real time. (Frozen always, a game's wait by osGetTime
-    # lasted as much longer as the monitor worked in it: F-Zero X's 3.8 s at its start, a loop of 64-bit conversions that
-    # are the monitor's, took 14 s.)
+    # lasted as much longer as the monitor worked in it: a wait of 3.8 s around a loop of 64-bit conversions, which are
+    # the monitor's, took 14 s.)
     lw      $k1, 0x04($k0)          # the game's Status, as it goes back
     andi    $k1, $k1, 3
     xori    $k1, $k1, 1

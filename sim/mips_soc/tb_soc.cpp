@@ -408,7 +408,7 @@ static void dump_frame(const std::string &dir, long n)
     FILE *f = fopen(path, "wb");
     if (!f) return;
     // FB_STRIDE=<pixels>[,<rows>] (with FB_N64): the game's own framebuffer as it is, a row of <pixels> pixels (the VI's WIDTH:
-    // GoldenEye's 440 x 330), for a game whose picture the scan-out does not show whole yet; the file is that size
+    // 440 of a 440 x 330 picture), for a game whose picture the scan-out does not show whole yet; the file is that size
     if (const char *fs = getenv("FB_STRIDE")) {
         int w = atoi(fs), h = strchr(fs, ',') ? atoi(strchr(fs, ',') + 1) : 240;
         fprintf(f, "P6 %d %d 255\n", w, h);
