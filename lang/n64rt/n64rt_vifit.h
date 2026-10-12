@@ -1,5 +1,5 @@
 /* The VI's window in the scan-out's 240-line field (rtl/soc/n64_video.sv): the picture is `rows` lines from line y0 and its line j shows the buffer's row
- * (j ys) >> 10. A window that has more lines than the field has from y0 -- PAL's wide modes: Mario Golf (Europe) writes V_START 0x2F0269, 285 lines
+ * (j ys) >> 10. A window that has more lines than the field has from y0 -- PAL's wide modes: V_START 0x2F0269, 285 lines
  * from the half-line 47 (before the 95 the field starts at) with Y_SCALE 0x35C, a 240-row buffer stretched to them -- is FITTED to what is left of the
  * field, not cut at its last line: the lines are fewer and the step Y_SCALE takes through the buffer larger by their ratio, so that the window's first and
  * last lines show the same rows of the buffer as the VI's (the last of its 285 lines is the row 238 with 0x35C, and so it is of the 240: 0x3FD). That is what

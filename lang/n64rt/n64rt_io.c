@@ -99,7 +99,7 @@ static u32 s_vi_vs = 0x002501FFu;       /* VI_V_START: start << 16 | end, in hal
 static u32 s_vi_tall_cur;               /* (the hi-res picture sent is 480 rows: no longer a thing) */
 /* The TV system the game's registers ask for: V_SYNC's 525 lines (512..575) NTSC, 625 (576..703) PAL, any other value (0: none yet) the ROM's region -- what
  * rtl/soc/rcp_vi.sv's `vi_pal` is. NOT n64rt_vi_pal(), the system the scan-out is using (WIDTH bit 19): that follows at the scan-out's next frame boundary, so
- * the window of a mode's first registers (SM64 (Europe): V_SYNC 0x271, V_START 0x5F0239, written once and never changed) was taken with NTSC's origin
+ * the window of a mode's first registers (a PAL game's V_SYNC 0x271, V_START 0x5F0239, written once and never changed) was taken with NTSC's origin
  * (37: the picture 29 lines below its place, y0 29, and cut at the bottom, 211 of its 237 lines). */
 static u32 s_vi_vsync;                  /* the last VI_V_SYNC that named a system (as rcp_vi.sv: any other value -- 0, noise -- changes nothing) */
 static void vi_note_vsync(u32 v) { const u32 k = (v & 0x3FFu) >> 6; if (k == 8u || k == 9u || k == 10u) s_vi_vsync = v; }
@@ -1451,8 +1451,8 @@ static int rcp_read_(u32 pa, u32 *v)
     if (pa >= 0x08000000u && pa < 0x10000000u) { (void)io_read(pa, v); return 1; }       /* the cartridge's domain 2: FlashRAM, as the PI's IO */
     /* The 64DD's registers (0x0500_0000) and its ROM (0x0600_0000): no drive. Nothing answers on the cartridge's bus there, and a
      * read gets what the bus last carried, the address's low half, twice (0x0500_0508, the drive's status, reads 0x0508_0508).
-     * It read 0 here: F-Zero X took that for a drive that is there, started the drive's manager and waited for it for ever
-     * (LeoCJCreateLeoManager's `while (status == 8)`), after reading its font from the drive's ROM -- a black screen. */
+     * A 0 read here is a drive that is there to a game that looks for one: it starts the drive's manager and waits for it for
+     * ever (LeoCJCreateLeoManager's `while (status == 8)`), after reading its font from the drive's ROM -- a black screen. */
     if (pa >= 0x05000000u && pa < 0x08000000u) { *v = (pa & 0xFFFFu) << 16 | (pa & 0xFFFFu); return 1; }
     /* what is not there (the bus's other addresses, the PIF's ROM): a read is told 0 */
     if ((pa >= 0x04900000u && pa < 0x10000000u) || (pa >= 0x1FC00000u && !(pa >= 0x1FC007C0u && pa < 0x1FC00800u))) { *v = 0; return 1; }
