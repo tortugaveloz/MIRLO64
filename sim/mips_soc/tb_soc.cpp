@@ -184,7 +184,8 @@ static void chip_step()
 // (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
 static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
 static bool o_cstat, o_ctrace, o_excstat, o_pcprof;
-static long o_pcprof_from;
+static long o_pcprof_from, o_rcpstat;
+static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
 static void opts_load()
 {
@@ -194,6 +195,9 @@ static void opts_load()
     o_xtrace = getenv("XTRACE") ? atol(getenv("XTRACE")) : 0;
     o_pctop = getenv("PCTOP") ? atol(getenv("PCTOP")) : 0;
     o_pcprof = getenv("PCPROF") != nullptr; o_pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
+    o_rcpstat = getenv("RCPSTAT") ? atol(getenv("RCPSTAT")) : 0;
+    o_rcp_ilo = o_rcp_ihi = 0;
+    if (const char *e = getenv("RCPSTAT_IDLE")) { o_rcp_ilo = strtoul(e, 0, 0); o_rcp_ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : o_rcp_ilo + 8; }
 }
 static void cpu_trace_step()
 {
@@ -1041,6 +1045,23 @@ int main(int argc, char **argv)
             // hazard -- or none. CPUSTAT_IDLE: a range of pc (the game's idle
             // loop) whose cycles are counted apart; what is left of a field
             // is its CPU time (CPUSTAT=2: a line for every field).
+            // RCPSTAT=n [RCPSTAT_IDLE=lo,hi]: every n fields, what the RCP and the CPU did in them -- the time the RSP ran, the
+            // time the RDP was not idle (a command under way or waiting), the RDP's full syncs (a frame each), and the CPU's
+            // time outside the game's idle loop (the range of its pc)
+            if (o_rcpstat) {
+                static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
+                n_cyc++;
+                if (t->rsp_stat & 1) rsp_run++;
+                if (!t->rootp->soc_sim_top__DOT__soc__DOT__mrdp_idle) rdp_busy++;
+                if (o_rcp_ihi && t->cpu_pc >= o_rcp_ilo && t->cpu_pc < o_rcp_ihi) cpu_idle++;
+                if (frames != f_last && frames % o_rcpstat == 0) {
+                    if (f_last >= 0)
+                        printf("[rcpstat field %ld: %.2f ms; RSP running %.2f ms, RDP busy %.2f ms, %u full syncs, CPU busy %.2f ms]\n", frames, n_cyc / TB_SYS_KHZ,
+                               rsp_run / TB_SYS_KHZ, rdp_busy / TB_SYS_KHZ, (unsigned)(t->mrdp_sync - sync_last), (n_cyc - cpu_idle) / TB_SYS_KHZ);
+                    rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->mrdp_sync;
+                }
+                f_last = frames;
+            }
             // RSPSTAT=1: where the RSP's time goes, by the task under way (the
             // port's 0xA3 / 0xA4 marks: built with RSPDUMP=1), a line a second
             static const bool rstat = getenv("RSPSTAT") != nullptr;
