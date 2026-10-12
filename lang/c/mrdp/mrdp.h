@@ -129,6 +129,11 @@ int mrdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  *   cvg out    CVG_DST: clamp (blended: the sum, else cvg - 1), wrap, zap
  *              (7), save
  *
+ * The depth is the N64's 18 bits, and the depth image's word the N64's: 14
+ * bits of it as a floating-point number above the top two bits of the
+ * pixel's dz code (mrdp.c z_enc). The compares are of the 18 bits against
+ * what the word keeps; "within dz" is the primitive's depth step, and no less
+ * than what a word of a near depth has lost.
  * The memory's dz is not kept: with Z_CMP the blender's coverage
  * shifts are 0 (the N64: the difference of the two dz encodings). */
 #if defined(MRDP_N64) && !defined(MRDP_NO_BLEND)
@@ -193,7 +198,7 @@ typedef struct {
     uint32_t fill;
     mrdp_rgba_t fog, blend, prim, env;
     uint8_t prim_lod_frac;
-    uint16_t prim_z;
+    uint16_t prim_z;                       /* (MRDP_N64: SET_PRIM_DEPTH's 15 bits << 1; the 18-bit depth is that << 2) */
     uint16_t prim_dz;                      /* MRDP_CVG: SET_PRIM_DEPTH's delta (the blender's shift without Z_CMP) */
     uint16_t sc_xh, sc_yh, sc_xl, sc_yl;   /* u10.2 */
     uint32_t cimg, cimg_width;             /* width in pixels */

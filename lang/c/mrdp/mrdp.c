@@ -693,6 +693,31 @@ static inline uint16_t rgb5551(mrdp_rgba_t c, int complete)
     return (uint16_t)(((c.r >> 3) << 11) | ((c.g >> 3) << 6) | ((c.b >> 3) << 1) | (complete ? 1u : 0u));
 }
 
+/* ---- the depth image's word: the N64's --------------------------------------
+ * A depth is 18 bits (Z's s15.16 >> 13, kept inside 0..0x3FFFF). The word holds 14 of them as a floating-point number --
+ * an exponent of 3 bits, the count of the depth's leading ones, and the 11 bits under them (under the first 0; the
+ * exponents 6 and 7 the last 11) -- so the far end, where a perspective's depths crowd, keeps every bit and the near end
+ * loses six:
+ *   exponent   0        1        2        3        4        5        6        7
+ *   from       0x00000  0x20000  0x30000  0x38000  0x3C000  0x3E000  0x3F000  0x3F800
+ *   lost bits  6        5        4        3        2        1        0        0
+ * and, in its two low bits, the top two of the pixel's dz code (its other two are the N64's hidden bits: not kept, and
+ * the code is not read back). 0xFFFC, what a game clears its depth image to, is the far plane. A game reads the image as
+ * the console's: with the CPU, or as a texture. */
+static const uint32_t s_z_base[8] = { 0x00000, 0x20000, 0x30000, 0x38000, 0x3C000, 0x3E000, 0x3F000, 0x3F800 };
+static const unsigned s_z_shift[8] = { 6, 5, 4, 3, 2, 1, 0, 0 };
+static inline uint16_t z_enc(uint32_t z)
+{
+    unsigned e = 7;
+    while (e > 0 && z < s_z_base[e]) e--;
+    return (uint16_t)((e << 11 | ((z >> s_z_shift[e]) & 0x7FFu)) << 2);
+}
+static inline uint32_t z_dec(uint16_t w)
+{
+    const unsigned e = w >> 13;
+    return s_z_base[e] | (((uint32_t)(w >> 2) & 0x7FFu) << s_z_shift[e]);
+}
+
 /* does the pixel pipeline read the colour image (rtl/rdp/rdp_top.v need_mem):
  * for the memory coverage (IM_RD, with AA_EN or CVG_X_ALPHA), or for a
  * blender cycle that selects it */
@@ -722,14 +747,18 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     const uint32_t rnd = r->lfsr;
     if (cvg) r->lfsr = ((rnd << 1) | (~((rnd >> 22) ^ (rnd >> 18)) & 1u)) & 0x7FFFFFu;
 
-    /* depth */
-    uint16_t depth;
+    /* depth: 18 bits (z_enc) */
+    uint32_t depth;
     if ((l & MRDP_L_Z_SRC_PRIM) || !pr->zbuf) {
-        depth = r->prim_z;
+        depth = (uint32_t)r->prim_z << 2;
     } else {
-        int32_t z = at[AZ] >> 15;
-        depth = (uint16_t)(z < 0 ? 0 : z > 0xFFFF ? 0xFFFF : z);
+        int32_t z = at[AZ] >> 13;
+        depth = (uint32_t)(z < 0 ? 0 : z > 0x3FFFF ? 0x3FFFF : z);
     }
+    /* the pixel's dz code (the N64's dzpixenc: the top bit of the primitive's depth step, in 18-bit units and
+     * doubled, or of SET_PRIM_DEPTH's delta), 4 bits */
+    unsigned dzenc = (l & MRDP_L_Z_SRC_PRIM) ? hibit(r->prim_dz) : (pr->zbuf ? hibit(pr->dz) + 3u : 0u);
+    if (dzenc > 15u) dzenc = 15u;
 
     /* inputs */
     cc_in_t in;
@@ -834,16 +863,21 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     int zpass = 1, blend_en;
     unsigned sh_a = 0, sh_b = 0;
     if ((l & MRDP_L_Z_CMP) && !copy) {
-        uint16_t old = r->rd16(r->ctx, zaddr);
+        /* the memory's depth, as much of it as its word keeps; the tolerance: the primitive's step (16-bit units: its
+         * two low bits set here), and no less than what a word of the exponents 0, 1 and 2 has lost (the N64's 16 >>
+         * exponent, in 8s) -- a surface drawn over itself is within it at any depth */
+        const uint16_t oldw = r->rd16(r->ctx, zaddr);
+        const uint32_t old = z_dec(oldw);
         unsigned zmode = (l >> MRDP_L_ZMODE_SHIFT) & 3;
         unsigned dz = pr->zbuf ? pr->dz : 1u;
-        int max = old == 0xFFFF, infront = depth < old;
-        int nearer = (int)depth - (int)dz <= (int)old;
-        int farther = (int)depth + (int)dz >= (int)old;
+        const uint32_t tol = (dz << 2 | 3u) | ((oldw >> 13) < 3u ? (0x7Fu >> (oldw >> 13)) : 0u);
+        int max = old == 0x3FFFF, infront = depth < old;
+        int nearer = (int)depth - (int)tol <= (int)old;
+        int farther = (int)depth + (int)tol >= (int)old;
         blend_en = (l & MRDP_L_FORCE_BL) || (!overflow && aa && farther);
         if (zmode == 1 && infront && farther && overflow) {
             /* interpenetrating: the coverage scaled by how far it is in front, in dz */
-            unsigned sft = hibit(dz) + 1;
+            unsigned sft = hibit(dz) + 3;
             unsigned coeff = ((old >> sft) - (depth >> sft)) & 0xFu;
             cvg_sel = ((cvg_sel * coeff) >> 3) & 0xFu;
         } else if (zmode == 2) {
@@ -856,9 +890,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     } else {
         blend_en = (l & MRDP_L_FORCE_BL) || (!overflow && aa);
         /* without a depth compare the memory coverage's weight is shifted by
-         * the primitive's dz (the N64's dzpixenc, 18-bit units: ours + 2) */
-        unsigned dzenc = (l & MRDP_L_Z_SRC_PRIM) ? hibit(r->prim_dz) : (pr->zbuf ? hibit(pr->dz) + 3u : 0u);
-        if (dzenc > 15u) dzenc = 15u;                                            /* (4 bits) */
+         * the primitive's dz code */
         sh_b = dzenc >= 12u ? 15u - dzenc : 4u;
     }
     if (!zpass) return;
@@ -891,7 +923,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
 
 #ifdef MRDP_DEBUG_PIXEL
     if (x == r->dbg_x && y == r->dbg_y) {
-        fprintf(stderr, "MRDP pixel (%d,%d) <- %04x depth %04x cvg %u mem %u blend %d op %02x words:", x, y, rgb5551(out, complete), depth, cvg_sel, memcvg, blend_en, (r->cmd[0] >> 24) & 0x3F);
+        fprintf(stderr, "MRDP pixel (%d,%d) <- %04x depth %05x cvg %u mem %u blend %d op %02x words:", x, y, rgb5551(out, complete), depth, cvg_sel, memcvg, blend_en, (r->cmd[0] >> 24) & 0x3F);
         for (int i = 0; i < r->ncmd; i++) fprintf(stderr, " %08x", r->cmd[i]);
         fprintf(stderr, "\n  at: r %08x g %08x b %08x a %08x s %08x t %08x w %08x z %08x\n",
                 at[AR], at[AG], at[AB], at[AA], at[AS], at[AT], at[AW], at[AZ]);
@@ -900,7 +932,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     if (cyc != 2) out = dither_n64(r, out, x, y, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
-    if ((l & MRDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, depth);
+    if ((l & MRDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzenc >> 2));
     r->pixels_drawn++;
 }
 #endif /* MRDP_CVG */

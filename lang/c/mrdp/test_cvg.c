@@ -61,8 +61,9 @@ static void setup(uint32_t other_l)
 }
 /* a triangle with a vertical left edge at x (s15.16) from y = 0 to 8 and a
  * diagonal to (30, 8): the N64 command's 8 words (no attributes) */
-static int with_z;                     /* the triangles carry Z = 0x8000 (flat) */
-static void zwords(void) { if (with_z) { cmd(0x40000000u, 0); cmd(0, 0); } }
+static int with_z;                     /* the triangles carry a flat Z: zval (s15.16; the 18-bit depth is it >> 13) */
+static uint32_t zval = 0x40000000u;
+static void zwords(void) { if (with_z) { cmd(zval, 0); cmd(0, 0); } }
 static void tri_vleft(int32_t x)
 {
     int32_t yl = 8 << 2, ym = 8 << 2, yh = 0;
@@ -145,7 +146,8 @@ int main(void)
     cmd(0x3A000000u, 0x0000FFFFu); tri_vright((10 << 16) + 0x8000);
     check("Z: shared edge pixel half and half, complete", 10, 3, c5551(127, 0, 127, 1));
     check_cvg("Z: shared edge pixel's coverage 3 + 4", 10, 3, 7);
-    if (rd16(0, ZIMG + (3 * W + 10) * 2) != 0x8000) { printf("FAIL depth at (10,3): %04x\n", rd16(0, ZIMG + (3 * W + 10) * 2)); fails++; }
+    /* (the depth's word: the 18 bits 0x20000 are the exponent 1 with a mantissa of 0) */
+    if (rd16(0, ZIMG + (3 * W + 10) * 2) != 0x2000) { printf("FAIL depth at (10,3): %04x\n", rd16(0, ZIMG + (3 * W + 10) * 2)); fails++; }
     with_z = 0;
 
     /* 3. CLR_ON_CVG: no overflow -> the memory colour stays, the coverage completes */
@@ -355,6 +357,47 @@ int main(void)
     cmd(0x2F000000u | (1u << 15) | (3u << 6) | (3u << 4), (1u << 6) | (1u << 22) | (1u << 18));   /* TLUT on (RGBA16 entries) */
     tri_vleft(10 << 16);
     check("TLUT on, a 16-bit texel: the entry of its first byte", 12, 3, c5551(0, 255, 0, 1));
+
+    /* 12. The depth image's word is the N64's: an exponent (the depth's leading ones) and the 11 bits under them, above the top
+     * two bits of the pixel's dz code (a flat triangle's code is 3: 0). Opaque, no AA, Z_CMP and Z_UPD. */
+#define Z_OPA ((1u << 4) | (1u << 5) | (1u << 6) | (1u << 22) | (1u << 18))
+#define ZWORD(x, y) rd16(0, ZIMG + ((uint32_t)(y) * W + (uint32_t)(x)) * 2)
+    with_z = 1;
+    {
+        static const struct { uint32_t z18; uint16_t word; } zt[] = {
+            { 0x00000, 0x0000 }, { 0x0007F, 0x0004 }, { 0x1FFFF, 0x1FFC }, { 0x20000, 0x2000 }, { 0x2ABCD, 0x3578 }, { 0x30000, 0x4000 },
+            { 0x38008, 0x6004 }, { 0x3C004, 0x8004 }, { 0x3E002, 0xA004 }, { 0x3F001, 0xC004 }, { 0x3F7FF, 0xDFFC }, { 0x3F800, 0xE000 },
+            { 0x3FFFE, 0xFFF8 } };
+        for (unsigned i = 0; i < sizeof zt / sizeof zt[0]; i++) {
+            setup(Z_OPA);
+            cmd(0x3A000000u, 0xFF0000FFu); zval = zt[i].z18 << 13; tri_vleft(10 << 16);
+            const uint16_t got = ZWORD(12, 3);
+            if (got != zt[i].word) { printf("FAIL depth %05x: the word is %04x, want %04x\n", (unsigned)zt[i].z18, got, zt[i].word); fails++; }
+            else printf("ok   depth %05x is the word %04x\n", (unsigned)zt[i].z18, got);
+        }
+        /* outside the 18 bits: the far plane, and 0 */
+        setup(Z_OPA); zval = 0x7FFFFFFFu; tri_vleft(10 << 16);
+        if (ZWORD(12, 3) != 0xFFFC) { printf("FAIL depth past the far plane: %04x\n", ZWORD(12, 3)); fails++; }
+        setup(Z_OPA); zval = 0x90000000u; tri_vleft(10 << 16);
+        if (ZWORD(12, 3) != 0x0000) { printf("FAIL depth below 0: %04x\n", ZWORD(12, 3)); fails++; }
+    }
+    /* the far end keeps all 18 bits: a pixel one step nearer is in front (in 16 bits the two were the same depth) ... */
+    setup(Z_OPA);
+    cmd(0x3A000000u, 0xFF0000FFu); zval = 0x3F902u << 13; tri_vleft(10 << 16);
+    cmd(0x3A000000u, 0x0000FFFFu); zval = 0x3F901u << 13; tri_vleft(10 << 16);
+    check("depth: one step nearer at the far end is in front", 12, 3, c5551(0, 0, 255, 1));
+    cmd(0x3A000000u, 0x00FF00FFu); zval = 0x3F901u << 13; tri_vleft(10 << 16);
+    check("depth: the same depth is not", 12, 3, c5551(0, 0, 255, 1));
+    /* ... and the near end loses six: a decal on a surface there is within what its word lost (0x0123F is kept as 0x01200,
+     * and the decal's own step is 7) */
+    setup(Z_OPA);
+    cmd(0x3A000000u, 0xFF0000FFu); zval = 0x0123Fu << 13; tri_vleft(10 << 16);
+    cmd(0x2F000000u | (3u << 6) | (3u << 4), (Z_OPA & ~(1u << 5)) | (3u << 10));        /* ZMODE_DEC, no Z_UPD */
+    cmd(0x3A000000u, 0x0000FFFFu); tri_vleft(10 << 16);
+    check("depth: a decal on a near surface", 12, 3, c5551(0, 0, 255, 1));
+    cmd(0x3A000000u, 0x00FF00FFu); zval = 0x01300u << 13; tri_vleft(10 << 16);          /* (behind by more: not a decal's) */
+    check("depth: a decal farther than that is not drawn", 12, 3, c5551(0, 0, 255, 1));
+    with_z = 0; zval = 0x40000000u;
 
     printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
     return fails != 0;
