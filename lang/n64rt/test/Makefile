@@ -10,7 +10,6 @@
 # (+gbcart: the ROM as the cartridge in the Pocket's slot, on a SoC built with
 # MIRLO_GB_CART; without it the slot is empty. ROM= makes the test the program
 # of data.json's runtime slot, as sim/mips_soc/tb_soc.cpp says)
-# layout.mk and layout_test.sh: a game with everything the memory's layout has.
 MIRLO    ?= ../../..
 VERSION  ?= 7
 PROGRAM   = pak_test

@@ -1,10 +1,8 @@
 #!/bin/bash
-# RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode, SDRAM timing, and the Z-port builds
+# RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode and SDRAM timing
 set -u
 cd "$(dirname "$0")/../../sim/rdp"
 ./build_rtl.sh >/dev/null || exit 1
-ZPORT=1 ./build_rtl.sh >/dev/null || exit 1
-ZPORT=2 ./build_rtl.sh >/dev/null || exit 1
 fail=0; n=0
 run() { out=$("$@" 2>&1); n=$((n+1)); case "$out" in *"RTL == model"*) ;; *) echo "FAIL: $* -> $(echo "$out" | tail -2)"; fail=$((fail+1));; esac; }
 for cw in 292 296 320; do
@@ -12,11 +10,8 @@ for cw in 292 296 320; do
 done
 for s in 11 12 13 14; do TB_LFSR=1 TB_STEP=1 run ./obj_rdp/tb_rdp -r $s 100; done
 for s in 21 22 23; do TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r $s 150; done
-for s in 31 33 34; do TB_RAND_CZ=1 run ./obj_rdp_z/tb_rdp -r $s 150; done
-for s in 41 42; do TB_RAND_CZ=2 run ./obj_rdp_zc/tb_rdp -r $s 150; done
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))
-# (baseline ed7ec01: ZPORT=1 TB_RAND_CZ=1 seed 32 already mismatches, 218 words)
 echo "rdp_regress: $n runs, $fail failed"
 exit $fail

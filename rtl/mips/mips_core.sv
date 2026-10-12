@@ -454,7 +454,7 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // and, with MAP_HI, 0x6000_0000 - 0x7FFF_FFFF, where it has nothing either once
 // the monitor owns the RCP and there is no audio core: GoldenEye maps and runs
 // from 0x7000_0000.)
-// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there -- the PSRAM is not in it -- and a game maps its code there:
+// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there, and a game maps its code there:
 // Mario Tennis jumps to 0x5000_xxxx after its second logo. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
 localparam bit MAP_HI = TLB_RAM && MON;
 function automatic logic kseg01(input logic [31:0] va);

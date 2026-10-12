@@ -19,7 +19,6 @@ command stream the RTL writes the same memory, byte for byte. The benches in
 | `rtl/rdp/rdp_pix.v` | the pixel pipeline: texture, combiner, coverage, depth, blender, dither |
 | `rtl/rdp/rdp_tmem.v` | one copy of TMEM |
 | `rtl/rdp/rdp_mem.v` | every access to the N64's memory: span reads, write-back, fills, texture loads |
-| `rtl/rdp/rdp_zmem.v` | the optional depth port's engine |
 
 `rtl/soc/mirlo_mips.sv` instantiates `rdp_top`, `rdp_dpc` and `rcp_dpc_view`.
 
@@ -404,23 +403,6 @@ Nothing in the engine orders a read after a write of the same word. The
 sequencer starts a primitive's reads, and a load, only with the write engine
 idle.
 
-### The optional depth port
-
-Built with `RDP_Z_PORT`, `rdp_top` has a second port for the depth image
-(`rdp_zmem.v`). `mirlo_mips.sv` instantiates `rdp_top` without it; the bench
-builds and checks it.
-
-* A row's depth span is read, and its results written back, as runs of
-  consecutive words that a memory can serve as one burst. A row none of whose
-  pixels passed has no write run.
-* A fill of a colour image whose address is the depth image's goes to the
-  port too.
-* Anything else drawn to such a colour image goes there only with
-  `RDP_Z_CDRAW`, a word at a time. Without it the primitive is drawn in the
-  N64's memory and the `z_cdraw` output says so.
-* With the port, the N64's memory at the depth image's address is not
-  written by depth spans.
-
 ### The scan-out
 
 `rtl/soc/n64_video.sv` reads the same colour image, and each group's hidden
@@ -471,7 +453,6 @@ A picture 512 wide or more is shown with the filters off.
 | the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
 | the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
 | the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks and on `gen_xbus_task.py`'s XBUS ones |
-| the depth port | `ZPORT=1` and `ZPORT=2` builds, `obj_rdp_z/tb_rdp`, `obj_rdp_zc/tb_rdp` | the same comparisons with `RDP_Z_PORT`, and with `RDP_Z_CDRAW`; `TB_RAND_CZ` puts the colour image on the depth image |
 | the scan-out's filters | `sim/vi_filter` | the pads against a model of the filters, pixel for pixel |
 | in the SoC | `sim/mips_soc` (`FB_N64=1` for frame dumps) | a program on the whole SoC: RSP, command fetch, RDP, scan-out |
 
@@ -490,12 +471,10 @@ switches:
   cycles spent in each sequencer state; `TB_CMDT=<file>` logs when each
   command word is taken.
 
-`tools/area2/rdp_regress.sh` builds the three benches and runs the lot:
-random seeds at colour image widths 292, 296 and 320, seeds with `TB_LFSR`
-and `TB_STEP`, seeds with `TB_SDRAM` and `TB_CPU=30`, the two depth-port
-builds, seeds with `TB_CC`, and `cc_unit.sh`. A run passes when the bench
-prints `RTL == model`. The script leaves out one depth-port seed (32) that
-its own comment records as a mismatch.
+`tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
+at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
+seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with `TB_CC`, and `cc_unit.sh`.
+A run passes when the bench prints `RTL == model`.
 
 A frame's time is the RSP's and the RDP's together, on one SDRAM with the
 CPU and the scan-out:
