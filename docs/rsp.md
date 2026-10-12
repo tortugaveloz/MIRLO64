@@ -1,171 +1,456 @@
 # The RSP
 
-`rtl/rsp` is the N64's RSP: a game's own graphics and audio microcode runs
-on it, as on the console. It is written for Mirlo from the instruction
-set's public description; no other implementation's code is in it. In the
-SoC it takes the place of the geometry and audio cores (Verilog macro
-`MIRLO_RSP`, `rtl/soc/mirlo_mips.sv`), and its graphics commands go to the
-RDP (`rtl/rdp`, [rdp.md](rdp.md)).
+`rtl/rsp` is the RSP of MIRLO 64: the processor that runs the graphics and
+audio microcode an N64 program brings with it. The microcode is not replaced or
+translated; it executes instruction by instruction, and the graphics commands
+it produces go to the RDP (`rtl/rdp`, [rdp.md](rdp.md)). The RTL and its
+reference model (`sim/rsp/rsp.c`) are written from the public documentation of
+the RSP.
 
-## What it implements
+* [Structure](#structure)
+* [Interface to the system](#interface-to-the-system)
+* [Scalar unit](#scalar-unit)
+* [Vector unit](#vector-unit)
+* [Memories](#memories)
+* [Reciprocal ROM](#reciprocal-rom)
+* [Clock and timing](#clock-and-timing)
+* [Verification](#verification)
 
-* **Scalar unit** (`rsp_su.sv`): the RSP's MIPS subset, five stages, a
-  12-bit PC, delay slots; no exceptions, no multiply or divide, no 64-bit
-  operations.
-* **COP0**: the SP registers (DMA addresses and lengths, STATUS, the
-  semaphore) and the DP command registers, with the N64's set / clear
-  write bits. BREAK halts and raises the SP interrupt if enabled.
-* **DMA** between RDRAM and IMEM / DMEM: length, count and skip as the
-  N64's, in 64-bit words; it runs behind the program, which waits on
-  `DMA_BUSY`. A transfer out of IMEM reads IMEM (its second port, a word a
-  cycle): the boot microcode of a CIC-6105 game writes eight bytes of
-  itself to RDRAM.
-* **Vector unit** (`rsp_vu.sv`): 32 registers of eight 16-bit elements, the
-  48-bit accumulator, VCO / VCC / VCE, element broadcast.
-  * the multiplies (VMULF, VMULU, VMUDL/M/N/H, VMACF, VMACU, VMADL/M/N/H);
-  * add / subtract with carry, VABS, VSAR, the logic operations;
-  * the compares and VMRG, VCL, VCH, VCR;
-  * the reciprocals and square roots (VRCP, VRCPL, VRCPH, VRSQ, VRSQL,
-    VRSQH) from the N64's two ROMs (`rsp_div_rom.hex`,
-    `sim/rsp/make_div_rom.py`), VMOV, VNOP;
-  * MFC2, MTC2, CFC2, CTC2;
-  * loads LBV, LSV, LLV, LDV, LQV, LRV, LPV, LUV, LTV and stores SBV, SSV,
-    SLV, SDV, SQV, SRV, SPV, SUV, STV, at any address and element.
-* **Not implemented** (the `unimpl` output is set if one runs): LHV, LFV,
-  LWV, SHV, SFV, SWV, VRNDP, VRNDN, VMULQ, VMACQ and the reserved COP2
-  functions. `sim/rsp/rom_ucode_scan.py` finds the microcode in a ROM
-  (also inside Yaz0 / Yay0 / MIO0 blocks) and lists its vector instructions:
-  none of the games looked at so far uses any of these.
+## Structure
 
-## How it is built
+| File | Contents |
+|---|---|
+| `rtl/rsp/rsp_top.sv` | IMEM, DMEM, the SP registers (COP0), the DMA engine, the reciprocal ROM; instantiates the two units |
+| `rtl/rsp/rsp_su.sv` | the scalar unit: the RSP's MIPS subset on a five-stage pipeline |
+| `rtl/rsp/rsp_vu.sv` | the vector unit: COP2 and the vector loads and stores (LWC2, SWC2) |
+| `rtl/rsp/rsp_dpram.sv` | DMEM's memory: four banks of block RAM |
+| `rtl/rsp/rsp_lutram.v` | a 32-word LUT RAM: one element of the vector registers |
 
-The area budget is what the two cores it replaces took, so it is narrower
-than the N64's:
+`rtl/rsp.qip` lists them for Quartus. The SoC instantiates `rsp_top` once, in
+`rtl/soc/mirlo_mips.sv`.
 
-* `LANES` is 4 or 8 (the SoC's `MIRLO_RSP_LANES`): with four, a vector
-  operation's eight elements go through the lanes in two beats. A lane is
-  one 16 x 16 multiplier, one adder and the 48-bit accumulate.
-* Vector operations run in a two-stage pipeline (select, execute) behind
-  the scalar pipeline; the scalar unit goes on while one finishes, and
-  waits only when it needs the result or the vector unit is still busy.
-* The vector registers are LUT RAM (`rsp_lutram.v`), three copies: two
-  addressed straight by the instruction's vs and vt (the multipliers'
-  operands), one for everything else.
-* With eight lanes VCL, VCH and VCR take a cycle more (the adder's flags in
-  one, the select by them in the next), and a reciprocal one for its ROM.
-* DMEM is 16 bytes wide, as the N64's: four banks of M10K, a word of each
-  16-byte line in each, so one access takes the 16 bytes from any word's
-  start (each bank at its own row). One access a cycle -- the DMA's, the
-  vector unit's or the scalar unit's -- and every vector load and store is
-  one: what each moves lies in those 16 bytes (LQV / SQV to the block's end,
-  LRV / SRV the block's start, a packed load the 16 bytes of its 8-byte
-  block, LDV / SDV from any byte). A load's data comes back rotated to the
-  register's bytes (one 16-byte rotation by address minus element, which
-  also gives the scalar unit its 1 to 4 bytes), a store's goes out rotated
-  the other way; enables pick the bytes. LTV and STV go a byte a cycle.
-* The DMA moves a 32-bit word a cycle each way (what the SDRAM gives).
+## Interface to the system
 
-With four lanes a computation's second pass runs behind the next instruction:
-its operands are taken with the first pass's and kept, so the instruction is
-in the scalar unit's E stage for one cycle, and what follows waits only for
-the lanes (another computation) or for the register being written. A load of
-one chunk goes ahead under it too; the registers have one write port, so the
-computation's write is then a cycle late, from the kept results. `MULW` adds
-four multipliers and accumulator adders to the four lanes: a multiply is one
-pass on eight lanes and only the other operations take two.
+### Host port and registers
 
-| | ALMs | M10K | DSP | Star Fox 64, a heavy graphics task | its audio task | Pokemon Stadium, graphics | Super Mario 64, graphics |
-|---|---|---|---|---|---|---|---|
-| 4 lanes | 4,594 | 20 | 4 | 20.0 ms (1.53 cycles an instruction) | 7.6 ms (1.33) | 14.9 ms (1.33) | 12.9 ms (1.45) |
-| 4 lanes, `MULW` | 5,092 | 20 | 8 | 18.4 ms (1.41) | 7.2 ms (1.26) | 14.7 ms (1.31) | 11.4 ms (1.29) |
-| 8 lanes | 5,595 | 20 | 8 | 17.0 ms (1.31) | 7.0 ms (1.22) | 14.2 ms (1.27) | 10.8 ms (1.21) |
+`rsp_top` has a register port for the game CPU (`h_we`, `h_rd`, `h_addr`,
+`h_wdata`, `h_rdata`, `h_ready`). In the SoC it is mapped at `0x2000_0000`;
+the CPU's access is first taken into registers and then performed.
 
-(Cyclone V 5CEBA4, standalone fit, 62.8 MHz; the tasks are of 820,000,
-360,000, 704,000 and 557,000 instructions, with a memory that answers at
-once. Star Fox 64's microcode runs its computations in long rows, where four
-lanes cannot hide the second pass; Pokemon Stadium's has them one at a time.)
+| Offset | `h_addr` | Register | Notes |
+|---|---|---|---|
+| `0x00` | 0 | SP_MEM_ADDR | bits 12:3; bit 12 selects IMEM |
+| `0x04` | 1 | SP_DRAM_ADDR | bits 23:3 |
+| `0x08` | 2 | SP_RD_LEN | a write starts a DMA from RDRAM into DMEM / IMEM |
+| `0x0C` | 3 | SP_WR_LEN | a write starts a DMA from DMEM / IMEM into RDRAM |
+| `0x10` | 4 | SP_STATUS | see below |
+| `0x14` | 5 | SP_DMA_FULL | a DMA is queued behind the running one |
+| `0x18` | 6 | SP_DMA_BUSY | a DMA is running or queued |
+| `0x1C` | 7 | SP_SEMAPHORE | a read returns the bit and sets it; a write clears it |
+| `0x20` | 8 | SP_PC | writable while halted; a read gives the next instruction to run |
+| `0x40`-`0x4C` | - | DPC_START, DPC_END, DPC_CURRENT, DPC_STATUS | held outside `rsp_top`, see below |
 
-In the SoC (`MIRLO_RSP_LANES`, and `MIRLO_RSP_MULW` with 4) the whole design
-is 18,182 ALMs with eight lanes and 17,314 with four and `MULW`. That Star
-Fox frame on the whole SoC, with the RDP drawing it and the game CPU busy in
-memory (`rsp_replay`), ends at 30.1 ms with eight lanes, 31.5 ms with four
-and `MULW`, 32.8 ms with four.
+The microcode reaches the same registers with MFC0 / MTC0 (registers 0-7 the
+SP ones, 8-11 the four DPC ones). When both write in the same cycle the
+microcode goes first: `h_ready` is low while an MTC0 is in the scalar unit's E
+stage, and the host's write waits.
 
-(Those figures are from before DMEM was 16 bytes wide.) The 16-byte DMEM
-takes every vector load and store to one cycle: with four lanes and `MULW`
-the audio tasks run 4-8 % fewer cycles and the graphics ones 0.1-1 %. Against
-a reference RSP implementation on the same task dumps (memory latency 8 on both): Pokemon
-Stadium audio x1.08 (was x1.13), Star Fox 64 audio x1.07 (x1.16), Super Mario
-64 audio x0.87 (x0.95), graphics x0.94-1.01. What is left of the audio gap is
-the DMA: ours moves 4 bytes a cycle, all the SDRAM gives, the N64's RDRAM 8.
-In the SoC it cost ~90 ALMs in the RSP (+93 / +155 for the whole design,
-seeds 34 / 3) and saved 4 RAM blocks, and the scalar unit's paths into DMEM
-are shorter than before (the RSP's clock +0.36 / +0.55 ns).
+SP_STATUS reads `{signals 7..0 [14:7], interrupt on break [6], single step [5],
+0 [4], DMA full [3], DMA busy or full [2], broke [1], halt [0]}`. A write uses
+the console's clear / set pairs: bit 0 clears halt and bit 1 sets it, bit 2
+clears broke, bits 3 / 4 clear / set the SP interrupt, 5 / 6 single step,
+7 / 8 interrupt on break, and from bit 9 on a clear / set pair for each signal.
+Both bits of a pair together leave the flag as it is. The single-step flag is
+stored and read back; it does not change how the unit runs.
 
-`PERF=<file>` on `tb_rsp` writes every instruction's cycles and
-`perf_kinds.py` sums them by kind, against another such log if given.
+BREAK sets halt and broke, and raises the SP interrupt (`irq`) if interrupt on
+break is set. After reset the RSP is halted.
 
-## In the SoC
+### DMA
 
-* The game CPU reaches the SP registers at `0x2000_0000` (`0x00` MEM_ADDR,
-  `0x04` DRAM_ADDR, `0x08` RD_LEN, `0x0C` WR_LEN, `0x10` STATUS, `0x14`
-  DMA_FULL, `0x18` DMA_BUSY, `0x1C` SEMAPHORE, `0x20` PC) and the DP command
-  registers at `0x2000_0040`.
-* The DMA is a port of the SDRAM arbiter; the N64's RDRAM is SDRAM
-  `0x4380_0000`.
-* The SP DMA registers are double, as the console's: a write to SP_MEM_ADDR / SP_DRAM_ADDR while a
-  DMA runs is the next one's (the running one's pointers go on and are what a read gives), a host RD_LEN / WR_LEN is taken
-  into pending registers (SP_DMA_FULL, STATUS bit 3; STATUS bit 2 and SP_DMA_BUSY read busy-or-full) and starts when the running
-  one is done; a third command while FULL replaces the pending one. The microcode's own MTC0 still waits in E for its
-  transfer. (Before 2026-10-09 a write while busy corrupted the running DMA and the second command was dropped.)
-  A DMEM transfer shares DMEM's port with the processor: the DMA has it (a beat of a transfer in, the whole transfer of one out)
-  and a scalar or vector load or store waits (`m_stall`; each beat of LTV / STV) instead of being lost -- 28 of 200 were
-  lost in `sim/rsp/tb_dma`'s loop before. The words of a transfer in are written a cycle after they arrive (so the stall is
-  known a cycle ahead, from a register): a DMA takes one cycle more (+0.11 % on a graphics task, +0.14 % on an audio one).
-* SP_SEMAPHORE is taken by a CPU read too (0, then 1, 1; a write clears it), as by the microcode's MFC0.
-* The CPU can write DPC_START, DPC_END and DPC_STATUS (the monitor forwards a game's store to `0x2000_0040`, `0x44`, `0x4C`):
-  `mirlo_mips.sv` merges them with the microcode's strobes (the CPU's wait for a cycle the microcode is not writing a
-  register: `h_ready`). `rtl/soc/rcp_dpc_view.sv` makes the register the console's: a START written while START_VALID is
-  set is ignored, and DPC_STATUS reads `{start valid [10], end valid [9], DMA busy [8], CBUF ready [7], 0, PIPE busy [5], 0,
-  START_GCLK [3], flush, freeze, xbus}`; START_GCLK and PIPE_BUSY are set by a write of END (not frozen) and by the unfreeze and
-  stay until the RDP completes a SYNC FULL (so after a list without one the register reads 0xA8, as n64-systemtest waits
-  for). `lang/mips/test/rcpcpu_test.c` checks it all on the SoC; `sim/rsp/tb_dma` the DMA part on the RSP alone.
-* The RDP's XBUS reads (its commands taken from DMEM) are DMEM's second
-  port (the banks' port B); the processor has port A.
-* The game CPU has no TLB of the VR4300's kind (`rtl/soc/mips_sys.sv`; the
-  macro `MIRLO_TLB` that put it in, ~550 ALMs, was removed). An N64 game's mapped addresses
-  are those below `0x2000_0000`, and the runtime keeps what the game maps
-  (`osMapTLB`). With `MIRLO_TLB_RAM` the CPU has translation tables in block
-  RAM that the runtime fills a page at a time, on the TLB's exception
-  ([mips.md](mips.md)); without it a load or store to a mapped page traps and
-  is done on the game's behalf (`n64rt_os.c`), which is for what a game maps
-  briefly -- Super Mario 64 maps `0x0400_0000` while it builds its title
-  screen's head (200,000 accesses, once) -- and code cannot run from a mapped
-  page.
-* `lang/n64rt/n64rt_rsp.c` (a port built with `RSP=1`) starts a task as
-  libultra's `osSpTaskLoad` does -- the header, its pointers physical, to
-  DMEM `0xFC0` and the boot microcode to IMEM by DMA, PC 0, halt cleared --
-  and takes its end from STATUS. The RSP's SP interrupt (a task's BREAK) is
-  the game CPU's IP2, so the runtime sees a task end as it does; a timer's
-  poll every 0.5 ms stands behind it. A graphics task yields and resumes as
-  on the N64. A port may have a yield held back (`n64rt_yield_wait_ms`): a
-  game yields its graphics task for an audio task, and the frame then ends
-  an audio task later, because what the RDP has most work with comes at the
-  graphics task's end. Held back, a graphics task that ends within the wait
-  is not stopped (the game sees its yield lose the race, which its
-  scheduler allows for) and the audio task runs while the RDP draws. Only
-  for a game whose audio is a buffer ahead of the AI. With no audio core the game CPU feeds the Pocket's audio FIFO
-  itself from the game's AI buffers, resampled to 48 kHz.
+A transfer is rows of 8-byte units: the length word gives the row's length
+less one (bits 11:0, taken up to a multiple of 8 bytes), the number of rows
+less one (bits 19:12) and the bytes skipped in RDRAM between rows (bits 31:20,
+of which the multiple of 8 is kept). It starts from the addresses last written
+to SP_MEM_ADDR and SP_DRAM_ADDR; the SP pointer wraps inside its 4 KiB. After a
+transfer SP_RD_LEN and SP_WR_LEN read the skip, a count of 0 and a length of
+`0xFF8`.
 
-## How it is verified
+The engine moves one 32-bit word per request on the RDRAM port (`r_valid`,
+`r_we`, `r_addr`, `r_wdata`, `r_ready`, `r_rvalid`, `r_rdata`):
 
-| what | where | checks |
+* into SP memory: a read request each cycle the memory accepts one; each word
+  that comes back is written to DMEM or IMEM the cycle after it arrives;
+* out of DMEM: DMEM is read 8 bytes at a time, one pair of words ahead, so a
+  write request goes out each cycle the memory accepts one;
+* out of IMEM: the two words of a pair are read one after the other on IMEM's
+  second port, a pair every three cycles.
+
+In the SoC the RDRAM port is port 3 of the SDRAM arbiter, and the 8 MiB of
+RDRAM is SDRAM at `0x4380_0000`.
+
+Who starts the transfer decides how it is sequenced:
+
+* The microcode's MTC0 to SP_RD_LEN / SP_WR_LEN stays in E until its transfer
+  is complete, so the microcode never observes its own DMA as busy.
+* The host's write returns at once. Its length word goes into pending
+  registers and SP_DMA_FULL is set; the transfer starts when the engine is idle
+  (the next cycle, if it already is). The address registers are double: a
+  write to SP_MEM_ADDR or SP_DRAM_ADDR while a DMA is running or queued belongs
+  to the next transfer, and reads give the running transfer's pointers. A
+  further length write while SP_DMA_FULL is set replaces the queued command.
+
+A DMA into or out of DMEM shares DMEM's port with the program, and the DMA
+has priority. A transfer in takes the port in each cycle it writes a word; a
+transfer out takes it for the whole transfer. While the DMA has the port,
+`m_stall` makes a scalar or vector load or store wait in E (each beat of LTV /
+STV likewise). The stall comes from a register, known one cycle ahead, which
+is why an arriving word is written a cycle after it arrives.
+
+### DPC registers and XBUS
+
+The DPC registers are not inside `rsp_top`. A microcode write to DPC_START,
+DPC_END or DPC_STATUS leaves the module as a strobe (`dpc_start_we`,
+`dpc_end_we`, `dpc_status_we`, `dpc_wdata`), and the four values it reads with
+MFC0 come in as inputs. In the SoC `rtl/rdp/rdp_dpc.sv` holds the registers and
+fetches the commands, `rtl/soc/rcp_dpc_view.sv` gives DPC_STATUS its layout,
+and the CPU's own writes to `0x2000_0040`, `0x44` and `0x4C` are merged with
+the microcode's strobes (a CPU write is taken in a cycle the microcode is not
+writing a register). [rdp.md](rdp.md) describes that side.
+
+When the RDP takes its commands from DMEM (XBUS) it reads them through
+`dx_addr` / `dx_data`, DMEM's second port: one word, the cycle after its
+address.
+
+### Interrupt
+
+`irq` goes to the game CPU's interrupt logic in `mirlo_mips.sv`. While the
+CPU's monitor level does not own the interrupts it is ORed into the CPU's
+interrupt line; while it does, `irq` reaches the CPU through the SoC's monitor
+registers (`mon_sp`), which hold it as the SP bit of the MI. The runtime takes
+it as IP2 (`N64RT_IM_SP`, `lang/n64rt/n64rt_os.c`).
+
+`halted` and `unimpl` (a vector instruction that is not implemented has run;
+it stays set until reset) are status outputs; the SoC routes both to a debug
+word (`dbg_aud_state`).
+
+### The runtime
+
+`lang/n64rt/n64rt_rsp.c` is the runtime's side (`lang/n64rt/Makefile` builds
+with `RSP=1 OWN=1`). It uses the registers at `0x2000_0000` directly.
+
+* With the program's own libultra running, its loads and stores of the SP
+  registers (`0x0404_0000`-`0x0404_001F`), SP_PC (`0x0408_0000`) and the DPC
+  registers trap to the CPU's monitor level and are forwarded to the hardware
+  registers (`n64rt_exc.S`, `rsp_rd` / `rsp_wr` in `n64rt_io.c`). The program
+  therefore loads and starts its tasks itself, by DMA, as on the console.
+* The CPU has no direct port into DMEM or IMEM. An access to
+  `0x0400_0000`-`0x0403_FFFF` is done by `n64rt_sp_mem`: with the RSP halted,
+  8 bytes are moved by DMA through two words of RDRAM, and SP_MEM_ADDR /
+  SP_DRAM_ADDR are put back afterwards.
+* `n64rt_gfx_init` fills DMEM by DMA with the first 4 KiB of the cartridge
+  image, its first `0x40` bytes cleared: what the console's boot leaves there.
+* `rsp_start` is the task path of `n64rt_io.c` (`n64rt_gfx_task`,
+  `n64rt_audio_task`): the task header, its pointers made physical, goes by
+  DMA to DMEM `0xFC0`, the boot microcode by DMA to IMEM, SP_PC is set to 0 and
+  halt is cleared with interrupt on break set. `rsp_poll` takes the task's end
+  from SP_STATUS; besides the interrupt, the timer polls every 0.5 ms while a
+  task is under way. A graphics task is asked to yield with signal 0 and
+  reports it with signal 1; a yielded task resumes from its yield data. A yield
+  can be held back for `n64rt_yield_wait_ms` (0 by default): a graphics task
+  that ends within that time is not stopped.
+
+## Scalar unit
+
+`rsp_su.sv` implements the RSP's integer instruction set with a 12-bit PC:
+
+* SLL, SRL, SRA, SLLV, SRLV, SRAV, JR, JALR, BREAK, ADD, ADDU, SUB, SUBU, AND,
+  OR, XOR, NOR, SLT, SLTU;
+* BLTZ, BGEZ, BLTZAL, BGEZAL, J, JAL, BEQ, BNE, BLEZ, BGTZ;
+* ADDI, ADDIU, SLTI, SLTIU, ANDI, ORI, XORI, LUI;
+* LB, LH, LW, LBU, LHU, LWU, SB, SH, SW;
+* MFC0, MTC0, and COP2 / LWC2 / SWC2, which are passed to the vector unit.
+
+There are no exceptions, no multiply or divide and no 64-bit operations; ADD,
+ADDI and SUB behave as their unsigned forms. An opcode outside this list does
+nothing.
+
+The pipeline has five stages:
+
+| Stage | Work |
+|---|---|
+| F | the PC goes to IMEM, which is synchronous: the word arrives the next cycle |
+| D | decode; the register file (two copies) is read with the arriving instruction |
+| E | forwarding, the ALU, branches and jumps, the DMEM address, the coprocessor instructions |
+| M | load data |
+| W | register write |
+
+Branches and jumps resolve in E. The delay slot, then in D, always runs; the
+instruction being fetched is squashed when the branch is taken. A load followed
+by an instruction that uses its result stalls one cycle. A load or store
+addresses 1, 2 or 4 bytes at any byte address in one DMEM access.
+
+A coprocessor instruction goes out on `c_valid` / `c_ins` with the values of
+rs and rt and holds E until `c_done`. `rsp_top` answers MFC0 / MTC0 itself and
+passes the rest to the vector unit.
+
+BREAK stops the unit as it leaves E: the instruction after it is not executed,
+and `pc_next` names it. While halt is set nothing enters E.
+
+## Vector unit
+
+`rsp_vu.sv` holds the state the instruction set defines: 32 registers of eight
+16-bit elements, a 48-bit accumulator per element, VCO and VCC (16 bits each),
+VCE (8 bits) and the divide registers.
+
+It implements:
+
+* the multiplies VMULF, VMULU, VMUDL, VMUDM, VMUDN, VMUDH and their
+  accumulating forms VMACF, VMACU, VMADL, VMADM, VMADN, VMADH;
+* VADD, VSUB, VADDC, VSUBC, VABS, VSAR;
+* VAND, VNAND, VOR, VNOR, VXOR, VNXOR;
+* VLT, VEQ, VNE, VGE, VMRG, VCL, VCH, VCR;
+* VRCP, VRCPL, VRCPH, VRSQ, VRSQL, VRSQH, VMOV, VNOP, VNULL;
+* MFC2, MTC2, CFC2, CTC2;
+* the loads LBV, LSV, LLV, LDV, LQV, LRV, LPV, LUV, LTV and the stores SBV,
+  SSV, SLV, SDV, SQV, SRV, SPV, SUV, STV, at any address and element.
+
+Not implemented: LHV, LFV, LWV, SHV, SFV, SWV, VRNDP, VRNDN, VMULQ, VMACQ and
+the reserved COP2 functions. They change nothing and set `unimpl`.
+
+### Four lanes
+
+The original hardware operates on all eight 16-bit elements of a vector
+register in one step (eight lanes); MIRLO 64 covers the same eight elements
+with 4 lanes, as follows.
+
+A lane is one signed 17 x 17 multiplier, one 16-bit adder / subtractor that
+serves every add, subtract, compare and clip, the 48-bit accumulator adder,
+the clamps and the flag logic (`lane_ex`). The unit has four of them. Next to
+the four lanes stand four multiply-accumulate units (`lane_mul`): a
+multiplier, the accumulator adder and the clamp, with none of the add, compare
+or clip logic.
+
+The storage is always eight elements wide. Each element of the register file
+is three copies of a 32-word LUT RAM (`rsp_lutram`), read in the cycle: copy A
+at vs and copy C at vt, addressed straight from the instruction word, for the
+operands of a computation; copy B for stores, MFC2, MTC2 and load writes that
+merge. The accumulator and the flags are registers for all eight elements. The
+element broadcast of vt (each element its own, one element of each pair, one
+of each half, or a single element for the whole register) is also formed for
+all eight elements at once.
+
+A computational instruction runs in two stages behind the scalar pipeline:
+SEL takes operands and multiplies, EX a cycle later does the accumulator, the
+clamps and the flags.
+
+| Instruction | How the eight elements are covered | Cycles |
 |---|---|---|
-| reference model | `sim/rsp/rsp.c` (`rsp_task` runs task dumps) | the model against an independent RSP in simulation, state after every instruction, on real tasks and random programs |
-| RTL vs model | `sim/rsp/build_rtl.sh`, `obj_rsp/tb_rsp` | lockstep: registers, flags and memory compared at every instruction, with random memory latency; real tasks and `gen_rand_task.py` programs, 4 lanes, 4 with `MULW` and 8. (Where a computation's late register write lands under the next one's first pass, the registers are compared and the accumulator and flags with the instruction after.) |
-| what games use | `sim/rsp/rom_ucode_scan.py <rom>` | every vector instruction of a ROM's microcode against what is implemented |
-| in the SoC | `sim/mips_soc` built with `MIRLO_RSP` | a game on the whole SoC |
+| multiplies | one pass: elements 0-3 on the four lanes, elements 4-7 on the four multiply-accumulate units | SEL, EX |
+| every other computation (adds, logic, compares, clips, VABS, VSAR, VMOV) | two passes on the four lanes: elements 0-3, then elements 4-7 | SEL, SEL + EX, EX |
+| VRCP, VRCPL, VRCPH, VRSQ, VRSQL, VRSQH | two passes as above for the accumulator; the ROM lookup runs alongside | SEL, SEL + EX, EX |
 
-Task dumps come from a port built with `RSPDUMP=1` run in `sim/mips_soc`
-with `RSPDUMP=<dir>`: the RDRAM and the task header at the moment the task
-starts. They hold the game's data and stay out of the repository.
+In detail, for a two-pass instruction:
+
+1. First SEL (the instruction is in E): all eight elements of vs and of the
+   broadcast vt are read. Elements 0-3 go through the multipliers into the EX
+   registers; elements 4-7 are kept in `s_hi` / `t_hi`. `done` is raised in
+   this cycle, so the instruction occupies E for one cycle.
+2. Second SEL: the kept operands of elements 4-7 take the four lanes. In the
+   same cycle the first pass's EX updates the accumulator and flags of elements
+   0-3 and keeps its four results in `hold`.
+3. Second EX: accumulator and flags of elements 4-7, and the register write.
+
+vd is written once, with the last pass, all eight elements together (elements
+0-3 from `hold`, elements 4-7 straight from the second EX), so vd may be the
+same register as vs or vt. The reciprocals and VMOV write one element of vd.
+
+Because the instruction has left E after its first SEL, the scalar unit goes
+on while the passes finish. What follows waits only when it needs something
+that is still busy:
+
+* another computation waits for the second SEL, which occupies the four lanes,
+  and for the write of a register it reads. Independent non-multiply
+  computations therefore start every two cycles, independent multiplies every
+  cycle;
+* a reciprocal waits for the EX of any instruction before it (the divide
+  registers are serial);
+* MTC2, CFC2, CTC2, LTV and STV wait until nothing is under way; a store or
+  MFC2 waits for a pending write of the register it reads; a load of another
+  register starts under a running computation.
+
+The register file has one write port. When the last pass's write would fall
+in the cycle a load writes its register, the load has the port and vd is
+written one cycle later, whole, from `hold`; a single-element write (a
+reciprocal, VMOV) waits a cycle instead.
+
+### Reciprocals
+
+The input (16 bits, or 32 with the half a preceding VRCPH / VRSQH left) is
+taken in the first SEL, normalised the cycle after, which gives the ROM's
+address, and the ROM's word is shifted back in the last pass's EX. VRCPH and
+VRSQH store the input's high half and return the high half of the previous
+result.
+
+### Loads, stores and moves
+
+Every load and store except LTV and STV is one DMEM access in the
+instruction's first cycle: the bytes it moves lie within the 16 bytes that
+start at the word of its address (LQV / SQV up to the end of the 16-byte block,
+LRV / SRV from the block's start, a packed load within the 16 bytes from its
+8-byte block). DMEM's bytes and the register's bytes are a rotation of each
+other, and byte enables select what is written. A load's data arrives the cycle
+after its address and is written into the register then; a load that leaves
+half of an element unchanged reads the register on copy B for the merge.
+
+LTV and STV move sixteen bytes between DMEM and the eight registers of vt's
+group, one byte per cycle.
+
+MFC2, MTC2, CFC2 and CTC2 take one cycle.
+
+## Memories
+
+IMEM is 1024 words with two ports: the fetch, and the DMA (its writes on a
+transfer in, its reads on a transfer out). Only a DMA writes IMEM.
+
+DMEM is 4 KiB in `rsp_dpram.sv`: four banks of 256 words, each an `altsyncram`
+in M10K, true dual port with byte enables. Bank k holds bytes 4k to 4k + 3 of
+every 16-byte line, and each bank has its own row address, so one access on
+port A reads or writes any 16 bytes that start at a word boundary. Read data
+comes back the next cycle, rotated so that the vector unit finds its
+register's bytes in place and the scalar unit its 1 to 4 bytes in the top
+word. In simulation the same module is one array of 1024 words, which the
+testbenches read.
+
+Port A carries one access per cycle, in this order of priority: the DMA
+engine, the vector unit (when the instruction in E is its own), the scalar
+unit. Port B is the RDP's XBUS read.
+
+The vector registers are LUT RAM (MLAB), as described above. The scalar
+register file is two copies of a 32-word memory with synchronous read.
+
+## Reciprocal ROM
+
+The ROM is 1024 words of 16 bits in `rsp_top.sv`: 512 reciprocal entries,
+then 512 inverse-square-root entries. Its read is registered. An address is
+the nine bits after the leading one of the normalised input; for a square root
+the lowest of them is replaced by the parity of the shift.
+
+`sim/rsp/make_div_rom.py` computes the table, with the same formulas as
+`make_roms` in `sim/rsp/rsp.c`, and writes it one word per line:
+
+```
+python3 sim/rsp/make_div_rom.py rtl/rsp/rsp_div_rom.hex
+```
+
+`rtl/rsp/rsp_div_rom.hex` is generated, not kept in the repository. The ROM is
+loaded with `$readmemh` from the `DIV_ROM` parameter; for the bitstream,
+`tools/mips_inits.py` writes the file's absolute path into the generated
+`rtl/soc/mirlo_mips_init.svh` (`MIPS_INIT_RSP_DIV`). The testbench build
+scripts pass the path themselves.
+
+## Clock and timing
+
+The whole RSP is on one clock with a synchronous reset. In the SoC that clock
+is `clk_sys`, the system clock shared with the SDRAM, the RDP and the scan-out:
+62.5 MHz (`SYS_HZ` in `target/pocket/core_top.sv`; [mips.md](mips.md) has the
+clocks). The game CPU runs on its own clock; its register accesses reach the
+RSP through the CPU's device port, already on `clk_sys`.
+
+Several details of the RTL exist for this clock:
+
+* the host's register access is registered before it is performed;
+* the DMA counts requests by rows instead of multiplying rows by row length;
+* a vector load or store scales its offset first, so the address is one adder
+  after rs;
+* DMEM's 16-byte rotations are done in two steps, by words and then by bytes;
+* the ROM, IMEM and DMEM reads are registered, and the reciprocal spreads over
+  the cycles of its two passes.
+
+In steady state the scalar unit completes one instruction per cycle. The
+cycles above that come from the load-use stall, taken branches, vector
+computations that follow each other, an MTC0 that waits for its DMA, and
+`m_stall`.
+
+## Verification
+
+Everything specific to the RSP is in `sim/rsp`.
+
+| File | What it is |
+|---|---|
+| `rsp.c`, `rsp.h` | the reference model in C: the scalar unit, COP0 with the DMA and the SP / DPC registers, the vector unit. `rsp_step` runs one instruction, `rsp_run` runs to BREAK. The RDP is not modelled: complete commands are passed to a callback. It also counts instructions by kind |
+| `rsp_task.c`, `Makefile` | `rsp_task`: runs task dumps on the model and reports instructions per kind, DMA traffic and RDP commands; `-o` writes the RDP command words, the RDRAM and DMEM after the task |
+| `tb_rsp.cpp`, `build_rtl.sh` | the RTL against the model in lockstep, in Verilator |
+| `gen_rand_task.py` | a random program as a task dump |
+| `tb_dma.cpp`, `build_dma.sh` | the host side of the DMA and the semaphore, on `rsp_top` alone |
+| `perf_kinds.py` | sums a `PERF` log of `tb_rsp` by instruction or by family, optionally next to a second log |
+| `rom_ucode_scan.py` | finds the microcode in a ROM image (also inside Yaz0 / Yay0 / MIO0 blocks) and lists its instructions against what the RTL implements |
+| `make_div_rom.py` | the reciprocal ROM |
+
+The model is the contract: the RTL must have the same state after each
+instruction. The model covers slightly more than the RTL (it has LHV, SHV and
+SWV, and gives the reserved functions a result).
+
+### Lockstep bench
+
+`MULW=1 sim/rsp/build_rtl.sh` builds `sim/rsp/obj_rsp/tb_rsp` with the vector
+unit as the SoC instantiates it (the reciprocal ROM must have been generated
+first). `tb_rsp task.bin ...` loads each task as the
+console does, the header and the boot microcode by DMA through the host
+registers, and then steps the model once for every instruction that leaves E.
+It compares:
+
+* the PC of every instruction;
+* each scalar register write, when it reaches W;
+* the vector registers, the accumulator and the flags, as each vector
+  instruction's effects are complete (`tr_v`). Where a register write that was
+  put off lands under the next computation's first pass, the registers are
+  compared at once and the accumulator and flags with the following
+  instruction (`tr_vp`);
+* DMEM, every 64 instructions (`DEEP`) and at the BREAK;
+* at the end, the whole RDRAM, the RDP's command words, and that the RTL has
+  halted.
+
+`RAM_LAT` sets the latency of an RDRAM read and `RAM_STALL` the percentage of
+cycles in which the memory accepts no request. `KINDS=1` prints where the
+cycles go by kind of instruction and `PERF=<file>` writes every instruction's
+cycles. The summary line gives cycles per instruction and a time computed at
+62.832 MHz. The exit status is non-zero on any mismatch.
+
+The inputs are of two kinds:
+
+* Task dumps of microcode tasks captured from commercial software: a 16-byte
+  header (`RSPT` and the task header's RDRAM address) followed by the 8 MiB of
+  RDRAM at the moment the task starts. They are written by `sim/mips_soc` run
+  with `RSPDUMP=<dir>` on a runtime built with `RSPDUMP=1`. They contain
+  the software's data and are not part of the repository.
+* `gen_rand_task.py SEED OUT.bin [N]`: straight-line programs that fill DMEM
+  and the vector registers with random data and then run random instructions
+  of every kind the RTL implements, with any element, address and alignment.
+  Captured tasks exercise a small part of what the instructions can do; the
+  random programs are for the rest.
+
+### DMA bench
+
+`sim/rsp/build_dma.sh` builds `obj_dma/tb_dma` (4 lanes, `MULW` set). It
+checks, and prints `PASS` or `FAIL`:
+
+* a second host DMA written while the first runs is queued, SP_DMA_FULL and
+  the STATUS bits read accordingly, and both transfers are correct;
+* a third command while one is queued replaces it;
+* SP_SEMAPHORE reads 0, 1, 1 and a write clears it;
+* a host DMA into DMEM, and one out of it, while the RSP runs a scalar load /
+  store loop: no access of the program is lost and no DMA word is wrong;
+* the same with a loop of vector loads and stores (LQV, SQV, LTV, STV),
+  compared against a run without a DMA.
+
+### With the rest of the system
+
+* `sim/rdp` (`DPC=1 build_rtl.sh`, `tb_dpc`): the RSP together with
+  `rdp_dpc.sv` against the model; the command words the fetch hands on must be
+  the model's, in order, with random memory latency and back-pressure.
+* `sim/mips_soc`: the whole SoC. `lang/mips/test/rsp_replay.c` replays one
+  task dump there, started the way the runtime does it, and times the RSP to
+  its BREAK and the RDP to its SYNC FULL. `lang/mips/test/rcpcpu_test.c`
+  checks the CPU's side of the SP and DPC registers: the semaphore, the DMA
+  queue, and the CPU's writes of the DPC registers.
