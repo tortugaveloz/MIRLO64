@@ -502,6 +502,7 @@ logic        rfq_aw, rfq_bw;                // (read with them) the register's h
 logic        rf_xw, hi_wide, lo_wide;       // the value written last cycle / HI / LO may have an hx
 logic        hilo_soft;                     // COP0 7: HI and LO are the runtime's (mfhi, mflo trap)
 logic        mon_game, mon_bd, mon_mi;              // MON: MCTL.GAME; the monitor's entry was in a delay slot
+logic        mon_mem4;                              // MON: MCTL bit 10 -- the game's RDRAM is 4 MiB (no Expansion Pak)
 logic [4:0]  mon_code;                      // MON: its cause
 function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {32{v[31]}}; endfunction
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
@@ -1015,7 +1016,9 @@ wire e_hwx = MI && mon_mi && !e_fexc && !e_misalign && e_ea[31] && !e_ea[30] && 
              (e_ea[28:20] == 9'h043 || (VIW && e_ea[28:20] == 9'h044) || (AIW && e_ea[28:20] == 9'h045) || (PIW && e_ea[28:20] == 9'h046 && e_ea[19:2] == 18'd4) ||
               (SIW && (e_ea[28:20] == 9'h048 || (e_ea[28:20] == 9'h1FC && e_ea[10:6] == 5'h1F))) ||
               (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && !(e_ea[25] && e_ea[24])))));
-wire e_n64dev = e_mem && e_n64c && !n64win(e_ea) && kseg01(e_ea);   // (a mapped address is the TLB's)
+// (MCTL bit 10, mon_mem4: a console without the Expansion Pak -- the upper 4 MiB of the window are nothing of the game's either,
+// and the monitor answers as the console does: a game that sizes the memory itself finds 4 MiB)
+wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22])) && kseg01(e_ea);   // (a mapped address is the TLB's)
 
 // E's synchronous exceptions (in order: fetch fault, coprocessor unusable,
 // RI/sys/break, trap, address). CpU: an FPU instruction (bc1 included) or an
@@ -1232,7 +1235,7 @@ always_comb begin
     5'd2: c0_rd = c0_entrylo0; 5'd3: c0_rd = c0_entrylo1; 5'd4: c0_rd = c0_context;
     5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
     // (31:28: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV; a core before them reads 0 there)
-    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, 19'd0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
+    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, 17'd0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     5'd23: c0_rd = TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;     // (bit 0: the game's TLB instructions are the monitor's)
     5'd22: c0_rd = (TLB_RAM && MON) ? mon_badv : 32'd0;
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
@@ -1649,7 +1652,7 @@ always_ff @(posedge clk) begin
         c0_watchhi <= 0; c0_taglo <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_hx <= 0; lo_hx <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
-        hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0;
+        hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0;
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
         ms <= MS_IDLE; ms_cnt <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
@@ -1758,7 +1761,8 @@ always_ff @(posedge clk) begin
                              if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
                 5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
                 5'd6:  begin c0_wired <= m_st_lo & 32'h3F; c0_random <= 5'd31; end
-                5'd7:  begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8]; end
+                5'd7:  begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8];
+                             if (MON && m_st_lo[11]) mon_mem4 <= m_st_lo[10]; end      // (bit 11: the write is of bit 10)
                 5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo;
                 5'd14: c0_epc <= m_st_lo;
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);

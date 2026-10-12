@@ -1235,7 +1235,9 @@ void n64rt_mi_init(void)
     u32 id = monitor_id_read(), m;
     if (!(id & 2u)) return;
     __asm__ volatile("mfc0 %0, $7" : "=r"(m));
-    m = (m & 3u) | 0x300u;
+    /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
+     * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
+    m = (m & 3u) | 0x300u | 0x800u | (n64rt_game->mem_size <= 0x400000u ? 0x400u : 0u);
     __asm__ volatile("mtc0 %0, $7" :: "r"(m));
     __asm__ volatile("mfc0 %0, $7" : "=r"(m));
     if (!(m & 0x100u)) return;
