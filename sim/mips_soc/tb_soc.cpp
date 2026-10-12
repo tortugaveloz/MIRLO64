@@ -47,6 +47,9 @@
 #include <deque>
 #include <string>
 #include <ctime>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <csignal>
 
 static Vsoc_sim_top *t;
 // The clocks. clk_sys is TB_SYS_HZ, clk_sys2x twice that; the game CPU's own
@@ -178,9 +181,23 @@ static void chip_step()
 // CPUTRACE=from,count: the game CPU's instructions as it retires them (pc,
 // word, the register written) and the exceptions it takes, `count` of them
 // from the `from`-th
+// (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
+static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
+static bool o_cstat, o_ctrace, o_excstat, o_pcprof;
+static long o_pcprof_from;
+static bool ck_run;                     // this is a run from a checkpoint
+static void opts_load()
+{
+    o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
+    ct_from = -1; ct_n = 0;
+    o_exc_per = o_excstat && atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
+    o_xtrace = getenv("XTRACE") ? atol(getenv("XTRACE")) : 0;
+    o_pctop = getenv("PCTOP") ? atol(getenv("PCTOP")) : 0;
+    o_pcprof = getenv("PCPROF") != nullptr; o_pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
+}
 static void cpu_trace_step()
 {
-    static long from = -1, count, n;
+    long &from = ct_from, &count = ct_count, &n = ct_n;
     if (from < 0) { const char *e = getenv("CPUTRACE"); from = atol(e); count = strchr(e, ',') ? atol(strchr(e, ',') + 1) : 1000; }
     if (t->tr_exc && n >= from && n < from + count) printf("[cpu      exception %u at %08x]\n", t->tr_exc_code, t->tr_exc_pc);
     if (!t->tr_retire) return;
@@ -195,7 +212,7 @@ static void cpu_trace_step()
 // a 64-bit instruction...), by cause code, a line every 60 fields (EXCSTAT=<n>: every n fields). Instrumentation only.
 static void exc_stat_step()
 {
-    static long hist[32], tot, f_n; static bool vb_was; static const long per = atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
+    static long hist[32], tot, f_n; static bool vb_was; const long per = o_exc_per;
     static long retired, ex_total;
     if (t->tr_exc) { hist[t->tr_exc_code & 31]++; tot++; ex_total++; }
     if (t->tr_retire) retired++;
@@ -537,7 +554,8 @@ int main(int argc, char **argv)
     for (int b = 0; b < 4; b++) t_act[b] = t_pre[b] = t_wr[b] = -1000;
     long sys = 0, frames = 0;
     static long rs_cnt[4][6]; static unsigned rs_type = 0;
-    const long max_sys = mcycles * 1000000;
+    long max_sys = mcycles * 1000000;
+    opts_load();
     time_t t0 = time(nullptr);
     int vid_phase = 0;                              // clk_vid: sys / 5
     int pvb = 0;
@@ -545,7 +563,7 @@ int main(int argc, char **argv)
     bool done = false;
     // the game CPU's clock: its edges every 2 x TB_CPU_M units, clk_sys2x's every TB_CPU_N
     long cpu_t = 0;                                 // its next edge
-    static const bool cstat = getenv("CPUSTAT") != nullptr, ctrace = getenv("CPUTRACE") != nullptr, excstat = getenv("EXCSTAT") != nullptr;
+    const bool &cstat = o_cstat, &ctrace = o_ctrace, &excstat = o_excstat;
     auto cpu_to = [&](long now) {                   // its edges before `now`, each on its own; one at `now` with what follows
         for (; cpu_t <= now; cpu_t += 2 * TB_CPU_M) {
             bool rise = (cpu_t / (2 * TB_CPU_M)) % 2 == 0;
@@ -630,6 +648,11 @@ int main(int argc, char **argv)
                     if (frames != pf_frame) { pf_frame = frames; if (FILE *f = fopen(pf, "r")) { unsigned v; if (fscanf(f, "%x", &v) == 1) { if (v != pf_keys) printf("[pad %ld: %x]\n", frames, v); pf_keys = v; } fclose(f); } }
                     keys[0] |= pf_keys;
                 }
+                // PAD_MASH=from,period,hold,keys: controller 1's keys (hex) held `hold` fields in every `period`, from the field `from` on
+                // (PAD_MASH_TO=n: up to the field n)
+                { static long mf = -1, mp, mh, mto; static unsigned mk;
+                  if (mf == -1) { mf = -2; if (const char *e = getenv("PAD_MASH")) { if (sscanf(e, "%ld,%ld,%ld,%x", &mf, &mp, &mh, &mk) != 4) mf = -2; } mto = getenv("PAD_MASH_TO") ? atol(getenv("PAD_MASH_TO")) : -1; }
+                  if (mf >= 0 && frames >= mf && (mto < 0 || frames <= mto) && (frames - mf) % mp < mh) keys[0] |= mk; }
                 t->cont1_key = keys[0]; t->cont2_key = keys[1]; t->cont3_key = keys[2]; t->cont4_key = keys[3];
                 t->cont1_joy = joy[0]; t->cont2_joy = joy[1]; t->cont3_joy = joy[2]; t->cont4_joy = joy[3];
             }
@@ -873,7 +896,7 @@ int main(int argc, char **argv)
                 }
                 phalt = halt;
             }
-            static long xt = getenv("XTRACE") ? atol(getenv("XTRACE")) : 0;
+            long &xt = o_xtrace;
             static const bool xvi = getenv("XTRACE_VI") != nullptr;   // XTRACE_VI=1: only the VI's registers (0x044xxxxx), with the frame and the cycle
             if (xt && t->x_ack && (!xvi || (t->x_addr >> 20) == 0x044u)) { xt--; if (xvi) printf("[x f%ld c%ld %s %08x = %08x]\n", frames, sys, t->x_we ? "W" : "R", t->x_addr, t->x_we ? t->x_wdata : t->x_rdata); else printf("[x %s %08x = %08x]\n", t->x_we ? "W" : "R", t->x_addr, t->x_we ? t->x_wdata : t->x_rdata); }
             if (t->vblank && !pvb) {
@@ -890,8 +913,57 @@ int main(int argc, char **argv)
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
                 frames++;
+                // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
+                // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
+                // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again
+                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF) or at each use (PAD_FILE, RAMDUMP ...).
+                // <dir>/quit ends the copies.
+                if (const char *ck = getenv("CKPT")) {
+                    static const std::string cdir = std::string(ck).substr(0, std::string(ck).find(','));
+                    static const long cn = strchr(ck, ',') ? atol(strchr(ck, ',') + 1) : 300;
+                    if (cn > 0 && frames % cn == 0) {
+                        fflush(nullptr);
+                        if (fork() == 0) {
+                            signal(SIGCHLD, SIG_IGN);
+                            std::string go = cdir + "/go_" + std::to_string(frames), q = cdir + "/quit";
+                            { FILE *f = fopen((cdir + "/ckpt_" + std::to_string(frames)).c_str(), "w"); if (f) { fprintf(f, "%d %ld\n", (int)getpid(), sys); fclose(f); } }
+                            struct stat sb;
+                            for (;;) {
+                                if (stat(q.c_str(), &sb) == 0) _exit(0);
+                                if (stat(go.c_str(), &sb) == 0) {
+                                    std::string run = go + ".run";
+                                    rename(go.c_str(), run.c_str());
+                                    if (fork() == 0) {
+                                        unsetenv("CKPT");
+                                        long more = 30;
+                                        if (FILE *f = fopen(run.c_str(), "r")) {
+                                            char ln[1024];
+                                            while (fgets(ln, sizeof ln, f)) {
+                                                ln[strcspn(ln, "\r\n")] = 0;
+                                                char *eq = strchr(ln, '='); if (!eq) continue;
+                                                *eq = 0; const char *v = eq + 1;
+                                                if (!strcmp(ln, "LOG")) { if (!freopen(v, "w", stdout)) _exit(3); }
+                                                else if (!strcmp(ln, "OUT")) outdir = v;
+                                                else if (!strcmp(ln, "EVERY")) every = atol(v);
+                                                else if (!strcmp(ln, "MCYCLES")) more = atol(v);
+                                                else setenv(ln, v, 1);
+                                            }
+                                            fclose(f);
+                                        }
+                                        max_sys = sys + more * 1000000;
+                                        ck_run = true;
+                                        opts_load();
+                                        printf("[run from the checkpoint at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                                        break;
+                                    }
+                                }
+                                sleep(1);
+                            }
+                        }
+                    }
+                }
                 // PCTOP=n: every n fields the game CPU's busiest 32-byte blocks of code (pc sampled every 64 sys cycles), then cleared
-                static const long pctop = getenv("PCTOP") ? atol(getenv("PCTOP")) : 0;
+                const long pctop = o_pctop;
                 if (pctop && frames % pctop == 0) {
                     std::vector<std::pair<uint32_t, uint32_t>> v(pct_hist.begin(), pct_hist.end());
                     std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.second > b.second; });
@@ -903,7 +975,7 @@ int main(int argc, char **argv)
                 }
             }
             pvb = t->vblank;
-            { static const bool pctop_on = getenv("PCTOP") != nullptr; if (pctop_on && (sys & 63) == 0) pct_hist[t->cpu_pc >> 5]++; }
+            if (o_pctop && (sys & 63) == 0) pct_hist[t->cpu_pc >> 5]++;
             // the geom core's busy share: anything but its "waiting for a list"
             // heartbeat (lang/c/geom/main.c HB 0xB0000040), per EVERY window
             static long g_busy, g_win;
@@ -917,8 +989,7 @@ int main(int argc, char **argv)
                 fflush(stdout);
             }
             // PCPROF=file [PCPROF_FROM=cycles]: the game CPU's PC every 256 cycles
-            static const char *pcprof = getenv("PCPROF");
-            static long pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
+            const bool pcprof = o_pcprof; const long pcprof_from = o_pcprof_from;
             if (pcprof && sys >= pcprof_from && (sys & 255) == 0) pc_hist[t->cpu_pc]++;
             // GPCPROF=file: the geom core's PC likewise (from PCPROF_FROM), and
             // how many of the samples it was waiting for a list (lang/c/geom/main.c HB)
@@ -992,6 +1063,14 @@ int main(int argc, char **argv)
             sys++;
         }
     }
+    // RAMDUMP=<file>: the game's 8 MiB of RDRAM (SDRAM 0x4380_0000) as the run ends, the N64's bytes
+    if (const char *f = getenv("RAMDUMP")) {
+        if (FILE *pf = fopen(f, "wb")) {
+            std::vector<uint8_t> ram(8u << 20);
+            for (uint32_t a = 0; a < (8u << 20); a += 4) { uint32_t w = rd_word((0x03800000u + a) >> 2); ram[a] = w >> 24; ram[a + 1] = w >> 16; ram[a + 2] = w >> 8; ram[a + 3] = w; }
+            fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
+        }
+    }
     if (const char *f = getenv("GPCPROF")) {
         FILE *pf = fopen(f, "w");
         if (pf) { fprintf(pf, "idle %u\n", gpc_idle); for (auto &kv : gpc_hist) fprintf(pf, "%08x %u\n", kv.first, kv.second); fclose(pf); }
@@ -1015,6 +1094,7 @@ int main(int argc, char **argv)
         uint32_t a = strtoul(d, 0, 0), n = strchr(d, ',') ? strtoul(strchr(d, ',') + 1, 0, 0) : 16;
         for (uint32_t i = 0; i < n; i++) printf("%08x: %08x\n", a + 4 * i, rd_word(((a & 0x3FFFFFF) >> 2) + i));
     }
+    if (ck_run) { fflush(nullptr); _exit(errors ? 1 : 0); }     // (a forked copy: the model's threads are not there to be joined)
     t->final();
     delete t;
     return errors ? 1 : 0;

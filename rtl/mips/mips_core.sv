@@ -48,7 +48,14 @@
 //    store to an entry that is not dirty: Mod, code 1) with BadVAddr the
 //    address and EntryHi its page pair, as the VR4300 leaves them, for the
 //    runtime to fill the entry from what the game has mapped -- a page of
-//    any size, 4 KiB of it at a time -- and return to the instruction. An
+//    any size, 4 KiB of it at a time -- and return to the instruction.
+//    With MON a fault that goes to the monitor level leaves BadVAddr and
+//    EntryHi as the game has them (a page the game's wired entry maps misses
+//    the tables where the VR4300's TLB never would: GoldenEye's exception
+//    handler runs from 0x7000_0000, and a miss on its first fetch replaced
+//    the BadVAddr it was about to read): the address is COP0 register 22's,
+//    which only reads, and the monitor level writes BadVAddr by mtc0 for the
+//    exception it delivers to the game. An
 //    entry is written through COP0 register 23: a write stores the entry of
 //    EntryHi's page (the pair's page by the value's bit 4) and ASID:
 //      bits 28-12 pa[28:12]    bit 4 va[12]    bit 3 the table (1: fetches)
@@ -590,6 +597,7 @@ typedef struct packed {
     logic [16:0] pfn;                        // pa[28:12]
 } tre_t;
 logic        tr_lastf;                       // the last TLB exception was a fetch's
+logic [31:0] mon_badv;                       // (MON) the address of the last translation fault taken by the monitor level: COP0 22
 logic [8:0]  tr_raddr, tr_waddr;
 logic        tr_we_d, tr_we_i;
 tre_t        tr_wdata, tr_qd, tr_qi;
@@ -1226,6 +1234,7 @@ always_comb begin
     // (31:28: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV; a core before them reads 0 there)
     5'd7: c0_rd = {XALU, XSH, XMD, XDIV, 19'd0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     5'd23: c0_rd = TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;     // (bit 0: the game's TLB instructions are the monitor's)
+    5'd22: c0_rd = (TLB_RAM && MON) ? mon_badv : 32'd0;
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
     5'd10: c0_rd = c0_entryhi; 5'd11: c0_rd = c0_compare;
     5'd12: c0_rd = c0_status;  5'd13: c0_rd = cause_now;  5'd14: c0_rd = c0_epc;   // (Cause: IP2 live, as the model)
@@ -1258,6 +1267,8 @@ wire m_refill = !m_exc_v && m_tlb_fault && !m_tlbq[34];
 wire m_mon_int = MON && (FAST ? int_mon_r : int_mon);
 wire m_to_mon  = MON && mon_game && !c0_status[2] &&
                  (m_take_int ? m_mon_int : (m_take_exc && (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : 1'b1)));
+// a translation fault (a fetch's, code 2 from E, or an access's, found here) that the monitor level takes
+wire m_tr_mon  = TLB_RAM && m_to_mon && m_take_exc && (!m_exc_v || m_exc_code == 5'd2);
 // (the game's own handler: an exception of the game's code that a console takes)
 wire m_to_game = MON && mon_game && (m_take_int || m_take_exc) && !m_to_mon && n64code(m_pc);
 wire m_live = m_valid && !m_take_int && !m_take_exc;
@@ -1699,10 +1710,12 @@ always_ff @(posedge clk) begin
             if (m_take_exc) begin
                 // (TLB_RAM: a fetch's too -- its page's entry is the runtime's to fill; a device access of the
                 // game's, in the monitor, leaves BadVAddr alone: the runtime works the address out)
-                if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev)) c0_badvaddr <= m_badv;
+                if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon) c0_badvaddr <= m_badv;
                 if (TLB_RAM && m_code >= 5'd1 && m_code <= 5'd3) tr_lastf <= m_exc_v;
-                if (TLB_RAM && m_exc_v && m_code == 5'd2) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                if (!m_exc_v) begin                                 // a TLB fault
+                if (TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
+                // (the monitor level's: the game's BadVAddr and EntryHi stay as they are)
+                if (m_tr_mon) mon_badv <= m_exc_v ? m_badv : m_addr;
+                if (!m_exc_v && !m_tr_mon) begin                    // a TLB fault
                     c0_badvaddr <= m_addr;
                     if (!TLB_RAM) c0_context <= (c0_context & 32'hFF800000) | ((m_addr >> 13) << 4);
                     c0_entryhi <= (m_addr & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
@@ -1734,6 +1747,8 @@ always_ff @(posedge clk) begin
                              if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[6:2] <= m_st_lo[6:2]; end end
                 // the VR4300's writable bits (the constant rest is not stored; BadVAddr,
                 // XContext, TagHi and the reserved registers take no write)
+                // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game)
+                5'd8:  if (TLB_RAM && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0];
                              // (the monitor does the game's tlbp: its P bit, which no mtc0 of the game's reaches)
                              if (TLB_RAM && MON && c0_status[2]) c0_index[31] <= m_st_lo[31]; end

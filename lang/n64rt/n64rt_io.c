@@ -1457,6 +1457,11 @@ static int rcp_read(u32 pa, u32 *v)
 static int rcp_read_(u32 pa, u32 *v)
 {
     if (pa >= 0x08000000u && pa < 0x10000000u) { (void)io_read(pa, v); return 1; }       /* the cartridge's domain 2: FlashRAM, as the PI's IO */
+    /* The 64DD's registers (0x0500_0000) and its ROM (0x0600_0000): no drive. Nothing answers on the cartridge's bus there, and a
+     * read gets what the bus last carried, the address's low half, twice (0x0500_0508, the drive's status, reads 0x0508_0508).
+     * It read 0 here: F-Zero X took that for a drive that is there, started the drive's manager and waited for it for ever
+     * (LeoCJCreateLeoManager's `while (status == 8)`), after reading its font from the drive's ROM -- a black screen. */
+    if (pa >= 0x05000000u && pa < 0x08000000u) { *v = (pa & 0xFFFFu) << 16 | (pa & 0xFFFFu); return 1; }
     /* what is not there (the bus's other addresses, the PIF's ROM): a read is told 0 */
     if ((pa >= 0x04900000u && pa < 0x10000000u) || (pa >= 0x1FC00000u && !(pa >= 0x1FC007C0u && pa < 0x1FC00800u))) { *v = 0; return 1; }
     if (pa < 0x04000000u || pa >= 0x04900000u) return 0;
@@ -1623,6 +1628,9 @@ static void pi_start(int rd, u32 len)
     const u32 dev = n64rt_pi_regs[1] & 0xFFFFFFFEu, pa = n64rt_pi_regs[0] & 0x00FFFFFEu;
     const u32 size = rd ? ((len & 0x00FFFFFFu) | 1u) + 1u : pi_wr_bytes(pa, len);
     pi_advance(dev, pa, size, rd);
+#ifdef N64RT_OWN
+    if (!rd) n64rt_tlb_frames_loaded(pa, size);
+#endif
     if (s_pi_hw && pi_hw_dma(rd, dev, pa, size)) return;
     if (!rd) (void)pi_copy(dev, K0P(pa), size, OS_READ);
     else if (is_flash(dev)) d2_copy(dev, K0P(pa), size, OS_WRITE);
