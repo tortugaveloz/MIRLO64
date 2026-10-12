@@ -7,8 +7,8 @@ calls it; both files are generated, not committed):
   the boot ROM           lang/mips/boot/build/boot.hex
   the RSP's ROM          rtl/rsp/rsp_div_rom.hex (as it is: only its path)
 
-The geom and audio cores are loaded by the game (lang/c/game/geom_load.c,
-audio_load.c), each game its own firmware: nothing here. A missing image gives an empty memory and a warning."""
+The geom core is loaded by the game (lang/c/game/geom_load.c), each game its
+own firmware: nothing here. A missing image gives an empty memory and a warning."""
 import os
 import struct
 import sys

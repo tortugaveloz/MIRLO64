@@ -5,7 +5,7 @@ with --big (MIRLO's MIPS cores).
     bin2words.py [--big] NAME FILE [NAME FILE ...] > out.h
 
 For each pair: `static const uint32_t NAME_words[]` and `#define NAME_NWORDS`.
-Used to embed the audio core's IMEM/DMEM images in game firmware.
+Used to embed a core's memory images in game firmware.
 """
 import struct
 import sys

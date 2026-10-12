@@ -9,9 +9,8 @@ the fabric keeps MIRLO and MIRLO64 close together.
 |------|----------------|
 | game CPU | `rtl/mips/mips_core.sv`: a 32-bit VR4300, big-endian (the N64's order), single-precision FPU, 16 KiB I / 8 KiB D cache |
 | geom core | `rtl/mips/mips_geom.sv` (mips_lite + D-cache), MIPS32 integer subset |
-| audio core | `rtl/mips/mips_lite.sv` |
 
-The CFUs (`Vpu4DFixed` + the setup unit, `AudioDspCfu`), MRDP and the video
+The CFUs (`Vpu4DFixed` + the setup unit), MRDP and the video
 path sit beside the cores.
 
 ## The SoC (`rtl/soc/mirlo_mips.sv`)
@@ -23,7 +22,6 @@ path sit beside the cores.
 | `0x2000_0000` | the geom core's ROM (its own); `0x2000_8000` its RAM, which the game CPU can also read and write |
 | `0x4000_0000` | SDRAM, 64 MiB. The game CPU caches it; the program starts at its base |
 | `0x40C0_0000` | the framebuffers (by convention) |
-| `0x6000_0000` | the audio core: IMEM, DMEM, CTRL, IMEM2 (the game loads it; the core itself sees them at `0x8000_0000`) |
 | `0x8000_0000` / `0xA000_0000` | an N64 game's RDRAM, 8 MiB: SDRAM `0x4380_0000` through KSEG0 (cached) or KSEG1 (see below) |
 | `0xF000_0000` | the registers: `rtl/soc/mirlo_regs.sv`, map in `tools/mirlo_regs.py` |
 | `0xBFC0_0000` | the game CPU's boot ROM (`lang/mips/boot`) |
@@ -1369,8 +1367,7 @@ SFL serial boot over the JTAG UART, which `tools/jtag/sfl_term.py` and
   `make -f lib.mk VARIANT=game` and `VARIANT=lite`.
 - `lang/mips/program.mk`, `lang/mips/linker/`: a game-CPU program (crt0 with
   an exception vector that saves registers, so timer interrupts work).
-- `lang/c/geom`: `make` gives `build/geom.bin`; `lang/c/audio`: `make` gives
-  `build/main/audio_fw.h`.
+- `lang/c/geom`: `make` gives `build/geom.bin`.
 - `lang/c/game`: `make [PROG=...]` gives `build/build.bin`.
 - `tools/mips_inits.py`: the boot ROM and geom ROM images for the bitstream.
 

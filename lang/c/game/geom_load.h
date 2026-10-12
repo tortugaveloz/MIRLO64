@@ -1,6 +1,6 @@
 /* Game-CPU side of the geom core's firmware: each game brings its own build
  * of lang/c/geom (with its display-list translator) and loads it at boot into
- * the core's two ROMs, as audio_load.h does for the audio core. Nothing of it
+ * the core's two ROMs. Nothing of it
  * is in the bitstream: the core stays in reset (MAILBOX.GEOM_RUN = 0) until
  * geom_start(). The images: lang/c/geom's $(B)/geom_fw.h. */
 #ifndef GEOM_LOAD_H
