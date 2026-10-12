@@ -46,6 +46,7 @@ enum {
     MRDP_OP_SYNC_PIPE    = 0x27,
     MRDP_OP_SYNC_TILE    = 0x28,
     MRDP_OP_SYNC_FULL    = 0x29,
+    MRDP_OP_SET_CONVERT  = 0x2C,   /* MRDP_N64: K4 and K5, the combiner's two constants (K0..K3, the YUV matrix, are not used) */
     MRDP_OP_SET_SCISSOR  = 0x2D,
     MRDP_OP_SET_PRIM_Z   = 0x2E,
     MRDP_OP_SET_OTHER    = 0x2F,
@@ -198,6 +199,7 @@ typedef struct {
     uint32_t fill;
     mrdp_rgba_t fog, blend, prim, env;
     uint8_t prim_lod_frac;
+    uint16_t k4, k5;                       /* MRDP_N64: SET CONVERT's K4 and K5, 9 bits each (the combiner's B 7 and C 15) */
     uint16_t prim_z;                       /* (MRDP_N64: SET_PRIM_DEPTH's 15 bits << 1; the 18-bit depth is that << 2) */
     uint16_t prim_dz;                      /* MRDP_CVG: SET_PRIM_DEPTH's delta (the blender's shift without Z_CMP) */
     uint16_t sc_xh, sc_yh, sc_xl, sc_yl;   /* u10.2 */

@@ -338,7 +338,10 @@ static int cc_rgb_a(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
 }
 static int cc_rgb_b(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
 {
-    if (sel >= 6) return 0;       /* 6 key center, 7 K4, 8+ zero */
+#ifdef MRDP_N64
+    if (sel == 7) return r->k4;   /* (its 9 bits read as COMBINED's are: combine_raw) */
+#endif
+    if (sel >= 6) return 0;       /* 6 key center, 8+ zero (MRDP: 7, K4, too) */
     return cc_rgb_a(r, in, sel, ch);
 }
 static int cc_rgb_c(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
@@ -353,7 +356,10 @@ static int cc_rgb_c(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
     case 11: return CC_SH(in, 3);
     case 12: return r->env.a;
     case 14: return r->prim_lod_frac;
-    default: return 0;           /* 6 key scale, 13 LOD fraction, 15 K5, 16+ */
+#ifdef MRDP_N64
+    case 15: return r->k5;       /* (a signed 9-bit: combine_raw) */
+#endif
+    default: return 0;           /* 6 key scale, 13 LOD fraction, 16+ (MRDP: 15, K5, too) */
     }
 }
 static int cc_rgb_d(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
@@ -451,14 +457,15 @@ static cc_out_t combine_raw(const mrdp_t *r, const cc_in_t *in, int cyc)
     }
     cc_out_t o;
 #ifdef MRDP_CVG
-    /* COMBINED (selection 0) is the only operand that can be above 383 and mean a negative number: A and B read it
-     * as -128..-1 from 0x180, C (selection 0, or 7: COMBINED's alpha) as a signed 9-bit; the SHADE and the rest are
-     * the plain positive numbers they are */
+    /* COMBINED (selection 0) and SET CONVERT's two constants are the operands that can be above 383 and mean a negative
+     * number: A and B read COMBINED, and B K4, as -128..-1 from 0x180, C (selection 0, or 7: COMBINED's alpha; 15: K5)
+     * as a signed 9-bit; the SHADE and the rest are the plain positive numbers they are. (K5 at 255 is the nearest the
+     * multiplier has to 1: a game's (TEXEL0 - TEXEL1) * K5 + TEXEL1 is TEXEL0, and TEXEL1 with K5 at 0.) */
     for (int ch = 0; ch < 3; ch++) {
         int a = cc_rgb_a(r, in, sa_r, ch), b = cc_rgb_b(r, in, sb_r, ch), c = cc_rgb_c(r, in, mul_r, ch);
         if (sa_r == 0) a = cc_ext9(a);
-        if (sb_r == 0) b = cc_ext9(b);
-        if (mul_r == 0 || mul_r == 7) c = cc_sgn9(c);
+        if (sb_r == 0 || sb_r == 7) b = cc_ext9(b);                       /* (7: K4) */
+        if (mul_r == 0 || mul_r == 7 || mul_r == 15) c = cc_sgn9(c);      /* (15: K5) */
         o.v[ch] = cc_eval(a, b, c, cc_rgb_d(r, in, add_r, ch));
     }
     {
@@ -1562,6 +1569,9 @@ static void execute(mrdp_t *r, const uint32_t *w)
     case MRDP_OP_NOP: case MRDP_OP_SYNC_LOAD: case MRDP_OP_SYNC_PIPE: case MRDP_OP_SYNC_TILE:
         break;
     case MRDP_OP_SYNC_FULL: r->sync_count++; break;
+#ifdef MRDP_N64
+    case MRDP_OP_SET_CONVERT: r->k4 = (uint16_t)((w[1] >> 9) & 0x1FF); r->k5 = (uint16_t)(w[1] & 0x1FF); break;
+#endif
     case MRDP_OP_TEXRECT: draw_texrect(r, w, 0); break;
     case MRDP_OP_TEXRECT_FLIP: draw_texrect(r, w, 1); break;
     case MRDP_OP_SET_SCISSOR:

@@ -399,6 +399,26 @@ int main(void)
     check("depth: a decal farther than that is not drawn", 12, 3, c5551(0, 0, 255, 1));
     with_z = 0; zval = 0x40000000u;
 
+    /* 13. SET CONVERT's K4 and K5 are the combiner's B 7 and C 15, 9 bits each: K4 a negative number from 0x180 (as COMBINED),
+     * K5 a signed 9-bit. PRIM is a grey of 200, ENV of 250. */
+#define K45(k4, k5) cmd(0x2C000000u, (uint32_t)(k4) << 9 | (uint32_t)(k5))
+    setup(AA_OPA);
+    cmd(0x3A000000u, 0xC8C8C8FFu); cmd(0x3B000000u, 0xFAFAFAFFu); K45(0, 255); CC_RGB(3, 7, 15, 7);
+    tri_vleft(10 << 16);
+    check("combiner: (PRIM - K4 0) * K5 255 -> 199", 12, 3, c5551(199, 199, 199, 1));
+    setup(AA_OPA);
+    cmd(0x3A000000u, 0xC8C8C8FFu); cmd(0x3B000000u, 0xFAFAFAFFu); K45(100, 255); CC_RGB(3, 7, 15, 7);
+    tri_vleft(10 << 16);
+    check("combiner: (PRIM - K4 100) * K5 255 -> 100", 12, 3, c5551(100, 100, 100, 1));
+    setup(AA_OPA);
+    cmd(0x3A000000u, 0xC8C8C8FFu); cmd(0x3B000000u, 0xFAFAFAFFu); K45(0, 0x180); CC_RGB(3, 7, 15, 5);
+    tri_vleft(10 << 16);
+    check("combiner: PRIM * K5 -128 + ENV -> 150", 12, 3, c5551(150, 150, 150, 1));
+    setup(AA_OPA);
+    cmd(0x3A000000u, 0xC8C8C8FFu); cmd(0x3B000000u, 0xFAFAFAFFu); K45(0x1C0, 0x80); CC_RGB(3, 7, 15, 7);
+    tri_vleft(10 << 16);
+    check("combiner: (PRIM - K4 -64) * K5 128 -> 132", 12, 3, c5551(132, 132, 132, 1));
+
     printf(fails ? "%d FAILED\n" : "ALL PASS\n", fails);
     return fails != 0;
 }

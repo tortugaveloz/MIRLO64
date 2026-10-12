@@ -32,6 +32,7 @@ module rdp_pix (
     input  wire [31:0] cc_lo,
     input  wire [31:0] prim, env, fog, blend,   // RGBA, R in [31:24]
     input  wire [7:0]  prim_lod_frac,
+    input  wire [8:0]  k4, k5,      // SET CONVERT's K4 (the combiner's B 7) and K5 (C 15)
     input  wire [15:0] prim_z,
     input  wire [15:0] z_tol,       // the primitive's depth step (a decal's tolerance; the coverage's dz)
     input  wire [15:0] prim_dz,     // SET_PRIM_DEPTH's delta
@@ -124,7 +125,8 @@ module rdp_pix (
         input [8:0] v;
         cc_xc = {v[8], v};
     endfunction
-    // cc_eval0: the first cycle, whose operands are 0..511 (COMBINED is 0 there; bit 9 of A, B, C is clear).
+    // cc_eval0: the first cycle's alpha, whose operands are 0..511 (COMBINED is 0 there; bit 9 of A, B, C is clear). Its colours
+    // take cc_eval1: K4 as B and K5 as C are signed numbers.
     function automatic [8:0] cc_eval0;
         input [9:0] a, b, c;
         input [8:0] d;
@@ -750,7 +752,7 @@ module rdp_pix (
         input [31:0] tex, tex1;
         input [35:0] sh;
         input [35:0] cm;
-        rgb_b = (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
+        rgb_b = (sel == 4'd7) ? cc_xab(k4) : (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
     endfunction
     function automatic [9:0] rgb_c;
         input [4:0]  sel;
@@ -768,6 +770,7 @@ module rdp_pix (
             5'd11: rgb_c = {1'b0, ch9(sh, 2'd3)};
             5'd12: rgb_c = {2'b00, env[7:0]};
             5'd14: rgb_c = {2'b00, prim_lod_frac};
+            5'd15: rgb_c = cc_xc(k5);
             default: rgb_c = 10'd0;
         endcase
     endfunction
@@ -858,12 +861,12 @@ module rdp_pix (
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
         end
     endfunction
-    // the four channels' raw 9 bits (cycle 0: operands 0..511; cycle 1: COMBINED too)
+    // the four channels' raw 9 bits (cycle 0: operands 0..511, and its colours' K4 and K5; cycle 1: COMBINED too)
     function automatic [35:0] cc_arith0;
         input [155:0] o;
-        cc_arith0 = { cc_eval0(o[155:146], o[115:106], o[75:66], o[35:27]),
-                      cc_eval0(o[145:136], o[105:96],  o[65:56], o[26:18]),
-                      cc_eval0(o[135:126], o[95:86],   o[55:46], o[17:9]),
+        cc_arith0 = { cc_eval1(o[155:146], o[115:106], o[75:66], o[35:27]),
+                      cc_eval1(o[145:136], o[105:96],  o[65:56], o[26:18]),
+                      cc_eval1(o[135:126], o[95:86],   o[55:46], o[17:9]),
                       cc_eval0(o[125:116], o[85:76],   o[45:36], o[8:0]) };
     endfunction
     function automatic [35:0] cc_arith1;
