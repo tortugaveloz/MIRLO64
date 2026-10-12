@@ -10,7 +10,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 
 * **CPU**: a MIPS of the VR4300 class at 93.75 MHz, with its FPU and caches.
 * **RSP and RDP**: both in hardware. The RSP runs the game's own microcode and the RDP draws the game's own command stream.
-* **Video**: 320 x 240, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
+* **Video**: the picture the game's video registers describe, in a 640 x 240 frame, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
@@ -22,8 +22,7 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 MIRLO 64 is experimental and not every game works. What is known of v0.1:
 
-* **Games with a frame buffer that is not 320 pixels wide show a garbled picture.**
-* **High-resolution interlaced pictures are shown at a reduced size.**
+* **Interlaced pictures are shown as 640 x 240**: each line is the average of two of the picture's rows.
 * ROMs of up to 48 MiB. Of a larger one, only the first 48 MiB are loaded.
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controller 1 can have a pak.
