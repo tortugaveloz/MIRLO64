@@ -68,7 +68,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | R button | None, L, **R**, ZL, ZR | The Pocket's button for the N64's R |
 | C buttons | **None**, Right stick | The right stick as the C buttons, besides the face buttons |
 | Start button | None, **Start**, Select+Start | The Pocket's button for Start |
-| Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons |
+| Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
 
 ### Saves
 
