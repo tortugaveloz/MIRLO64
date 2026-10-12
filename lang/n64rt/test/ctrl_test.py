@@ -75,12 +75,10 @@ def main():
     # fighter: C-up (jump) on X, Z on Y and L, L on a dock pad's ZL
     expect('fighter', ['X'], ['CUP']); expect('fighter', ['Y'], ['Z']); expect('fighter', ['L1'], ['Z']); expect('fighter', ['L2'], ['L'])
     expect('fighter', ['select'], ['CDOWN']); expect('fighter', ['A'], ['A'])
-    # a family sets the Modifier and (platformer, shooter) "C buttons", never "Stick" / "D-pad"
+    # a family owns the Modifier and the table, nothing of the stick's feel (dead zone and range are the player's)
     for f, p in presets.items():
-        if p['m1'] & ~(31 << 10):
-            fail('family %d owns more of set1 than "C buttons": %x' % (f, p['m1']))
-        if f not in (1, 2) and p['m1']:
-            fail('family %d owns set1 bits without setting them' % f)
+        if p['m1'] or p['s1']:
+            fail('family %d owns set1 bits: %x / %x' % (f, p['m1'], p['s1']))
         if p['s0'] & ~(31 << 10):
             fail('family %d sets more of set0 than the Modifier: %x' % (f, p['s0']))
 
@@ -103,9 +101,9 @@ def main():
             fail('family %s: %d, expected %d' % (i, got, want))
 
     # a game's saved layout: it comes back, and any damage to it, or a short file, refuses it
-    s0, s1, m = 6 << 10 | 0x7FFF, 1 << 10 | 2 << 15 | 1 << 22 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
+    s0, s1, m = 6 << 10 | 0x7FFF | 0x2AA << 20, 3 | 0x3FFF000, [0x12345678 & 0x3FFFFFFF, 1, 2, 3, 0x3FFFFFFF]
     args = ['%x' % s0, '%x' % s1, *('%x' % w for w in m)]
-    want = '1 %x %x %s' % (s0 & (31 << 10), s1 & (31 << 10 | 31 << 15 | 3 << 22), ' '.join('%x' % w for w in m))
+    want = '1 %x %x %s' % (s0 & (31 << 10 | 0x3FF << 20), 0, ' '.join('%x' % w for w in m))
     got = run(ctrl, 'record', *args).strip()
     if got != want:
         fail('record: %s, expected %s' % (got, want))
@@ -135,8 +133,9 @@ def main():
     def session(saved, fam, script):
         out = run(ctrl, 'session', str(saved), str(fam), stdin=script).splitlines()
         return [[int(x, 16) for x in line.split()[1:]] for line in out]
-    def eff(saved, fam, pk=(0, 0, 0, 0), menu=(0, 0)):
-        return session(saved, fam, 'pick %d %d %d %d\nmenu %x %x\neff\n' % (*pk, *menu))[0]
+    def eff(saved, fam, pk=(0, 0, 0, 0, 1), menu=(0, 0)):
+        pk = tuple(pk) + (1,) * (5 - len(pk))                       # (the Analog sticks list's default is 1)
+        return session(saved, fam, 'pick %d %d %d %d %d\nmenu %x %x\neff\n' % (*pk, *menu))[0]
     def fld(words, f): return (words[f // 6] >> (5 * (f % 6))) & 31
     def keys(e, names, joy=0x80808080, typ=3):
         s0, s1, *m = e
@@ -186,15 +185,30 @@ def main():
     # D-pad keys
     for pick, buttons, stick in ((0, [], (-80, 0)), (1, ['DLEFT'], (0, 0)), (2, ['DLEFT'], (-80, 0)), (3, ['CLEFT'], (0, 0))):
         want(eff(0, -1, (0, 0, 0, pick)), ['left'], buttons, stick)
+    # Analog sticks (a dock pad with sticks: type 3): the left stick right (lx 0xFF), the right stick up (ry 0x10)
+    LR, RU = 0x808080FF, 0x10808080
+    want(eff(0, -1), [], ['CUP'], joy=RU); want(eff(0, -1), [], [], (80, 0), joy=LR)           # the default: left = the N64 stick, right = the C buttons
+    want(eff(0, -1, (0, 0, 0, 0, 0)), [], [], joy=RU); want(eff(0, -1, (0, 0, 0, 0, 0)), [], [], (80, 0), joy=LR)   # L stick / R none
+    want(eff(0, -1, (0, 0, 0, 0, 2)), [], [], (40, 0), joy=LR); want(eff(0, -1, (0, 0, 0, 0, 2)), [], ['CUP'], joy=RU)   # L half / R C
+    want(eff(0, -1, (0, 0, 0, 0, 3)), [], ['DRIGHT'], joy=LR)                                   # L D-pad / R C
+    want(eff(0, -1, (0, 0, 0, 0, 4)), [], ['CRIGHT'], joy=LR)                                   # L C buttons / R stick
+    got = keys(eff(0, -1, (0, 0, 0, 0, 4)), [], joy=RU)
+    if got[0] or got[2] <= 0: fail('R stick as the N64 stick: %s' % (got,))
+    want(eff(0, -1, (0, 0, 0, 0, 5)), [], [], joy=LR); want(eff(0, -1, (0, 0, 0, 0, 5)), [], [], joy=RU)   # both none
     # a pick out of the list's range is Auto
-    if eff(0, P, (9, 9, 9, 9)) != eff(0, P): fail('picks out of range changed the layout')
+    if eff(0, P, (9, 9, 9, 9, 9)) != eff(0, P): fail('picks out of range changed the layout')
     # Save keeps the layout in use with the picks; a saved layout is what Auto then uses; the picks still win over it; Forget goes back
-    r = session(0, SKATE, 'pick 0 2 0 0\nmenu 0 0\ncap\nsave\npick 0 0 0 0\neff\nforget\neff\n')
+    r = session(0, SKATE, 'pick 0 2 0 0 1\nmenu 0 0\ncap\nsave\npick 0 0 0 0 1\neff\nforget\neff\n')
     if fld(r[0][2:], 15) != 10 or r[0][0] != 6 << 10: fail('Save of a layout with a pick: %s' % (r[0],))
     if fld(r[1][2:], 15) != 10: fail('a saved game layout is not used under Auto: %s' % (r[1],))
     if fld(r[2][2:], 15) != 1 or fld(r[2][2:], 0) != 10: fail('Forget did not return Auto to the family: %s' % (r[2],))
-    r = session(1, P, 'pick 1 0 0 0\nmenu 0 0\neff\n')
+    r = session(1, P, 'pick 1 0 0 0 1\nmenu 0 0\neff\n')
     if fld(r[0][2:], 0) != 1 or r[0][0] != 3 << 10: fail('a pick over a saved layout: %s' % (r[0],))
+    # the stick's feel is kept by a family, a game's saved layout carries it; the menu's own Modifier still wins over a family's
+    feel = 2 << 20 | 3 << 25                          # dead zone code 2, range code 3
+    if eff(0, 3, menu=(feel, 0))[0] != feel | 6 << 10: fail('a family changed the stick\'s feel: %x' % eff(0, 3, menu=(feel, 0))[0])
+    if eff(0, 3, menu=(feel | 1 << 10, 0))[0] != feel | 1 << 10: fail('a family overrode the menu Modifier with the feel set')
+    if eff(1, 3, menu=(feel, 0))[0] != 3 << 10: fail('a game\'s saved layout kept the menu\'s feel: %x' % eff(1, 3, menu=(feel, 0))[0])
     print('ctrl_test: %s' % ('FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

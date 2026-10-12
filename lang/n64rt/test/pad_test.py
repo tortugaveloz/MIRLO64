@@ -25,8 +25,14 @@ def pack(fields):
     return [sum((fields[6 * w + i] & 31) << (5 * i) for i in range(6)) for w in range(5)]
 
 
-def spec(keys, joy, s0, s1, fields):
+def spec(*args):
+    return _spec(*args)[:3]
+
+
+def _spec(keys, joy, s0, s1, fields):
     """-> (button, stick_x, stick_y) by the table in the task: written from the spec, not from the C"""
+    dz = {1: 0, 2: 6, 3: 20, 4: 30}.get((s0 >> 20) & 31, 12)          # "Stick dead zone" interact0 [24:20]
+    rng = {1: 85, 2: 75, 3: 70, 4: 60}.get((s0 >> 25) & 31, 80)       # "Stick range" interact0 [29:25]
     held = {n for n, bit in K.items() if keys >> bit & 1}
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
@@ -64,9 +70,9 @@ def spec(keys, joy, s0, s1, fields):
         dx = ('right' in held) - ('left' in held)
         dy = ('up' in held) - ('down' in held)
         if dsel == 1:
-            tx, ty = 80 * dx, 80 * dy
+            tx, ty = rng * dx, rng * dy
         elif dsel == 2:
-            tx, ty = (28 * dx, 28 * dy) if dx and dy else (40 * dx, 40 * dy)
+            tx, ty = ((rng * 7 // 20) * dx, (rng * 7 // 20) * dy) if dx and dy else ((rng // 2) * dx, (rng // 2) * dy)
         elif dsel in (3, 4, 6):
             if dsel == 6: tx, ty = 80 * dx, 80 * dy                     # (7 in the field: the stick and the N64's D-pad)
             for key, c3, c4 in (('up', 'DUP', 'CUP'), ('down', 'DDOWN', 'CDOWN'), ('left', 'DLEFT', 'CLEFT'), ('right', 'DRIGHT', 'CRIGHT')):
@@ -77,16 +83,18 @@ def spec(keys, joy, s0, s1, fields):
     def axg(v, flip):
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)
-        return max(-80, min(80, a))
+        if -dz < a < dz: return 0
+        a = int(a * rng / 127)
+        return max(-rng, min(rng, a))
     for g, (px, py) in ((1, (lx, ly)), (2, (rx, ry))):
         sel, _ = group(g)
         if not sel:
-            continue
+            sel = 1 if g == 1 else 4              # the default: the left stick is the N64's stick, the right the C buttons
         if analog:
-            if sel == 1: tx += axg(px, False); ty += axg(py, True)
-            elif sel == 2: tx += int(axg(px, False) / 2); ty += int(axg(py, True) / 2)
+            if sel in (1, 2):
+                dv = 2 if sel == 2 else 1
+                ax_, ay_ = int(axg(px, False) / dv), int(axg(py, True) / dv)
+                tx += ax_; ty += ay_
             elif sel in (3, 4):
                 for cond, c3, c4 in ((px - 128 < -64, 'DLEFT', 'CLEFT'), (px - 128 > 64, 'DRIGHT', 'CRIGHT'),
                                      (py - 128 < -64, 'DUP', 'CUP'), (py - 128 > 64, 'DDOWN', 'CDOWN')):
@@ -103,15 +111,15 @@ def spec(keys, joy, s0, s1, fields):
     def ax(v, flip):
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)                     # (C: truncates toward zero)
-        return max(-80, min(80, a))
+        if -dz < a < dz: return 0
+        a = int(a * rng / 127)                    # (C: truncates toward zero)
+        return max(-rng, min(rng, a))
     def dpad_stick():
-        full = 40 if lmod else 80
+        full = rng // 2 if lmod else rng
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
         dy = (1 if 'up' in held else 0) + (-1 if 'down' in held else 0)
         if lmod and dx and dy:
-            return 28 * dx, 28 * dy
+            return (rng * 7 // 20) * dx, (rng * 7 // 20) * dy
         return full * dx, full * dy
     smode = (s1 >> 15) & 31
     sx = sy = 0
@@ -137,8 +145,8 @@ def spec(keys, joy, s0, s1, fields):
         if px - 128 > 64: out.add('DRIGHT')
         if py - 128 < -64: out.add('DUP')
         if py - 128 > 64: out.add('DDOWN')
-    sx = max(-80, min(80, sx + tx))
-    sy = max(-80, min(80, sy + ty))
+    sx = max(-rng, min(rng, sx + tx))
+    sy = max(-rng, min(rng, sy + ty))
     return sum(N[n] for n in out), sx, sy
 
 
@@ -146,8 +154,11 @@ def settings():
     """every combination of the legacy settings' values (valid ones, and invalid codes)"""
     for mod, c, stick, dpad in itertools.product((0, 1, 2, 3, 4, 5, 6, 9), (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3)):
         s0 = mod << 10 | 3 << 5 | 1 << 15 | 2                   # (crop, pak: other fields, ignored here)
-        s1 = 1 | c << 10 | stick << 15 | dpad << 22 | 1 << 25     # (a free field)
+        s1 = c << 10 | stick << 15 | dpad << 22 | 1 << 25         # (a free field)
         yield s0, s1
+    for dz, rg in itertools.product((0, 1, 2, 3, 4, 9), (0, 1, 2, 3, 4, 9)):      # the stick's dead zone and range with each stick source
+        for stick, dpad in itertools.product((0, 1, 2), (0, 1)):
+            yield 2 << 10 | dz << 20 | rg << 25, 1 << 10 | stick << 15 | dpad << 22
 
 
 def maps(rng):
@@ -199,7 +210,7 @@ def main():
         total += len(cases)
         for c, line in zip(cases, res):
             b, x, y = line.split()
-            want = spec(*c)
+            want = _spec(*c)
             if (int(b, 16), int(x), int(y)) != want:
                 bad += 1
                 if bad <= 10:
@@ -277,6 +288,17 @@ def main():
     assert sel([], f, joy=0x80808080, typ=1) == (0, 0, 0)       # a pad without a stick: nothing to give
     f[13] = 2
     assert sel([], f, joy=0x808080E0, s1=1 << 15) == (0, 30, 0)     # half a stick; the Stick setting sees the left stick centred
+    # a dock pad out of the box (the default table, no settings): the left stick is the N64's stick, the right stick the C buttons, the D-pad keys
+    # the stick too (and they add); the Pocket's own controls (no stick bytes) are unchanged; None in the group turns a stick off
+    dock = lambda joy, names=(), typ=3, f=DEFAULT_MAP: spec(typ << 28 | sum(1 << K[n] for n in names), joy, 0, 0, f)
+    assert dock(0x808080E0) == (0, 60, 0) and dock(0x80808020) == (0, -60, 0)               # left stick right / left (x byte 0xE0 / 0x20)
+    assert dock(0x80E08080) == (N['CRIGHT'], 0, 0) and dock(0x20808080) == (N['CUP'], 0, 0)   # right stick: C-right / C-up
+    assert dock(0x80808080, ['left']) == (0, -80, 0) and dock(0x808080E0, ['right']) == (0, 80, 0)   # the D-pad keys and the stick add, clamped
+    assert dock(0x808080E0, typ=1) == (0, 0, 0)                                              # a pad without stick bytes gives nothing
+    none = [0] * 30; none[13], none[14] = 5, 5
+    assert dock(0x808080E0, f=none) == (0, 0, 0) and dock(0x20808080, f=none) == (0, 0, 0)    # both groups None
+    swap = [0] * 30; swap[13], swap[HELD + 13] = 1, 3                                         # held: the left stick is the N64's D-pad
+    assert spec(3 << 28 | 1 << K['select'], 0x808080E0, 6 << 10, 0, swap) == (N['DRIGHT'], 0, 0)
     print('pad_test: %d cases, %d legacy settings x %d tables: %s' % (total, len(sets), len(tables), 'FAIL (%d)' % bad if bad else 'PASS'))
     return 1 if bad else 0
 

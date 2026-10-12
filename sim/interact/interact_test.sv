@@ -53,7 +53,7 @@ module interact_test;
         @(negedge clk); r_req = 1; r_we = 1; r_addr = addr; r_wdata = data;
         @(negedge clk); r_req = 0; r_we = 0;
     endtask
-    // the model: bus words 16-20 are five-bit fields (Normal, Shift, Shift: D-pad, D-pad keys, spare) in INTERACT2 [4:0], [9:5], [14:10], [19:15], [24:20];
+    // the model: bus words 16-20 are five-bit fields (Normal, Shift, Shift: D-pad, D-pad keys, Analog sticks) in INTERACT2 [4:0], [9:5], [14:10], [19:15], [24:20];
     // word 21 flips INTERACT2 [28] (value bit 0) and [29] (value bit 1)
     logic [4:0]  model [0:4];
     logic        act_a = 0, act_b = 0;
@@ -74,7 +74,7 @@ module interact_test;
         repeat (3) @(negedge clk);
         rst = 0;
         @(negedge clk);
-        for (int i = 0; i < 5; i++) model[i] = 5'd0;     // (every list resets to Auto)
+        for (int i = 0; i < 5; i++) model[i] = (i == 4) ? 5'd1 : 5'd0;     // (the lists reset to Auto, "Analog sticks" to its default 1)
         check_regs("reset");
         csr_read(R_APF_INTERACT_INTERACT0, q); check("reset: INTERACT0", q, 0);
 
@@ -121,7 +121,7 @@ module interact_test;
         // reset clears everything
         ia_write(21, 1);
         @(negedge clk); rst = 1; @(negedge clk); rst = 0; @(negedge clk);
-        for (int i = 0; i < 5; i++) model[i] = 5'd0;
+        for (int i = 0; i < 5; i++) model[i] = (i == 4) ? 5'd1 : 5'd0;
         act_a = 0; act_b = 0;
         check_regs("second reset");
         csr_read(R_APF_INTERACT_INTERACT0, q); check("second reset: INTERACT0", q, 0);

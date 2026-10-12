@@ -188,7 +188,7 @@ end
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
 // The controller layout lists (interact.json has 16 entries at most, so a layout is not one entry per field): bus words 16-19 are five-bit
-// fields (Normal, Shift, Shift: D-pad, D-pad keys; 0 is Auto), word 20 is spare; word 21 is the Pocket's actions -- a write flips ia_act_a
+// fields (Normal, Shift, Shift: D-pad, D-pad keys; 0 is Auto), word 20 is "Analog sticks (dock)" (resets to 1, the default); word 21 is the Pocket's actions -- a write flips ia_act_a
 // with bit 0 set, ia_act_b with bit 1 (a write of 2 is Save, 3 both: Forget; 1 is nothing) -- and the CPU compares the two bits with the
 // ones it saw. The Pocket reads the fields back (ia_q: words 16-20, as it reads words 2-15); the actions are writeonly and read as 0.
 logic [4:0]  iaf [5];
@@ -200,7 +200,7 @@ assign ia_crop_r = ia0[16:15];
 always_ff @(posedge clk) begin
     if (rst) begin
         ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;
-        for (int i = 0; i < 5; i++) iaf[i] <= 5'd0;
+        for (int i = 0; i < 5; i++) iaf[i] <= (i == 4) ? 5'd1 : 5'd0;
         ia_act_a <= 0; ia_act_b <= 0;
     end
     else begin

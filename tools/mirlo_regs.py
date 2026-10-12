@@ -56,7 +56,7 @@ BLOCKS = [
         # the controller layout lists (bus words 16-20; mirlo_regs.sv): what the Pocket's menu last wrote -- Normal, Shift, Shift: D-pad and D-pad
         # keys (each 0 = Auto) -- and two bits that flip when its actions are pressed (Save: bit 1 of the written value, Forget: both; bit 0
         # alone is unused): the CPU compares ACT_A and ACT_B with the ones it saw
-        ("INTERACT2",         0x10, R,  1, [("NORMAL", 0, 5), ("SHIFT", 5, 5), ("SHIFT_DPAD", 10, 5), ("DPAD_KEYS", 15, 5), ("SPARE", 20, 5),
+        ("INTERACT2",         0x10, R,  1, [("NORMAL", 0, 5), ("SHIFT", 5, 5), ("SHIFT_DPAD", 10, 5), ("DPAD_KEYS", 15, 5), ("STICKS", 20, 5),
                                             ("ACT_A", 28, 1), ("ACT_B", 29, 1)]),
     ]),
     ("APF_VIDEO", 0x0400, [

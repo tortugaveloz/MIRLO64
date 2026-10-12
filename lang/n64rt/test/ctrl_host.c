@@ -2,11 +2,12 @@
  *   ctrl_host presets            -> "family set0 set1 m1 map0..map4" per family
  *   ctrl_host family ABCD        -> the family of a cartridge ID, or -1
  *   ctrl_host record s0 s1 m0..m4 [damage] -> store, then load back: "1 set0 set1 map0..map4" or "0"
- *   ctrl_host session saved family  -> commands on stdin: pick n s d k, menu s0 s1, eff, cap, save, forget */
+ *   ctrl_host session saved family  -> commands on stdin: pick n s d k t, menu s0 s1, eff, cap, save, forget */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../n64rt_ctrl.h"
+#include "../n64rt_pad.h"
 
 int main(int argc, char **argv)
 {
@@ -20,12 +21,12 @@ int main(int argc, char **argv)
         n64rt_ctrl_state_t st;
         memset(&st, 0, sizeof st);
         st.family = atoi(argv[3]);
-        if (atoi(argv[2])) { st.saved_ok = 1; st.saved.set0 = 3u << 10; st.saved.m1 = N64RT_CTRL_MASK1; st.saved.map[0] = 0x1234; }
-        n64rt_ctrl_pick_t pk = { 0, 0, 0, 0 };
+        if (atoi(argv[2])) { st.saved_ok = 1; st.saved.set0 = 3u << 10; st.saved.m0 = N64RT_CTRL_MASK0; st.saved.m1 = N64RT_CTRL_MASK1; st.saved.map[0] = 0x1234; }
+        n64rt_ctrl_pick_t pk = { 0, 0, 0, 0, 1 };
         uint32_t m0 = 0, m1 = 0;
         char cmd[16];
         while (scanf("%15s", cmd) == 1) {
-            if (!strcmp(cmd, "pick") && scanf("%u %u %u %u", &pk.normal, &pk.shift, &pk.shift_dpad, &pk.dpad_keys) == 4) { }
+            if (!strcmp(cmd, "pick") && scanf("%u %u %u %u %u", &pk.normal, &pk.shift, &pk.shift_dpad, &pk.dpad_keys, &pk.sticks) == 5) { }
             else if (!strcmp(cmd, "menu") && scanf("%x %x", &m0, &m1) == 2) { }
             else if (!strcmp(cmd, "eff")) {
                 uint32_t s0 = m0, s1 = m1, map[5];

@@ -544,7 +544,8 @@ static void ctrl_init(void)
 static n64rt_ctrl_pick_t ctrl_picks(void)
 {
     n64rt_ctrl_pick_t pk = { apf_interact_interact2_normal_read(), apf_interact_interact2_shift_read(),
-                             apf_interact_interact2_shift_dpad_read(), apf_interact_interact2_dpad_keys_read() };
+                             apf_interact_interact2_shift_dpad_read(), apf_interact_interact2_dpad_keys_read(),
+                             apf_interact_interact2_sticks_read() };
     return pk;
 }
 static void ctrl_poll(void)

@@ -65,13 +65,14 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak | The accessory in controller 1 |
-| Stick | **D-pad**, L stick, R stick | What moves the N64's analog stick |
-| C buttons | **None**, Right stick | The right stick as the C buttons, besides the face buttons |
 | Shift key | **None**, L, R, ZL, ZR, Select | Held, it switches to the second layer of the controls below; the key never reaches the game |
 | Normal: A B X Y / L R | **Auto**, A B cR cL / Z R, cR cD cU cL / Z R, A B cR cL / R Z, A B cU Z / Z R | What the face buttons send (A B X Y), then (after the bar) L and R; cU cR cD cL are the C buttons |
 | Shift: A B X Y / L R | **Auto**, Same as normal, cR cD cU cL, A B cU cD, / L R (shoulders) | The same while the Shift key is held |
 | Shift: D-pad | **Auto**, Same as normal, C buttons, Half stick, N64 D-pad, Stick and D-pad | What the D-pad gives while the Shift key is held |
 | D-pad keys | **N64 stick**, N64 D-pad, Stick and D-pad, C buttons | What the Pocket's D-pad gives |
+| Analog sticks (dock) | **L stick / R C buttons**, L stick / R none, L half / R C buttons, L D-pad / R C buttons, L C buttons / R stick, Both none | What a dock pad's two analog sticks give (the Pocket has none) |
+| Stick dead zone | **Default (12)**, None, Small (6), Large (20), Huge (30) | How far an analog stick must move before the N64's stick does |
+| Stick range | **Default (80)**, Wide (85), 75, 70, Small (60) | How far the N64's stick goes at a full deflection |
 | Save for this game, Forget this game | (actions) | Keep the layout in use, with your picks, in this game's own file (`<game>.ctl`), or delete it |
 
 **Auto** in a layout list takes the layout you saved for the game, else the game's family (Platformer, Shooter, Skate, Racing or

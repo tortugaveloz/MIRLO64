@@ -138,8 +138,8 @@
 #define CSR_APF_INTERACT_INTERACT2_SHIFT_DPAD_SIZE 5
 #define CSR_APF_INTERACT_INTERACT2_DPAD_KEYS_OFFSET 15
 #define CSR_APF_INTERACT_INTERACT2_DPAD_KEYS_SIZE 5
-#define CSR_APF_INTERACT_INTERACT2_SPARE_OFFSET 20
-#define CSR_APF_INTERACT_INTERACT2_SPARE_SIZE 5
+#define CSR_APF_INTERACT_INTERACT2_STICKS_OFFSET 20
+#define CSR_APF_INTERACT_INTERACT2_STICKS_SIZE 5
 #define CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET 28
 #define CSR_APF_INTERACT_INTERACT2_ACT_A_SIZE 1
 #define CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET 29
@@ -455,8 +455,8 @@ static inline uint32_t apf_interact_interact2_shift_dpad_extract(uint32_t r) { r
 static inline uint32_t apf_interact_interact2_shift_dpad_read(void) { return apf_interact_interact2_shift_dpad_extract(apf_interact_interact2_read()); }
 static inline uint32_t apf_interact_interact2_dpad_keys_extract(uint32_t r) { return (r >> 15) & 0x1fu; }
 static inline uint32_t apf_interact_interact2_dpad_keys_read(void) { return apf_interact_interact2_dpad_keys_extract(apf_interact_interact2_read()); }
-static inline uint32_t apf_interact_interact2_spare_extract(uint32_t r) { return (r >> 20) & 0x1fu; }
-static inline uint32_t apf_interact_interact2_spare_read(void) { return apf_interact_interact2_spare_extract(apf_interact_interact2_read()); }
+static inline uint32_t apf_interact_interact2_sticks_extract(uint32_t r) { return (r >> 20) & 0x1fu; }
+static inline uint32_t apf_interact_interact2_sticks_read(void) { return apf_interact_interact2_sticks_extract(apf_interact_interact2_read()); }
 static inline uint32_t apf_interact_interact2_act_a_extract(uint32_t r) { return (r >> 28) & 0x1u; }
 static inline uint32_t apf_interact_interact2_act_a_read(void) { return apf_interact_interact2_act_a_extract(apf_interact_interact2_read()); }
 static inline uint32_t apf_interact_interact2_act_b_extract(uint32_t r) { return (r >> 29) & 0x1u; }

@@ -3,8 +3,9 @@
  * how the menu's picks lay over them. Pure functions of their arguments (no hardware), so that test/ctrl_host.c can run them on the
  * host (test/ctrl_test.py).
  *
- * A layout is: the Shift key (set0 [14:10]), the "C buttons" [14:10], "Stick" [19:15] and "D-pad" [23:22] settings (set1) and the table's
- * 30 fields (map[5]). Every other setting (crops, pak) stays the menu's.
+ * A layout is: the Shift key (set0 [14:10]), the stick's dead zone and range (set0 [29:20]) and the table's
+ * 30 fields (map[5]). Every other setting (crops, pak) stays the menu's. A family sets the Shift key and the table, not the stick's
+ * feel (dead zone, range): those are the player's; a game's saved layout has all of them.
  *
  * The menu has four layout lists (INTERACT2 [4:0] .. [19:15]): Normal (the face keys, shoulders and Select), Shift (the face keys and
  * shoulders while the Shift key is held), Shift: D-pad and D-pad keys. Where a list is on Auto (0), the layout comes from, in this order:
@@ -15,10 +16,11 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct { uint32_t set0, set1, m1, map[5]; int mod_default; } n64rt_ctrl_t;   /* m1: which bits of set1 the layout owns (a family's: only "C buttons", and only
-                                                                                        * when it sets it); mod_default: its Modifier is a default, the menu's wins if it names one */
-#define N64RT_CTRL_MASK0 (31u << 10)
-#define N64RT_CTRL_MASK1 ((31u << 10) | (31u << 15) | (3u << 22))
+typedef struct { uint32_t set0, set1, m0, m1, map[5]; int mod_default; } n64rt_ctrl_t;   /* m0, m1: which bits of set0 / set1 the layout owns (a family's: the Modifier only);
+                                                                                          * mod_default: its Modifier is a default, the menu's wins if it names one */
+#define N64RT_CTRL_MOD   (31u << 10)                 /* set0: the Modifier */
+#define N64RT_CTRL_MASK0 (N64RT_CTRL_MOD | (0x3FFu << 20))   /* ... and the stick's dead zone [24:20] and range [29:25] */
+#define N64RT_CTRL_MASK1 0u                          /* set1: no bit of it is part of a layout */
 #define N64RT_CTRL_BYTES 64u                     /* the Controls slot's file */
 #define N64RT_CTRL_MAGIC 0x4D435431u             /* "MCT1" */
 
@@ -48,12 +50,12 @@ static inline void n64rt_ctrl_preset(unsigned fam, n64rt_ctrl_t *c)
     uint8_t f[30];
     memset(f, 0, sizeof f);
     memset(c, 0, sizeof *c);
+    c->m0 = N64RT_CTRL_MOD;                      /* a family owns the Modifier, and only that: the stick's feel is the player's */
     c->mod_default = 1;                          /* the family's Modifier (Select) is for a player who has not chosen one in the menu */
     switch (fam) {
     case N64RT_FAM_PLATFORMER:                   /* Mario 64, Banjo, Zelda ... : A, B, C-left (Y), C-right (X); Select + X / Y / D-pad: the rest */
     case N64RT_FAM_SHOOTER:                      /* the same, and the trigger on R (Z), L is the N64's R (aim) */
         c->set0 = N64RT_MOD_SELECT << 10;
-        c->set1 = 1u << 10; c->m1 = 31u << 10;   /* the right stick of a dock pad is the C buttons too */
         f[F_HELD + F_X] = O_CU;
         f[F_HELD + F_Y] = O_CD;
         f[F_HELD + F_A] = O_SAME; f[F_HELD + F_B] = O_SAME;      /* (the Held layer's own A, B are C-right, C-down) */
@@ -157,6 +159,7 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
     if (w[0] != N64RT_CTRL_MAGIC || w[8] != n64rt_ctrl_sum(w)) return 0;
     c->set0 = w[1] & N64RT_CTRL_MASK0;
     c->set1 = w[2] & N64RT_CTRL_MASK1;
+    c->m0 = N64RT_CTRL_MASK0;
     c->m1 = N64RT_CTRL_MASK1;
     c->mod_default = 0;
     for (int i = 0; i < 5; i++) c->map[i] = w[3 + i];
@@ -164,7 +167,7 @@ static inline int n64rt_ctrl_load(const volatile uint32_t *mem, unsigned file_by
 }
 
 /* ---- the menu's picks ---- */
-typedef struct { unsigned normal, shift, shift_dpad, dpad_keys; } n64rt_ctrl_pick_t;
+typedef struct { unsigned normal, shift, shift_dpad, dpad_keys, sticks; } n64rt_ctrl_pick_t;   /* sticks: 1 is the default (the dock pad's own) */
 enum { N64RT_PICK_NORMAL = 5, N64RT_PICK_SHIFT = 5, N64RT_PICK_SDPAD = 6, N64RT_PICK_DKEYS = 4 };   /* how many entries each list has (Auto first) */
 
 /* Normal: the outputs of A, B, X, Y, L, R, Select; entry 1.. of the list ("A B cR cL / Z R", "cR cD cU cL / Z R", "A B cR cL / R Z", "A B cU Z / Z R") */
@@ -199,13 +202,21 @@ static inline void n64rt_ctrl_overlay(const n64rt_ctrl_pick_t *pk, uint32_t map[
     if (pk->shift_dpad >= 1u && pk->shift_dpad < N64RT_PICK_SDPAD) n64rt_ctrl_setf(map, F_HELD + F_DPAD, sd[pk->shift_dpad]);
     static const uint8_t dk[N64RT_PICK_DKEYS] = { 0, G_DPAD, G_BOTH, G_C };
     if (pk->dpad_keys >= 1u && pk->dpad_keys < N64RT_PICK_DKEYS) n64rt_ctrl_setf(map, F_DPAD, dk[pk->dpad_keys]);
+    /* Analog sticks (a dock pad): the left and right stick groups, in both layers; 1, or a value beyond the list, changes nothing */
+    static const uint8_t st[6][2] = { { G_STICK, G_NONE }, { 0, 0 }, { G_HALF, G_C }, { G_DPAD, G_C }, { G_C, G_STICK }, { G_NONE, G_NONE } };
+    if (pk->sticks < 6u && pk->sticks != 1u)
+        for (unsigned g = 0; g < 2; g++) {
+            n64rt_ctrl_setf(map, F_LSTICK + g, st[pk->sticks][g]);
+            n64rt_ctrl_setf(map, F_HELD + F_LSTICK + g, G_SAME);
+        }
 }
 /* the settings the pad mapping reads: the menu's words with the layout's parts put in */
 static inline void n64rt_ctrl_apply(const n64rt_ctrl_t *c, uint32_t *set0, uint32_t *set1, uint32_t map[5])
 {
     if (!c) return;
-    if (!(c->mod_default && ((*set0 >> 10) & 31u) != 0u))      /* (the menu's Shift key, if it names a key, over a family's) */
-        *set0 = (*set0 & ~N64RT_CTRL_MASK0) | c->set0;
+    uint32_t m0 = c->m0;
+    if (c->mod_default && ((*set0 >> 10) & 31u) != 0u) m0 &= ~N64RT_CTRL_MOD;      /* (the menu's Shift key, if it names a key, over a family's) */
+    *set0 = (*set0 & ~m0) | (c->set0 & m0);
     *set1 = (*set1 & ~c->m1) | (c->set1 & c->m1);
     for (int i = 0; i < 5; i++) map[i] = c->map[i];
 }
@@ -229,6 +240,7 @@ static inline void n64rt_ctrl_capture(const n64rt_ctrl_state_t *st, const n64rt_
     memset(rec, 0, sizeof *rec);
     rec->set0 = s0 & N64RT_CTRL_MASK0;
     rec->set1 = s1 & N64RT_CTRL_MASK1;
+    rec->m0 = N64RT_CTRL_MASK0;
     rec->m1 = N64RT_CTRL_MASK1;
     for (int i = 0; i < 5; i++) rec->map[i] = map[i];
 }

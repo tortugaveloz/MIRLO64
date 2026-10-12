@@ -38,8 +38,10 @@ def build():
  lst("Shift: D-pad", 242, "0x10000148", [AUTO, (1, "Same as normal"), (2, "C buttons"), (3, "Half stick"), (4, "N64 D-pad"),
                                         (5, "Stick and D-pad")], persist=False),
  lst("D-pad keys", 243, "0x1000014C", [(0, "N64 stick (default)"), (1, "N64 D-pad"), (2, "Stick and D-pad"), (3, "C buttons")], persist=False),
- lst("Stick", 225, "0x1000012C", [(0, "D-pad"), (1, "L stick"), (2, "R stick")]),
- lst("C buttons", 223, "0x10000128", [(0, "None"), (1, "Right stick")]),
+ lst("Analog sticks (dock)", 244, "0x10000150", [(1, "L stick / R C buttons"), (0, "L stick / R none"), (2, "L half / R C buttons"),
+                                                 (3, "L D-pad / R C buttons"), (4, "L C buttons / R stick"), (5, "Both none")]),
+ lst("Stick dead zone", 273, "0x10000118", [(0, "Default (12)"), (1, "None"), (2, "Small (6)"), (3, "Large (20)"), (4, "Huge (30)")]),
+ lst("Stick range", 274, "0x1000011C", [(0, "Default (80)"), (1, "Wide (85)"), (2, "75"), (3, "70"), (4, "Small (60)")]),
  action("Save for this game", 271, 2),
  action("Forget this game", 272, 3),
   ]
