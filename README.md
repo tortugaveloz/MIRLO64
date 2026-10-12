@@ -22,8 +22,8 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 MIRLO 64 is experimental and not every game works. What is known of v0.1:
 
-* **Games with a frame buffer that is not 320 pixels wide show a garbled picture.** GoldenEye 007 (440 wide) and Mario Tennis (384 wide) are two of them.
-* **High-resolution interlaced pictures are shown at a reduced size**, so the menus of Pokemon Stadium or the logos of Donkey Kong 64 lose detail.
+* **Games with a frame buffer that is not 320 pixels wide show a garbled picture.**
+* **High-resolution interlaced pictures are shown at a reduced size.**
 * ROMs of up to 48 MiB. Of a larger one, only the first 48 MiB are loaded.
 * No Rumble Pak: the Pocket gives a core nothing to vibrate. Only controller 1 can have a pak.
 * The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
