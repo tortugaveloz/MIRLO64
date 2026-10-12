@@ -36,7 +36,7 @@ MIRLO 64 is experimental and not every game works. What is known of v0.1:
    ```
    Assets/mirlo/common/          n64rt.sys (the runtime) and n64savedb.txt; where Mirlo's games go
    Cores/tortuga.Mirlo64/        the core: mirlo.rev (the bitstream), core.json, ...
-   Platforms/mirlo.json          the platform, under Console
+   Platforms/mirlo.json          the platform: Console > Nintendo 64
    Platforms/_images/mirlo.bin   its image
    ```
 
