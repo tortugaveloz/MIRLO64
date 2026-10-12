@@ -47,6 +47,9 @@
 #include <deque>
 #include <string>
 #include <ctime>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <csignal>
 
 static Vsoc_sim_top *t;
 // The clocks. clk_sys is TB_SYS_HZ, clk_sys2x twice that; the game CPU's own
@@ -70,8 +73,10 @@ static long errors;
 // ---- the chip (sys2x cycles): 4 banks x 8192 rows x 1024 columns x 16 bits
 static std::vector<uint16_t> mem(1u << 25);
 #include <map>
+#include <algorithm>
 static std::map<uint32_t, uint32_t> pc_hist;   // PCPROF
 static std::map<uint32_t, uint32_t> gpc_hist;  // GPCPROF
+static std::map<uint32_t, uint32_t> pct_hist;  // PCTOP
 static uint32_t gpc_idle;
 static int rows[4], opened[4];
 static long t_act[4], t_pre[4], t_wr[4], t_ref = -1000;
@@ -176,9 +181,27 @@ static void chip_step()
 // CPUTRACE=from,count: the game CPU's instructions as it retires them (pc,
 // word, the register written) and the exceptions it takes, `count` of them
 // from the `from`-th
+// (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
+static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
+static bool o_cstat, o_ctrace, o_excstat, o_pcprof;
+static long o_pcprof_from, o_rcpstat;
+static uint32_t o_rcp_ilo, o_rcp_ihi;
+static bool ck_run;                     // this is a run from a checkpoint
+static void opts_load()
+{
+    o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
+    ct_from = -1; ct_n = 0;
+    o_exc_per = o_excstat && atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
+    o_xtrace = getenv("XTRACE") ? atol(getenv("XTRACE")) : 0;
+    o_pctop = getenv("PCTOP") ? atol(getenv("PCTOP")) : 0;
+    o_pcprof = getenv("PCPROF") != nullptr; o_pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
+    o_rcpstat = getenv("RCPSTAT") ? atol(getenv("RCPSTAT")) : 0;
+    o_rcp_ilo = o_rcp_ihi = 0;
+    if (const char *e = getenv("RCPSTAT_IDLE")) { o_rcp_ilo = strtoul(e, 0, 0); o_rcp_ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : o_rcp_ilo + 8; }
+}
 static void cpu_trace_step()
 {
-    static long from = -1, count, n;
+    long &from = ct_from, &count = ct_count, &n = ct_n;
     if (from < 0) { const char *e = getenv("CPUTRACE"); from = atol(e); count = strchr(e, ',') ? atol(strchr(e, ',') + 1) : 1000; }
     if (t->tr_exc && n >= from && n < from + count) printf("[cpu      exception %u at %08x]\n", t->tr_exc_code, t->tr_exc_pc);
     if (!t->tr_retire) return;
@@ -193,7 +216,7 @@ static void cpu_trace_step()
 // a 64-bit instruction...), by cause code, a line every 60 fields (EXCSTAT=<n>: every n fields). Instrumentation only.
 static void exc_stat_step()
 {
-    static long hist[32], tot, f_n; static bool vb_was; static const long per = atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
+    static long hist[32], tot, f_n; static bool vb_was; const long per = o_exc_per;
     static long retired, ex_total;
     if (t->tr_exc) { hist[t->tr_exc_code & 31]++; tot++; ex_total++; }
     if (t->tr_retire) retired++;
@@ -354,7 +377,7 @@ static void vga_sample(const std::string &dir, long every)
     static long nf;
     if (t->vga_de && !t->vga_skip) { row.push_back((uint8_t)t->vga_r); row.push_back((uint8_t)t->vga_g); row.push_back((uint8_t)t->vga_b); }   // (8:8:8)
     if (pde && !t->vga_de && !t->vga_skip) { rows.push_back(row); row.clear(); }
-    static long outside;                             // pads outside DE that are not 0 (one slot, no feature bits)
+    static long outside;                             // pads outside DE that are not 0 (one scaler slot, 0: no slot words, no feature bits)
     if (!t->vga_de && !t->vga_skip && (t->vga_r | t->vga_g | t->vga_b)) outside++;
     if (!pvs && t->vga_vsync) {
         static const bool vgat = getenv("VGAT") != nullptr;      // VGAT=1: each frame's size, slot and period (sys cycles) in the log
@@ -384,6 +407,22 @@ static void dump_frame(const std::string &dir, long n)
     snprintf(path, sizeof path, "%s/f%06ld.ppm", dir.c_str(), n);
     FILE *f = fopen(path, "wb");
     if (!f) return;
+    // FB_STRIDE=<pixels>[,<rows>] (with FB_N64): the game's own framebuffer as it is, a row of <pixels> pixels (the VI's WIDTH:
+    // 440 of a 440 x 330 picture), for a game whose picture the scan-out does not show whole yet; the file is that size
+    if (const char *fs = getenv("FB_STRIDE")) {
+        int w = atoi(fs), h = strchr(fs, ',') ? atoi(strchr(fs, ',') + 1) : 240;
+        fprintf(f, "P6 %d %d 255\n", w, h);
+        uint32_t w0 = (t->fb_base & 0x3FFFFFF) >> 2;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                uint32_t v = rd_word(w0 + ((uint32_t)y * w + x) / 2);
+                uint16_t p = (x & 1) ? v & 0xffff : v >> 16;
+                uint8_t rgb[3] = { (uint8_t)(((p >> 11) & 31) << 3), (uint8_t)(((p >> 6) & 31) << 3), (uint8_t)(((p >> 1) & 31) << 3) };
+                fwrite(rgb, 1, 3, f);
+            }
+        fclose(f);
+        return;
+    }
     bool hi = t->fb_width >= 512;                    // a hi-res picture: 640 wide, 240 rows or (interlaced) 480
     int w = hi ? 640 : 320, h = hi && t->fb_tall ? 480 : 240;
     fprintf(f, "P6 %d %d 255\n", w, h);
@@ -393,7 +432,7 @@ static void dump_frame(const std::string &dir, long n)
     // black around it; width 0 / >= 320 / hi-res: the screen's own 320 x 240
     int vw = t->fb_width & ~1, vx0 = 0, vy0 = 0, vrows = 240;
     bool win = !hi && vw >= 2 && vw < 320;
-    if (win) { vx0 = t->fb_x0; vy0 = t->fb_y0; if (t->fb_rows && t->fb_rows <= 240) vrows = t->fb_rows; }
+    if (win) { vx0 = 0; vy0 = t->fb_y0; if (t->fb_rows && t->fb_rows <= 240) vrows = t->fb_rows; }
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x += 2) {
             uint32_t v;
@@ -519,7 +558,8 @@ int main(int argc, char **argv)
     for (int b = 0; b < 4; b++) t_act[b] = t_pre[b] = t_wr[b] = -1000;
     long sys = 0, frames = 0;
     static long rs_cnt[4][6]; static unsigned rs_type = 0;
-    const long max_sys = mcycles * 1000000;
+    long max_sys = mcycles * 1000000;
+    opts_load();
     time_t t0 = time(nullptr);
     int vid_phase = 0;                              // clk_vid: sys / 5
     int pvb = 0;
@@ -527,7 +567,7 @@ int main(int argc, char **argv)
     bool done = false;
     // the game CPU's clock: its edges every 2 x TB_CPU_M units, clk_sys2x's every TB_CPU_N
     long cpu_t = 0;                                 // its next edge
-    static const bool cstat = getenv("CPUSTAT") != nullptr, ctrace = getenv("CPUTRACE") != nullptr, excstat = getenv("EXCSTAT") != nullptr;
+    const bool &cstat = o_cstat, &ctrace = o_ctrace, &excstat = o_excstat;
     auto cpu_to = [&](long now) {                   // its edges before `now`, each on its own; one at `now` with what follows
         for (; cpu_t <= now; cpu_t += 2 * TB_CPU_M) {
             bool rise = (cpu_t / (2 * TB_CPU_M)) % 2 == 0;
@@ -612,6 +652,11 @@ int main(int argc, char **argv)
                     if (frames != pf_frame) { pf_frame = frames; if (FILE *f = fopen(pf, "r")) { unsigned v; if (fscanf(f, "%x", &v) == 1) { if (v != pf_keys) printf("[pad %ld: %x]\n", frames, v); pf_keys = v; } fclose(f); } }
                     keys[0] |= pf_keys;
                 }
+                // PAD_MASH=from,period,hold,keys: controller 1's keys (hex) held `hold` fields in every `period`, from the field `from` on
+                // (PAD_MASH_TO=n: up to the field n)
+                { static long mf = -1, mp, mh, mto; static unsigned mk;
+                  if (mf == -1) { mf = -2; if (const char *e = getenv("PAD_MASH")) { if (sscanf(e, "%ld,%ld,%ld,%x", &mf, &mp, &mh, &mk) != 4) mf = -2; } mto = getenv("PAD_MASH_TO") ? atol(getenv("PAD_MASH_TO")) : -1; }
+                  if (mf >= 0 && frames >= mf && (mto < 0 || frames <= mto) && (frames - mf) % mp < mh) keys[0] |= mk; }
                 t->cont1_key = keys[0]; t->cont2_key = keys[1]; t->cont3_key = keys[2]; t->cont4_key = keys[3];
                 t->cont1_joy = joy[0]; t->cont2_joy = joy[1]; t->cont3_joy = joy[2]; t->cont4_joy = joy[3];
             }
@@ -855,8 +900,9 @@ int main(int argc, char **argv)
                 }
                 phalt = halt;
             }
-            static long xt = getenv("XTRACE") ? atol(getenv("XTRACE")) : 0;
-            if (xt && t->x_ack) { xt--; printf("[x %s %08x = %08x]\n", t->x_we ? "W" : "R", t->x_addr, t->x_we ? t->x_wdata : t->x_rdata); }
+            long &xt = o_xtrace;
+            static const bool xvi = getenv("XTRACE_VI") != nullptr;   // XTRACE_VI=1: only the VI's registers (0x044xxxxx), with the frame and the cycle
+            if (xt && t->x_ack && (!xvi || (t->x_addr >> 20) == 0x044u)) { xt--; if (xvi) printf("[x f%ld c%ld %s %08x = %08x]\n", frames, sys, t->x_we ? "W" : "R", t->x_addr, t->x_we ? t->x_wdata : t->x_rdata); else printf("[x %s %08x = %08x]\n", t->x_we ? "W" : "R", t->x_addr, t->x_we ? t->x_wdata : t->x_rdata); }
             if (t->vblank && !pvb) {
                 // FBLOG=1: each frame boundary where the scan-out's base is not the one of the last (a frame the game showed): the
                 // frame count and the time (sys cycles) -- the game's own rate (30 / 25 a second) is these, counted
@@ -866,13 +912,74 @@ int main(int argc, char **argv)
                 static const bool vgat = getenv("VGAT") != nullptr;
                 if (vgat && frames % every == 0)
                     printf("[vi frame %ld: base %08x on %d width %u tall %d window %u/%u/%u; VI: H_START 0 %d black %d hw %d origin %06x thr %05x WIDTH %u tv %s (V_SYNC %s)]\n",
-                           frames, t->fb_base, t->fb_on, t->fb_width, t->fb_tall, t->fb_x0, t->fb_y0, t->fb_rows,
+                           frames, t->fb_base, t->fb_on, t->fb_width, t->fb_tall, t->fb_px0, t->fb_y0, t->fb_rows,
                            t->vi_dbg0 >> 31, (t->vi_dbg0 >> 30) & 1, (t->vi_dbg0 >> 29) & 1, t->vi_dbg0 & 0x7FFFFF, (t->vi_dbg1 >> 12) & 0x1FFFF, t->vi_dbg1 & 0xFFF,
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
                 frames++;
+                // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
+                // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
+                // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again
+                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF) or at each use (PAD_FILE, RAMDUMP ...).
+                // <dir>/quit ends the copies.
+                if (const char *ck = getenv("CKPT")) {
+                    static const std::string cdir = std::string(ck).substr(0, std::string(ck).find(','));
+                    static const long cn = strchr(ck, ',') ? atol(strchr(ck, ',') + 1) : 300;
+                    if (cn > 0 && frames % cn == 0) {
+                        fflush(nullptr);
+                        if (fork() == 0) {
+                            signal(SIGCHLD, SIG_IGN);
+                            std::string go = cdir + "/go_" + std::to_string(frames), q = cdir + "/quit";
+                            { FILE *f = fopen((cdir + "/ckpt_" + std::to_string(frames)).c_str(), "w"); if (f) { fprintf(f, "%d %ld\n", (int)getpid(), sys); fclose(f); } }
+                            struct stat sb;
+                            for (;;) {
+                                if (stat(q.c_str(), &sb) == 0) _exit(0);
+                                if (stat(go.c_str(), &sb) == 0) {
+                                    std::string run = go + ".run";
+                                    rename(go.c_str(), run.c_str());
+                                    if (fork() == 0) {
+                                        unsetenv("CKPT");
+                                        long more = 30;
+                                        if (FILE *f = fopen(run.c_str(), "r")) {
+                                            char ln[1024];
+                                            while (fgets(ln, sizeof ln, f)) {
+                                                ln[strcspn(ln, "\r\n")] = 0;
+                                                char *eq = strchr(ln, '='); if (!eq) continue;
+                                                *eq = 0; const char *v = eq + 1;
+                                                if (!strcmp(ln, "LOG")) { if (!freopen(v, "w", stdout)) _exit(3); }
+                                                else if (!strcmp(ln, "OUT")) outdir = v;
+                                                else if (!strcmp(ln, "EVERY")) every = atol(v);
+                                                else if (!strcmp(ln, "MCYCLES")) more = atol(v);
+                                                else setenv(ln, v, 1);
+                                            }
+                                            fclose(f);
+                                        }
+                                        max_sys = sys + more * 1000000;
+                                        ck_run = true;
+                                        opts_load();
+                                        printf("[run from the checkpoint at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                                        break;
+                                    }
+                                }
+                                sleep(1);
+                            }
+                        }
+                    }
+                }
+                // PCTOP=n: every n fields the game CPU's busiest 32-byte blocks of code (pc sampled every 64 sys cycles), then cleared
+                const long pctop = o_pctop;
+                if (pctop && frames % pctop == 0) {
+                    std::vector<std::pair<uint32_t, uint32_t>> v(pct_hist.begin(), pct_hist.end());
+                    std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                    uint64_t tot = 0; for (auto &kv : v) tot += kv.second;
+                    printf("[pctop fields %ld: %llu samples:", frames, (unsigned long long)tot);
+                    for (size_t i = 0; i < v.size() && i < 8; i++) printf(" %08x:%u", v[i].first << 5, v[i].second);
+                    printf("]\n"); fflush(stdout);
+                    pct_hist.clear();
+                }
             }
             pvb = t->vblank;
+            if (o_pctop && (sys & 63) == 0) pct_hist[t->cpu_pc >> 5]++;
             // the geom core's busy share: anything but its "waiting for a list"
             // heartbeat (lang/c/geom/main.c HB 0xB0000040), per EVERY window
             static long g_busy, g_win;
@@ -886,8 +993,7 @@ int main(int argc, char **argv)
                 fflush(stdout);
             }
             // PCPROF=file [PCPROF_FROM=cycles]: the game CPU's PC every 256 cycles
-            static const char *pcprof = getenv("PCPROF");
-            static long pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
+            const bool pcprof = o_pcprof; const long pcprof_from = o_pcprof_from;
             if (pcprof && sys >= pcprof_from && (sys & 255) == 0) pc_hist[t->cpu_pc]++;
             // GPCPROF=file: the geom core's PC likewise (from PCPROF_FROM), and
             // how many of the samples it was waiting for a list (lang/c/geom/main.c HB)
@@ -939,6 +1045,23 @@ int main(int argc, char **argv)
             // hazard -- or none. CPUSTAT_IDLE: a range of pc (the game's idle
             // loop) whose cycles are counted apart; what is left of a field
             // is its CPU time (CPUSTAT=2: a line for every field).
+            // RCPSTAT=n [RCPSTAT_IDLE=lo,hi]: every n fields, what the RCP and the CPU did in them -- the time the RSP ran, the
+            // time the RDP was not idle (a command under way or waiting), the RDP's full syncs (a frame each), and the CPU's
+            // time outside the game's idle loop (the range of its pc)
+            if (o_rcpstat) {
+                static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
+                n_cyc++;
+                if (t->rsp_stat & 1) rsp_run++;
+                if (!t->rootp->soc_sim_top__DOT__soc__DOT__mrdp_idle) rdp_busy++;
+                if (o_rcp_ihi && t->cpu_pc >= o_rcp_ilo && t->cpu_pc < o_rcp_ihi) cpu_idle++;
+                if (frames != f_last && frames % o_rcpstat == 0) {
+                    if (f_last >= 0)
+                        printf("[rcpstat field %ld: %.2f ms; RSP running %.2f ms, RDP busy %.2f ms, %u full syncs, CPU busy %.2f ms]\n", frames, n_cyc / TB_SYS_KHZ,
+                               rsp_run / TB_SYS_KHZ, rdp_busy / TB_SYS_KHZ, (unsigned)(t->mrdp_sync - sync_last), (n_cyc - cpu_idle) / TB_SYS_KHZ);
+                    rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->mrdp_sync;
+                }
+                f_last = frames;
+            }
             // RSPSTAT=1: where the RSP's time goes, by the task under way (the
             // port's 0xA3 / 0xA4 marks: built with RSPDUMP=1), a line a second
             static const bool rstat = getenv("RSPSTAT") != nullptr;
@@ -959,6 +1082,14 @@ int main(int argc, char **argv)
                 }
             }
             sys++;
+        }
+    }
+    // RAMDUMP=<file>: the game's 8 MiB of RDRAM (SDRAM 0x4380_0000) as the run ends, the N64's bytes
+    if (const char *f = getenv("RAMDUMP")) {
+        if (FILE *pf = fopen(f, "wb")) {
+            std::vector<uint8_t> ram(8u << 20);
+            for (uint32_t a = 0; a < (8u << 20); a += 4) { uint32_t w = rd_word((0x03800000u + a) >> 2); ram[a] = w >> 24; ram[a + 1] = w >> 16; ram[a + 2] = w >> 8; ram[a + 3] = w; }
+            fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
         }
     }
     if (const char *f = getenv("GPCPROF")) {
@@ -984,6 +1115,7 @@ int main(int argc, char **argv)
         uint32_t a = strtoul(d, 0, 0), n = strchr(d, ',') ? strtoul(strchr(d, ',') + 1, 0, 0) : 16;
         for (uint32_t i = 0; i < n; i++) printf("%08x: %08x\n", a + 4 * i, rd_word(((a & 0x3FFFFFF) >> 2) + i));
     }
+    if (ck_run) { fflush(nullptr); _exit(errors ? 1 : 0); }     // (a forked copy: the model's threads are not there to be joined)
     t->final();
     delete t;
     return errors ? 1 : 0;

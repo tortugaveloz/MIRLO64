@@ -81,7 +81,10 @@ static int fill(uint32_t badv, uint32_t fetch)
         uint32_t lo = off >= span ? raw[i].lo1 : raw[i].lo0;
         if (!(lo & 2u)) return 0;
         uint32_t pa = (((lo >> 6) << 12) & ~(span - 1u)) + (off & (span - 1u) & ~0xFFFu);
+        uint32_t hi = MFC0(10);
+        MTC0(10, (badv & 0xFFFFE000u) | asid);                 /* (the tables' write is of EntryHi's page pair; a fault leaves the game's EntryHi alone) */
         tr_write(badv, pa, 3u | (g ? 4u : 0u) | (((lo >> 3) & 7u) != 2u ? 32u : 0u) | (fetch ? 8u : 0u));   /* (bit 5: cacheable, as n64rt does) */
+        MTC0(10, hi);
         return 1;
     }
     return 0;
@@ -118,7 +121,7 @@ void mon_c(void)
         }
     }
     if (code >= 1 && code <= 3) {                          /* the translation tables miss: from the entries */
-        uint32_t badv = MFC0(8), fetch = MFC0(23) >> 3 & 1u;
+        uint32_t badv = MFC0(22), fetch = MFC0(23) >> 3 & 1u;   /* (COP0 22: the fault's address) */
         if (fill(badv, fetch)) { m_fills++; return; }
         m_unexpected++; m_lastbad = badv;
         MTC0(30, MFC0(30) + 4u);                          /* (the access is skipped) */

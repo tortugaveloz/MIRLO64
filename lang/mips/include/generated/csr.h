@@ -266,6 +266,15 @@
 #define CSR_VIDEO_FRAMEBUFFER_WINDOW_OFS 0xa1c
 #define CSR_VIDEO_FRAMEBUFFER_WINDOW_ADDR (CSR_BASE + 0xa1c)
 #define CSR_VIDEO_FRAMEBUFFER_WINDOW_SIZE 1
+#define CSR_VIDEO_FRAMEBUFFER_HWINDOW_OFS 0xa20
+#define CSR_VIDEO_FRAMEBUFFER_HWINDOW_ADDR (CSR_BASE + 0xa20)
+#define CSR_VIDEO_FRAMEBUFFER_HWINDOW_SIZE 1
+#define CSR_VIDEO_FRAMEBUFFER_SCALE_OFS 0xa24
+#define CSR_VIDEO_FRAMEBUFFER_SCALE_ADDR (CSR_BASE + 0xa24)
+#define CSR_VIDEO_FRAMEBUFFER_SCALE_SIZE 1
+#define CSR_VIDEO_FRAMEBUFFER_ROWWORDS_OFS 0xa28
+#define CSR_VIDEO_FRAMEBUFFER_ROWWORDS_ADDR (CSR_BASE + 0xa28)
+#define CSR_VIDEO_FRAMEBUFFER_ROWWORDS_SIZE 1
 
 /* MONITOR */
 #define CSR_MONITOR_BASE (CSR_BASE + 0xd00)
@@ -512,6 +521,12 @@ static inline uint32_t video_framebuffer_width_read(void) { return csr_read_simp
 static inline void video_framebuffer_width_write(uint32_t v) { csr_write_simple(v, CSR_VIDEO_FRAMEBUFFER_WIDTH_ADDR); }
 static inline uint32_t video_framebuffer_window_read(void) { return csr_read_simple(CSR_VIDEO_FRAMEBUFFER_WINDOW_ADDR); }
 static inline void video_framebuffer_window_write(uint32_t v) { csr_write_simple(v, CSR_VIDEO_FRAMEBUFFER_WINDOW_ADDR); }
+static inline uint32_t video_framebuffer_hwindow_read(void) { return csr_read_simple(CSR_VIDEO_FRAMEBUFFER_HWINDOW_ADDR); }
+static inline void video_framebuffer_hwindow_write(uint32_t v) { csr_write_simple(v, CSR_VIDEO_FRAMEBUFFER_HWINDOW_ADDR); }
+static inline uint32_t video_framebuffer_scale_read(void) { return csr_read_simple(CSR_VIDEO_FRAMEBUFFER_SCALE_ADDR); }
+static inline void video_framebuffer_scale_write(uint32_t v) { csr_write_simple(v, CSR_VIDEO_FRAMEBUFFER_SCALE_ADDR); }
+static inline uint32_t video_framebuffer_rowwords_read(void) { return csr_read_simple(CSR_VIDEO_FRAMEBUFFER_ROWWORDS_ADDR); }
+static inline void video_framebuffer_rowwords_write(uint32_t v) { csr_write_simple(v, CSR_VIDEO_FRAMEBUFFER_ROWWORDS_ADDR); }
 
 /* MONITOR */
 static inline uint32_t monitor_id_read(void) { return csr_read_simple(CSR_MONITOR_ID_ADDR); }

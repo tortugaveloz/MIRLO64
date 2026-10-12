@@ -655,6 +655,18 @@ static int insn_at(u32 pc, u32 *insn)
     return 1;
 }
 static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv);
+/* a load or store at an address where the console has nothing: a load reads 0, a store goes nowhere (1: done) */
+static int emulate_none(n64rt_ctx_t *x, u32 op, u32 rt)
+{
+    switch (op) {
+    case 0x20: case 0x24: case 0x21: case 0x25: case 0x23: case 0x22: case 0x26: case 0x27: if (rt) gset(x, rt, 0); return 1;   /* loads */
+    case 0x37: w64(x, rt, 0); return 1;                                                                              /* ld */
+    case 0x28: case 0x29: case 0x2B: case 0x2A: case 0x2E: case 0x3F: case 0x39: case 0x3D: return 1;                /* stores */
+    case 0x31: x->fpr[rt] = 0; return 1;                                                                             /* lwc1 */
+    case 0x35: x->fpr[rt | 1u] = 0; x->fpr[rt & ~1u] = 0; return 1;                                                  /* ldc1 */
+    default: return 0;
+    }
+}
 static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 {
     u32 bd = cause >> 31, pc = x->epc + (bd ? 4u : 0u), next = pc + 4u;
@@ -667,8 +679,21 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
     u32 badv; __asm__ volatile("mfc0 %0, $8" : "=r"(badv));
 #endif
     if ((badv >> 29) != 5u && (badv >> 29) != 4u) return 0;     /* (KSEG1 or KSEG0: a device's address) */
-    if ((badv & 0x1FFFFFFFu) < 0x03F00000u) return 0;           /* (RDRAM is not one) */
     u32 op = insn >> 26, rt = (insn >> 16) & 31u;
+    if ((badv & 0x1FFFFFFFu) < 0x03F00000u) {
+#ifdef N64RT_OWN
+        /* Past the RDRAM the console has (8 MiB here), below the RCP: nothing. A game that sizes the memory itself goes on a megabyte
+         * at a time until a word does not read back: it writes 0x12345678 at 0xA040_0000, 0xA050_0000 ... and its 0xA080_0000
+         * must not stop the runtime. On the console the store goes nowhere and the load is 0. */
+        if ((badv & 0x1FFFFFFFu) < n64rt_game->mem_size) return 0;      /* (the RDRAM itself is not the monitor's) */
+        if (bd && !branch_next(x, x->epc, &next)) return 0;
+        if (!emulate_none(x, op, rt)) return 0;
+        x->epc = next;
+        return 1;
+#else
+        return 0;                                               /* (RDRAM is not one) */
+#endif
+    }
     if (bd && !branch_next(x, x->epc, &next)) return 0;         /* (in a delay slot: through the branch) */
     int r = emulate_hw_at(x, insn, op, rt, badv);
     if (r) x->epc = next;
@@ -874,17 +899,97 @@ struct n64rt_tlbr_e n64rt_tlbr[TLB_N];                           /* (hi ^ 0x8000
 _Static_assert(sizeof(struct n64rt_tlbr_e) == 16, "n64rt_exc.S's tlbr, tlbp and tlbwi");
 #define CP0_GET(reg, v) __asm__ volatile("mfc0 %0, $" #reg : "=r"(v))
 #define CP0_SET(reg, v) __asm__ volatile("mtc0 %0, $" #reg : : "r"(v))
-static void tlb_write(u32 i)
+/* ---- the entries a tlbwr put out ---------------------------------------------------------------------------------
+ * A game that fills its TLB from a page table of its own (a refill handler: tlbwr) has more pages in use than the TLB's 32
+ * entries hold, and each tlbwr puts a random one out: on the console the page it mapped is a refill away, a dozen
+ * instructions. Here a refill is two trips through the monitor and the game's handler between them (the fault delivered,
+ * its tlbwr, the tables' fill): some 3,000 clocks, and a game can take 180 of them a field, with as many tlbwr --
+ * a third of the CPU's time. So the entry a tlbwr replaces is KEPT (s_vic, by its page pair: 4 KiB pages only) and its pages
+ * stay in the CPU's tables: an access to them goes on as before, and one that misses the tables is filled from here
+ * (tlb_service), neither seen by the game. The game sees its 32 entries as the VR4300 has them (tlbr, tlbp, Index, Random).
+ *
+ * What the console does that this does not: there, the page of an entry that went takes a refill, from the game's page table
+ * as it is THEN. The game does not choose which entry a tlbwr replaces, so it cannot count on that refill -- but a page table
+ * can change under an entry that is kept here. So a kept entry goes (with its pages in the tables) as soon as the game
+ *   - looks for the page with a tlbp (it finds nothing, as on the console, and there is nothing from then on),
+ *   - writes an entry of the same page pair, or an entry that maps one of its frames (the frame is another page's now),
+ *   - reads into one of its frames from the cartridge (n64rt_tlb_frames_loaded: a game that looks for a page's entry by reading
+ *     all 32 with tlbr finds none for a page whose entry a tlbwr replaced, and loads another page of its code over the frame),
+ *   - writes three entries that map nothing in a row (a flush of the TLB): then all of them go.
+ * What is left is a game that reuses a frame by copying into it with the CPU while another thread runs code from the page
+ * it was: no game known here does. N64RT_NO_TLBKEEP builds the runtime without any of it (every tlbwr as the console's). */
+#define VIC_N 128
+static struct n64rt_tlbr_e s_vic[VIC_N];                        /* (as n64rt_tlbr: hi ^ 0x80000000; 0: free) */
+u32 n64rt_vic_n;                                                /* how many (n64rt_exc.S: with any, a tlbp and a tlbwi are done here) */
+static u32 s_tlb_unmaps;                                        /* the game's last TLB instructions were this many tlbwi that map nothing */
+static inline u32 vic_slot(u32 hi) { return (hi >> 13) & (VIC_N - 1u); }
+/* the kept entry of EntryHi `hi`'s page pair (its ASID unless the entry is global), or -1 */
+static int vic_find(u32 hi)
+{
+    if (!n64rt_vic_n) return -1;
+    const u32 k = vic_slot(hi), ehi = s_vic[k].hi ^ 0x80000000u;
+    if (!s_vic[k].hi || ((hi ^ ehi) & 0xFFFFE000u)) return -1;
+    if (!(s_vic[k].lo0 & s_vic[k].lo1 & 1u) && ((hi ^ ehi) & 0xFFu)) return -1;
+    return (int)k;
+}
+/* it goes, and what the tables have of its pages unless `keep` (the game's new entry of the page pair is the same) */
+static void vic_drop(u32 k, int keep)
+{
+    if (!s_vic[k].hi) return;
+    if (!keep) tr_inval((s_vic[k].hi ^ 0x80000000u) & 0xFFFFE000u, 0x2000u);
+    s_vic[k].hi = 0; n64rt_vic_n--;
+}
+static void vic_flush(void)
+{
+    for (u32 k = 0; k < VIC_N && n64rt_vic_n; k++) vic_drop(k, 0);
+}
+/* the kept entries with a page in the RDRAM's [pa, pa + bytes) go */
+static void vic_drop_frames(u32 pa, u32 bytes)
+{
+    for (u32 k = 0; k < VIC_N && n64rt_vic_n; k++) {
+        if (!s_vic[k].hi) continue;
+        const u32 f0 = (s_vic[k].lo0 >> 6) << 12, f1 = (s_vic[k].lo1 >> 6) << 12;
+        if (((s_vic[k].lo0 & 2u) && f0 + 0x1000u > pa && f0 < pa + bytes) || ((s_vic[k].lo1 & 2u) && f1 + 0x1000u > pa && f1 < pa + bytes))
+            vic_drop(k, 0);
+    }
+}
+void n64rt_tlb_frames_loaded(u32 pa, u32 bytes) { if (n64rt_vic_n) vic_drop_frames(pa, bytes); }
+static void tlb_write(u32 i, int random)
 {
     u32 mask, hi, lo0, lo1;
     CP0_GET(5, mask); CP0_GET(10, hi); CP0_GET(2, lo0); CP0_GET(3, lo1);
     mask &= 0x01FFE000u; hi &= ~(mask | 0x1F00u); lo0 &= 0x3FFFFFFFu; lo1 &= 0x3FFFFFFFu;
+    const struct n64rt_tlbr_e old = s_tlbr[i];
     s_tlbr[i].mask = mask; s_tlbr[i].hi = hi ^ 0x80000000u; s_tlbr[i].lo0 = lo0; s_tlbr[i].lo1 = lo1;
     const u32 span = (mask + 0x2000u) >> 1;                            /* a page of the pair (4 KiB with no mask) */
     const u32 p0 = lo0 & 2u ? ((lo0 >> 6) << 12) & ~(span - 1u) : 0xFFFFFFFFu;     /* (V clear: nothing is mapped) */
     const u32 p1 = lo1 & 2u ? ((lo1 >> 6) << 12) & ~(span - 1u) : 0xFFFFFFFFu;
     const int was = s_tlb[i].span != 0, on = p0 != 0xFFFFFFFFu || p1 != 0xFFFFFFFFu;
-    if (was) tr_inval(s_tlb[i].va, 2u * s_tlb[i].span);              /* (what the CPU's tables took from this entry goes) */
+    if (n64rt_vic_n) {
+        /* a kept entry of the page pair written: the page is this entry's now (its tables' pages stay if it is the same); and
+         * the kept entries of the frames this one maps: those frames are this page's now */
+        const int k = vic_find(hi);
+        if (k >= 0) vic_drop((u32)k, mask == 0u && s_vic[k].lo0 == lo0 && s_vic[k].lo1 == lo1);
+        if (p0 != 0xFFFFFFFFu && p1 == p0 + span) vic_drop_frames(p0, 2u * span);
+        else {
+            if (p0 != 0xFFFFFFFFu) vic_drop_frames(p0, span);
+            if (p1 != 0xFFFFFFFFu) vic_drop_frames(p1, span);
+        }
+    }
+    s_tlb_unmaps = (!random && !on) ? s_tlb_unmaps + 1u : 0u;
+    if (s_tlb_unmaps >= 3u) vic_flush();                                  /* (entries that map nothing, one after another: a flush) */
+#ifdef N64RT_NO_TLBKEEP
+    random = 0;
+#endif
+    if (was) {
+        const u32 ohi = old.hi ^ 0x80000000u;
+        if (random && old.mask == 0u && ((ohi ^ hi) & 0xFFFFE000u)) {      /* put out by a tlbwr: kept, its pages left in the tables */
+            const u32 k = vic_slot(ohi);
+            vic_drop(k, 0);                                               /* (the slot's other page pair, if any) */
+            s_vic[k] = old; n64rt_vic_n++;
+        } else
+            tr_inval(s_tlb[i].va, 2u * s_tlb[i].span);                   /* (what the CPU's tables took from this entry goes) */
+    }
     s_tlb_n += (u32)on - (u32)was;
     s_tlb[i].span = on ? span : 0;
     s_tlb[i].asid = (lo0 & lo1 & 1u) ? -1 : (s32)(hi & 0xFFu);
@@ -910,6 +1015,7 @@ static void tlb_probe(void)
         const u32 ehi = s_tlbr[i].hi ^ 0x80000000u, vpn = ~(s_tlbr[i].mask | 0x1FFFu);
         if ((hi & vpn) == (ehi & vpn) && ((s_tlbr[i].lo0 & s_tlbr[i].lo1 & 1u) || (hi & 0xFFu) == (ehi & 0xFFu))) { found = i; break; }
     }
+    if (found >> 31) { const int k = vic_find(hi); if (k >= 0) vic_drop((u32)k, 0); }     /* (the game is told "no entry": there is none from now) */
     CP0_SET(0, found);                  /* (the core lets the monitor level write Index's P bit) */
 }
 /* the game's TLB instruction at x->epc (or in the delay slot behind it): 1 when it was done */
@@ -931,10 +1037,10 @@ static int tlb_insn(n64rt_ctx_t *x, int bd)
     }
 #endif
     switch (insn & 63u) {
-    case 0x01: CP0_GET(0, v); tlb_read(v & 31u); break;                                   /* tlbr */
-    case 0x02: CP0_GET(0, v); if ((v & 63u) < TLB_N) tlb_write(v & 63u); break;           /* tlbwi */
-    case 0x06: CP0_GET(1, v); tlb_write(v & 31u); break;                                  /* tlbwr */
-    case 0x08: tlb_probe(); break;                                                        /* tlbp */
+    case 0x01: s_tlb_unmaps = 0; CP0_GET(0, v); tlb_read(v & 31u); break;                 /* tlbr */
+    case 0x02: CP0_GET(0, v); if ((v & 63u) < TLB_N) tlb_write(v & 63u, 0); break;        /* tlbwi */
+    case 0x06: CP0_GET(1, v); tlb_write(v & 31u, 1); break;                               /* tlbwr */
+    case 0x08: s_tlb_unmaps = 0; tlb_probe(); break;                                      /* tlbp */
     default: return 0;
     }
     if (bd && !branch_next(x, x->epc, &next)) return 0;
@@ -954,12 +1060,18 @@ static int tlb_insn(n64rt_ctx_t *x, int bd)
  * exception came to the monitor), Context's BadVPN2, Status.EXL -- and returns to the vector. The game's handler does its
  * tlbwr (tlb_insn), eret, and the instruction runs again: the access misses the tables, and tlb_service fills the page
  * from the entry the handler wrote. Cause.ExcCode / BD and Context's BadVPN2 are written by mtc0 in the monitor
- * level only (mips_core, MON). */
+ * level only (mips_core, MON).
+ * The fault's address is COP0 register 22's: a fault that comes to the monitor leaves the game's BadVAddr and EntryHi as the
+ * game has them, and the monitor writes both for the exception it delivers. A page that an entry of the game's maps can miss
+ * the tables at any time (512 entries by the page number's low 9 bits; a wired entry of the VR4300's TLB never misses) --
+ * a libultra that runs from 0x7000_0000 has its exception handler's own page (0x70010) put out of the fetch table by
+ * 0x7F010's, and a fill of it that replaced the BadVAddr the handler is about to read would hand the fault thread a TLBL
+ * that is not where the game's pages are: it stops the game for ever (black, silent). */
 enum { TLBX_FILLED, TLBX_REFILL, TLBX_INVALID, TLBX_MOD, TLBX_NONE };
-static int tlb_service(u32 code)
+static int tlb_service(u32 code, u32 badv)
 {
-    u32 badv, sel, hi;
-    CP0_GET(8, badv); CP0_GET(23, sel); CP0_GET(10, hi);
+    u32 sel, hi;
+    CP0_GET(23, sel); CP0_GET(10, hi);
     for (u32 i = 0; i < TLB_N; i++) {
         const u32 ehi = s_tlbr[i].hi ^ 0x80000000u, vpn = ~(s_tlbr[i].mask | 0x1FFFu);
         const u32 g = s_tlbr[i].lo0 & s_tlbr[i].lo1 & 1u;
@@ -970,7 +1082,9 @@ static int tlb_service(u32 code)
         if (code == 1u && !(lo & 4u)) return TLBX_MOD;
         const u32 pa = ((((lo >> 6) << 12) & ~(span - 1u)) + (off & (span - 1u) & ~0xFFFu));
         if (pa >= 0x00800000u) return TLBX_NONE;                                   /* (not the RDRAM) */
+        CP0_SET(10, (badv & 0xFFFFE000u) | (hi & 0xFFu));                          /* (the tables' write is of EntryHi's page pair and ASID) */
         tr_write(badv, pa, TR_V | ((lo & 4u) ? TR_D : 0u) | (g ? TR_G : 0u) | (((lo >> 3) & 7u) != 2u ? TR_C : 0u) | (sel & TR_FETCH));
+        CP0_SET(10, hi);                                                           /* (the game's, as it was) */
         s_tlb_fills++;
 #ifdef N64RT_DEBUG
         { static u32 s_n; if (s_n++ < 600u) n64rt_log("n64rt: TLB page %08lx -> %08lx (entry %lu, %s%s)\n", (unsigned long)(badv & ~0xFFFu), (unsigned long)pa, (unsigned long)i,
@@ -978,12 +1092,41 @@ static int tlb_service(u32 code)
 #endif
         return TLBX_FILLED;
     }
+    {   /* an entry a tlbwr put out (above): its valid page is entered as if the entry were there still; an invalid one, or a
+         * store to a clean one, is the refill the VR4300 would take */
+        const int k = vic_find((badv & 0xFFFFE000u) | (hi & 0xFFu));
+        if (k >= 0) {
+            const u32 lo = (badv & 0x1000u) ? s_vic[k].lo1 : s_vic[k].lo0, g = s_vic[k].lo0 & s_vic[k].lo1 & 1u;
+            const u32 pa = ((lo >> 6) << 12) & 0xFFFFF000u;
+            if ((lo & 2u) && !(code == 1u && !(lo & 4u)) && pa < 0x00800000u) {
+#ifdef N64RT_TLBKEEP_CHECK
+                {   /* (a debugging build, for a game whose refill handler reads its page table by Context from the pointer at
+                     * N64RT_TLBKEEP_CHECK: the kept entry must be what a refill would write now) */
+                    const u32 base = *(volatile u32 *)(uintptr_t)N64RT_TLBKEEP_CHECK;
+                    const u32 pte = *(volatile u32 *)(uintptr_t)(base + ((badv >> 13) << 4)) & 0x3FFFFFFFu;
+                    static u32 s_n, s_bad;
+                    s_n++;
+                    if (pte != s_vic[k].lo0 && s_bad++ < 16u)
+                        n64rt_log("n64rt: TLBKEEP: page %08lx kept as %08lx, the game's table has %08lx\n", (unsigned long)(badv & ~0x1FFFu), (unsigned long)s_vic[k].lo0, (unsigned long)pte);
+                    if ((s_n & 511u) == 0u) n64rt_log("n64rt: TLBKEEP: %lu fills from kept entries (%lu kept now), %lu not the table's\n", (unsigned long)s_n, (unsigned long)n64rt_vic_n, (unsigned long)s_bad);
+                }
+#endif
+                CP0_SET(10, (badv & 0xFFFFE000u) | (hi & 0xFFu));
+                tr_write(badv, pa, TR_V | ((lo & 4u) ? TR_D : 0u) | (g ? TR_G : 0u) | (((lo >> 3) & 7u) != 2u ? TR_C : 0u) | (sel & TR_FETCH));
+                CP0_SET(10, hi);
+                s_tlb_fills++;
+                return TLBX_FILLED;
+            }
+        }
+    }
     return TLBX_REFILL;
 }
-static void tlb_deliver(n64rt_ctx_t *x, int res, u32 code, u32 bd)
+static void tlb_deliver(n64rt_ctx_t *x, int res, u32 code, u32 bd, u32 badv)
 {
-    u32 badv, cause, ctxt;
-    CP0_GET(8, badv); CP0_GET(13, cause); CP0_GET(4, ctxt);
+    u32 cause, ctxt, hi;
+    CP0_GET(13, cause); CP0_GET(4, ctxt); CP0_GET(10, hi);
+    CP0_SET(8, badv);                                                             /* (BadVAddr: the monitor level's to write) */
+    CP0_SET(10, (badv & 0xFFFFE000u) | (hi & 0xFFu));                             /* EntryHi: the page pair, the ASID as it is */
     const u32 exl = x->status & 2u, exc = res == TLBX_MOD ? 1u : code == 3u ? 3u : 2u;
     cause = (cause & ~0x7Cu) | exc << 2;
     if (!exl) { cause = (cause & 0x7FFFFFFFu) | bd << 31; CP0_SET(14, x->epc); }
@@ -1008,13 +1151,15 @@ static void tlb_deliver(n64rt_ctx_t *x, int res, u32 code, u32 bd)
 static int tlb_fault(n64rt_ctx_t *x, u32 code, u32 bd)
 {
     if (!n64rt_tlbi) return tlb_fill();
-    const int res = tlb_service(code);
+    u32 badv;
+    CP0_GET(22, badv);                  /* the fault's address (not BadVAddr: that is the game's) */
+    const int res = tlb_service(code, badv);
     if (res == TLBX_FILLED) return 1;
     if (res == TLBX_NONE) return 0;
 #ifdef N64RT_TLB_FATAL
     return 0;                           /* (a debugging build: the exception is the runtime's, with the game's registers in the log) */
 #endif
-    tlb_deliver(x, res, code, bd);
+    tlb_deliver(x, res, code, bd, badv);
     return 1;
 }
 void n64rt_tlbi_init(void)
@@ -1029,7 +1174,11 @@ void n64rt_tlbi_init(void) { }
 #endif
 int n64rt_tlb_phys(u32 va, u32 *pa)
 {
+#ifdef N64RT_OWN
+    if (!s_tlb_n && !n64rt_vic_n) return 0;
+#else
     if (!s_tlb_n) return 0;
+#endif
     for (int i = 0; i < TLB_N; i++) {
         u32 span = s_tlb[i].span, off = va - s_tlb[i].va;
         if (span && off < 2u * span) {
@@ -1039,6 +1188,29 @@ int n64rt_tlb_phys(u32 va, u32 *pa)
             if (p >= 0x00800000u) return 0;                 /* (the RDRAM) */
             *pa = p;
             return 1;
+        }
+    }
+#ifdef N64RT_OWN
+    if (n64rt_vic_n) {                                      /* (a page of an entry a tlbwr put out: the game's code may be on one) */
+        const u32 k = vic_slot(va), ehi = s_vic[k].hi ^ 0x80000000u;
+        if (s_vic[k].hi && !((va ^ ehi) & 0xFFFFE000u)) {
+            const u32 lo = (va & 0x1000u) ? s_vic[k].lo1 : s_vic[k].lo0, p = (((lo >> 6) << 12) & 0xFFFFF000u) | (va & 0xFFFu);
+            if (!(lo & 2u) || p >= 0x00800000u) return 0;
+            *pa = p;
+            return 1;
+        }
+    }
+#endif
+    return 0;
+}
+/* va is mapped by a valid page of an entry, onto no memory of the console's: 1 */
+static int tlb_maps_nothing(u32 va)
+{
+    for (int i = 0; i < TLB_N; i++) {
+        u32 span = s_tlb[i].span, off = va - s_tlb[i].va;
+        if (span && off < 2u * span) {
+            u32 p = s_tlb[i].pa[off >= span];
+            return p != 0xFFFFFFFFu && p + (off & (span - 1u)) >= 0x00800000u;
         }
     }
     return 0;
@@ -1114,7 +1286,16 @@ static int emulate_mapped(n64rt_ctx_t *x, u32 cause)
     u32 insn = *(volatile u32 *)(uintptr_t)pc;
     u32 op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u;
     u32 ea = g32(x, rs) + (u32)(s32)(s16)insn, k = ea & 3u, v, r = g32(x, rt), pa;
-    if (!n64rt_tlb_phys(ea, &pa)) return 0;
+    if (!n64rt_tlb_phys(ea, &pa)) {
+        /* A page mapped onto nothing the console has: libultra's osMapTLBRdb maps 0xC000_0000 onto the development board's debug
+         * port, physical 0x8000_0000 (entry 31, at osInitialize), for a game that still has
+         * the debugger's code in it to write to. On the console the store goes nowhere and a load reads nothing: so here. */
+        if (!tlb_maps_nothing(ea)) return 0;
+        if (bd && !branch_next(x, x->epc, &next)) return 0;
+        if (!emulate_none(x, op, rt)) return 0;
+        x->epc = next;
+        return 1;
+    }
     if (bd && !branch_next(x, x->epc, &next)) return 0;
     switch (op) {
     case 0x20: if (!tlb_rd(ea, 1, &v)) return 0; r = (u32)(s32)(s8)v; break;          /* lb */
@@ -1333,7 +1514,20 @@ static int emulate_64(n64rt_ctx_t *x, u32 cause)
         else wr64(ea, n == 7u ? r : ((m & ((1ull << (8u * (7u - n))) - 1ull)) | (r << (8u * (7u - n)))));
         break;
     }
-    case 0x11: if (!emulate_fpu64(x, insn)) return 0;
+    case 0x11:
+        if (!emulate_fpu64(x, insn)) return 0;
+        /* The compiler's conversions between a 64-bit integer and a float (libultra's __ll_to_d, __f_to_ll ...) are two of
+         * these in a row -- dmtc1 / jr ra / cvt.d.l in its delay slot, or trunc.l.s / dmfc1 -- and some games call them
+         * a hundred times a field: the one behind this one, or the one in the delay slot of the `jr ra` behind it, is done
+         * on the same entry. */
+        if (!bd) {
+            u32 n1, n2;
+            const u32 ra = g32(x, 31);
+            if (insn_at(next, &n1)) {
+                if ((n1 >> 26) == 0x11u && emulate_fpu64(x, n1)) next += 4u;
+                else if (n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
+            }
+        }
         break;
     case 0x18: case 0x19: w64(x, rt, r64(x, rs) + (u64)(s64)imm); break;                             /* daddi(u) */
     /* (what the CPU hands over when an operand is not a 32-bit value) */

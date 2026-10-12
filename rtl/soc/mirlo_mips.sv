@@ -264,6 +264,7 @@ logic        vi_aa, vi_dv, vi_dd;
 wire  [4:0]  vid_crop_v;           // the core's video options (interact.json): crop lines at the top and bottom,
 wire  [1:0]  vid_crop_r;           // and pixels at the right (n64_video.sv)
 logic [25:0] vi_base;
+logic        vi_il;
 logic [31:0] vi_rd, ai_rd;
 logic        mon_ai, ai_clr, ai_chg, ai_req;
 logic        ai_irq /*verilator public_flat_rd*/, ai_fw /*verilator public_flat_rd*/, ai_step_we /*verilator public_flat_rd*/, ai_ack /*verilator public_flat_rd*/;   // (the bench's AILOG)
@@ -374,8 +375,10 @@ logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
 logic [7:0]  r_uart_byte, uart_rx_byte;
 logic [31:0] fb_base_csr, dbg_geom_msg;
 logic [11:0] fb_width;
-logic [5:0]  fb_x0, fb_y0;
+logic [7:0]  fb_y0;
 logic [8:0]  fb_rows;
+logic [9:0]  fb_px0, fb_pw;
+logic [10:0] fb_xs, fb_ys, fb_nw;
 logic        fb_gamma, fb_tall, fb_pal, tv_pal, vi_pal_rq;
 logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
@@ -399,7 +402,7 @@ mirlo_regs regs (.clk, .rst,
     .cont_trig('{apf_input_cont4_trig, apf_input_cont3_trig, apf_input_cont2_trig, apf_input_cont1_trig}),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
     .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r),
-    .vblank, .fb_base(fb_base_csr), .fb_width, .fb_x0, .fb_y0, .fb_rows, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
+    .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
     .mrdp_sync_count(mrdp_sync), .mrdp_load_count(mrdp_load), .mrdp_unknown_ops(mrdp_unknown), .mrdp_idle,
@@ -609,7 +612,7 @@ assign ps_x_rdata = '0; assign ps_z_rdata = '0;
 // With MONITOR.CTL's VI bit the scan-out's base, gamma and black are the VI registers'; else the CSRs'
 rcp_vi vi (.clk, .rst, .sc_line(vi_line), .sc_latch(vi_latch), .tv_pal, .tv_def(fb_pal), .vi_pal(vi_pal_rq), .thr(vi_thr),
     .a(x_addr[5:2]), .wd(x_wdata), .wr_s(xs == X_VIW), .rd(vi_rd), .vi_clr,
-    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
+    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .il(vi_il), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
 // ---------------------------------------------------------------- the AI (MIRLO_AI: rcp_ai.sv)
 // The Pocket's audio FIFO has two writers: the CSR's (the runtime's software AI, a program's) and the AI's
 rcp_ai ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(ai_rd), .clr(ai_clr), .irq(ai_irq), .chg(ai_chg),
@@ -630,8 +633,8 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 // ---------------------------------------------------------------- the scan-out
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
-    .enable(fb_en), .vi_origin(fb_base[25:0]), .vblank,
-    .vi_width(fb_width), .vi_tall(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_x0(fb_x0), .vi_y0(fb_y0), .vi_rows(fb_rows), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
+    .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_avg(mon_vi && vi_il), .vblank,
+    .vi_width(fb_width), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

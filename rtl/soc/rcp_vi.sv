@@ -16,8 +16,9 @@
 //            line 1: 17 lines (a millisecond) before the latch, for the game's retrace handler to write its ORIGIN.
 //   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res (WIDTH 512 or more)
 //            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
-//            + WIDTH * 2 bytes) is one frame of both, from the lower: the weave of the 640 x 480 frame -- a write of the
-//            base + one row leaves the base as it is.
+//            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
+//            base + one row leaves the base as it is. (A serrated picture is shown as 640 x 240, progressive: the scan-out
+//            averages the rows 2k and 2k + 1 of that frame, rtl/soc/n64_video.sv.)
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
 //            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
@@ -29,7 +30,7 @@
 //            runtime's choice from the ROM's region (n64rt_boot.c). The
 //            half-line counter of a PAL field is 312 lines (CURRENT 0..623), VI_V_START's first line 47 (libultra's PAL modes:
 //            half-line 95) where the NTSC modes' is 18.
-//   WIDTH, V_START, Y_SCALE   what the scan-out's window and size come from (the runtime computes them: n64rt_io.c, and
+//   WIDTH, H_START, V_START, X_SCALE, Y_SCALE   what the scan-out's window and size come from (the runtime computes them: n64rt_io.c, and
 //            is told when one of them has changed -- `chg`, a pulse -- reading the registers back).
 // The accesses are sequenced by mirlo_mips.sv: the address is held while the access lasts; for a read, `rd` is the answer
 // in the cycle after the address (rd_s); a write is done in the cycle `wr_s` is up.
@@ -51,9 +52,10 @@ module rcp_vi (
     output wire         vi_clr,         // a write to CURRENT (the MI's VI bit is cleared)
     // events
     output logic        irq,            // a pulse: the line V_INTR names began
-    output logic        chg,            // a pulse: WIDTH, V_START or Y_SCALE changed
+    output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE or Y_SCALE changed
     // the scan-out's
     output wire  [25:0] base,           // the framebuffer's byte address in the SDRAM
+    output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (the scan-out averages its row pairs)
     output logic        black,
     output logic        gamma,
     output logic        aa,             // AA_MODE 0 or 1: the scan-out's anti-alias filter (MIRLO_VI_AA)
@@ -79,7 +81,7 @@ logic        st_gamma, st_serr, hs_zero, gm_f;
 logic        st_aa, st_dv, st_dd;
 logic        vs_set, vs_pal;            // V_SYNC has been written; and it names 625 lines (576 or more)
 assign vi_pal = vs_set ? vs_pal : tv_def;
-// a hi-res picture's second field: the origin written is the base + one row of the 640-pixel picture (1280 bytes): with
+// a hi-res picture's second field's origin: the base + one row of the 640-pixel picture (1280 bytes), which the base does not follow: with
 // WIDTH 640 (libultra's interlaced modes: Y_SCALE 2.0) that is WIDTH * 2 bytes; with WIDTH 1280 (Donkey Kong 64's: the
 // buffer's pitch is two rows, Y_SCALE 1.0, so a field is every other row) it is WIDTH bytes
 wire         row_up = |wid[11:9] && (wd[22:0] == org_b + {10'd0, wid, 1'b0} || (|wid[11:10] && wd[22:0] == org_b + {11'd0, wid}));
@@ -105,7 +107,7 @@ end
 
 // a register the window is computed from has changed (q is the register's old word)
 wire [31:0] dx = q ^ wd;
-wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]));
+wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]) || (a == 4'd12 && |dx[11:0]) || (a == 4'd9 && |dx[25:0]));
 always_ff @(posedge clk) chg <= !rst && chg_now;
 
 // ---------------------------------------------------------------- the half-line counter
@@ -136,6 +138,7 @@ end
 
 // ---------------------------------------------------------------- what the scan-out takes
 assign base = {3'b111, org_b};
+assign il = st_serr && |wid[11:9];
 always_ff @(posedge clk) begin
     black <= hs_zero || org_b[22:6] > thr;
     if (sc_latch) begin gm_f <= st_gamma; aa <= st_aa; divot <= st_dv; dedither <= st_dd; end

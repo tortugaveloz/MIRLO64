@@ -481,7 +481,9 @@ bit 3) the registers are the hardware's (`rtl/soc/rcp_vi.sv`):
   next frame, as on the console; a hi-res picture whose two fields' origins the game gives one row of the buffer apart
   (the second is the base + one 640-pixel row, 1280 bytes: WIDTH * 2 for libultra's own interlaced modes -- WIDTH 640, Y_SCALE
   2.0 -- and WIDTH for Donkey Kong 64's -- WIDTH 1280, Y_SCALE 1.0, a pitch of two rows; a write of that leaves the base as it
-  is) is one frame of both, from the lower (the runtime's `vi_apply_base`, now the hardware's). The runtime's `tall` counts the
+  is) is one frame of both, from the lower (the runtime's `vi_apply_base`, now the hardware's); a serrated one (STATUS' SERRATE) is shown as 640 x 240
+  progressive, the average of the rows 2k and 2k + 1 of that frame (`n64_video.sv`'s `vi_avg`, rcp_vi's `il`; no 480i, no second origin: the
+  base is the only one the scan-out reads -- `docs/resolution.md`, "Serrated pictures"). The runtime's `tall` counts the
   rows of the pitch too (`vi_width_gamma`: lines x Y_SCALE x pitch rows > 300): DK64's logos were cut to their upper half
   before (480 rows shown as 240 of the interleaved buffer).
 * STATUS' GAMMA bit, taken at the latch, is the scan-out's gamma; H_START 0 (osViBlack) and an ORIGIN that puts the

@@ -1,114 +1,78 @@
-# Resolution
+# MIRLO 64: the video output
 
-(The section "Two modes" below describes the earlier cores, with a 268 x 240 frame; the N64 core's frames are the next section's.)
+`rtl/soc/n64_video.sv` reads the frame buffer the game's VI registers name and sends the Pocket what the N64's VI
+sends a television. This page is the frame, its timing, and how each picture is placed in it. The VI's registers and
+interrupt are in [mips.md](mips.md), the filters in [rdp.md](rdp.md) (The scan-out), the registers the runtime writes in
+[control.md](control.md) (`VIDEO_FRAMEBUFFER`).
 
-## Two modes, chosen by the game file (Mirlo)
+## The frame
 
-The core runs 268 x 240 (the default: fills the Pocket's screen, the N64's
-320-wide frame cropped 26 px a side, 2D moved in) or the N64's own 320 x 240
-(4:3, nothing cropped or moved). The game file's header picks: byte 26 of the
-MIRLODATA footer, 0 = 268, 1 = 320 (`tools/make_mirlo_game.py --video 320`).
-Older files read 0. There is no menu override: a game runs in the mode its
-file asks for.
+The Pocket is sent one frame size, 640 x 240, progressive: the single scaler mode of
+`pkg/pocket/Cores/tortuga.Mirlo64/video.json`, shown 4:3. A line is the VI's own, 640 pixel clocks wide; the pixel clock
+is `clk_vid`, 12.5 MHz (the system clock divided by 5), one clock a pixel.
 
-How it switches, at boot (lang/c/game/frame.c `frame_set_video`, called by
-the program with the game file header's choice before `frame_init()`):
-the scan-out's `vtg_mode` register (rtl/soc/n64_video.sv: two constant
-timing sets, 340 x 280 and 360 x 264 -- since replaced by the one 320 x 240 frame, see the section below,
-~60 Hz, which also set the frame's length), the Pocket's scaler slot
-(sent on the RGB bus during blanking; video.json slot 0 = 268, slot 1 = 320),
-the clears' width and the geom core's screen edges (GDL_FBSIZE).
+| TV system | Clocks a line | Lines a field | A field | Rate |
+|---|---|---|---|---|
+| NTSC (and MPAL) | 790 (nine lines in vblank: 788) | 264 | 1,042,710 system clocks | 59.940 Hz |
+| PAL | 800 (fifty lines in vblank: 792) | 313 | 1,250,000 system clocks | 50.000 Hz |
 
-The older, manual procedure below (a new pixel clock and timings) still
-applies for any other resolution.
+The field's length is the N64's for each system, so the VI's line counter and its interrupt keep the console's timing.
+The picture is 240 lines in both; a PAL field has more lines of blanking, not a taller picture.
 
-## Frame size (N64 games: always 320 x 240)
+The timing never stalls: the frame's words go from the SDRAM to the pads through a FIFO of 16,384 words, and a word
+that is not there in time shows black. The frame buffer's address is taken at the frame boundary, the first line of
+vblank, so a new one never tears the frame being sent.
 
-`rtl/soc/n64_video.sv` sends the Pocket ONE frame, the scaler slot 0 of
-`video.json`:
+## The TV system
 
-| slot | frame       | clocks a pixel | clocks a line | lines a field | rate          |
-|------|-------------|----------------|---------------|---------------|---------------|
-| 0    | 320 x 240   | 2              | 790 (nine: 788) | 264         | 59.940 Hz     |
-| 0    | 320 x 240   | 2              | 800 (fifty: 792) | 313        | 50.000 Hz (PAL) |
+Until the game programs the VI, the system is the one of the ROM's region: the runtime writes it to bit 18 of
+`VIDEO_FRAMEBUFFER.WIDTH`. From then on it is what the game's `VI_V_SYNC` says: 525 lines (a value of 512 to 575) is
+NTSC, 625 lines (576 to 703) is PAL, and any other value changes nothing. The system is taken at the frame boundary and
+the timing changes where that field ends, so no field is cut short. Bit 19 of the same register reads the system in
+use.
 
-On the pixel clock `clk_vid` = sys / 5 (12.5 MHz, `mf_pllbase`'s outputs 3 and
-4). A pixel lasts two clocks and `video_skip` marks the second, so the Pocket's
-scaler sees 320 pixels a line; a field (790 clocks x 264 lines, less 18 clocks
-in nine vblank lines = 208,542 clk_vid clocks = 1,042,710 system clocks) is the
-N64's 59.940 Hz (V_SYNC 0x20D, H_SYNC 0xC15 of every NTSC libultra mode; until
-2026-10-09 it was 792 x 264 = 1,045,440, 59.783 Hz), so the VI's field timing does
-not move with the size, nor the scan-out's reads (240 rows of 320 words a field: 18.4 MB/s,
-through the 64 KiB FIFO).
+## The picture
 
-**PAL (2026-10-10, branch `own-pal`).** The same slot and pixel clock, with a PAL field: 313 lines of 800 clk_vid clocks (400
-pixels, 64 us: the console's PAL line is 3178 clocks of 49.6565 MHz) and fifty of them (lines 253..302, in vblank) four pixels
-(8 clocks) shorter: 263 x 800 + 50 x 792 = 250,000 clk_vid clocks = **1,250,000 system clocks = exactly 50.000 Hz**
-(V_SYNC 0x271, H_SYNC 0xC69 of libultra's PAL modes: 312.5 lines of 3178 clocks = 993,125 VI clocks of 49.6565 MHz = 20.000 ms).
-The picture is the same 240 lines in the same slot: libultra's PAL modes show 237 lines like the NTSC ones (V_START 95..569
-half-lines against 37..511), so no letterbox or crop is needed for a lo-res or an interlaced hi-res mode; a picture taller
-than 240 rows (a PAL game's own 264- or 288-row mode) is cut at its 240th row, as an NTSC one is. Which system is in use:
-`VIDEO_FRAMEBUFFER_WIDTH` bit 18 (the runtime writes it from the ROM's region, `n64rt_tv`) until the game writes a V_SYNC that
-names one -- 525 lines (512..575) NTSC, 625 (576..703) PAL; anything else (0, noise) changes nothing --, then that. The system is
-taken at the scan-out's frame boundary and applied where the field ends, so no field is cut short (tb_vi checks the 8
-transitions of a sequence line by line); bit 19 of the same register reads the system in use. MPAL is NTSC here (525 lines, 59.9
-Hz). The Pocket's output stays 12.5 MHz / 2 clocks a pixel / 320 x 240: only the number of lines (313) and the line length
-(400) change, and the frame rate follows (50 Hz is inside the 47..61 Hz the scaler takes; not yet seen on a Pocket).
+The picture is the VI's, by the game's own registers:
 
-(The 268 x 240 frame and `VTG_MODE` of the earlier
-cores are gone: the register stays, it does nothing.) Outside DE the pads are 0:
-there is no scaler-slot word and no frame feature bits.
+| VI register | What the scan-out does with it |
+|---|---|
+| `VI_ORIGIN` | The frame buffer's address |
+| `VI_WIDTH` | The pitch: the pixels from one row of the buffer to the next |
+| `VI_H_START` | The picture's window in the line: its first clock and its width, counted from the VI's first visible clock (108; 128 for PAL) |
+| `VI_V_START` | Its window in the field: its first line and its lines, counted from the VI's first visible half-line (37; 95 for PAL) |
+| `VI_X_SCALE` | The step through a row, in 1/1024 of a pixel for each clock of the window: clock `i` shows the pixel `(i * X_SCALE) >> 10` |
+| `VI_Y_SCALE` | The step through the rows for each line of the window: line `j` shows the row `(j * Y_SCALE) >> 10` |
 
-**A hi-res picture is shown in that frame, reduced without a buffer.** An earlier branch
-(`own-st3`, `integ` up to fe65db8) sent a 640 x 480 interlaced picture as the
-N64 does, as a 640 x 240 field each VI field with the Pocket's frame feature
-bits (slots 1 and 2 of `video.json`, `VIDEO_FRAMEBUFFER_WIDTH` bits 21:18, the
-runtime's `N64RT_HIRES_OPT`); it never displayed correctly on the Pocket for
-Pokemon Stadium's Game Pak Check, and was dropped. Now:
+Outside the window the frame is black. The pixel and the row are the nearest ones, not interpolated; the VI's filters
+(anti-alias, divot, dither filter, gamma) work on the frame buffer's own pixels before the scale, as the VI's do. So
+one path shows every size: a 320-wide buffer with a scale of 0.5 (each pixel two clocks), a wider one with its own
+scale, and a 640-wide one with a scale of 1.
 
-- VI_WIDTH 512 or more (a 640-wide framebuffer) is shown at half its width: the
-  scan-out reads every word of a row (two pixels) and shows their average, per
-  channel (a + b + 1) >> 1 (a 2 x 1 box on what the word has: ~31 ALUTs; showing
-  the left pixel alone, point sampling, was the first try and costs none);
-- one of 480 rows (interlaced: the VI's Y scale steps two rows a line, or WIDTH is 1280 -- two rows' pitch -- with Y scale 1.0, Donkey Kong 64's; the
-  runtime sets `WIDTH` bit 17) shows its first field alone, the buffer's even
-  rows (point sampled vertically) (the reads skip the odd ones; the first field's origin is the lower of
-  the two origins libultra writes a row apart, which `rcp_vi.sv` keeps); its
-  window is a field's rows, half those of the mode;
-- the VI's filters (AA, divot, dither: MIRLO_VI_AA) are off for it: their taps
-  would be the neighbours of the full-size picture, and their line buffers
-  are one frame's width, 320 (512 words of 19 bits);
-- the cost: Stadium's menus and any 640-wide mode lose half their horizontal
-  and (480-row ones) half their vertical resolution, and the 480-row ones show
-  one field of the weave, with no deinterlacing.
+Three cases are not the plain rule:
 
-The runtime picks tall from the VI mode (`n64rt_io.c` `vi_width_gamma`):
-interlaced when the rows the mode shows -- its window's lines times
-VI_Y_SCALE's step -- come to more than 300 (libultra's HPF/HAF: 237 lines a
-field at a step of 2).
+- **A picture 512 pixels wide or more** is shown with the VI's filters off.
+- **A serrated picture** (the VI's interlaced modes with a 640-wide buffer: 480 rows as two fields of 240) is not sent
+  as two fields: it is the same 640 x 240 progressive frame, and each line is the average, per channel, of the rows
+  `2k` and `2k + 1` of the picture, which is what a television mixes of the two fields.
+- **A window taller than the field** from its first line (some PAL modes stretch a 240-row buffer over more lines than
+  the frame has) is fitted to what is left of the field, not cut: it has fewer lines and a proportionally larger step
+  through the rows, so its first and last lines show the same rows as the VI's (`lang/n64rt/n64rt_vifit.h`).
 
-A framebuffer narrower than 320 (Banjo-Kazooie's 292 x 213) is shown 1:1 with
-black around it, inside the 320 x 240 frame.
+The runtime works the window, the scales and the words to read for a row out of the VI's registers
+(`lang/n64rt/n64rt_io.c`, `vi_width_gamma`) and writes them to `VIDEO_FRAMEBUFFER`.
 
-## Changing the resolution by hand
+`VI_H_START` 0 (libultra's `osViBlack`) shows black. A frame buffer so close to the end of the RDRAM that the picture
+would run past it shows black too.
 
-If you don't like the default resolution selected by the core, you can change it to anything supported by the Analogue Pocket. Remember openFPGA is limited to 800x720, so you can't choose a resolution outside of those bounds.
+## The core's settings
 
-1. Find your desired vertical and horizontal counts. [See agg23's wiki](https://github.com/agg23/analogue-pocket-utils/wiki/Video) for additional information about how to select counts, but briefly, visit https://tomverbeure.github.io/video_timings_calculator and enter your desired resolution. It will show you the "conforms to protocol" options that you can select between, but you are not required to use one of these for the Pocket; it is just an example. If you choose an unusual resolution (like the default 266x240), there won't be a standard to base the calculations off of, so the tool will estimate what it would be.  
-Note that you want all of your system clocks (CPU, and 2x for SDRAM) to be integer multiples of this clock, and to pass timing you probably need the CPU clock to be < 60MHz. For example, you could choose counts that require a 10MHz clock, which would either be a 5x or 6x multiple (50MHz or 60MHz) for the CPU clock.
+"Crop Vertical" (none, 8 or 12 lines) blanks that many lines at the top and at the bottom of the picture, and "Crop
+Right" (none or 1 column) its last column, a column being a pixel of a 320-wide picture. They are relative to the
+picture's window; the frame and its timing do not change.
 
-2. In Quartus, open the `mf_pllbase` megafunction on the left side of the screen. This will open the tool where you can manipulate the clocks for the core. The last two clocks should be the video pixel clock that you chose, the first is your CPU clock (remember to keep it an integer multiple of the video clock), and the second and third clocks are your SDRAM clock (remember to keep it 2x the CPU clock). Enter those values and click finish.
+## Tests
 
-3. Edit the clock constants: `CLOCK_HZ` in `tools/mirlo_regs.py` (then run it) and `SYS_HZ` in `target/pocket/core_top.sv`. Put your counts into `rtl/soc/n64_video.sv` (its two timing sets and the frame's word counts).
-
-4. Update the Pocket `video.json` to your new resolution. Without it, the Pocket won't know what resolution you want to display.
-
-5. Rebuild the firmware that has the clock compiled in (see the top-level README's build steps).
-
-6. Build the Quartus project by pressing "Build".
-
-7. Reverse the produced bitstream (`*.rbf`). See https://www.analogue.co/developer/docs/packaging-a-core#fpga-bitstream
-
-8. Update your clock speed constants in your software code, if any.
-
-9. The core should now be ready to use at the new resolution.
+`sim/vi_filter/regress.sh` builds the scan-out alone against a model of it (`tb_vi.cpp`) and checks the pads pixel for
+pixel: the filters, pitches and scales other than 320, windows, the crop settings, serrated pictures, PAL and a change
+of TV system between fields. `sim/vi_filter/vifit_test.c` checks the fitted window's arithmetic.

@@ -1,8 +1,8 @@
 /* The scan-out showing a framebuffer smaller than the screen
- * (rtl/soc/n64_video.sv: VIDEO_FRAMEBUFFER_WIDTH and _WINDOW): a 292 x 216
+ * (rtl/soc/n64_video.sv: VIDEO_FRAMEBUFFER_WIDTH, _WINDOW, _HWINDOW and _SCALE): a 292 x 216
  * picture -- a white frame at its edge, a diagonal, a vertical line every 16
- * pixels -- must sit in the middle of the 320 x 240 screen, whole, a pixel a
- * pixel, black around it (Banjo-Kazooie's way). Then 320 x 240, then
+ * pixels -- must sit in the middle of the 640 x 240 field, whole, each pixel two clocks wide
+ * (X_SCALE 0x200, as the VI shows a 320-wide picture), black around it. Then 320 x 240, then
  * 256 x 224, in turn. sim/mips_soc's VGA=1 writes what the pads send. */
 #include <stdint.h>
 #include <generated/csr.h>
@@ -33,8 +33,11 @@ int main(void)
             FB[y * w + x] = c;                      /* (big-endian: pixel x is the word's high half when x is even) */
         }
         flush_cpu_dcache();
-        video_framebuffer_window_write((320u - w) / 2u | ((240u - h) / 2u) << 8 | (h < 240u ? h : 0u) << 16);
-        video_framebuffer_width_write(w < 320u ? w : 0u);
+        video_framebuffer_scale_write(0x200u | 0x400u << 16);
+        video_framebuffer_hwindow_write((640u - 2u * w) / 2u | (2u * w) << 16);
+        video_framebuffer_window_write(((240u - h) / 2u) << 8 | (h < 240u ? h : 0u) << 16);
+        video_framebuffer_rowwords_write((w + 7u) / 2u + 2u);
+        video_framebuffer_width_write(w);
         puts_("size "); putc_('1' + (char)i); puts_("\n");
         timer0_uptime_latch_write(1);
         uint64_t t0 = timer0_uptime_cycles_read();

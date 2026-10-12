@@ -33,7 +33,7 @@ CFLAGS += -I$(RT) -I$(MIRLO)/lang/c/game -I$(MIRLO)/lang/c/geom -I$(MIRLO)/lang/
           -fno-strict-aliasing $(N64RT_F3D) $(if $(DEBUG),-DN64RT_DEBUG) \
           $(if $(RSPDUMP),-DN64RT_RSPDUMP) $(if $(PAK_FORCE),-DN64RT_PAK_FORCE=$(PAK_FORCE)u) \
           $(if $(SI_GAME),-DN64RT_SI_GAME=$(SI_GAME)) $(if $(filter 1,$(STATS)),-DN64RT_STATS) \
-          $(if $(filter 1,$(OWN)),-DN64RT_OWN -DN64RT_SI_GAME=1) $(if $(TLB_FATAL),-DN64RT_TLB_FATAL) $(if $(EEP16K),-DN64RT_EEP16K) $(if $(PADLOG),-DN64RT_PADLOG) $(if $(TLBPROF),-DN64RT_TLBPROF)
+          $(if $(filter 1,$(OWN)),-DN64RT_OWN -DN64RT_SI_GAME=1) $(if $(TLB_FATAL),-DN64RT_TLB_FATAL) $(if $(EEP16K),-DN64RT_EEP16K) $(if $(PADLOG),-DN64RT_PADLOG) $(if $(TLBPROF),-DN64RT_TLBPROF) $(if $(TLBKEEP_CHECK),-DN64RT_TLBKEEP_CHECK=$(TLBKEEP_CHECK)u) $(if $(NO_TLBKEEP),-DN64RT_NO_TLBKEEP)
 
 GEOM_FW_H  := $(abspath $(BUILD))/geom/geom_fw.h
 # (no display-list cache on the geom core: an N64 game's lists are rebuilt

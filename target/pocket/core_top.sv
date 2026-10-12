@@ -1143,15 +1143,12 @@ module core_top (
 
   assign video_rgb_clock = clk_vid;
   assign video_rgb_clock_90 = clk_vid_90deg;
-  // Outside DE: 0 (the one scaler slot, 0, video.json's 320 x 240; no frame feature bits).
+  // Outside DE: 0 (the one scaler slot, 0, video.json's 640 x 240; no frame feature bits: every picture is progressive).
   assign video_rgb = de_delay ? rgb_delay : 24'd0;
-  // DE exactly where the (one-cycle-delayed) pixels are: 268 per line, the
-  // framebuffer's width and video.json's (the game renders 268 x 240). It used
-  // to be de || de_delay2, stretched a cycle to each side of a 266-px
-  // framebuffer: 268 on the wire with a black column on each edge.
+  // DE exactly where the (one-cycle-delayed) pixels are: 640 a line, the N64 VI's
+  // own line (rtl/soc/n64_video.sv), a pixel a clock of the 12.5 MHz pixel clock.
   assign video_de = de_delay;
-  // A pixel of the 320 x 240 frame lasts two clocks of the 12.5 MHz pixel clock,
-  // the scaler takes the first and skips the other.
+  // (no pixel is skipped: the scan-out's vga_skip is 0)
   assign video_skip = skip_delay;
   assign video_vs = vs_delay;
   assign video_hs = hs_delay;

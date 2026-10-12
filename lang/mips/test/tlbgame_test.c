@@ -79,7 +79,7 @@ static void do_write(uint32_t i)
 enum { X_FILLED, X_REFILL, X_INVALID, X_MOD, X_NONE };
 static int service(uint32_t code)
 {
-    uint32_t badv = MFC0(8), sel = MFC0(23), hi = MFC0(10);
+    uint32_t badv = MFC0(22), sel = MFC0(23), hi = MFC0(10);      /* (COP0 22: the fault's address; BadVAddr and EntryHi are the game's) */
     for (int i = 0; i < 32; i++) {
         uint32_t ehi = raw[i].hi, vpn = ~(raw[i].mask | 0x1FFFu), g = raw[i].lo0 & raw[i].lo1 & 1u;
         if (ehi == 0x80000000u || (badv & vpn) != (ehi & vpn) || (!g && (hi & 0xFF) != (ehi & 0xFF))) continue;
@@ -89,14 +89,18 @@ static int service(uint32_t code)
         if (code == 1 && !(lo & 4u)) return X_MOD;
         uint32_t pa = (((lo >> 6) << 12) & ~(span - 1u)) + (off & (span - 1u) & ~0xFFFu);
         if (pa >= 0x00800000u) return X_NONE;
+        MTC0(10, (badv & 0xFFFFE000u) | (hi & 0xFFu));
         tr_write(badv, pa, 1u | ((lo & 4u) ? 2u : 0u) | (g ? 4u : 0u) | (((lo >> 3) & 7u) != 2u ? 32u : 0u) | (sel & 8u));   /* (bit 5: cacheable, as n64rt does) */
+        MTC0(10, hi);
         return X_FILLED;
     }
     return X_REFILL;
 }
 static void deliver(int res, uint32_t code, uint32_t bd)
 {
-    uint32_t badv = MFC0(8), cause = MFC0(13), ctxt = MFC0(4), epc = MFC0(30), status = MFC0(12);
+    uint32_t badv = MFC0(22), cause = MFC0(13), ctxt = MFC0(4), epc = MFC0(30), status = MFC0(12);
+    MTC0(8, badv);
+    MTC0(10, (badv & 0xFFFFE000u) | (MFC0(10) & 0xFFu));
     uint32_t exl = status & 2u, exc = res == X_MOD ? 1u : code == 3u ? 3u : 2u;
     cause = (cause & ~0x7Cu) | exc << 2;
     if (!exl) { cause = (cause & 0x7FFFFFFFu) | bd << 31; MTC0(14, epc); }
@@ -105,11 +109,24 @@ static void deliver(int res, uint32_t code, uint32_t bd)
     MTC0(12, status | 2u);
     MTC0(30, (res == X_REFILL && !exl) ? 0x80000000u : 0x80000180u);
 }
+/* the instruction at pc: as it is, or a mapped page's (below 0x2000_0000, or 0x6000_0000 - 0x7FFF_FFFF) by the entries -- the game's
+ * handler may run from one */
+static uint32_t insn_at(uint32_t pc)
+{
+    if (pc >= 0x20000000u && (pc >> 29) != 3u) return *(volatile uint32_t *)(uintptr_t)pc;
+    for (int i = 0; i < 32; i++) {
+        uint32_t span = (raw[i].mask + 0x2000u) >> 1, off = pc - (raw[i].hi & 0xFFFFE000u & ~(2u * span - 1u));
+        if (raw[i].hi == 0x80000000u || off >= 2u * span) continue;
+        uint32_t lo = off >= span ? raw[i].lo1 : raw[i].lo0;
+        if (lo & 2u) return *K1(((((lo >> 6) << 12) & ~(span - 1u)) + (off & (span - 1u))) & 0x7FFFFCu);
+    }
+    return 0;
+}
 void mon_c(void)
 {
     uint32_t mctl = MFC0(7), code = (mctl >> 3) & 31u, bd = (mctl >> 2) & 1u, epc = MFC0(30);
     if (code == 10) {
-        uint32_t pc = epc + (bd ? 4u : 0u), insn = *(volatile uint32_t *)(uintptr_t)pc, next = pc + 4u;
+        uint32_t pc = epc + (bd ? 4u : 0u), insn = insn_at(pc), next = pc + 4u;
         if ((insn & 0xFFFFFFC0u) == 0x42000000u) {
             uint32_t v, k = insn & 63u;
             m_tlbops++;
@@ -459,6 +476,16 @@ int main(void)
         check("0x7F00_0000: a function fetched there ran", r, 0x1234);
         check("0x7F00_0000: the refill's BadVAddr", LOG(8), 0x7F000000u);
     }
+    /* (and 0x5000_0000 - 0x5FFF_FFFF: a game may map its code there too) */
+    pte(0x50000000u, LO(0x11E000, LV | LD | LG), LO(0x120000, LV | LD | LG));
+    pre = LOG(0);
+    check("0x5000_0000: a load", *(volatile uint32_t *)0x50000000u, 0x1E000000u);
+    check("0x5000_0000: after a refill", LOG(0), pre + 1);
+    check("0x5000_0000: BadVAddr", LOG(8), 0x50000000u);
+    {
+        uint32_t r = ((uint32_t (*)(void))0x50001000u)();
+        check("0x5000_1000: a function fetched there ran", r, 0x1234);
+    }
 
     /* 11. code from cacheable mapped pages (the fetch page registers), with the game's own refill handler: a function run
      * twice, then its pair replaced by a tlbwi (the new frame's code, none of the old), an ASID switch (the other ASID's entry
@@ -513,6 +540,36 @@ int main(void)
         t = MFC0(9); ((fn1_t)0x04B00000u)(3000); uint32_t t_map = MFC0(9) - t;
         puts_("loop of 3000: KSEG0 "); puthex(t_k0); puts_(", mapped "); puthex(t_map); puts_("\n");
         check("code speed: the mapped loop within 1.3x of KSEG0's", t_map * 10 <= t_k0 * 13, 1);
+    }
+
+    /* 12. the game's exception handler on a mapped page (a libultra that runs from 0x7000_0000, an entry the game wires) whose place
+     * in the fetch table another page has taken (0x7F010's: the same low nine bits of the page number). The handler's first fetch
+     * misses the tables, which the monitor fills -- and BadVAddr and EntryHi are still the fault's when the handler reads them
+     * (the VR4300's TLB does not miss there): the general handler's tlbp finds the faulting entry, not its own page's. */
+    {
+        typedef uint32_t (*fn_t)(void);
+        copy(0x128000, h_gen, h_gen_end);
+        K1(0x180)[0] = 0x3C1A7001u;                      /* lui k0, 0x7001 */
+        K1(0x180)[1] = 0x03400008u;                      /* jr k0 */
+        K1(0x180)[2] = 0;
+        flush_cpu_dcache(); flush_cpu_icache();
+        MTC0(0, 1); MTC0(5, 0); MTC0(10, 0x70010000u); MTC0(2, LO(0x128000, LV | LD | LG)); MTC0(3, LO(0x129000, LV | LD | LG)); TLBWI(); __asm__ volatile("nop");
+        MTC0(0, 2); MTC0(5, 0); MTC0(10, 0x7F010000u); MTC0(2, LO(0x120000, LV | LD | LG)); MTC0(3, LO(0x121000, LV | LD | LG)); TLBWI(); __asm__ volatile("nop");
+        for (int k = 0; k < 3; k++) {                    /* (the handler's page is back in the table after each: put out again) */
+            MTC0(0, 3); MTC0(5, 0); MTC0(10, 0x04C00000u); MTC0(2, LO(0x105000, LD | LG)); MTC0(3, LO(0x106000, LV | LD | LG)); TLBWI(); __asm__ volatile("nop");
+            MTC0(10, 0);
+            LOG(0x5C) = 0; LOG(0x60) = LO(0x105000, LV | LD | LG); LOG(0x64) = LO(0x106000, LV | LD | LG);
+            g0 = LOG(0x40);
+            check("mapped handler: 0x7F010's code", ((fn_t)0x7F010000u)(), 0x1234);
+            check("mapped handler: the load", *(volatile uint32_t *)0x04C00000u, 0x05000000u);
+            check("mapped handler: the general vector, once", LOG(0x40), g0 + 1);
+            check("mapped handler: TLBL", (LOG(0x44) >> 2) & 31u, 2);
+            check("mapped handler: BadVAddr is the fault's", LOG(0x48), 0x04C00000u);
+            check("mapped handler: EntryHi is the fault's page", LOG(0x54) & 0xFFFFE000u, 0x04C00000u);
+            check("mapped handler: 0x7F010's entry is its own still", ((fn_t)0x7F010000u)(), 0x1234);
+        }
+        copy(0x180, h_gen, h_gen_end);
+        flush_cpu_dcache(); flush_cpu_icache();
     }
 
     check("no other exception", m_other, 0);

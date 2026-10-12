@@ -29,8 +29,10 @@ module soc_sim_top (
     output wire  [11:0] fb_width,
     output wire         fb_tall,
     output wire  [31:0] vi_dbg0, vi_dbg1,   // (VGAT) the VI's: {hs_zero, black, mon_vi, tv_pal, vs_set, vs_pal, origin}; {thr, WIDTH}
-    output wire  [5:0]  fb_x0, fb_y0,
+    output wire  [7:0]  fb_y0,
     output wire  [8:0]  fb_rows,
+    output wire  [9:0]  fb_px0, fb_pw,
+    output wire  [10:0] fb_xs, fb_ys, fb_nw,
     output wire         boot_ready,
     output wire         uart_we,
     output wire  [7:0]  uart_byte,
@@ -131,7 +133,7 @@ assign fb_width  = soc.fb_width;
 assign fb_tall   = soc.fb_tall;
 assign vi_dbg0   = {soc.vi.hs_zero, soc.vi.black, soc.mon_vi, soc.tv_pal, soc.vi.vs_set, soc.vi.vs_pal, 3'd0, soc.vi.org_b};
 assign vi_dbg1   = {3'd0, soc.vi_thr, soc.vi.wid};
-assign fb_x0     = soc.fb_x0;
+assign fb_px0    = soc.fb_px0; assign fb_pw = soc.fb_pw; assign fb_xs = soc.fb_xs; assign fb_ys = soc.fb_ys; assign fb_nw = soc.fb_nw;
 assign fb_y0     = soc.fb_y0;
 assign fb_rows   = soc.fb_rows;
 assign fb_gamma  = soc.fb_gamma;                              // (the scan-out's gamma correction is on)

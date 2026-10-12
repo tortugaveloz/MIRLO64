@@ -256,9 +256,14 @@ n64rt_mon_fast_exit:                # the game goes on past the instruction (or 
     lw      $k1, CTXL(0x1B8)
     addiu   $k1, $k1, 1
     sw      $k1, CTXL(0x1B8)
+    lw      $k1, CTXL(0x04)         # (Count, as the full path's exit: put back only when the game has its interrupts off)
+    andi    $k1, $k1, 3
+    xori    $k1, $k1, 1
+    beqz    $k1, 6f
+    nop
     lw      $k1, CTXL(0x1A0)
     mtc0    $k1, $9
-    ld      $k1, CTXL(8*27)
+6:  ld      $k1, CTXL(8*27)
     lw      $k0, -0x7FFC($zero)
     eret
     nop
@@ -396,7 +401,11 @@ n64rt_mon_tlbq:
     TLB_DONE
 # tlbwi: entry Index & 63 (nothing if 32 or more) := PageMask, EntryHi, EntryLo0, EntryLo1 -- but only when it changes no translation:
 # checked with $k0 and $k1 alone first, so that the ones that do (a page mapped or unmapped) lose nothing to the register save
-2:  mfc0    $k1, $0
+# (and while entries put out by a tlbwr are kept -- n64rt_os.c, n64rt_vic_n -- a tlbwi and a tlbp are C's: they look at them)
+2:  lui     $k0, %hi(n64rt_vic_n)
+    lw      $k0, %lo(n64rt_vic_n)($k0)
+    bnez    $k0, n64rt_mon_slow
+    mfc0    $k1, $0
     andi    $k1, $k1, 63
     sltiu   $k0, $k1, 32
     beqz    $k0, 21f                # (an Index of 32 or more writes nothing)
@@ -444,7 +453,11 @@ n64rt_mon_tlbq:
     TLB_DONE
 21: TLB_EXIT
 # tlbp: Index := the entry EntryHi names (VPN2 under the entry's mask, ASID unless global), or P (bit 31) if none
-3:  TLB_SAVE
+3:  lui     $k0, %hi(n64rt_vic_n)
+    lw      $k0, %lo(n64rt_vic_n)($k0)
+    bnez    $k0, n64rt_mon_slow
+    nop
+    TLB_SAVE
     mfc0    $8, $10                 # EntryHi: the key
     lui     $14, 0x8000
     xor     $14, $14, $8            # key ^ 0x80000000: an entry holds hi ^ 0x80000000, so (entry ^ this) is key ^ hi
@@ -545,10 +558,21 @@ n64rt_mon_slow:
     .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
     ld      $\n, 8*\n($k0)
     .endr
-    lw      $k1, 0x1A0($k0)         # Count back to what it was on the way in: the monitor level took no time of the
-    mtc0    $k1, $9                 # game's. A monitor entry the game does not ask for (a field, a tick) can land
-                                    # between its osGetCount and its write of Compare (__osSetTimerIntr, with its
-                                    # interrupts off) and Count would pass Compare, which then waits a wrap (91 s)
+    # Count: back to what it was on the way in when the game has its interrupts off (IE clear, or EXL set) -- a monitor
+    # entry the game does not ask for (a field, a tick) can land between its osGetCount and its write of Compare
+    # (__osSetTimerIntr, with its interrupts off; the timer's handler, at EXL) and Count would pass Compare, which then
+    # waits a wrap (91 s). With its interrupts on the game is in neither, and Count keeps the monitor's time: it is the
+    # console's clock, and what the monitor does for the game takes real time. (Frozen always, a game's wait by osGetTime
+    # lasted as much longer as the monitor worked in it: a wait of 3.8 s around a loop of 64-bit conversions, which are
+    # the monitor's, took 14 s.)
+    lw      $k1, 0x04($k0)          # the game's Status, as it goes back
+    andi    $k1, $k1, 3
+    xori    $k1, $k1, 1
+    beqz    $k1, 6f                 # IE set, EXL clear
+    nop
+    lw      $k1, 0x1A0($k0)
+    mtc0    $k1, $9
+6:
     ld      $k1, 8*27($k0)          # the game's $k0 and $k1, as the runtime left them: 64 bits each, k0 last
     ld      $k0, 8*26($k0)          # (its own base)
     eret

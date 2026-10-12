@@ -296,6 +296,7 @@ void n64rt_vi_field(void);                 /* a VI field elapsed (n64rt_tick) */
 /* an RCP register the game reaches itself (the trap): 1 = done */
 int n64rt_hw_read(u32 addr, u32 *v);
 int n64rt_tlb_phys(u32 va, u32 *pa);       /* a page the game mapped (osMapTLB): 1, and its RDRAM address */
+void n64rt_tlb_frames_loaded(u32 pa, u32 bytes);   /* the cartridge read into the RDRAM there: the TLB entries kept of those frames go (n64rt_os.c) */
 int n64rt_hw_write(u32 addr, u32 v);
 
 #endif
