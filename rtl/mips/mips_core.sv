@@ -453,11 +453,12 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // below 0x2000_0000, where Mirlo's own map has nothing -- SM64's 0x0400_0000 --
 // and, with MAP_HI, 0x6000_0000 - 0x7FFF_FFFF, where it has nothing either once
 // the monitor owns the RCP and there is no audio core: GoldenEye maps and runs
-// from 0x7000_0000. 0x2000_0000 (the RSP), 0x4000_0000 (the SDRAM: the runtime) and
-// 0x5000_0000 (the PSRAM) stay physical.)
+// from 0x7000_0000.)
+// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there -- the PSRAM is not in it -- and a game maps its code there:
+// Mario Tennis jumps to 0x5000_xxxx after its second logo. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
 localparam bit MAP_HI = TLB_RAM && MON;
 function automatic logic kseg01(input logic [31:0] va);
-    return FLAT ? !((TLB_EN || TLB_RAM) && N64WIN && (va[31:29] == 3'b000 || (MAP_HI && va[31:29] == 3'b011))) : va[31:30] == 2'b10;
+    return FLAT ? !((TLB_EN || TLB_RAM) && N64WIN && (va[31:29] == 3'b000 || (MAP_HI && (va[31:29] == 3'b011 || va[31:28] == 4'b0101)))) : va[31:30] == 2'b10;
 endfunction
 // N64WIN: the N64's RDRAM, through KSEG0 (cached) or KSEG1
 function automatic logic n64win(input logic [31:0] va);
@@ -474,7 +475,7 @@ endfunction
 // an instruction of the N64 game's (fetched from KSEG0's window)
 // (TLB_RAM: and from a page the game mapped)
 function automatic logic n64code(input logic [31:0] pc);
-    return N64WIN && (pc[31:23] == 9'h100 || (TLB_RAM && FLAT && (pc[31:29] == 3'b000 || (MAP_HI && pc[31:29] == 3'b011))));
+    return N64WIN && (pc[31:23] == 9'h100 || (TLB_RAM && FLAT && (pc[31:29] == 3'b000 || (MAP_HI && (pc[31:29] == 3'b011 || pc[31:28] == 4'b0101)))));
 endfunction
 // a physical address the D-cache may hold (FLAT: pa == va there)
 function automatic logic pa_cached(input logic [31:0] pa);

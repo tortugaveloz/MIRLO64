@@ -284,6 +284,7 @@ static void vi_field_common(void)
 {
     s_fields++;
     if (s_watch_on) watch_check();
+#ifdef N64RT_PSRAM
     {   /* (a core with the RDP's depth in the PSRAM and not what a game draws onto its
          * depth image: said once, the first time one does) */
         static u8 said;
@@ -293,6 +294,7 @@ static void vi_field_common(void)
             n64rt_log("n64rt: the game draws onto its depth image, which this core's RDP does not do (MIRLO_Z_CDRAW): its depth will be wrong there\n");
         }
     }
+#endif
 #ifdef N64RT_STATS
     if (s_fields % 60u == 0u) { extern void n64rt_stats_log(u32); n64rt_stats_log(s_fields); }
 #endif

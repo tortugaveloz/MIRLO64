@@ -476,6 +476,16 @@ int main(void)
         check("0x7F00_0000: a function fetched there ran", r, 0x1234);
         check("0x7F00_0000: the refill's BadVAddr", LOG(8), 0x7F000000u);
     }
+    /* (and 0x5000_0000 - 0x5FFF_FFFF: a game maps its code there too -- Mario Tennis, after its logos) */
+    pte(0x50000000u, LO(0x11E000, LV | LD | LG), LO(0x120000, LV | LD | LG));
+    pre = LOG(0);
+    check("0x5000_0000: a load", *(volatile uint32_t *)0x50000000u, 0x1E000000u);
+    check("0x5000_0000: after a refill", LOG(0), pre + 1);
+    check("0x5000_0000: BadVAddr", LOG(8), 0x50000000u);
+    {
+        uint32_t r = ((uint32_t (*)(void))0x50001000u)();
+        check("0x5000_1000: a function fetched there ran", r, 0x1234);
+    }
 
     /* 11. code from cacheable mapped pages (the fetch page registers), with the game's own refill handler: a function run
      * twice, then its pair replaced by a tlbwi (the new frame's code, none of the old), an ASID switch (the other ASID's entry
