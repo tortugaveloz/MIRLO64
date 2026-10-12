@@ -1,0 +1,114 @@
+# The nightly build: every night at 00:00 (Europe/Madrid) the core is built from the default branch with the fit
+# recorded in projects/fits.json (no seed is searched for) and published as an artifact, kept for two weeks. The
+# artifact is the tree a user copies onto the Pocket's SD card: downloaded, it is the zip to unpack there.
+# The job fails, and publishes nothing, if that fit does not close timing with the sources as they are.
+#
+# It also runs for a pull request that changes the record of the fits or the build itself: the seed a pull request
+# records is compiled and must close.
+#
+# Quartus comes from a public container image of Quartus Prime Lite 23.1std.1, named by its digest. For this device
+# that version places and routes as 25.1std, the one of README.md, does: the same seed gives the same bitstream,
+# byte for byte, so a seed found with one is good for the other.
+name: Nightly
+
+on:
+  schedule:
+    # GitHub's schedule is in UTC: 22:00 is midnight in Madrid in summer, 23:00 in winter. The first step lets
+    # through the one of the two that is midnight there (by which of them this run is, not by the clock: a
+    # scheduled run can start late).
+    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - projects/fits.json
+      - tools/nightly.sh
+      - tools/fits.py
+      - tools/area2/fit.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QUARTUS_IMAGE: docker.io/chriz2600/quartus-lite@sha256:50eac410e54617e93ad6c13d9129f7e52c89108a819ded31e66d1eb4577cd8ef
+  QUARTUS_IN_IMAGE: /opt/intelFPGA_lite/23.1/quartus/bin
+  MIPS_CC: mips-linux-gnu-gcc-13
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Is it midnight in Madrid?
+        id: when
+        run: |
+          case "$(TZ=Europe/Madrid date +%z)" in
+            +0200) midnight='0 22 * * *' ;;
+            *)     midnight='0 23 * * *' ;;
+          esac
+          if [ "${{ github.event_name }}" != schedule ] || [ "${{ github.event.schedule }}" = "$midnight" ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.when.outputs.run == 'yes'
+        with:
+          submodules: recursive
+
+      - name: The tools
+        if: steps.when.outputs.run == 'yes'
+        run: |
+          # room for the image (12 GB unpacked): what the runner carries and this build does not use
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gcc-13-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build
+          docker pull -q "$QUARTUS_IMAGE"
+          # quartus_sh, as the build calls it: the image's, on this tree at the same path
+          mkdir -p "$RUNNER_TEMP/quartus"
+          cat > "$RUNNER_TEMP/quartus/quartus_sh" <<'SH'
+          #!/bin/sh
+          exec docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" "$QUARTUS_IMAGE" "$QUARTUS_IN_IMAGE/quartus_sh" "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/quartus/quartus_sh"
+          echo "QUARTUS_BIN=$RUNNER_TEMP/quartus" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/quartus/quartus_sh" --version
+          df -h / | tail -1
+
+      - name: Build
+        if: steps.when.outputs.run == 'yes'
+        id: build
+        run: |
+          tools/nightly.sh "$RUNNER_TEMP/nightly"
+          zip=$(ls "$RUNNER_TEMP"/nightly/tortuga.Mirlo64_nightly_*.zip)
+          name=$(basename "$zip" .zip)
+          rm -rf "$RUNNER_TEMP/sd" && mkdir -p "$RUNNER_TEMP/sd"
+          python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zip" "$RUNNER_TEMP/sd"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the zip
+        if: steps.when.outputs.run == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.name }}
+          path: ${{ runner.temp }}/sd
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: The compile's log and reports, if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-failure-${{ github.run_id }}
+          path: |
+            projects_a2_nightly.compile.log
+            projects_a2_nightly/output_files/*.summary
+            projects_a2_nightly/output_files/*.rpt
+          retention-days: 14
+          if-no-files-found: ignore

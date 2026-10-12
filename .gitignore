@@ -90,3 +90,8 @@ sim/rdp/obj_rdp*
 sim/ai/obj_ai*
 sim/rsp/obj_dma*
 sim/vi_filter/obj_vi.log
+
+# Fits (tools/area2/fit.sh) and the nightly build (tools/nightly.sh)
+/s_*/
+/projects_a2_*
+/nightly/

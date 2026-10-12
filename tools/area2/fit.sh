@@ -2,7 +2,7 @@
 # fit.sh <tag> <seed> [extra.qsf|-] [map]
 # Snapshots rtl/ platform/ target/ projects/ of this worktree into s_<tag>/ (so later edits cannot reach a run in
 # progress), adds the closing macros + seed + extras, and compiles s_<tag>/projects (symlink: projects_a2_<tag>).
-# With "map": quartus_map only. DROP="VI_AA PI2" leaves those macros out. CPUCLK=43 overrides MIRLO_CPU_CLK; EXTRA_MACROS="A=1 B=2" adds MIRLO_A=1 ...
+# With "map": quartus_map only. WAIT=1: the compile in the foreground, with its exit status (else it runs in the background). DROP="VI_AA PI2" leaves those macros out. CPUCLK=43 overrides MIRLO_CPU_CLK; EXTRA_MACROS="A=1 B=2" adds MIRLO_A=1 ...
 set -e
 W=$(cd "$(dirname "$0")/../.." && pwd)
 tag=$1; seed=$2; extra=$3; mode=$4
@@ -20,6 +20,10 @@ done
 [ -n "$extra" ] && [ "$extra" != "-" ] && cat "$extra" >> $D/mirlo.qsf
 cd $D
 Q=${QUARTUS_BIN:-$HOME/altera/25.1std/quartus/bin}
+if [ -n "${WAIT:-}" ]; then                # WAIT=1: in the foreground, and its exit status
+  $Q/quartus_sh --flow compile mirlo > $W/projects_a2_$tag.compile.log 2>&1
+  exit $?
+fi
 if [ "$mode" = map ]; then
   nohup $Q/quartus_map mirlo > $W/projects_a2_$tag.compile.log 2>&1 &
 else
