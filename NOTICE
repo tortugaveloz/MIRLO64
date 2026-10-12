@@ -122,14 +122,12 @@ COPYING.picolibc and COPYING.NEWLIB (BSD-style), compiler-rt's in its
 LICENSE.TXT (Apache-2.0 with LLVM exceptions); see the submodules.
 
 -------------------------------------------------------------------------------
-Audio interpreter and resampling table
+Audio resampling table
 
-These belong to the project's earlier audio core, which is not part of the
-MIRLO64 bitstream or of n64rt.sys. The N64 audio ABI interpreter in
-lang/c/audio/abi.c ports the scalar paths of Ghostship's src/audio/mixer.c
-(the SM64 PC port's, sm64ex lineage), and the 64 x 4 resampling filter table in
-lang/c/audio/audio_cfu_table.c (and its copy in rtl/audio/AudioDspCfu.v) comes
-from it:
+The 64 x 4 resampling filter table in lang/c/audio/audio_cfu_table.c (and its
+copy in rtl/audio/AudioDspCfu.v) comes from Ghostship's src/audio/mixer.c (the
+SM64 PC port's, sm64ex lineage). It belongs to the project's earlier audio
+core, which is not part of the MIRLO64 bitstream or of n64rt.sys.
 
   MIT License
 

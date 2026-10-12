@@ -842,32 +842,28 @@ NK4J   sram      rev=0,1         # Hoshi no Kirby 64 (J), its first two versions
   bounded by the file's size (at most 64 KiB are read) and cannot fail: the worst a file does is not match, and then the chip is 4 Kbit.
   `lang/n64rt/test/savedb_host.c` checks the cases and 20,000 random files under the address sanitiser.
 
-**Where it comes from**: `tools/build_savedb.py --fetch --ares --micro64 --romdb -o ...` makes it from five public sources --
+**Where it comes from**: `tools/build_savedb.py --fetch --ares --micro64 -o ...` makes it from four public sources --
 `mupen64plus.ini` (`SaveType=` per ROM by MD5), libretro's No-Intro dat (the same MD5 to the cartridge ID, and the titles),
 ares' list by 3-character ID, and the owner's list, micro-64.com's "Game Save Method List"
-(<http://micro-64.com/database/gamesave.shtml>, updated 2020-04-13, fetched 2026-10-09), and a public N64 ROM database of cartridge IDs (the ID database; fetched 2026-10-09:
-its retail games are `ID:` lines, first match wins, `_` a wildcard, the six characters being the header's 0x3B..0x3E and the version
-byte as two hex digits -- its MD5 lines are homebrew, betas and the ROMs it patches). micro-64's list has titles by save method
+(<http://micro-64.com/database/gamesave.shtml>, updated 2020-04-13, fetched 2026-10-12). micro-64's list has titles by save method
 and no IDs, so its titles are mapped to IDs through the No-Intro names (exact, or an alias checked against the dat; a title
 that maps to nothing is listed commented at the end of the file, not guessed: none is left today). Where the sources
-agree -- nearly always -- there is one row; where micro-64 or the ID database disagrees on a game the others have, the row is what
-mupen64plus and ares say and carries `[micro-64.com says X]` / `[<database> says X]` (a row judged by hand, `OVERRIDES` in the script,
+agree -- nearly always -- there is one row; where micro-64 disagrees on a game the others have, the row is what
+mupen64plus and ares say and carries `[micro-64.com says X]` (a row judged by hand, `OVERRIDES` in the script,
 says which source it differs from). mupen64plus' explicit `SaveType=None` is a source too (it had been dropped, so that a
 three-character row was taken for every region of a game when only the one with a chip was known: Castlevania (USA, Europe), Top
-Gear Rally (USA) and Wetrix (USA, Europe) were rows of their Japanese chips). Nothing of a ROM is in the file. It has 448 rows:
-108 EEPROM 4 Kbit, 29 EEPROM 16 Kbit, 39 SRAM 32 KiB, 1 SRAM 96 KiB, 21 FlashRAM, 250 no save (`none` and an absent game both
-answer a 4 Kbit chip, so the extra rows change nothing at run time except Castlevania's). It covers the 420 games the
-ID database lists. The disagreements, for the owner: against micro-64, GT 64 Championship Edition (16 Kbit by mupen64plus, ares and
-the ID database, 4 Kbit by micro-64), Kirby 64 (16 Kbit; the Japanese versions 0 and 1 are an SRAM -- mupen64plus, ares and the ID database; micro-64
-says 4 Kbit), Waialae Country Club (SRAM by ares and the ID database, 4 Kbit by micro-64), Premier Manager 64 (SRAM by ares and the ID database, 4 Kbit
-by micro-64); against the ID database, Aidyn Chronicles (no chip by mupen64plus and ares, SRAM by the ID database), Hybrid Heaven (J) (SRAM by
-mupen64plus and ares, none by the ID database), Monaco Grand Prix (USA, Europe) and Rally Challenge 2000 (4 Kbit by mupen64plus and ares,
-none by the ID database), Donald Duck: Goin' Quackers (none by mupen64plus and the ID database, 4 Kbit by ares: the row is none), Space Dynamites
-(J) (4 Kbit by ares and the ID database, none by mupen64plus: the row is 4 Kbit).
-Banjo-Kazooie is **4 Kbit** by all four (and by its decompilation: three saves of 15 blocks and the global block at 60, all
+Gear Rally (USA) and Wetrix (USA, Europe) were rows of their Japanese chips). Nothing of a ROM is in the file. It has 400 rows:
+99 EEPROM 4 Kbit, 28 EEPROM 16 Kbit, 39 SRAM 32 KiB, 1 SRAM 96 KiB, 20 FlashRAM, 213 no save (`none` and an absent game both
+answer a 4 Kbit chip, so the extra rows change nothing at run time except Castlevania's). The disagreements, for the owner:
+against micro-64, which says 4 Kbit for each, GT 64 Championship Edition (16 Kbit by the others), Kirby 64 (16 Kbit; the Japanese
+versions 0 and 1 are an SRAM), Waialae Country Club (SRAM) and Premier Manager 64 (SRAM, a row of ares'); between mupen64plus and
+ares, Donald Duck: Goin' Quackers (none by mupen64plus, 4 Kbit by ares: the row is none, judged by hand) and Racing Simulation 2
+(Germany) (none by mupen64plus, 4 Kbit by ares' list for its three characters: the join's row stands). Space Dynamites (J) has no
+row of its own (ares gives it a 4 Kbit chip, mupen64plus none) and falls under Dark Rift's `NDK?`, none: 4 Kbit at run time either way.
+Banjo-Kazooie is **4 Kbit** by all of them (and by its decompilation: three saves of 15 blocks and the global block at 60, all
 in `EEPROM_MAXBLOCKS` = 64 blocks); the 16 Kbit games among the ones tested are Banjo-Tooie and Donkey Kong 64. Of the 14
 ROMs tested (1080, Banjo-Kazooie, Banjo-Tooie, Donkey Kong 64, GoldenEye, Mario Kart 64, Majora's Mask, Ocarina of Time,
-Pokemon Stadium, Pilotwings 64, Star Fox 64 both revisions, Super Mario 64, Wave Race 64) the file, micro-64 and the ID database agree on every one.
+Pokemon Stadium, Pilotwings 64, Star Fox 64 both revisions, Super Mario 64, Wave Race 64) the file and micro-64 agree on every one.
 Edit the file by hand to add a game.
 
 **How it gets to the runtime**: `data.json` slot 4, "Save-type database" (`filename` `n64savedb.txt`, `required` false,
