@@ -37,7 +37,7 @@ game file's big-endian words as they are, so a game file is the plain output
 of `objcopy`, and its blocks and footer are big-endian
 (`tools/make_mirlo_game.py`). The geom and audio cores stay little-endian:
 they read the game's bytes and halfwords in the N64's order (the geom core's
-texture decoder, `GEOM_N64_ORDER`; the audio core's `ABI_N64` transfers), and
+texture decoder, `GEOM_N64_ORDER`), and
 the game hands the geom core its vertices already in its layout
 (`gdl_vtx_pack()`).
 

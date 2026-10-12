@@ -23,21 +23,14 @@ CFLAGS    = $(ARCHFLAGS) -O2 -g -ffreestanding -nostdlib -fsigned-char \
             -fno-strict-aliasing -Wall -Wextra -ffunction-sections -fdata-sections -std=gnu11 \
             -I$(GEN) $(CFLAGS_EXTRA)
 
-# PROG=abi_main (default): the N64 audio microcode's ABI interpreter (abi.c:
-# ABI 1 -- SM64 --, naudio, EAD's) and the AI, in the N64's byte order
-# (ABI_N64). PROG=main: the bring-up program -- self-tests, benchmarks, then
-# a 440 Hz tone (lang/c/game/tone_main.c). Each builds into build/$(PROG)/.
-PROG ?= abi_main
+# PROG=main: the bring-up program -- self-tests, benchmarks, then a 440 Hz
+# tone (lang/c/game/tone_main.c). It builds into build/$(PROG)/.
+PROG ?= main
 B     = build/$(PROG)
 GEN   = build
 LINK  = $(MIPS_LD) -EB --gc-sections -Map=$(B)/audio.map -T audio_mips.ld
 START = start_mips
-ifeq ($(PROG),abi_main)
-OBJS  = $(B)/$(START).o $(B)/abi_main.o $(B)/abi.o $(B)/nolibc.o
-CFLAGS_EXTRA += -DABI_N64 -DABI_STATE_CACHE
-else
 OBJS  = $(B)/$(START).o $(B)/$(PROG).o $(B)/nolibc.o
-endif
 
 all: $(B)/audio_imem.bin $(B)/audio_imem2.bin $(B)/audio_dmem.bin $(B)/audio_fw.h
 
@@ -56,10 +49,9 @@ $(GEN)/generated_csr_addrs.h: $(GEN_CSR) | $(GEN)
 $(B)/%.o: %.S | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# IMEM is 8 KiB (+ 8 KiB IMEM2): only the ABI interpreter (abi.c, the hot
-# code) is -O2; the task/AI loop and the libc helpers are -Os.
-$(B)/abi_main.o $(B)/nolibc.o: CFLAGS := $(subst -O2,-Os,$(CFLAGS))
-$(B)/%.o: %.c $(GEN)/generated_csr_addrs.h audio_hw.h abi.h | $(B)
+# IMEM is 8 KiB (+ 8 KiB IMEM2): the libc helpers are -Os.
+$(B)/nolibc.o: CFLAGS := $(subst -O2,-Os,$(CFLAGS))
+$(B)/%.o: %.c $(GEN)/generated_csr_addrs.h audio_hw.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(B)/audio.elf: $(OBJS) audio_mips.ld

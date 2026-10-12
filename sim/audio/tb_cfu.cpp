@@ -1,5 +1,5 @@
 // rtl/audio/AudioDspCfu.v against its C model (lang/c/audio/audio_cfu.h),
-// op by op: random but in-range sequences shaped like abi.c's use (configure,
+// op by op: random but in-range sequences shaped like an audio interpreter's use (configure,
 // load the 16 lane volumes, a run of ENV_MIX2 in cursor order, read them
 // back; resampler runs; ADPCM codebook loads and frames), every result
 // compared.
