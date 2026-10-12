@@ -22,20 +22,7 @@ characters at ROM 0x3B..0x3E), no ROM data. Sources, all public:
                     the games the others lack and where it disagrees on the type of a game the others have,
                     the row is kept as the others say and marked with a comment, and printed.
 
-  romdb             (the community N64 ROM database, N64-database.txt, optional, --romdb; the URL is in URLS below): a
-                    database that tells a frontend the save type and options of each game. Two kinds of lines: `<md5> <tags> # title` (the MD5 of the
-                    whole .z64, or of its first 4096 bytes: homebrew, betas, hacks, and the ROMs it patches) and
-                    `ID:<6 characters> <tags> # title`, the cartridge ID (header 0x3B..0x3E, then the version byte 0x3F as
-                    two hex digits; `_` is a wildcard; the FIRST matching line wins). Tags: ntsc|pal, cic61xx/71xx/..., the
-                    save (eeprom512 = 4 Kbit, eeprom2k = 16 Kbit, sram32k, sram96k, flash128k; none = no save tag), cpak, rpak,
-                    tpak, rtc, noepak (the cartridge runs with 4 MiB: no Expansion Pak), pADDR:XOR (a patch of one 32-bit word
-                    of the ROM, optionally `:t`, turbo mode only). Its retail games are all `ID:` lines (their MD5s are not in
-                    it); an ID line carries the save type and the paks, not the CIC or region (a user of it reads those from the
-                    IPL3 checksum). Here it is a cross-check and a source: where it disagrees with the join above the row is
-                    kept as the others say (unless OVERRIDES below says otherwise) and carries `[romdb says X]`, and the
-                    games only it has (homebrew, hacks, Aleck64) are added as rows. The disagreements are printed.
-
-Usage:  tools/build_savedb.py [--fetch] [--dir <cache dir>] [-o <out>] [--ares] [--micro64] [--romdb]
+Usage:  tools/build_savedb.py [--fetch] [--dir <cache dir>] [-o <out>] [--ares] [--micro64]
   --fetch downloads the files into the cache dir (default /tmp/n64savedb_src) first (urllib, or curl if that fails).
 """
 import argparse, html, os, re, subprocess, sys, time, urllib.request
@@ -44,7 +31,6 @@ URLS = {
     'mupen64plus.ini': 'https://raw.githubusercontent.com/mupen64plus/mupen64plus-core/master/data/mupen64plus.ini',
     'nointro.dat': 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/Nintendo%20-%20Nintendo%2064.dat',
     'micro64.html': 'http://micro-64.com/database/gamesave.shtml',
-    'romdb-n64-database.txt': 'https://raw.githubusercontent.com/MiSTer-devel/N64_ROM_Database/main/N64-database.txt',
     'ares-n64.cpp': 'https://raw.githubusercontent.com/ares-emulator/ares/master/mia/medium/nintendo-64.cpp',
 }
 # (mupen64plus's `SaveType=None` is explicit -- the games with no battery or EEPROM -- and is kept: without it a 3-character
@@ -54,16 +40,13 @@ ARES_KIND = {'eeprom = 512': 'eeprom4k', 'eeprom = 2_KiB': 'eeprom16k', 'sram = 
 MICRO64_SECTIONS = {'Controller Pak': 'cpak', '4Kbit EEPROM': 'eeprom4k', '16Kbit EEPROM': 'eeprom16k', '256Kbit SRAM': 'sram',
                     '1Mbit FlashRAM': 'flash', 'No Save': 'none'}
 SRAM = {'sram', 'sram96k'}          # (the same memory, of two sizes: the more specific wins)
-ROMDB_SAVE = {'eeprom512': 'eeprom4k', 'eeprom2k': 'eeprom16k', 'sram32k': 'sram', 'sram96k': 'sram96k', 'flash128k': 'flash'}
 
-# Judged by hand where romdb, mupen64plus and ares do not agree (pattern -> (type, comment)); each is a row that is put in place of
-# the one the join gives (or added before it). The sources of the verdict are in the comment.
+# Judged by hand where mupen64plus and ares do not agree and the join below cannot settle it (pattern -> (type, comment));
+# each is a row that is put in place of the one the join gives (or added before it). The sources of the verdict are in the comment.
 OVERRIDES = {
-    # ares' region special case (`NDK` + region J -> eeprom = 512) and romdb (ID:NDKJ__ eeprom512) against mupen64plus' None
-    'NDKJ': ('eeprom4k', 'Space Dynamites (Japan) (ares, romdb) [mupen64plus says none]'),
-    # mupen64plus (both Donald Duck ROMs, SaveType=None; their MD5s are not in the No-Intro dat we use) and romdb (ID:NDQ___ cpak)
-    # against ares' first list (`NDQ` eeprom = 512, with a cpak too in another)
-    'NDQ?': ('none', "Disney's Donald Duck - Goin' Quackers [Quack Attack] (mupen64plus, romdb) [ares says eeprom4k]"),
+    # mupen64plus (both Donald Duck ROMs, SaveType=None; their MD5s are not in the No-Intro dat we use, so the join has no row)
+    # against ares' first list (`NDQ` eeprom = 512, with a cpak too in another): mupen64plus wins, as it does in the join
+    'NDQ?': ('none', "Disney's Donald Duck - Goin' Quackers [Quack Attack] (mupen64plus) [ares says eeprom4k]"),
 }
 
 def mupen_types(path):
@@ -161,41 +144,12 @@ def title_index(path):
             if k: idx.setdefault(k, {}).setdefault(i[:3], set()).add(i[3])
     return idx
 
-def romdb_db(path):
-    """the community N64 ROM database -> ([(ID pattern of 6 characters, save type, tags, title)] in the file's order, {md5: (save, tags, title)})"""
-    ids, md5 = [], {}
-    for line in open(path, encoding='utf-8', errors='replace'):
-        line = line.rstrip('\n')
-        if not line.strip() or line.startswith(';'): continue
-        body, _, title = line.partition(' # ')
-        f = body.split()
-        tags = f[1].split('|') if len(f) > 1 else []
-        save = next((ROMDB_SAVE[t] for t in tags if t in ROMDB_SAVE), 'none')
-        if f[0].startswith('ID:'): ids.append((f[0][3:], save, tags, title.strip()))
-        elif re.fullmatch(r'[0-9a-fA-F]{32}', f[0]): md5[f[0].upper()] = (save, tags, title.strip())
-    return ids, md5
-
-def romdb_lookup(ids, cid, rev):
-    """the community database's rule: the first ID line that matches the four characters and the version byte (as two hex digits)"""
-    full = cid + '%02X' % rev
-    for pat, save, tags, title in ids:
-        if all(a == '_' or a == c for a, c in zip(pat, full)): return pat, save, title
-    return None
-
-def row_lookup(rows, cid, rev):
-    """the index of the row the runtime would take (first match, lowest in the sorted order) for an ID and version"""
-    for n, (pat, t, c, r) in enumerate(rows):
-        if not all(a == '?' or a.upper() == b.upper() for a, b in zip(pat, cid)): continue
-        if r and rev not in {int(x) for x in r[4:].split(',')}: continue
-        return n
-    return None
-
 def sortkey(r): return (r[0].replace('?', '~'), r[3], r[1])
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--fetch', action='store_true'); ap.add_argument('--dir', default='/tmp/n64savedb_src')
-    ap.add_argument('--ares', action='store_true'); ap.add_argument('--micro64', action='store_true'); ap.add_argument('--romdb', action='store_true'); ap.add_argument('-o', default=None)
+    ap.add_argument('--ares', action='store_true'); ap.add_argument('--micro64', action='store_true'); ap.add_argument('-o', default=None)
     a = ap.parse_args()
     os.makedirs(a.dir, exist_ok=True)
     for f, u in URLS.items():
@@ -267,66 +221,14 @@ def main():
         rows = [r for r in rows if not (r[0] == pat and not r[3])]
         rows.append((pat, t, c, ''))
     rows.sort(key=sortkey)
-    romdb_n = ''
-    if a.romdb:
-        mids, mmd5 = romdb_db(os.path.join(a.dir, 'romdb-n64-database.txt'))
-        # the IDs to probe: every (ID, version) of the No-Intro dat, and the IDs romdb lists that the dat does not know (a wildcard
-        # region is probed as E, J and P; a version it gives as two hex digits is probed as it is, else 0)
-        probes = {(i, revision(n)) for i, n in ni.values()}
-        known = set(probes)
-        for pat, save, tags, title in mids:
-            if '_' in pat[:3]: continue
-            ver = int(pat[4:6], 16) if re.fullmatch(r'[0-9A-Fa-f]{2}', pat[4:6]) else 0
-            if not any(all(x == '_' or x == y for x, y in zip(pat[:4], i)) for i, _ in probes):
-                probes |= {(pat[:3] + c, ver) for c in (pat[3] if pat[3] != '_' else 'EJP')}
-        # 1. the games romdb lists and no row covers: added (the first line of the database that matches wins, as there)
-        added = {}
-        for cid, rev in sorted(probes):
-            m = romdb_lookup(mids, cid, rev)
-            n = row_lookup(rows, cid, rev)
-            # (also an ID that only romdb knows and a wildcard row takes in by its first three characters: Duke Nukem 64 (Beta) NMSE
-            # against Morita Shougi 64 NMS?)
-            clash = n is not None and (cid, rev) not in known and m and m[0][3] != '_' and rows[n][0][3] == '?' and rows[n][1] != m[1]
-            if m and (n is None or clash):
-                pat = m[0][:4].replace('_', '?')
-                if pat.count('?') > 1: continue                 # (Z_____: "any Aleck64" -- no row)
-                added.setdefault(pat, (m[1], m[2]))
-        for pat, (t, title) in added.items():
-            rows.append((pat, t, title + ' (romdb)', ''))
-        rows.sort(key=sortkey)
-        # 2. the rows against the database's answer for each ID they stand for
-        says, lacks, agree = {}, [], 0
-        for cid, rev in sorted(probes):
-            n = row_lookup(rows, cid, rev); m = romdb_lookup(mids, cid, rev)
-            if n is None: continue
-            t = rows[n][1]; mt = m[1] if m else 'none'
-            if mt == t or (t in SRAM and mt in SRAM): agree += 1
-            else: says.setdefault(n, {}).setdefault(mt, []).append(cid + ('' if rev == 0 else '/r%d' % rev))
-            if not m and t != 'none': lacks.append((cid, rev, t))
-        for n, d in says.items():
-            r = rows[n]
-            print('romdb DISAGREES %s%s: %s %s; romdb says %s (%s)' % (r[0], ' ' + r[3] if r[3] else '', r[1], r[2][:50],
-                  sorted(d), ' '.join(x for v in d.values() for x in v)[:60]), file=sys.stderr)
-            rows[n] = (r[0], r[1], r[2] + ' [romdb says %s]' % '/'.join(sorted(d)), r[3])
-        # 3. its MD5 lines (the ones the No-Intro dat has) against its own ID lines
-        mm = [(m, v) for m, v in mmd5.items() if m in ni]
-        for m, (save, tags, title) in mm:
-            i, nm = ni[m]; r = romdb_lookup(mids, i, revision(nm))
-            if r and r[1] != save: print('romdb md5 line vs its ID line differ:', i, nm, save, r[1], file=sys.stderr)
-        print('romdb: %d ID lines, %d md5 lines (%d in the No-Intro dat); %d probes agree, %d rows disagree, %d rows added, %d IDs of ours romdb lacks'
-              % (len(mids), len(mmd5), len(mm), agree, len(says), len(added), len(lacks)), file=sys.stderr)
-        for cid, rev, t in lacks: print('romdb lacks:', cid, rev, t, file=sys.stderr)
-        romdb_n = os.path.join(a.dir, 'romdb-n64-database.txt')
     srcs = ['mupen64plus (SaveType by ROM MD5), libretro no-intro (MD5 -> ID)'] + (['ares (by 3-character ID)'] if a.ares else []) + \
-           (['micro-64.com (by title; see below)'] if a.micro64 else []) + (['community N64 ROM database (by cartridge ID)'] if a.romdb else [])
+           (['micro-64.com (by title; see below)'] if a.micro64 else [])
     fetched = time.strftime('%Y-%m-%d', time.localtime(os.path.getmtime(os.path.join(a.dir, 'micro64.html')))) if a.micro64 else ''
     out = ['# n64savedb.txt -- the save type of a cartridge, by the ID in its ROM header (offsets 0x3B..0x3E, e.g. NBKE),',
            '# read by n64rt.sys (data slot 4 of the core, the file Assets/mirlo/common/n64savedb.txt). Plain facts about',
            '# cartridges, no ROM data. Generated by tools/build_savedb.py from: ' + '; '.join(srcs) + ';',
            '# edit by hand if you wish.'] + \
           (['# micro-64.com: http://micro-64.com/database/gamesave.shtml (Game Save Method List, updated 2020-04-13), fetched ' + fetched + '.'] if a.micro64 else []) + \
-          (['# romdb: a public list of cartridge IDs with their save type, fetched ' +
-            time.strftime('%Y-%m-%d', time.localtime(os.path.getmtime(romdb_n))) + '.'] if a.romdb else []) + \
           ['#',
            '#   <ID> <type>   # anything after a "#" is a comment',
            '#',
@@ -338,8 +240,8 @@ def main():
            '#         an SRAM or a FlashRAM from the game\'s first access, and a line of any other type is skipped (sram96k',
            '#         among them). Optional after the type: rev=0,1 -- the line is for those versions only (the header byte',
            '#         0x3F), for an ID whose revisions have different chips; other fields are ignored.',
-           '#   "[micro-64.com says X]", "[romdb says X]": that list has another type for the game; the row is what mupen64plus/ares say',
-           '#         (X is the romdb type: none = it lists the game with no save). "[mupen64plus says X]", "[ares says X]": a row judged by hand.',
+           '#   "[micro-64.com says X]": that list has another type for the game; the row is what mupen64plus/ares say.',
+           '#   "[mupen64plus says X]", "[ares says X]": a row judged by hand.',
            '#', '']
     for i, t, n, r in rows: out.append('%-5s %-9s %s# %s' % (i, t, '%-8s ' % r if r else '', n))
     if m64_un:

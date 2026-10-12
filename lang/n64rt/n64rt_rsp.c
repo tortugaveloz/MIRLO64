@@ -198,7 +198,7 @@ void n64rt_sp_irq(void)
     { extern void n64rt_tasks_events(void); n64rt_tasks_events(); }      /* (the audio's feed is the tick's) */
 }
 
-/* ---- what n64rt_io.c's task path calls (as n64rt_gfx.c / n64rt_audio.c gave it) ---- */
+/* ---- what n64rt_io.c's task path calls (as n64rt_gfx.c gives it in the earlier mode) ---- */
 const int n64rt_gfx_sp_early = 0;
 /* The game CPU at the RSP's memory (0x0400_0000: DMEM, IMEM), a word at a
  * time: by DMA through a word of RDRAM, the RSP halted. For the few games

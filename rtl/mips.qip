@@ -1,5 +1,5 @@
-# MIRLO's SoC (docs/mips.md), rtl/soc -- the game CPU, the geom and audio
-# cores (MIPS), MRDP, SDRAM, the scan-out. The Quartus project: projects/.
+# MIRLO's SoC (docs/mips.md), rtl/soc -- the game CPU, the geom core (MIPS),
+# MRDP, SDRAM, the scan-out. The Quartus project: projects/.
 # Before a compile: tools/mirlo_regs.py (the register map) and
 # tools/mips_inits.py (the boot ROM and geom ROM images, after building
 # lang/mips/boot and lang/c/geom).
@@ -34,8 +34,6 @@ set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path)
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "rdp.qip"]
 set_global_assignment -name VERILOG_FILE         [file join $::quartus(qip_path) "geom/GeomTcmRam.v"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "vpu/vpu.qip"]
-set_global_assignment -name VERILOG_FILE         [file join $::quartus(qip_path) "audio/AudioCore.v"]
-set_global_assignment -name VERILOG_FILE         [file join $::quartus(qip_path) "audio/AudioDspCfu.v"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/mips_lite.sv"]
 set_global_assignment -name SEARCH_PATH          [file join $::quartus(qip_path) "soc"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "video/rgb565_to_rgb888.sv"]

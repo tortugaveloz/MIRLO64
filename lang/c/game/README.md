@@ -24,11 +24,9 @@ all of it.
 | `frame.c/.h` | framebuffers (four RGB565 buffers + one depth buffer), GDL ring slots, `frame_begin()` / `frame_submit()` (clears, geometry-core kick, completion, vblank flip), optional pipelined mode (`frame_set_overlap()`), an FPS counter. |
 | `gdl_build.h` | cursor-based helpers that write a GDL. |
 | `log.c/.h` | a non-blocking log (a RAM ring pumped to the UART) for use inside the frame loop, and a trap handler that reports faults. |
-| `audio_load.c/.h` | loads a program into the audio core's memories and starts it. |
 | `cube_main.c` | example: a spinning, depth-tested cube. |
 | `demo_main.c` | example: the smallest drawing program, a spinning Gouraud triangle. |
 | `videotest_main.c` | diagnostic: cycles solid-colour framebuffers with no rendering at all — the first thing to run for any video problem. |
-| `tone_main.c` | loads the audio core's bring-up program (`../audio/main.c`), reports its self-tests and plays a 440 Hz tone. Build `../audio` first. |
 
 ## The frame loop
 
@@ -55,8 +53,7 @@ README); the program reads one of its variables, so build it against the same
 ```
 (cd ../../mips && make -f lib.mk VARIANT=game && make -f lib.mk VARIANT=lite)   # once
 (cd ../geom && make)               # geometry-core firmware
-(cd ../audio && make)              # audio-core firmware (PROG=tone embeds it)
-make                               # -> build/build.bin  (make PROG=demo, PROG=videotest, PROG=tone)
+make                               # -> build/build.bin  (make PROG=demo, PROG=videotest)
 ```
 
 `build/build.bin` is a game-CPU program: put it on the SD card as a Mirlo game

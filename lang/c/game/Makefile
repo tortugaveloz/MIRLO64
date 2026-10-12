@@ -4,10 +4,8 @@
 #   make                  the spinning cube (cube_main.c)
 #   make PROG=demo        the spinning triangle (demo_main.c)
 #   make PROG=videotest   the scan-out test (videotest_main.c)
-#   make PROG=tone        the audio core bring-up + a 440 Hz tone (tone_main.c)
 
 PROG ?= cube
-OBJECTS_tone = audio_load.o
 
 # lang/mips: the toolchain, picolibc, compiler-rt, crt0 and linker files
 BUILD    = build
@@ -15,7 +13,7 @@ PROGRAM  = build
 OBJECTS  = $(addprefix $(BUILD)/,log.o frame.o geom_load.o $(PROG)_main.o $(OBJECTS_$(PROG)))
 all: $(BUILD)/build.bin
 include ../../mips/program.mk
-CFLAGS  += -O2 -Wall -fno-strict-aliasing -I. -I../geom $(EXTRA_CFLAGS) -DAUDIO_FW_HEADER='"../audio/build/main/audio_fw.h"'
+CFLAGS  += -O2 -Wall -fno-strict-aliasing -I. -I../geom $(EXTRA_CFLAGS)
 # the geom core's firmware, loaded by frame_init() (geom_load.h)
 GEOM_FW_H ?= ../geom/build/geom_fw.h
 CFLAGS  += -DGEOM_FW_HEADER='"$(abspath $(GEOM_FW_H))"'

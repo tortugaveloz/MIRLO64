@@ -6,7 +6,7 @@
 * [`fungus`](./examples/fungus/) - A demo with visuals, sound and controls.
 * [`dhrystone`](./examples/dhrystone/) - The Dhrystone benchmarking program.
 * [`keytest`](./examples/keytest/) - Prints the Pocket's buttons as they are pressed.
-* [3D: `game`](./game/) - Drawing with the geometry core and MRDP: a spinning cube and triangle, the frame/GDL SDK they use, and an audio-core example. The geometry core's firmware is in [`geom`](./geom/), the audio core's in [`audio`](./audio/).
+* [3D: `game`](./game/) - Drawing with the geometry core and MRDP: a spinning cube and triangle, and the frame/GDL SDK they use. The geometry core's firmware is in [`geom`](./geom/).
 
 ## Overview
 
