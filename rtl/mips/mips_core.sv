@@ -51,9 +51,9 @@
 //    any size, 4 KiB of it at a time -- and return to the instruction.
 //    With MON a fault that goes to the monitor level leaves BadVAddr and
 //    EntryHi as the game has them (a page the game's wired entry maps misses
-//    the tables where the VR4300's TLB never would: GoldenEye's exception
-//    handler runs from 0x7000_0000, and a miss on its first fetch replaced
-//    the BadVAddr it was about to read): the address is COP0 register 22's,
+//    the tables where the VR4300's TLB never would: an exception handler
+//    that runs from a mapped page must not have a miss on its first fetch
+//    replace the BadVAddr it is about to read): the address is COP0 register 22's,
 //    which only reads, and the monitor level writes BadVAddr by mtc0 for the
 //    exception it delivers to the game. An
 //    entry is written through COP0 register 23: a write stores the entry of
@@ -452,10 +452,10 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // (FLAT with N64WIN and the TLB: the N64 game's mapped addresses are those
 // below 0x2000_0000, where Mirlo's own map has nothing -- SM64's 0x0400_0000 --
 // and, with MAP_HI, 0x6000_0000 - 0x7FFF_FFFF, where it has nothing either once
-// the monitor owns the RCP and there is no audio core: GoldenEye maps and runs
-// from 0x7000_0000.)
-// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there, and a game maps its code there:
-// Mario Tennis jumps to 0x5000_xxxx after its second logo. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
+// the monitor owns the RCP and there is no audio core: a game can map its code
+// at 0x7000_0000 and run from there.)
+// (and 0x5000_0000 - 0x5FFF_FFFF: nothing of this system is there, and a game can map its code
+// there and jump to it. 0x2000_0000 - 0x4FFF_FFFF stay physical: the RSP, the SDRAM.)
 localparam bit MAP_HI = TLB_RAM && MON;
 function automatic logic kseg01(input logic [31:0] va);
     return FLAT ? !((TLB_EN || TLB_RAM) && N64WIN && (va[31:29] == 3'b000 || (MAP_HI && (va[31:29] == 3'b011 || va[31:28] == 4'b0101)))) : va[31:30] == 2'b10;

@@ -8,16 +8,16 @@ static unsigned row_of(unsigned j, unsigned ys) { return (j * ys) >> 10; }
 int main(void)
 {
     unsigned r, s;
-    /* Mario Golf (Europe), the VI's registers as the sim reads them (V_SYNC 0x271, H_START 0x800300, V_START 0x002F0269, Y_SCALE 0x35C, WIDTH 320):
+    /* A wide PAL mode, the VI's registers as the sim reads them (V_SYNC 0x271, H_START 0x800300, V_START 0x002F0269, Y_SCALE 0x35C, WIDTH 320):
      * 285 lines from the half-line 47, before the PAL field's 95: line 0 of the field, rows 0..284 of the window, a 240-row buffer */
     n64rt_vi_fit(0, 285, 0x35C, &r, &s);
-    CHECK(r == 240 && s == 0x3FD, "Mario Golf: rows %u ys %03x (want 240, 3FD)", r, s);
-    CHECK(row_of(r - 1, s) == row_of(285 - 1, 0x35C), "Mario Golf: the last line shows the row %u, the VI's last shows %u", row_of(r - 1, s), row_of(284, 0x35C));
-    CHECK(row_of(0, s) == 0, "Mario Golf: the first line's row");
-    /* the modes that fitted: 237 lines (libultra's NTSC and PAL: SM64 (Europe) V_START 0x5F0239), GoldenEye's 237 lines of 330 rows, Banjo-Kazooie's 216 from 12 */
+    CHECK(r == 240 && s == 0x3FD, "285 lines: rows %u ys %03x (want 240, 3FD)", r, s);
+    CHECK(row_of(r - 1, s) == row_of(285 - 1, 0x35C), "285 lines: the last line shows the row %u, the VI's last shows %u", row_of(r - 1, s), row_of(284, 0x35C));
+    CHECK(row_of(0, s) == 0, "285 lines: the first line's row");
+    /* the modes that fitted: 237 lines (libultra's NTSC and PAL: V_START 0x5F0239), 237 lines of 330 rows, 216 from 12 */
     n64rt_vi_fit(0, 237, 0x400, &r, &s); CHECK(r == 237 && s == 0x400, "237 lines changed: %u %03x", r, s);
-    n64rt_vi_fit(0, 237, 0x580, &r, &s); CHECK(r == 237 && s == 0x580, "GoldenEye changed: %u %03x", r, s);
-    n64rt_vi_fit(12, 216, 0x400, &r, &s); CHECK(r == 216 && s == 0x400, "Banjo-Kazooie changed: %u %03x", r, s);
+    n64rt_vi_fit(0, 237, 0x580, &r, &s); CHECK(r == 237 && s == 0x580, "237 lines of 330 rows changed: %u %03x", r, s);
+    n64rt_vi_fit(12, 216, 0x400, &r, &s); CHECK(r == 216 && s == 0x400, "216 lines from 12 changed: %u %03x", r, s);
     n64rt_vi_fit(3, 237, 0x400, &r, &s); CHECK(r == 237 && s == 0x400, "237 lines from 3 (240 exactly) changed: %u %03x", r, s);
     n64rt_vi_fit(0, 240, 0x400, &r, &s); CHECK(r == 240 && s == 0x400, "240 lines changed: %u %03x", r, s);
     /* a PAL mode of the whole 288 lines (V_START 0x2F..0x26F), a 288-row buffer: all of it in the 240 lines, the last row the last */

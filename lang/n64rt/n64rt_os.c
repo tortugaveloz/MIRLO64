@@ -683,8 +683,8 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
     if ((badv & 0x1FFFFFFFu) < 0x03F00000u) {
 #ifdef N64RT_OWN
         /* Past the RDRAM the console has (8 MiB here), below the RCP: nothing. A game that sizes the memory itself goes on a megabyte
-         * at a time until a word does not read back -- F-Zero X writes 0x12345678 at 0xA040_0000, 0xA050_0000 ... and its
-         * 0xA080_0000 stopped the runtime: a black screen at the start. On the console the store goes nowhere and the load is 0. */
+         * at a time until a word does not read back: it writes 0x12345678 at 0xA040_0000, 0xA050_0000 ... and its 0xA080_0000
+         * must not stop the runtime. On the console the store goes nowhere and the load is 0. */
         if ((badv & 0x1FFFFFFFu) < n64rt_game->mem_size) return 0;      /* (the RDRAM itself is not the monitor's) */
         if (bd && !branch_next(x, x->epc, &next)) return 0;
         if (!emulate_none(x, op, rt)) return 0;
@@ -903,7 +903,7 @@ _Static_assert(sizeof(struct n64rt_tlbr_e) == 16, "n64rt_exc.S's tlbr, tlbp and 
  * A game that fills its TLB from a page table of its own (a refill handler: tlbwr) has more pages in use than the TLB's 32
  * entries hold, and each tlbwr puts a random one out: on the console the page it mapped is a refill away, a dozen
  * instructions. Here a refill is two trips through the monitor and the game's handler between them (the fault delivered,
- * its tlbwr, the tables' fill): some 3,000 clocks, and GoldenEye in a level took 180 of them a field, with as many tlbwr --
+ * its tlbwr, the tables' fill): some 3,000 clocks, and a game can take 180 of them a field, with as many tlbwr --
  * a third of the CPU's time. So the entry a tlbwr replaces is KEPT (s_vic, by its page pair: 4 KiB pages only) and its pages
  * stay in the CPU's tables: an access to them goes on as before, and one that misses the tables is filled from here
  * (tlb_service), neither seen by the game. The game sees its 32 entries as the VR4300 has them (tlbr, tlbp, Index, Random).
@@ -913,8 +913,8 @@ _Static_assert(sizeof(struct n64rt_tlbr_e) == 16, "n64rt_exc.S's tlbr, tlbp and 
  * can change under an entry that is kept here. So a kept entry goes (with its pages in the tables) as soon as the game
  *   - looks for the page with a tlbp (it finds nothing, as on the console, and there is nothing from then on),
  *   - writes an entry of the same page pair, or an entry that maps one of its frames (the frame is another page's now),
- *   - reads into one of its frames from the cartridge (n64rt_tlb_frames_loaded: GoldenEye looks for a page's entry by reading
- *     all 32 with tlbr, finds none for a page whose entry a tlbwr replaced, and loads another page of its code over the frame),
+ *   - reads into one of its frames from the cartridge (n64rt_tlb_frames_loaded: a game that looks for a page's entry by reading
+ *     all 32 with tlbr finds none for a page whose entry a tlbwr replaced, and loads another page of its code over the frame),
  *   - writes three entries that map nothing in a row (a flush of the TLB): then all of them go.
  * What is left is a game that reuses a frame by copying into it with the CPU while another thread runs code from the page
  * it was: no game known here does. N64RT_NO_TLBKEEP builds the runtime without any of it (every tlbwr as the console's). */
@@ -1064,9 +1064,9 @@ static int tlb_insn(n64rt_ctx_t *x, int bd)
  * The fault's address is COP0 register 22's: a fault that comes to the monitor leaves the game's BadVAddr and EntryHi as the
  * game has them, and the monitor writes both for the exception it delivers. A page that an entry of the game's maps can miss
  * the tables at any time (512 entries by the page number's low 9 bits; a wired entry of the VR4300's TLB never misses) --
- * GoldenEye's libultra runs from 0x7000_0000, and when its exception handler's own page (0x70010) had been put out of the
- * fetch table by 0x7F010's, the fill of it replaced the BadVAddr the handler was about to read: the fault thread found a TLBL
- * that was not at 0x7Fxxxxxx and stopped the game for ever (a level's load: black, silent). */
+ * a libultra that runs from 0x7000_0000 has its exception handler's own page (0x70010) put out of the fetch table by
+ * 0x7F010's, and a fill of it that replaced the BadVAddr the handler is about to read would hand the fault thread a TLBL
+ * that is not where the game's pages are: it stops the game for ever (black, silent). */
 enum { TLBX_FILLED, TLBX_REFILL, TLBX_INVALID, TLBX_MOD, TLBX_NONE };
 static int tlb_service(u32 code, u32 badv)
 {
@@ -1101,7 +1101,7 @@ static int tlb_service(u32 code, u32 badv)
             if ((lo & 2u) && !(code == 1u && !(lo & 4u)) && pa < 0x00800000u) {
 #ifdef N64RT_TLBKEEP_CHECK
                 {   /* (a debugging build, for a game whose refill handler reads its page table by Context from the pointer at
-                     * N64RT_TLBKEEP_CHECK -- GoldenEye's is at 0x8005E4A4: the kept entry must be what a refill would write now) */
+                     * N64RT_TLBKEEP_CHECK: the kept entry must be what a refill would write now) */
                     const u32 base = *(volatile u32 *)(uintptr_t)N64RT_TLBKEEP_CHECK;
                     const u32 pte = *(volatile u32 *)(uintptr_t)(base + ((badv >> 13) << 4)) & 0x3FFFFFFFu;
                     static u32 s_n, s_bad;
@@ -1288,7 +1288,7 @@ static int emulate_mapped(n64rt_ctx_t *x, u32 cause)
     u32 ea = g32(x, rs) + (u32)(s32)(s16)insn, k = ea & 3u, v, r = g32(x, rt), pa;
     if (!n64rt_tlb_phys(ea, &pa)) {
         /* A page mapped onto nothing the console has: libultra's osMapTLBRdb maps 0xC000_0000 onto the development board's debug
-         * port, physical 0x8000_0000 (entry 31, at osInitialize: GoldenEye and F-Zero X both have it), for a game that still has
+         * port, physical 0x8000_0000 (entry 31, at osInitialize), for a game that still has
          * the debugger's code in it to write to. On the console the store goes nowhere and a load reads nothing: so here. */
         if (!tlb_maps_nothing(ea)) return 0;
         if (bd && !branch_next(x, x->epc, &next)) return 0;

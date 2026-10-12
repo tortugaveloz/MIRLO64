@@ -7,13 +7,13 @@
 //    clocks and 264 lines make 208,560 clocks: nine of the lines in vblank lose two clocks (1,042,710 sys clocks,
 //    59.9400 Hz to 1.5 ppm), see below. The Pocket's scaler slot 0 (video.json) is 640 x 240.
 //  - the picture is the VI's own: a window of the line (VI_H_START / H_END: `vi_px0`, `vi_pw`, in pixel clocks from
-//    the VI's 108 -- Mario Tennis' is 597 wide, 20 in) and of the field (`vi_y0`, `vi_rows`: V_START / V_END), black
+//    the VI's 108 -- one 597 wide, 20 in, is not centred) and of the field (`vi_y0`, `vi_rows`: V_START / V_END), black
 //    around it. The window's pixel i (clock i) shows the framebuffer's pixel floor(i X_SCALE / 1024) (`vi_xs`, 2.10:
-//    0x200 doubles a 320-wide picture, 0x2C0 shows GoldenEye's 440 whole, 0x400 is a hi-res 640), its line j the row
+//    0x200 doubles a 320-wide picture, 0x2C0 shows a 440-wide one whole, 0x400 is a hi-res 640), its line j the row
 //    floor(j Y_SCALE / 1024) (`vi_ys`: 0x400 a row a line, 0x800 every other row: a hi-res picture's even rows),
-//    the rows `vi_width` pixels apart (the VI's WIDTH: a hi-res DK64's 1280 is two rows of 640). Nearest pixel and
+//    the rows `vi_width` pixels apart (the VI's WIDTH: a hi-res picture's 1280 is two rows of 640). Nearest pixel and
 //    row, the VI's filters at the framebuffer's own pixels, as the VI has them (below). One path for every size.
-//    A SERRATED hi-res picture (VI_CTRL's SERRATE: Pokemon Stadium's menus, DK64's logos: 640 x 480 as two fields of 240 rows)
+//    A SERRATED hi-res picture (VI_CTRL's SERRATE: 640 x 480 as two fields of 240 rows)
 //    is not sent as 480i, which the Pocket does not take reliably: it is the same 640 x 240 progressive frame, each line the
 //    average of the rows 2k and 2k + 1 of the picture (`vi_avg`; what a CRT mixes of the two fields; docs/resolution.md).
 //  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new

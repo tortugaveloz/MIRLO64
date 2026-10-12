@@ -476,7 +476,7 @@ int main(void)
         check("0x7F00_0000: a function fetched there ran", r, 0x1234);
         check("0x7F00_0000: the refill's BadVAddr", LOG(8), 0x7F000000u);
     }
-    /* (and 0x5000_0000 - 0x5FFF_FFFF: a game maps its code there too -- Mario Tennis, after its logos) */
+    /* (and 0x5000_0000 - 0x5FFF_FFFF: a game may map its code there too) */
     pte(0x50000000u, LO(0x11E000, LV | LD | LG), LO(0x120000, LV | LD | LG));
     pre = LOG(0);
     check("0x5000_0000: a load", *(volatile uint32_t *)0x50000000u, 0x1E000000u);
@@ -542,7 +542,7 @@ int main(void)
         check("code speed: the mapped loop within 1.3x of KSEG0's", t_map * 10 <= t_k0 * 13, 1);
     }
 
-    /* 12. the game's exception handler on a mapped page (GoldenEye's libultra runs from 0x7000_0000, an entry it wires) whose place
+    /* 12. the game's exception handler on a mapped page (a libultra that runs from 0x7000_0000, an entry the game wires) whose place
      * in the fetch table another page has taken (0x7F010's: the same low nine bits of the page number). The handler's first fetch
      * misses the tables, which the monitor fills -- and BadVAddr and EntryHi are still the fault's when the handler reads them
      * (the VR4300's TLB does not miss there): the general handler's tlbp finds the faulting entry, not its own page's. */

@@ -1,7 +1,7 @@
 /* tlbkeep_test: a game for the entries the runtime keeps when a tlbwr puts them out (n64rt_os.c, "the entries a tlbwr put out") --
  * a program linked for 0x8000_0400 that runs as a game under the loader (OWN) on the SoC in sim/mips_soc, with a refill handler
  * of its own at 0x8000_0000 that fills the TLB from a page table by Context (PTEBase 0x8000_0000: 16 bytes a pair, EntryLo0,
- * EntryLo1) with tlbwr, as GoldenEye's does. Wired is 31: every tlbwr writes entry 31, so each refill puts the one before out.
+ * EntryLo1) with tlbwr. Wired is 31: every tlbwr writes entry 31, so each refill puts the one before out.
  * What it checks (the refills are counted by the handler):
  *   1. 64 page pairs read, then read again: the data, and no refill the second time (the console would take 64 more: its TLB
  *      holds one of them -- that is what is kept); a store through a kept page
