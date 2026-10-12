@@ -16,7 +16,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Controllers**: up to four through the Dock, controls are customizable.
 * **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, and EEPROM, SRAM and FlashRAM saves.
 
-A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included.
+A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
 ## Status
 
