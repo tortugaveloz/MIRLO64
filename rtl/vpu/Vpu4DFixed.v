@@ -9,7 +9,7 @@
 // V's variable-precision DSP block does a signed 27x27 multiply in ONE
 // block, while 32x32 costs three. S17.10 keeps >2.7x headroom over the
 // largest clip-space value measured on real game content (~23,659) and
-// >3.7x over the largest matrix element (~17,424); docs/geometry_core.md.
+// >3.7x over the largest matrix element (~17,424).
 //
 // Each of the 4 output lanes has its own multiply-accumulate unit (4 DSP
 // blocks in total) and the four lanes run at once; within a lane the 4 terms

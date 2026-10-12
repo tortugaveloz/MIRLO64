@@ -1,7 +1,7 @@
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/mrdp/mrdp.c built with MRDP_N64: for the same command stream the RTL
-// writes the same memory. From MRDP (rtl/mrdp, docs/mrdp.md), which draws the
+// writes the same memory. From MRDP (rtl/mrdp), which draws the
 // geometry core's triangles: here the triangles are the N64's (0x08..0x0F),
 // TMEM is the N64's 4 KiB loaded by LOAD BLOCK / LOAD TILE / LOAD TLUT and
 // decoded by the tile's format when sampled, texture rectangles, 2-cycle and

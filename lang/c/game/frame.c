@@ -11,7 +11,7 @@
 #include GEOM_FW_HEADER
 #include "log.h"
 #include "../geom/geom_gdl.h"
-/* MRDP (docs/mrdp.md), the N64-style rasterizer: every
+/* MRDP, the N64-style rasterizer: every
  * frame's clears lead its GDL and a SYNC FULL ends it (GDL_RAW, forwarded
  * by the geom core in stream order), in serial and pipelined mode alike, so
  * once frame_init() is done the geom core is the only writer of MRDP's

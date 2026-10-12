@@ -15,7 +15,7 @@
  * guMtxF2L() scales by 65536), so this format needs no separate precision
  * case-study: it inherits the original hardware's. Integer range (+-32767)
  * comfortably covers the worst clip-space value measured on real game
- * content (~23,659; docs/geometry_core.md).
+ * content (~23,659).
  *
  * This is a genuinely different, WIDER format than the CFU's S17.10 --
  * with the CFU's 10 fractional bits a projection scale of exactly 1/1000
@@ -24,8 +24,8 @@
  * 1/1000 to within 1/65536, matching the N64 precedent that never hit this
  * problem. Software scalar ops (this file) get that full precision;
  * the CFU's parallel per-vertex transform (geom_vpar.h) still quantizes to
- * S17.10 at its own boundary -- a separate, smaller-impact tradeoff
- * (docs/geometry_core.md), not fixed by this file.
+ * S17.10 at its own boundary -- a separate, smaller-impact tradeoff,
+ * not fixed by this file.
  *
  * The `float` C TYPE is kept as the interface throughout geom_pipeline.c/
  * geom_triangle.c/geom_vecmath.h -- only the bit PATTERN is used (via the

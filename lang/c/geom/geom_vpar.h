@@ -1,5 +1,5 @@
 /* CFU intrinsics for rtl/vpu/Vpu4DFixed.v -- the parallel fixed-point
- * matrix-vector engine (docs/geometry_core.md). Custom-0 R-type
+ * matrix-vector engine. Custom-0 R-type
  * instructions, function id = {funct7[6:0], funct3[2:0]} (10 bits),
  * matching the wiring of the SoC and the RTL's own function-id map:
  *

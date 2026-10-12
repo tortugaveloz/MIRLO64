@@ -1,4 +1,4 @@
-/* The geom core's MRDP back end (docs/mrdp.md): render state, texture loads
+/* The geom core's MRDP back end: render state, texture loads
  * and triangles as N64 RDP commands. Shared by the geom core and the host
  * simulator (GEOM_HOST_TEST), which feeds the words to the bit-exact model
  * (lang/c/mrdp/mrdp.c) -- the same words the hardware gets.

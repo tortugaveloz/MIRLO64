@@ -1,407 +1,530 @@
 # The RDP
 
-`rtl/rdp` draws the N64's own command stream: what a game's microcode,
-running on the RSP ([rsp.md](rsp.md)), leaves in memory for the RDP. It is
-in the SoC with the Verilog macro `MIRLO_RSP`, in MRDP's place.
+The RDP of MIRLO 64 (`rtl/rdp`) draws the N64's own command stream: what a
+program's microcode, running on the RSP ([rsp.md](rsp.md)), leaves in memory
+for it. It decodes the N64's commands, walks the N64's triangle coefficients,
+keeps the N64's 4 KiB of TMEM and writes a 16-bit colour image and a 16-bit
+depth image in the N64's memory.
 
-It comes from MRDP ([mrdp.md](mrdp.md)), whose pixel pipeline it keeps: the
-N64's combiner and blender, a 16-bit Z buffer, one pixel a clock. What
-differs is everything that MRDP had moved to the geometry core -- triangle
-setup, texture decoding -- and is here the N64's again. The contract is the
-same C model, `lang/c/mrdp/mrdp.c`, built with `MRDP_N64`: for the same
-commands the RTL writes the same memory.
+Its contract is a C reference model (integer arithmetic only): for the same
+command stream the RTL writes the same memory, byte for byte. The benches in
+`sim/rdp` compile that model next to the RTL (`sim/rdp/build_rtl.sh` and
+`sim/rdp/Makefile` name its source).
+
+| file | what it is |
+|---|---|
+| `rtl/rdp/rdp_dpc.sv` | the DPC registers and the command fetch |
+| `rtl/soc/rcp_dpc_view.sv` | DPC_STATUS as a reader sees it |
+| `rtl/rdp/rdp_top.v` | command intake and decode, state, the sequencer, the edge walker, the line buffers |
+| `rtl/rdp/rdp_pix.v` | the pixel pipeline: texture, combiner, coverage, depth, blender, dither |
+| `rtl/rdp/rdp_tmem.v` | one copy of TMEM |
+| `rtl/rdp/rdp_mem.v` | every access to the N64's memory: span reads, write-back, fills, texture loads |
+| `rtl/rdp/rdp_zmem.v` | the optional depth port's engine |
+
+`rtl/soc/mirlo_mips.sv` instantiates `rdp_top`, `rdp_dpc` and `rcp_dpc_view`.
+
+## The command interface
+
+### Registers and fetch
+
+`rdp_dpc.sv` holds the N64's DPC_START, DPC_END, DPC_CURRENT and DPC_STATUS
+and fetches the 64-bit commands between CURRENT and END, handing them on as
+32-bit words.
+
+* A write of START is held until the next write of END, which makes
+  CURRENT = START and sets END. While commands are still being fetched that
+  pair waits for them. A write of END alone extends the run.
+* There is work while CURRENT is below END. An END behind CURRENT is nothing
+  to do, not a run round the address space.
+* CURRENT moves by 8 as each command's second word comes back. Up to four
+  words are asked for or held at a time.
+* DPC_STATUS writes set and clear XBUS, FREEZE and FLUSH with the N64's bit
+  pairs. FREEZE stops the fetch. FLUSH is only stored.
+* Without XBUS the commands are read from RDRAM, through a port of the SDRAM
+  arbiter that the fetch has for itself. With XBUS they are in the RSP's
+  DMEM, and START, END and CURRENT are addresses in it: the words are read
+  from a copy of DMEM that the RSP keeps for this, a word a cycle.
+
+Two writers reach the registers:
+
+* **The RSP.** The microcode writes START, END and STATUS through the RSP's
+  COP0.
+* **The CPU.** The CPU's device port has them at `0x2000_0040` (START),
+  `+44` (END), `+48` (CURRENT, read only) and `+4C` (STATUS); the monitor
+  forwards a program's accesses there. A CPU write is taken in a cycle in
+  which the microcode is not writing a register itself.
+
+### What a reader sees
+
+Both readers get START, END and CURRENT from `rdp_dpc.sv` and DPC_STATUS
+from `rcp_dpc_view.sv`, which gives the console's layout:
+
+| bit | name | here |
+|---|---|---|
+| 0, 1, 2 | XBUS, FREEZE, FLUSH | as written |
+| 3 | START_GCLK | set by a write of END (not while frozen) and by an unfreeze; cleared when a SYNC FULL completes |
+| 4 | TMEM busy | always 0 |
+| 5 | PIPE busy | as bit 3; also cleared by bit 7 of a STATUS write |
+| 6 | command busy | always 0 |
+| 7 | CBUF ready | always 1 |
+| 8 | DMA busy | CURRENT below END |
+| 9, 10 | END valid, START valid | a pair waiting; a START written and its END not yet |
+
+After a list without a SYNC FULL the register reads `0xA8`. A write of START
+while START is valid is ignored.
+
+### The command FIFO
+
+The fetched words go into a 4096-word FIFO in `rtl/soc/mirlo_regs.sv`, and
+from there to `rdp_top`. The same module lets the CPU read the FIFO's level,
+the count of completed SYNC FULLs and an idle flag. A completed SYNC FULL
+also pulses the DP interrupt of the MI (`rcp_mi`).
 
 ## Commands
 
+`rdp_top` takes one command at a time. Its length comes from the first word:
+a triangle is 8 words plus 16 for shade, 16 for texture and 4 for Z; a
+texture rectangle is 4; everything else is 2. State commands wait for the
+primitive before them to finish, so the pixel pipeline never sees a state
+change with pixels in flight.
+
 | op | command | notes |
 |---|---|---|
-| 0x08-0x0F | triangle | the N64's: edges, then shade, texture, Z coefficients |
+| 0x00 | no-op | |
+| 0x08-0x0F | triangle | edges, then shade, texture and Z coefficients by the opcode's low three bits |
 | 0x24, 0x25 | texture rectangle, flipped | |
-| 0x26-0x28 | sync load / pipe / tile | nothing to do: commands run in order |
-| 0x29 | sync full | done when every earlier write is in memory; counted (the DP interrupt) |
-| 0x2D | set scissor | |
-| 0x2E | set prim depth | |
-| 0x2F | set other modes | what is honoured: below |
+| 0x26-0x28 | sync load, pipe, tile | nothing to do: commands run in order |
+| 0x29 | sync full | completes when every earlier write has been accepted by the memory |
+| 0x2D | set scissor | the four coordinates; the interlace field bits are not read |
+| 0x2E | set primitive depth | Z (15 bits) and its delta |
+| 0x2F | set other modes | what is read of them: below |
 | 0x30 | load TLUT | |
 | 0x32 | set tile size | |
 | 0x33 | load block | |
-| 0x34 | load tile | |
-| 0x35 | set tile | format, size, line, TMEM address, palette, clamp / mirror / mask / shift |
+| 0x34 | load tile | also sets the tile's size |
+| 0x35 | set tile | format, size, line, TMEM address, palette, clamp, mirror, mask, shift |
 | 0x36 | fill rectangle | |
-| 0x37-0x3B | fill, fog, blend, prim, env colour | |
+| 0x37-0x3B | fill, fog, blend, primitive, environment colour | primitive colour also sets the primitive LOD fraction |
 | 0x3C | set combine | both cycles |
-| 0x3D-0x3F | texture, Z, colour image | |
+| 0x3D-0x3F | texture, depth, colour image | |
 
-Anything else (set key, set convert, the invalid opcodes) is counted and
-skipped.
+Any other opcode (set key, set convert, the undefined ones) is counted in
+`unknown_ops` and skipped as a two-word command.
 
-## Triangles
+## Drawing a primitive
 
-Every triangle is walked as the N64 walks it (the model's `MRDP_CVG`,
-`lang/c/mrdp/mrdp.h`; Angrylion's rules), with or without AA_EN:
+A primitive is drawn row by row. For each row the sequencer:
 
-* **Subscanlines.** Each row is four subscanlines. The edges start at
-  `XH & ~1` (and XM, XL) at the first row's top and step `(DxDy >> 2) & ~1`
-  each subscanline, one subscanline a clock (`S_AASUB`, five clocks a row).
-  Each edge is taken to eighths of a pixel with a sticky bit and clamped to
-  the scissor. A subscanline counts if it is between YH and YL and the
-  scissor's quarter rows, and its edges have not crossed.
-* **Samples.** Each subscanline has two samples in a checkerboard, so a
+1. finds the row's span (the walker for a triangle, fixed columns for a
+   rectangle);
+2. asks the memory engine for what the pixels need of memory: the depth span
+   with Z_CMP, the colour span when the blender or the coverage reads it, and
+   the span's hidden coverage words;
+3. sets up the attributes at the span's first pixel;
+4. issues the pixels, one a clock as their memory words come in;
+5. asks for the write-back of the row's results.
+
+What memory holds and what the pixels produce sit in on-chip line buffers of
+512 words, two pixels a word, so a span is at most 1024 pixels. There are two
+sets of them and rows alternate between the sets, so a row's reads, its
+pixels and the write-back of the row before overlap. Only pixels that passed
+are written, by byte enables; a word with none is not written. The depth span
+is written only with Z_UPD. A primitive ends when its last pixel is back in
+memory.
+
+The colour span is read only when it is needed: with FORCE_BL, when a blender
+cycle in use selects memory; without it, when the last cycle's P is memory
+or, in 2-cycle mode, the first cycle's blend of it; and whenever the memory's
+coverage is read (IM_RD with AA_EN or CVG_X_ALPHA).
+
+### Triangles
+
+Every triangle is walked with the N64's coverage rules, with or without
+AA_EN.
+
+* **Subscanlines.** Each row is four subscanlines. The three edges start at
+  `X & ~1` at the first row's top and step `(DxDy >> 2) & ~1` a subscanline,
+  one subscanline a clock (five clocks a row). Each edge is taken to eighths
+  of a pixel with a sticky bit and clamped to the scissor. A subscanline
+  counts if it is between YH and YL and inside the scissor's quarter rows,
+  and its edges have not crossed.
+* **XL.** XH and XM are the edges at YH's scanline, but XL is the low edge at
+  YM itself. It is taken back by YM's quarter rows of its slope before the
+  walk.
+* **Samples.** Each subscanline has two samples, in a checkerboard, so a
   pixel has an 8-sample mask. The span is every pixel a subscanline reaches.
-  With AA_EN a pixel is drawn if any sample is covered; **without it, only
-  if sample 7 is** -- the pixel's top-left corner, so an edge exactly on a
-  pixel's left takes it and any fraction after does not.
-  The coverage is the mask's count either way
-  (a rectangle's is 8). Before this a triangle without AA_EN was MRDP's
-  centre rule: a pixel whose centre is inside, whole -- half a pixel from the
-  console's (41.8 % of the pixels of 2,939 random small triangles differed).
-* **Attributes and Z.** Attributes are the plane's value at the pixel's
-  **top-left corner** (x, the row's top) -- the N64's `lineFrac`,
-  not the pixel centre: S and T at (x, y) mean
-  texel S, not S + 0.5, so a 1:1 mapped texture is not blurred by a half-pixel
-  phase. Z moves to the first covered sample (as the N64's offx / offy do),
-  from the corner by (0, 2, 4, 6) eighths a pixel; sample 7, the only one
-  a pixel without AA_EN has, is at the corner. Shade is not corrected to the
-  sample (the console does: it would take about 150 ALMs here; the error
-  is under a level on smooth shading).
-* **Cost.** The walker adds five clocks a row (measured: +0.1 % cycles on
-  144 SF64 and 6 Stadium task dumps); the old centre-rule path (the
-  `exm`/`exl` edges, `S_SPAN`) is gone from the RTL. The span reads cost
-  some 15-20 % of the RDP's time on Stadium's dumps: an AA surface with
-  IM_RD reads its colour span, as the N64 does.
+  With AA_EN a pixel is drawn if any sample is covered; without it, only if
+  sample 7, the pixel's top-left corner, is covered. The coverage is the
+  mask's count in both cases.
+* **Attributes.** The attribute words wait in a 64-word staging RAM. Each
+  attribute's value, DaDx and DaDe are put together there from their integer
+  and fraction halves. The row-start values step by DaDe each row; a pixel's
+  value is the plane at its top-left corner. DaDy is not read, except Z's.
+* **Z.** Z moves from the corner to the pixel's first covered sample, by
+  DzDx and DzDy in quarter pixels. The shade is not moved.
+* **S, T, W.** S and T are s10.5 in the integer half and W is s.15; they are
+  shifted into the pipeline's units where the pixels start.
+* **Depth step.** From DzDx and DzDy the walker derives the primitive's
+  depth step: all ones under the top bit of |DzDx| + |DzDy|, in the stored
+  depth's units. The depth test and the blender use it (below).
 
-The N64's coefficients go in as they are, with two things of theirs minded:
+A triangle whose command has no texture block has S = T = W = 0, and the
+texture stages run all the same: TEXEL0 is the tile's texel (0, 0).
 
-* XH and XM are the edges at YH's scanline, but **XL is the low edge at YM
-  itself**, the middle vertex: it is taken back by YM's quarter rows of its
-  slope before the walk. (Read as if at YM's scanline, a shallow low edge is
-  off by up to 3/4 of its slope: cracks along every such edge.)
-* S and T are s10.5 in the integer half and W is s.15; they are shifted into
-  the pipeline's units where the pixels start.
+### Rectangles
 
-A triangle's attribute words wait in a 64-word staging RAM; each attribute's
-value, DaDx and DaDe are put together from their integer and fraction halves
-there (about ten cycles an attribute). DaDy is not used, but Z's (a decal's
-depth tolerance).
+A rectangle's pixels are whole: all eight samples. The corners' integer parts
+are taken; the lower-right corner is inclusive for a texture rectangle in
+copy mode and for a fill rectangle in fill mode, exclusive otherwise. Its
+depth is the primitive depth.
+
+A texture rectangle steps S by DsDx along the row and T by DtDy down the
+rows; the flipped one swaps the two. In copy mode DsDx counts a quarter of
+its value. A fill rectangle outside fill mode goes through the pixel pipeline
+like any untextured primitive.
 
 ## Textures
 
-TMEM is the N64's 4 KiB, as 2048 16-bit words. The loads copy the texture
-image as it is in memory:
+### TMEM and the loads
 
-* **load block**: a run of texels, in whole 64-bit words;
+TMEM is the N64's 4 KiB, as 2048 16-bit words: four memories of 512 words,
+the lower and upper halves by the even and odd words. The loads copy the
+texture image as it is in memory, from a source that may start at any byte:
+
+* **load block**: a run of texels in whole 64-bit words, at most 4 KiB;
 * **load tile**: a rectangle, each row at the tile's `line`;
-* **load TLUT**: 16-bit entries, each written four times over, as the N64
-  keeps them (64 bits an entry in the upper half);
-* a 32-bit RGBA tile is split as the N64 splits it: R and G in the lower
-  half of TMEM, B and A in the same word of the upper half.
+* **load TLUT**: up to 256 16-bit entries, each written four times over (64
+  bits an entry);
+* a load into a 32-bit RGBA tile is split: R and G go to the lower half of
+  TMEM, B and A to the same word of the upper half.
 
-The source may start at any byte. An odd row's 64-bit words go into TMEM
-with their halves changed places, and are sampled so, as the N64's: a row is
-odd by the load's own count (LOAD TILE's rows; LOAD BLOCK's dxt summed over
-its words), so a LOAD BLOCK with dxt 0 loads every row as an even one -- and
-a game that does that keeps its textures' odd rows swapped in the ROM.
+An odd row's 64-bit words go into TMEM with their halves changed places, and
+are sampled so. A row is odd by the load's own count: LOAD TILE's rows, or
+LOAD BLOCK's dxt summed over its words. A LOAD BLOCK with dxt 0 loads every
+row as an even one.
+
+### Coordinates
+
+* **Perspective** (other modes): W is normalised and its reciprocal comes
+  from a 64-entry table with linear interpolation; S and T are multiplied by
+  it. A W of zero or below counts as the smallest positive one. Without
+  perspective S and T are taken as they are.
+* **The tile**: the shift, then the tile's origin is subtracted, then clamp
+  (with the clamp bit, or a mask of 0), mirror and mask. Each axis gives two
+  texel coordinates and a 5-bit fraction.
+
+### Texel formats
 
 A texel is decoded when it is sampled, by the tile's size and format:
 
 | | 4-bit | 8-bit | 16-bit | 32-bit |
 |---|---|---|---|---|
-| RGBA | (as I) | (as I) | 5551 | 8888 |
-| IA | 3 + 1 | 4 + 4 | 8 + 8 | |
-| I | 4 | 8 | | |
-| CI, or any with the TLUT on | index, with the tile's palette | index | 5551 (CI 16 is read as RGBA, as on the console) | |
+| RGBA | as I | as I | 5551 | 8888 |
+| YUV | as I | as I | read as 5551 | read as 8888 |
+| CI | as I | as I | read as 5551 | read as 8888 |
+| IA | 3 + 1 | 4 + 4 | 8 + 8 | read as 8888 |
+| I | 4 | 8 | the upper byte | read as 8888 |
 
-A TLUT entry is RGBA5551 or IA 8 + 8 by the other modes' TLUT type. YUV is
-not decoded.
+An I texel gives its value on all four channels. With the TLUT enabled a 4-
+or 8-bit texel of any format is an index instead (a 4-bit one with the
+tile's palette above it), and the entry is RGBA5551 or IA 8 + 8 by the other
+modes' TLUT type; 16- and 32-bit texels are never looked up. YUV is not
+converted.
 
-The filter is the N64's three-point one, so a pixel reads three texels at
-once: TMEM is kept three times (`rdp_tmem.v`, 15 M10K in all), each copy
-with a second small memory of the TLUT's entries for the lookup.
+### Filter
+
+With the filter select at 0 the texel is the one at the coordinates. Any
+other setting takes the N64's three-point filter: three texels of the 2 x 2,
+by which triangle of it the fractions fall in. A pixel reads the three at
+once, so TMEM is kept three times (`rdp_tmem.v`), each copy with a second
+small memory of the TLUT's entries for the lookup. The loads write all the
+copies alike.
+
+### TEXEL1 and LOD
+
+There is no LOD: no level selection, detail or sharpen. A pixel samples one
+level of its tile.
+
+TEXEL1 is the next tile's sample (tile + 1, wrapping at 8) at the same S and
+T. A 2-cycle textured primitive whose first combiner cycle reads TEXEL1, or
+whose second reads TEXEL0, sends each pixel through the texture stages twice,
+a clock apart, on the same TMEM copies and filter: first the tile, then the
+next tile. `rdp_top` issues such a pixel every second clock. In the second
+cycle TEXEL0 is the next tile's sample and TEXEL1 the tile's own. In 1-cycle
+mode TEXEL1 is the same sample as TEXEL0.
 
 ## The pixel pipeline
 
-* **Cycle types**: 1-cycle; 2-cycle (two combiner stages one after the
-  other in the pipeline, a pixel a clock -- two clocks when the first
-  stage reads TEXEL1, below); copy (the texel; with the alpha compare
-  enabled a texel whose alpha bit is 0 is not written -- not the blend
-  colour's compare -- and the depth image is neither read nor written,
-  whatever the mode word says); fill.
-* **Combiner**: the N64's, for colour and alpha: `((A - B) * C + D * 256 +
-  0x80) >> 8`, kept to 9 bits (as Angrylion's). "1" is 256 (A and D), C is the plain 0..255 (an 8-bit 255 is
-  255/256, so TEXEL0 * SHADE at full brightness is 254). A colour result is
-  clamped as the hardware does: bits 8:7 both set -> 0, bit 8 -> 255 (an
-  overflow past 383 reads as a small number). The first cycle's result
-  (COMBINED) reaches the second as its 9 raw bits (0..383, or -128..-1 above;
-  as C a signed 9-bit). An alpha result is 0..256: bit 8, and exactly 255,
-  give **256**, which is what CVG_X_ALPHA
-  multiplies the coverage by -- a fully covered opaque texel keeps all 8
-  samples. (Before, ONE was 255 and C was `c + (c >> 7)`, no rounding: off
-  by one in about 40 % of channels.) NOISE, KEY and CONVERT inputs read 0.
-  `sim/rdp/cc_unit.sh` checks the RTL's functions against the model's over
-  2 x 10^9 operand sets; TEXEL1's samples are 8-bit operands like TEXEL0's.
-  * **SHADE is a byte, 0..255** when it enters the combiner: the interpolated
-    value is saturated below 0 to 0 and above 255 to 255, a plain positive number
-    as A, B, C and D (colour and alpha); the blender's shade alpha is clamped at 255
-    after the alpha dither is added. (With 9 bits, 0..511, a lit surface's shade
-    overshoots 255 at its edges -- Link's tunic with Navi's light: 270..330 at the
-    shoulder -- and OoT's tunic is a 2-cycle `TEXEL0 * SHADE` then `ENV * COMBINED`:
-    the first cycle's raw 9 bits reached 256 and over, and as COMBINED, the second
-    cycle's C, they are a negative number: black pixels, which the N64 does not
-    show.) `test_cvg.c` section 10.
-  * **TEXEL1** in the first cycle of a 2-cycle pixel is the next tile's
-    sample (tile + 1, wrapping at 8) at the same S, T: OoT's skybox draws
-    `(TEXEL1 - TEXEL0) * PRIM_ALPHA + TEXEL0`, the day's two textures
-    blended by the prim alpha, and its terrain a second layer. A pixel
-    whose first cycle reads it (`two_pass`, `rdp_pix.v`: a select of 2, or
-    9 for the C alpha) goes through the texture stages twice, a clock
-    apart, on the same TMEM copies and filter -- the first pass the tile,
-    the second the next tile (`ts1_*`, the tile's fields registered a
-    second time; each stage takes the fields of its pass's tile) -- and
-    leaves P9 once with both. `rdp_top` issues such a pixel every second
-    clock; the OoT frame at the intro (3158 commands, 282 k pixels) takes
-    10 % more RDP clocks. **The second cycle's TEXEL0 is that same next
-    tile's sample** (the N64 shifts the first cycle's TEXEL1 into it): a pixel whose
-    second cycle reads TEXEL0 (colour or alpha, `cc1_uses_texel0`, `cc1_t0`)
-    is a `two_pass` pixel too. Mario Golf's ground is `(TEXEL0 - 0) *
-    TEXEL1` (an I8 detail tile 0 by the RGBA16 grass of tile 1), then
-    `(COMBINED - TEXEL0) * A + TEXEL0`: with TEXEL0 the detail tile again
-    (as it was until this was found) the grass came out a pale grey-green
-    with speckle, not green. The second cycle's TEXEL1 stays the tile's own
-    sample (the N64's is the next pixel's; no stream reads it there). A
-    census of 175 task dumps of OoT, Stadium, Pilotwings, Star Fox 64 and
-    Banjo-Kazooie shows no other picture changed. There is no LOD, detail or
-    sharpen: one level of the tile.
-  * **No texture coefficients**: a triangle whose command has no S, T, W block
-    (or a fill rectangle) has S = T = W = 0, and the texture stages run all
-    the same: TEXEL0 is the tile's texel (0, 0), whatever the last texture
-    bound there left (on the console each primitive starts with
-    S, T, W at 0 and the fetch is never skipped). OoT's Link needs it: the tunic
-    collar (`gLinkChildCollarNearDL`) is `G_TEXTURE` off with a combiner of
-    `TEXEL0 * SHADE`, then `ENV * COMBINED`, and with TEXEL0 = 0 it was
-    black -- Link's black neck. (`rdp_pix.v`: S, T, W gated to 0 by `p_tex`,
-    the sample never zeroed; `lang/c/mrdp/test_cvg.c` section 8.)
-* **Blender**: the N64's. P * A5 + M * (B5 + 1) with 5-bit weights; with B
-  as memory alpha, A5 and B5 are the coverages. The result is >> 5 (8 bits,
-  wrapping), or -- a blend without FORCE_BL -- divided by A5/4 + B5/4 + 1
-  through a reciprocal table (3 DSP blocks). blend_en is
-  FORCE_BL, or AA_EN with no coverage overflow and not clearly in front.
-  CLR_ON_CVG with no overflow keeps M. 2-cycle mode's first cycle always
-  blends. The colour image is read when a select needs it, and for the
-  memory's coverage (IM_RD with AA_EN or CVG_X_ALPHA). Fog works through
-  it.
-* **Coverage**: CVG_X_ALPHA (coverage x alpha), ALPHA_CVG_SEL, the alpha
-  dither (ALPHA_DITHER_SEL; "noise" is three bits of a 23-bit LFSR that
-  steps for every pixel with coverage), and CVG_DST (clamp, wrap, zap, save).
-* **RGB dither** (RGB_DITHER_SEL): the blender's 8 bits go to 5 with a 3-bit
-  threshold per channel, the magic square (0) or Bayer matrix (1) at the
-  pixel's place on the screen, or **noise** (2, `G_CD_NOISE`: OoT's
-  `SETUPDL_0`, its dust and other soft effects): the LFSR's bits [2:0], [5:3]
-  and [8:6] as that pixel's alpha dither saw them, carried down the pipe to the output stage. (Before, 2
-  used the Bayer matrix: the dust of Epona's gallop was an ordered checker
-  screen instead of a random grain.) 3: off.
-  * **Storage: the N64's three bits.** The colour image's bit 0 is the
-    coverage's top bit. Its two hidden bits (RDRAM's 9th bits) are in a
-    plane of their own.
-    * **Layout.** 1 MiB at SDRAM 0x0370_0000, just below the RDRAM
-    (`layout.h` `LAYOUT_HID`; the layout mark is unchanged). The 16-bit word
-    at RDRAM byte A has bits [2k+1:2k] (k = A[4:1]) of the 32-bit word
-    A[22:5]. The RDP addresses it with its address's bit 23, which
-    `mirlo_mips.sv` maps there.
-    * **Pixel spans.** A span reads its groups' words first, into two raw
-    buffers. The pixels take their memory coverage there. The write engine
-    writes each group back with the span's new bits merged in, the new
-    colour buffer's lanes carrying them.
-    * **Fills.** A fill rectangle writes each 4-pixel quad's {a, a} by byte
-    enables, with no read.
-    * **Start.** The runtime starts the plane all ones (`n64rt_boot.c`).
-    * **Cost.** On the Stadium and SF64 dumps: 10-13 % more memory words,
-    and 5-6 % more RDP cycles.
-  * **`MRDP_CVG1`.** The model's first version, one bit, kept for
-    reference.
-* **Z**: 16-bit, linear (not the N64's compressed format), compare and
-  update; primitive depth. The N64's rules use the primitive's dz (all ones
-  under the top bit of |DzDx| + |DzDy|, in the stored depth's units):
-  * **Opaque**: in front, or -- without a coverage overflow -- within dz
-    behind.
-  * **Interpenetrating**: the coverage is scaled by how far the pixel is in
-    front.
-  * **Translucent**: in front.
-  * **Decal** (ZMODE_DEC: a shadow on the floor): within dz either way, and
-    not over a cleared depth.
+`rdp_pix.v` takes one pixel a clock and never stalls: every operand is on
+chip. Its stages, in order: the perspective divide, the tile's coordinate
+arithmetic, the TMEM read, the TLUT read and decode, the filter, two combiner
+cycles, the alpha, coverage and depth tests, two blender cycles, the dither.
 
-  The memory's dz is not kept, so the blender's coverage shifts are 0 with
-  Z_CMP.
-* **Alpha compare** against the blend colour's alpha, or the alpha dither
-  (2-cycle: the first cycle's alpha). A pixel with no coverage left
-  (AA_EN, or CVG_X_ALPHA's cut-outs) is not drawn.
+### Cycle types
 
-## Images
+* **1-cycle.** The combiner's second-cycle settings with COMBINED at 0, and
+  the blender's first-cycle settings.
+* **2-cycle.** The two combiner cycles one after the other, then the two
+  blender cycles; the first blender cycle always blends.
+* **Copy.** The pixel is the texel. The alpha compare's threshold is 128,
+  the texel's alpha bit, not the blend colour's alpha. The depth image is
+  neither read nor written, whatever the mode word says. No blender, no
+  dither. The coverage written is 7 or 0 by the texel's alpha bit.
+* **Fill.** The fill colour's two 16-bit halves, the even pixel taking the
+  upper one. A fill rectangle goes straight to the memory engine, without the
+  pipeline and without a read. A triangle in fill mode goes through the
+  pipeline and writes the fill colour where it has coverage.
 
-The colour image is the game's: RGBA5551 (the low bit the coverage, above), in the
-N64's byte order, two pixels a word with the left one first. Only 16-bit
-colour images are drawn to. A row must start on a 4-byte boundary (an image
-4-aligned, of even width). The scan-out (`n64_video`, `N64FB`) reads the
-same format.
+Copy and fill mode have no depth.
 
-The scan-out does the N64 video interface's gamma correction when the game
-has it on (`VIDEO_FRAMEBUFFER.WIDTH` bit 16, which the runtime sets from
-the VI mode and `osViSetSpecialFeatures`): each channel's square root, from
-a table on its five bits. Star Fox 64 has it on and draws that much darker;
-most games turn it off.
+### Colour combiner
 
-With **`MIRLO_VI_AA`** the scan-out has the VI's anti-alias and divot
-filters. `rcp_vi` takes them from
-VI_CONTROL: AA_MODE 0 or 1, and DIVOT_ENABLE.
+Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 
-* **Fetch.** The picture is fetched a line ahead of the display. Two line
-  buffers hold the rows above and below (1024 x 17, 4 M10K).
+* "1" is 256, as A and D. C is the plain 0..255.
+* A colour result is clamped: bits 8:7 both set give 0, bit 8 alone 255.
+* COMBINED reaches the second cycle as the first cycle's 9 raw bits: 0..383,
+  or negative when bits 8:7 are both set; as C, a signed 9-bit number.
+* An alpha result of bit 8 alone, or exactly 255, counts as 256 where the
+  coverage is multiplied by it (CVG_X_ALPHA): a fully covered opaque texel
+  keeps all 8 samples.
+* SHADE is saturated to a byte, 0..255, when it enters the pipeline.
+* The primitive LOD fraction is an input. NOISE, the LOD fraction, the key
+  and the convert inputs read 0.
+
+### Alpha and coverage
+
+* **Alpha dither** (ALPHA_DITHER_SEL): the pattern, its inverse, noise or
+  none; the pattern is the matrix that RGB_DITHER_SEL's low bit names. It is
+  added to the combined alpha and to the shade alpha, which saturate at 255.
+  Copy mode has none.
+* **Noise.** A 23-bit LFSR that steps for every pixel with coverage, outside
+  fill mode.
+* **CVG_X_ALPHA**: the coverage becomes `(alpha * coverage + 4) >> 8`.
+* **ALPHA_CVG_SEL**: the pixel's alpha becomes the coverage (times the alpha
+  with CVG_X_ALPHA).
+* **Alpha compare**: against the blend colour's alpha, or with
+  DITHER_ALPHA_EN against 8 bits of the LFSR. In 2-cycle mode the alpha
+  compared is the first cycle's.
+* A pixel with no coverage left (AA_EN, or CVG_X_ALPHA's cut-outs) is not
+  drawn.
+* **The memory's coverage** is the three stored bits where the colour span
+  is read with IM_RD, and 7 otherwise.
+* **CVG_DST**: clamp, wrap, zap (7) or save (the memory's).
+
+### Depth
+
+The depth image is 16 bits a pixel and linear: the interpolated Z shifted
+right by 15 and clamped to 0..65535. With the Z source select, or for a
+primitive without Z coefficients, the depth is the primitive depth. The
+modes, with dz the primitive's depth step:
+
+* **Opaque**: in front, or -- without a coverage overflow -- within dz behind.
+* **Interpenetrating**: as opaque; and where a pixel in front, within dz,
+  overflows the coverage, its coverage is scaled by how far in front it is.
+* **Translucent**: in front.
+* **Decal**: within dz either way, and not over a cleared depth.
+
+A stored depth of `0xFFFF` is the cleared one and passes the first three.
+
+### Blender
+
+`P * A5 + M * (B5 + 1)` with 5-bit weights, for each blender cycle.
+
+* P and M are the pixel, memory, the blend colour or the fog colour. A is the
+  pixel's alpha, the fog alpha, the shade alpha or 0; B is 1 - A, the
+  memory's coverage, 1 or 0. Fog is done with these selects.
+* The result is the sum `>> 5` (8 bits, wrapping) with FORCE_BL. Without it
+  the sum is divided by `A5/4 + B5/4 + 1`, through a reciprocal table.
+* The pixel is blended with FORCE_BL, or with AA_EN when the coverage does
+  not overflow and, with Z_CMP, the pixel is not more than dz in front of
+  memory. Otherwise the result is P. A cycle of P with 1 - its own alpha, at
+  an alpha of 255, is P too.
+* In 2-cycle mode the first cycle always blends, `>> 5`.
+* CLR_ON_CVG without a coverage overflow keeps M.
+* The memory's dz is not stored. With Z_CMP the blender's coverage weight is
+  not shifted; without it the shift comes from the primitive's own dz.
+
+### RGB dither
+
+The blender's 8 bits go to 5 by truncation, after the three low bits are
+compared with a 3-bit threshold: where the threshold is below them the
+channel goes up a step (255 stays 255). RGB_DITHER_SEL chooses the threshold:
+
+| value | threshold |
+|---|---|
+| 0 | the 4 x 4 magic square, at the pixel's place on the screen |
+| 1 | the 4 x 4 Bayer matrix |
+| 2 | noise: three LFSR bits for each channel |
+| 3 | none |
+
+Copy and fill write their colours untouched.
+
+### Other modes that are read
+
+Of the high word: the cycle type, perspective, the TLUT enable and type, the
+filter select and the two dither selects. Of the low word: the blender's
+selects, FORCE_BL, ALPHA_CVG_SEL, CVG_X_ALPHA, the Z mode, CVG_DST,
+CLR_ON_CVG, IM_RD, Z_UPD, Z_CMP, AA_EN, the Z source, DITHER_ALPHA_EN and the
+alpha compare enable.
+
+## Images and memory
+
+### The colour image
+
+The colour image is the program's: RGBA5551 in the N64's byte order, two
+pixels a 32-bit word with the left one first. Only 16-bit colour images are
+drawn to: a primitive sent while the colour image has another size is
+dropped. A row must start on a 4-byte boundary (an image 4-aligned, of even
+width).
+
+Bit 0 of a pixel is the top bit of its 3-bit coverage. The other two bits,
+the N64's hidden bits, are in a plane of their own:
+
+* **Layout.** The 16-bit word at RDRAM byte A has bits [2k+1:2k], k = A[4:1],
+  of the 32-bit word A[22:5] of the plane: one word for a group of 16
+  pixels. The RDP addresses the plane with bit 23 of its address;
+  `mirlo_mips.sv` maps that to the megabyte just below the RDRAM in the
+  SDRAM (`LAYOUT_HID` in `lang/mips/include/layout.h`).
+* **Spans.** A span reads its groups' words first. The pixels take the
+  memory's coverage there, and the write engine writes each group back with
+  the span's new bits merged in, when a pixel of the group was written.
+* **Fills.** A fill writes each 4-pixel quad it touches by byte enables,
+  from bit 0 of the fill colour's halves, with no read.
+* **Start.** The runtime starts the plane all ones (`n64rt_boot.c`).
+
+### The memory port
+
+`rdp_mem.v` makes every access, over one port: a command channel (write
+flag and 4-aligned byte address), a write data channel with byte enables
+that follows its command, and read data returned in order. Reads go before
+writes. In the SoC the port is one of the SDRAM arbiter's.
+
+Nothing in the engine orders a read after a write of the same word. The
+sequencer starts a primitive's reads, and a load, only with the write engine
+idle.
+
+### The optional depth port
+
+Built with `RDP_Z_PORT`, `rdp_top` has a second port for the depth image
+(`rdp_zmem.v`). `mirlo_mips.sv` instantiates `rdp_top` without it; the bench
+builds and checks it.
+
+* A row's depth span is read, and its results written back, as runs of
+  consecutive words that a memory can serve as one burst. A row none of whose
+  pixels passed has no write run.
+* A fill of a colour image whose address is the depth image's goes to the
+  port too.
+* Anything else drawn to such a colour image goes there only with
+  `RDP_Z_CDRAW`, a word at a time. Without it the primitive is drawn in the
+  N64's memory and the `z_cdraw` output says so.
+* With the port, the N64's memory at the depth image's address is not
+  written by depth spans.
+
+### The scan-out
+
+`rtl/soc/n64_video.sv` reads the same colour image, and each group's hidden
+word before its colour words. With the VI registers of `rtl/soc/rcp_vi.sv`
+([mips.md](mips.md)) it applies the VI's filters to the frame buffer's own pixels,
+before the VI's scale ([resolution.md](resolution.md)):
+
 * **Anti-alias.** A pixel whose coverage is not complete takes six taps:
-  (x±1) above and below, (x±2) beside. A tap that is not complete is the
-  centre itself. Per channel, the second smallest and second largest of the
-  six are widened to take in the centre.
-* **The true coverage.** The scan-out reads the hidden plane: a group's word
-  before its colour words, and +12.5 % of its reads. Each FIFO word carries
-  its pair's four bits; the FIFO is 37 bits wide, 8 more M10K. The N64's
-  c + ((min + max - 2c)(7 - cvg) + 4) >> 3 is computed exactly on the
-  8-bit channels, and the pads take its top six bits.
-* **Divot.** Where any of three neighbours on the line is partial, each
+  (x-1, x+1) above and below, (x-2, x+2) beside. A tap that is not complete
+  is the centre itself. Per channel, the second smallest and second largest
+  of the six are widened to take in the centre, and the result is
+  `c + ((min + max - 2c) * (7 - coverage) + 4) >> 3`.
+* **Dither filter.** On a complete pixel (every pixel with the anti-alias
+  off), each channel adds +1 for each of its eight ring neighbours above the
+  centre and -1 for each below.
+* **Divot.** Where any of three neighbours on the line is not complete, each
   channel takes the median of the three.
-* **Dedither** (VI_CONTROL bit 16). On a complete pixel (with AA off, every
-  pixel), each channel adds the signs of its eight ring neighbours against
-  the centre (on 5 bits) to its eight bits. This rebuilds the smooth colour
-  behind the RDP's dither, so the grain is never seen.
-* **8:8:8 to the Pocket.** The filters' eight bits go out as they are.
-  The gamma is the N64's 2 sqrt(64 v) on eight bits, from a table.
-  `core_top` no longer converts 565 to 888.
-* **Edges.** A game's border rows filled with alpha 0 have coverage 0. The
-  first one next to the picture is filtered toward it, the N64's own result,
-  which a TV's overscan hides. (The macro `MIRLO_VI_AA_NO_CVG0`, which left
-  coverage-0 pixels unfiltered, was removed.) The core's video options (interact.json, fields 3 and
-  5 of the interact words: `mirlo_regs` hands them to the scan-out) are
-  "Crop Vertical" and "Crop Right".
-  * **Crop Vertical:** None, 8 or 12 lines blanked at the picture's top and
-    bottom (twice as many in the 480-line frame).
-  * **Crop Right:** None, 1 or 2 pixels blanked at its right edge (Stadium's
-    full-screen overlays end at x = 319.5).
-  * **How:** both are relative to the picture (a window too), output as
-    black by the scan-out. The frame and its timing are unchanged. The
-    default is None, the N64's own output.
-* **Delay.** The timing is delayed six pixels to match.
+* **Gamma.** Each channel's square root, from a table.
+* **Crop.** The core's "Crop Vertical" and "Crop Right" options blank lines
+  at the picture's top and bottom and pixels at its right edge. The frame and
+  its timing do not change.
 
-`sim/vi_filter` checks the pads against a model of the filters at 320 x 240, with divot on and off, and
-that a 640-wide picture (480 or 240 rows) is reduced into 320 x 240 (the pixel pairs averaged, the first field's rows) with the filters off.
+A picture 512 wide or more is shown with the filters off.
 
-Not done:
+## Not implemented, or approximated
 
-* The VI's scaling (a framebuffer is shown 1:1, or 2:1 when 512 wide or
-  more).
-* Its window.
-* The filter on a 640-wide picture shown at half width.
-
-## The depth memory (`MIRLO_Z_PSRAM`, removed from the SoC)
-
-The macros `MIRLO_Z_PSRAM` and `MIRLO_Z_CDRAW` were removed from the RTL (2026-10,
-branch own-cleanrtl); `rdp_top` still has the port as `RDP_Z_PORT` / `RDP_Z_CDRAW`
-(the bench's builds). What follows is how the SoC used it.
-
-Of the words the RDP moves, about three in ten are depth: on the one SDRAM
-they take their turn with the colour image's, with the game CPU's and the
-scan-out's. With `MIRLO_Z_PSRAM` (the bench's `RDP_Z_PORT`) the depth
-spans go to a memory of their own, the Pocket's two PSRAMs
-(`rtl/soc/psram.sv`, [mips.md](mips.md)), while the colour spans keep the
-SDRAM:
-
-* `rdp_zmem.v` reads a row's depth span and writes its results back as
-  **runs** of consecutive words, which the PSRAM does as one burst each: a
-  read run as the row's setup starts, a write run once the row's last pixel
-  is through (no run for a row none of whose pixels passed). A word is at
-  its address in the N64's memory, so the depth image can be anywhere.
-* A game clears its Z buffer by filling it as a colour image: a fill
-  (fill mode, whatever the shape) on a colour image whose address is the
-  depth image's is a run there too.
-* Anything else drawn to such a colour image (a saved Z buffer put back
-  with texture rectangles: few games, few scenes) needs `RDP_Z_CDRAW` (it was `MIRLO_Z_CDRAW`)
-  as well: it is then `rdp_mem`'s whole, with its port
-  turned to the depth memory a word at a time -- right, slow, and some 200
-  LUTs. Without it such a primitive is drawn in the N64's memory, where
-  nothing looks for it, and the RDP says so: `z_cdraw`, bit 9 of the
-  PSRAMs' state, which the runtime logs once.
-* What is **not** there: the RDRAM at the depth image's address is not
-  written any more. A game that reads its Z buffer with the CPU (a lens
-  flare's test against the scene) reads what the RDRAM held, and a texture
-  loaded from the depth image's address is loaded from the RDRAM too.
-
-What it gives, on the whole SoC with a task replay (Star Fox 64, Corneria,
-the explosion: the heaviest frame at hand; `rsp_replay`, the game CPU idle
-to busy):
-
-| | frame's end, SDRAM only | with the depth memory |
-|---|---|---|
-| the explosion (gfx_142) | 25.8 - 30.2 ms | 22.6 - 25.5 ms |
-| an ordinary frame (gfx_060) | 19.0 - 20.8 ms | 18.1 - 19.5 ms |
-
-The RDP's words on the SDRAM go from 686,000 to 483,000 on the first. The
-PSRAM's burst costs about eight clocks before its first word, so short
-spans gain less than long ones (`tb_rdp`'s `TB_ZOV`, `TB_ZCW`: the same
-frame alone takes 977,000 clocks on the SDRAM, 855,000 with the pair of
-PSRAMs, 817,000 with a depth memory that cost nothing, 915,000 with one
-PSRAM at 16 bits a clock).
-
-## Its registers and command fetch
-
-`rdp_dpc.sv` is the N64's DPC_START, DPC_END, DPC_CURRENT and DPC_STATUS,
-written by the microcode through the RSP's COP0. It reads the 64-bit
-commands between CURRENT and END from RDRAM, through a port of the SDRAM
-arbiter of its own, into the command FIFO. A START written while a run is
-still being fetched waits for it, with its END, as on the N64. With XBUS
-set the commands are in the RSP's DMEM instead (the first microcodes:
-Pilotwings 64's): they are read from a copy of DMEM the RSP keeps for it
-(both of DMEM's own ports are the processor's).
-
-The CPU can write START, END and STATUS too (`mirlo_mips.sv`; the runtime forwards a game's stores to `0x2000_0040`), and
-what a reader of DPC_STATUS sees is `rcp_dpc_view.sv`'s, not `rdp_dpc.sv`'s own: the console's layout (START_GCLK and PIPE_BUSY
-sticky until a SYNC FULL, 0xA8 after a list without one, DMA busy in bit 8, bits 4 and 6 never), and a START written while START
-is valid is ignored ([rsp.md](rsp.md)).
+* **Colour images** other than 16-bit ones are not drawn to.
+* **Depth** is 16-bit linear, not the N64's compressed format, and the
+  memory's dz is not stored.
+* **LOD**: none. No detail, sharpen or level selection; the LOD fraction
+  reads 0.
+* **TEXEL1** is the next tile at the same coordinates. In the second cycle
+  of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
+* **YUV** textures are not converted; SET_CONVERT and SET_KEY are skipped.
+  The key, convert and noise inputs of the combiner read 0.
+* **Shade** is not corrected to the covered sample; only Z is.
+* **Scissor**: the interlace field bits are not read.
+* **Other modes**: detail, sharpen, LOD enable, the bilerp and convert bits
+  and the key enable are not read.
 
 ## How it is verified
 
 | what | where | checks |
 |---|---|---|
-| a frame in software | `sim/rdp/rdp_task` | a task dump through the RSP's model and this model, to a PPM; `-v` lists the commands, `rdp_stats.py` what they use |
-| RTL vs model, real tasks | `sim/rdp/build_rtl.sh`, `obj_rdp/tb_rdp task...` | the RSP model's commands to both; all 8 MiB identical |
-| RTL vs model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind at any alignment, triangles and rectangles in every cycle type |
-| the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc`: the words handed on are the model's, on real tasks and on `gen_xbus_task.py`'s XBUS ones |
-| in the SoC | `sim/mips_soc` built with `MIRLO_RSP` (`FB_N64=1` for its frame dumps) | a game on the whole SoC: RSP, command fetch, RDP, scan-out |
-| the depth memory | `ZPORT=1 ./build_rtl.sh`, `obj_rdp_z/tb_rdp` (`TB_RAND_CZ=1`: the colour image on the depth image now and then) | the same comparisons with the depth spans on their own port, timed as the PSRAM pair |
+| a frame in software | `sim/rdp/rdp_task` (`make`) | a captured task dump through the RSP's model (`sim/rsp`) and the reference model, to a PPM; `-n` counts the commands by opcode, `-v` lists them, `rdp_stats.py` summarises what the primitives use |
+| RTL against the model, captured tasks | `sim/rdp/build_rtl.sh`, `obj_rdp/tb_rdp task...` | the RSP model's commands go to both, each with its own copy of memory; every byte, hidden plane included, must match |
+| RTL against the model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind from any alignment, triangles and rectangles in every cycle type |
+| the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
+| the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
+| the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks and on `gen_xbus_task.py`'s XBUS ones |
+| the depth port | `ZPORT=1` and `ZPORT=2` builds, `obj_rdp_z/tb_rdp`, `obj_rdp_zc/tb_rdp` | the same comparisons with `RDP_Z_PORT`, and with `RDP_Z_CDRAW`; `TB_RAND_CZ` puts the colour image on the depth image |
+| the scan-out's filters | `sim/vi_filter` | the pads against a model of the filters, pixel for pixel |
+| in the SoC | `sim/mips_soc` (`FB_N64=1` for frame dumps) | a program on the whole SoC: RSP, command fetch, RDP, scan-out |
+
+The bench's memory answers with random stalls and read latency. Its
+switches:
+
+* `TB_STEP=1` compares after every command and stops at the first that
+  differs; with `TB_LFSR=1` it compares the LFSR too.
+* `TB_CW=<width>` sets the random stream's colour image width; a width that
+  is not a multiple of 16 makes rows share hidden-plane groups.
+* `TB_CC=1` makes random streams in which the combiner's result reaches
+  memory unblended.
+* `TB_SDRAM=1` gives the memory the SDRAM controller's timing (rows, turns
+  between reads and writes, refresh); `TB_CPU=<percent>` adds another master.
+* `TB_FAST=1` is a memory that takes every request; `TB_PROF=1` prints the
+  cycles spent in each sequencer state; `TB_CMDT=<file>` logs when each
+  command word is taken.
+
+`tools/area2/rdp_regress.sh` builds the three benches and runs the lot:
+random seeds at colour image widths 292, 296 and 320, seeds with `TB_LFSR`
+and `TB_STEP`, seeds with `TB_SDRAM` and `TB_CPU=30`, the two depth-port
+builds, seeds with `TB_CC`, and `cc_unit.sh`. A run passes when the bench
+prints `RTL == model`. The script leaves out one depth-port seed (32) that
+its own comment records as a mismatch.
 
 A frame's time is the RSP's and the RDP's together, on one SDRAM with the
-game CPU and the scan-out:
+CPU and the scan-out:
 
-* `tb_rdp` with `TB_SDRAM=1` gives the RDP the SDRAM's own timing (rows,
-  the bus's turns, refresh) instead of a memory that answers at once, and
-  `TB_CPU=<percent>` another master beside it.
-* `rdp_flow.py` puts the two benches' logs together (`tb_rsp` with
+* `sim/rdp/rdp_flow.py` puts two benches' logs together (`tb_rsp` with
   `DPCT=<file>`: when each command is handed over; `tb_rdp` with
   `TB_CMDT=<file>`: what each takes to draw) and gives the frame's end for
-  the two as they are and for either made faster or slower.
-* `lang/mips/test/rsp_replay.c` runs a task dump on the whole SoC in
-  `sim/mips_soc` (`PRELOAD=<dump>@0x437FFFF0`, `MEMSTAT=1` for the SDRAM's
-  use by port): the RSP's and the RDP's times with the scan-out reading and
-  the game CPU idle or busy in memory. The dump's task header must not be in
-  the SDRAM's last bytes (the boot ROM's stack is there).
+  the two as they are and for either scaled.
+* `lang/mips/test/rsp_replay.c` replays a task dump on the whole SoC in
+  `sim/mips_soc` (`PRELOAD=<dump>@0x437FFFF0`; `MEMSTAT=1` for the SDRAM's
+  use by port): the RSP's time to its BREAK and the RDP's to its SYNC FULL,
+  with the scan-out reading and the CPU idle or busy in memory.
 
-`TB_STEP=1` compares after every command and reports the first that differs.
+## Resources
 
-## Area and timing (Cyclone V 5CEBA4, 62.8 MHz)
+Where the area goes, without figures:
 
-| | ALMs | M10K | DSP |
-|---|---|---|---|
-| RDP, standalone | ~4,500 | 33 | 26 |
-| without the blender | ~4,300 | 31 | 20 |
-| the SoC with the RSP (8 lanes) and the RDP | ~17,850 (97 %) | 184 | 41 |
-
-In the SoC the RDP is ~4,800 ALMs and the game CPU ~3,800 (~4,350 with its
-TLB, which is left out). Three fitter seeds close timing.
-
-It is smaller than MRDP was (~5,800 in the design): the triangle setup
-engine and its microcode are gone, the N64's coefficients needing none.
+* **Block RAM.** Three copies of TMEM, each of four memories and a TLUT
+  copy. The line buffers: depth and colour as read, depth and colour as
+  produced, their pass masks, and the raw hidden words. The attribute
+  staging RAM.
+* **RAM in place of registers.** The eight tiles are two 8-entry RAMs, read
+  into registers for the drawing tile and the next one. The attributes'
+  row-start values and their DaDe are LUT RAM, stepped one attribute a clock.
+* **Multipliers.** One shared 32 x 32 multiplier does all the setup
+  arithmetic of the sequencer: edge and attribute start values, row offsets,
+  load addresses. The pixel pipeline has its own for the perspective divide,
+  the tile shift, the TMEM row address, the filter, the two combiner cycles,
+  the coverage and the two blender cycles with their divide.
+* **Registered stages.** Each combiner and blender cycle is two stages, the
+  operand selects then the arithmetic, and the decoded texels are registered
+  before the filter.

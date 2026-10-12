@@ -1,263 +1,243 @@
-# Control Registers
+# MIRLO 64: the registers
 
-The map is `tools/mirlo_regs.py`: it generates the hardware's decode (`rtl/soc/mirlo_regs.svh`) and the firmware's `lang/mips/include/generated/csr.h`, with an accessor per register (`<block>_<register>_read()` / `_write()`). The registers sit at `0xF000_0000` for all three cores. Addresses change between hardware revisions: take them from `csr.h`, never from memory.
+The system's own registers -- the Pocket's interfaces, the scan-out's settings, the monitor's block and the cartridge
+slot -- are 32-bit words at `0xF000_0000`. The map is one table, `tools/mirlo_regs.py`, which generates the hardware's
+decode (`rtl/soc/mirlo_regs.svh`, used by `rtl/soc/mirlo_regs.sv`) and the software's
+`lang/mips/include/generated/csr.h`, with an accessor for each register (`<block>_<register>_read()` / `_write()`) and
+for each field. Offsets can change with the map: take them from `csr.h`, not from this page.
 
-It is very important that you remain aware that register locations and offsets can change between hardware revisions, and instead you should be using the `SVD` file to derive constants to these registers.
+These are not the N64's registers. What a game reads and writes of the RCP is described in [mips.md](mips.md); the
+runtime (`n64rt.sys`) is what uses the registers here.
 
-# Audio
+| Block | Base | What |
+|---|---|---|
+| `APF_AUDIO` | `0xF000_0000` | The Pocket's audio FIFO |
+| `APF_BRIDGE` | `0xF000_0100` | The Pocket's file commands and the data slots |
+| `APF_INPUT` | `0xF000_0200` | The controllers |
+| `APF_INTERACT` | `0xF000_0300` | The core's settings (`interact.json`) |
+| `APF_VIDEO` | `0xF000_0400` | Vblank and the frame counter |
+| `CTRL` | `0xF000_0500` | A scratch word, the bus error count |
+| (reserved) | `0xF000_0600` | |
+| RDP command port | `0xF000_0700` | A command FIFO for the RDP and its counters |
+| `TIMER0` | `0xF000_0800` | A 64-bit cycle counter |
+| `UART` | `0xF000_0900` | The JTAG UART |
+| `VIDEO_FRAMEBUFFER` | `0xF000_0A00` | The scan-out: its base, its enables, the picture's pitch, window and scales |
+| `GB_CART` | `0xF000_0C00` | A Game Boy cartridge in the Pocket's slot |
+| `MONITOR` | `0xF000_0D00` | The monitor level's events, and the MI, PI, VI, AI and SI blocks' controls |
 
-The system provides audio via a write only audio buffer of 1024 elements. The Pocket accepts solely 48khz `i16` audio, thus the exposed write register takes the form of `{i16, i16}`, or a single 32 bit word containing both channels. This is one sample at 48khz
+An address that no register has reads 0. A 64-bit register is two words, the high one first.
 
-## CSR
+## APF_AUDIO
 
-Base address (`APF_AUDIO` block): `0xF000_0000`
+The Pocket takes 48 kHz stereo samples of 16 bits. The FIFO holds 1,024 of them.
 
-| Name           | Offset | Dir | Width | Description                                                                                                                                                                                           |
-| -------------- | ------ | --- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `out`          | `0x0`  | W   | 32    | The entrypoint to the audio buffer. Write two 16 bit signed values (for the left and right audio channels) here. This will push one value into the 1024 record FIFO that represents the audio buffer. |
-| `playback_en`  | `0x4`  | RW  | 1     | Enable audio playback (reading of the audio buffer) when set to 1. No audio playback otherwise.                                                                                                       |
-| `buffer_flush` | `0x8`  | W   | 1     | Writing 1 to this register will immediately clear the audio buffer.                                                                                                                                   |
-| `buffer_fill`  | `0xC`  | R   | 12    | The current fill level of the audio buffer (0..1023; it cannot show "full").                                                                                                                   |
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `OUT` | `0x00` | W | One sample: the left and right channels, 16 bits each, in a word |
+| `PLAYBACK_EN` | `0x04` | RW | 1: the FIFO is played |
+| `BUFFER_FLUSH` | `0x08` | W | A write of 1 empties the FIFO |
+| `BUFFER_FILL` | `0x0C` | R | The FIFO's level (0 to 1,023) |
 
-# Bridge
+The AI block in hardware (`rtl/soc/rcp_ai.sv`) feeds the same FIFO with the game's samples, resampled to 48 kHz.
 
-The main control mechanism from the user's core (the game CPU) to the host hardware, PIC, and scaler FPGA. Of primary relevance to this system is the file IO processes, which are exposed here:
+## APF_BRIDGE
 
-**NOTE:** Write (to SD card) mechanism appears to be broken in the Pocket firmware at the moment. The functionality is exposed, but it seems to exhibit weird behavior. I recommend you avoid using it.
+The Pocket's target commands (Analogue's
+[host/target command documentation](https://www.analogue.co/developer/docs/host-target-commands) has their details and
+result codes). A data slot is one of the entries of the core's `data.json`.
 
-## File API
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `REQUEST_READ` | `0x00` | W | A write of 1 asks the Pocket to read from the slot into memory |
+| `REQUEST_WRITE` | `0x04` | W | A write of 1 asks it to write memory to the slot |
+| `REQUEST_GETFILE` | `0x08` | W | A write of 1 asks for the path of the slot's file |
+| `REQUEST_OPENFILE` | `0x0C` | W | A write of 1 asks to change the slot's file to the one a path in memory names |
+| `SLOT_ID` | `0x10` | RW | The slot (16 bits) |
+| `DATA_OFFSET` | `0x14` | RW | The offset in the slot's file |
+| `TRANSFER_LENGTH` | `0x18` | RW | The bytes to transfer |
+| `RAM_DATA_ADDRESS` | `0x1C` | RW | The SDRAM address (`0x4xxx_xxxx`) of the data |
+| `FILE_SIZE` | `0x20` | RW | Read: the size of the slot's file. Write: sets the size the Pocket has for it, which is what it writes back of a nonvolatile slot |
+| `STATUS` | `0x24` | R | 1 when a command has completed; a read clears it |
+| `CURRENT_ADDRESS` | `0x28` | R | The address the bridge is at |
+| `COMMAND_RESULT_CODE` | `0x2C` | R | The last command's result (3 bits) |
+| `BOOT_READY` | `0x30` | RW | A bit the software can set and read; the Pocket is told the core is ready by the SDRAM's controller, not by this |
+| `HOST_STATE` | `0x34` | R | Bit 0 `RESET_N`: the Pocket has released the core's reset. Bit 1 `LOADED`: it has loaded the data slots |
 
-Base address (`APF_BRIDGE` block): `0xF000_0100`
+The Pocket loads the ROM, the runtime and the saves by itself before the core starts, and reads the nonvolatile slots
+back when the core is quit: the runtime only sets a save's size (`FILE_SIZE`).
 
-For all of these operations, it is recommended to read through the [Host/Target Command Docs](https://www.analogue.co/developer/docs/host-target-commands). It details nuance and return codes that are relevant to software development.
+## APF_INPUT
 
-### Common
+The controllers as the Pocket gives them: controller 1 is the Pocket's own buttons or the Dock's first pad. There is no
+interrupt; the runtime reads them when the game polls a controller.
 
-| Name                  | Offset | Dir | Width | Description                                                                                                                                                                                                                                                  |
-| --------------------- | ------ | --- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `slot_id`             | `0x10` | RW  | 16    | The slot ID defined in `data.json` for the desired asset/slot.                                                                                                                                                                                               |
-| `data_offset`         | `0x14` | RW  | 32    | The offset from the start of the asset in the selected data slot to operate on.                                                                                                                                                                              |
-| `transfer_length`     | `0x18` | RW  | 32    | The length of data to transfer as part of this bridge operation. A length of `0xFFFFFFFF` will request the entire file (NOTE: As of Pocket firmware 1.1, this is bugged, and you just request the file size instead).                                        |
-| `ram_data_address`    | `0x1C` | RW  | 32    | The address of SDRAM (`0x4xxx_xxxx`) to be manipulated in this operation. It is either the first write address for a read request, or the first read address for a write request.                                                                                       |
-| `file_size`           | `0x20` | R   | 32    | The file size on disk of the current selected asset in slot `slot_id`. Writing to this register will update the internal size representation for this file. Note that if you do this for a readonly file, you will mess up any future reads of that slot ID. |
-| `status`              | `0x24` | R   | 1     | Indicates when the bridge is currently transferring a file. 1 when transferring, 0 otherwise. Clears its value on read.                                                                                                                                      |
-| `current_address`     | `0x28` | R   | 32    | The current address the bridge is operating on. Can be used to show a progress bar/estimate time until completion.                                                                                                                                           |
-| `command_result_code` | `0x2C` | R   | 3     | Reports the results of the recent file command. See https://www.analogue.co/developer/docs/host-target-commands for details on expected codes.                                                                                                               |
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `CONT1_KEY` .. `CONT4_KEY` | `0x00`, `0x04`, `0x08`, `0x0C` | R | The buttons (below) |
+| `CONT1_JOY` .. `CONT4_JOY` | `0x10`, `0x14`, `0x18`, `0x1C` | R | The sticks (below) |
+| `CONT1_TRIG` .. `CONT4_TRIG` | `0x20`, `0x24`, `0x28`, `0x2C` | R | The analog triggers (below) |
 
+| `KEY` bits | | `KEY` bits | |
+|---|---|---|---|
+| 0 | D-pad up | 8 | L1 |
+| 1 | D-pad down | 9 | R1 |
+| 2 | D-pad left | 10 | L2 |
+| 3 | D-pad right | 11 | R2 |
+| 4 | A | 12 | L3 |
+| 5 | B | 13 | R3 |
+| 6 | X | 14 | Select |
+| 7 | Y | 15 | Start |
+| 28:16 | unused | 31:29 | the controller's type |
 
-### Reading
+| `JOY` bits | | `TRIG` bits | |
+|---|---|---|---|
+| 7:0 | left stick, X | 7:0 | left trigger |
+| 15:8 | left stick, Y | 15:8 | right trigger |
+| 23:16 | right stick, X | | |
+| 31:24 | right stick, Y | | |
 
-| Name           | Offset | Dir | Width | Description                                             |
-| -------------- | ------ | --- | ----- | ------------------------------------------------------- |
-| `request_read` | `0x0`  | W   | 1     | Writing 1 to this register will trigger a read request. |
+How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Controllers and settings) and
+`lang/n64rt/n64rt_pad.h`.
 
-### Writing
+## APF_INTERACT
 
-**NOTE:** Write (to SD card) mechanism appears to be broken in the Pocket firmware at the moment. The functionality is exposed, but it seems to exhibit weird behavior. I recommend you avoid using it.
+The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
+is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+each setting has an address of its own and needs no mask.
 
-| Name            | Offset | Dir | Width | Description                                              |
-| --------------- | ------ | --- | ----- | -------------------------------------------------------- |
-| `request_write` | `0x4`  | W   | 1     | Writing 1 to this register will trigger a write request. |
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `INTERACT0` | `0x00` | RW | Word 0 |
+| `INTERACT_CHANGED0` | `0x04` | R | 1 when the Pocket has written the whole word 0 since the CPU last read `INTERACT0` |
+| `INTERACT1` | `0x08` | RW | Word 1 |
+| `INTERACT_CHANGED1` | `0x0C` | R | The same for word 1 |
 
-### Manipulation
+| n | `address` | Field | The setting (`pkg/pocket/Cores/tortuga.Mirlo64/interact.json`) |
+|---|---|---|---|
+| 0 | `0x1000_0100` | `INTERACT0`, whole | |
+| 1 | `0x1000_0104` | `INTERACT1`, whole | |
+| 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller 1 pak |
+| 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
+| 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
+| 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | L button |
+| 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
+| 8 | `0x1000_0120` | `INTERACT1[4:0]` | not used |
+| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
+| 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
+| 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
+| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
+| 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
+| 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
+| 15 | `0x1000_013C` | `INTERACT1[25]` | not used |
 
-See [the Analogue Docs](https://www.analogue.co/developer/docs/host-target-commands#target-command-structs) for detailed information of what is required to make these requests.
+## APF_VIDEO
 
-| Name               | Offset | Dir | Width | Description                                                                                                                         |
-| ------------------ | ------ | --- | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `request_getfile`  | `0x8`  | W   | 1     | Writing 1 to this register will trigger a request for the filepath of the active slot.                                              |
-| `request_openfile` | `0xC`  | W   | 1     | Writing 1 to this register will trigger a request to change the file in the active slot to the one specified by the path in memory. |
+One register, `VIDEO`, at offset `0x00`:
 
-## Interact API
+| Field | Bits | What |
+|---|---|---|
+| `VBLANK_STATUS` | 0 | 1 while the scan-out is in vblank |
+| `VBLANK_TRIGGERED` | 1 | Set when vblank starts, cleared by a read of the register |
+| `FRAME_COUNTER` | 31:2 | The fields sent since reset |
 
-Base address (`APF_INTERACT` block): `0xF000_0300`
+## CTRL
 
-This interface provides IO to the Pocket's `interact.json` (`Core Settings`) API. `interact.json` entries whose `address` lies in `0x1000_0100`..`0x1000_01FF` reach the SoC; the word index is `n = (address >> 2) & 63`. Two 32-bit slots hold the values:
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `RESET` | `0x00` | W | No effect: there is no soft reset (quit the core and launch it again) |
+| `SCRATCH` | `0x04` | RW | A word (`0x1234_5678` after reset) |
+| `BUS_ERRORS` | `0x08` | R | The CPU's accesses to addresses nothing answers (16 bits) |
 
-| `n`       | `address`                   | Maps to                                    |
-| --------- | --------------------------- | ------------------------------------------ |
-| `0`, `1`  | `0x1000_0100`, `0x1000_0104` | the whole slot `interact0` / `interact1`   |
-| `2`..`7`  | `0x1000_0108`..`0x1000_011C` | `interact0[5(n-2)+4 : 5(n-2)]` (5 bits)    |
-| `8`..`11` | `0x1000_0120`..`0x1000_012C` | `interact1[5(n-8)+4 : 5(n-8)]` (5 bits)    |
-| `12`      | `0x1000_0130`               | `interact1[21:20]`                         |
-| `13`      | `0x1000_0134`               | `interact1[23:22]`                         |
-| `14`      | `0x1000_0138`               | `interact1[24]`                            |
-| `15`      | `0x1000_013C`               | `interact1[25]`                            |
+## RDP command port
 
-A field address writes only its bits, so each `interact.json` setting can have its own address and needs no `mask`. [See the Analogue Docs](https://www.analogue.co/developer/docs/core-definition-files/interact-json) for more information.
+A FIFO of command words for the RDP beside its own command fetch (`rtl/rdp/rdp_dpc.sv`, [rdp.md](rdp.md)), and the
+RDP's counters. A game's commands come through the DPC registers, not through this port; the runtime reads the count of
+full syncs here.
 
-| Name                  | Offset | Dir | Width | Description                                                   |
-| --------------------- | ------ | --- | ----- | ------------------------------------------------------------- |
-| `interact0`           | `0x0`  | RW  | 32    | Slot 0.                                                       |
-| `interact_changed0`   | `0x4`  | R   | 1     | 1 when slot 0 has been written by the Pocket since last read. |
-| `interact1`           | `0x8`  | RW  | 32    | Slot 1.                                                       |
-| `interact_changed1`   | `0xC`  | R   | 1     | 1 when slot 1 has been written by the Pocket since last read. |
+| Offset | Dir | What |
+|---|---|---|
+| `0x00` | W | A command word into the FIFO (lost, and counted, when the FIFO is full) |
+| `0x04` | R | Bits 11:0: the FIFO's level. Bit 12: full |
+| `0x08` | R | The words lost (16 bits) |
+| `0x0C` | R | The SYNC FULL commands the RDP has completed: everything before them is in memory |
+| `0x14` | R | Bit 0: the RDP is idle and the FIFO empty |
 
-# IO - Interfaces
+The accessors' names are in `csr.h`.
 
-Connections to the link port and cartridge slot will be coming soon. This will probably change the register offsets defined above.
+## TIMER0
 
-# IO - User
+A free-running 64-bit count of system clock cycles (62.5 MHz).
 
-## CSR
-
-Base address (`APF_INPUT` block): `0xF000_0200`
-
-Input data is directly exposed through read registers exactly how they are exposed through APF. No interrupts are available at this time; you must loop and watch for changes in inputs yourself (just like on old consoles).
-
-| Name             | Offset                         | Dir | Width | Description                                                                                                                                        |
-| ---------------- | ------------------------------ | --- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONT[1-4]_KEY`  | `0x0`, `0x4`, `0x8`, `0xC`     | R   | 32    | Controller 1-4 inputs. See associated bitmap                                                                                                       |
-| `CONT[1-4]_JOY`  | `0x10`, `0x14`, `0x18`, `0x1C` | R   | 32    | Controller 1-4 joystick values. See associated bitmap                                                                                              |
-| `CONT[1-4]_TRIG` | `0x20`, `0x24`, `0x28`, `0x2C` | R   | 16    | Controller 1-4 trigger values. Values are binary on Pocket (`0 and 0xFFFF`), and analog on controllers with analog triggers. See associated bitmap |
-
-## Controller Bitmap
-
-| Bit Indexes | Name            |
-| ----------- | --------------- |
-| 0           | `dpad_up`       |
-| 1           | `dpad_down`     |
-| 2           | `dpad_left`     |
-| 3           | `dpad_right`    |
-| 4           | `face_a`        |
-| 5           | `face_b`        |
-| 6           | `face_x`        |
-| 7           | `face_y`        |
-| 8           | `trig_l1`       |
-| 9           | `trig_r1`       |
-| 10          | `trig_l2`       |
-| 11          | `trig_r2`       |
-| 12          | `trig_l3`       |
-| 13          | `trig_r3`       |
-| 14          | `face_select`   |
-| 15          | `face_start`    |
-| [28:16]     | _unused_        |
-| [31:29]     | controller type |
-
-## Joystick Bitmap
-
-| Bit Indexes | Name       |
-| ----------- | ---------- |
-| [7:0]       | `lstick_x` |
-| [15:8]      | `lstick_y` |
-| [23:16]     | `rstick_x` |
-| [31:24]     | `rstick_y` |
-
-## Trigger Bitmap
-
-| Bit Indexes | Name    |
-| ----------- | ------- |
-| [7:0]       | `ltrig` |
-| [15:8]      | `rtrig` |
-
-# Internals
-
-## Control
-
-Base address (`CTRL` block): `0xF000_0500`
-
-| Name         | Offset | Dir | Width | Description |
-| ------------ | ------ | --- | ----- | ----------- |
-| `reset`      | `0x0`  | W   | -     | No effect: there is no soft reset (quit the core and launch it again). |
-| `scratch`    | `0x4`  | RW  | 32    | Scratch register (`0x1234_5678` after reset). |
-| `bus_errors` | `0x8`  | R   | 16    | Count of the game CPU's accesses to addresses nothing answers. |
-
-## Timer0
-
-A free-running 64-bit count of system clock cycles (`CONFIG_CLOCK_FREQUENCY`, 62.832 MHz).
-
-### CSR
-
-Base address (`TIMER0` block): `0xF000_0800`
-
-| Name            | Offset | Dir | Width | Description |
-| --------------- | ------ | --- | ----- | ----------- |
-| `uptime_latch`  | `0x0`  | W   | 1     | Write 1 to latch the count into `uptime_cycles`. |
-| `uptime_cycles` | `0x4`  | R   | 64    | The latched count: high word at `0x4`, low word at `0x8` (`timer0_uptime_cycles_read()` reads both). |
-
-The game CPU also has COP0's Count/Compare timer (Count runs at half the clock); `lang/c/game/trap_arch.h` uses it for timer interrupts.
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `UPTIME_LATCH` | `0x00` | W | A write latches the count |
+| `UPTIME_CYCLES` | `0x04` | R | The latched count: the high word at `0x04`, the low word at `0x08` |
 
 ## UART
 
-The UART runs over JTAG: a USB Blaster on the Pocket's JTAG port, with `tools/jtag/jtag_uart_relay.py` on the host (see the top-level README). It is bidirectional, and the boot ROM uses it to upload a new program (SFL serial boot).
+A UART over the Pocket's JTAG port (`rtl/soc/jtag_uart_bridge.v`; `tools/jtag/jtag_uart_relay.py` is the host's side):
+the boot ROM's and the runtime's messages. The project file builds the bitstream without it (the macro
+`MIRLO_NO_JTAG_UART` in `projects/mirlo.qsf`).
 
-### CSR
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `RXTX` | `0x00` | RW | Write: a byte out (dropped if the FIFO is full). Read: the next byte in |
+| `TXFULL` | `0x04` | R | The transmit FIFO is full |
+| `RXEMPTY` | `0x08` | R | The receive FIFO is empty |
+| `EV_PENDING` | `0x0C` | RW | Always 0: the UART is polled |
 
-Base address (`UART` block): `0xF000_0900`
+## VIDEO_FRAMEBUFFER
 
-| Name         | Offset | Dir | Width | Description |
-| ------------ | ------ | --- | ----- | ----------- |
-| `rxtx`       | `0x0`  | RW  | 8     | Write: send a byte (dropped if `txfull`). Read: the next received byte. |
-| `txfull`     | `0x4`  | R   | 1     | The transmit FIFO is full. With no host reading, it stays full: write with a bounded wait (`uart_write()` in `lang/mips/lib/mirlo_rt.c`). |
-| `rxempty`    | `0x8`  | R   | 1     | The receive FIFO is empty. |
-| `ev_pending` | `0xC`  | RW  | 2     | Reserved; always 0 (the UART is polled). |
+The scan-out's settings (`rtl/soc/n64_video.sv`, [resolution.md](resolution.md)). With the VI in hardware
+(`MONITOR.CTL` bit 3) the base, the gamma and the blanking are the VI's own; the runtime writes the rest from the VI's
+registers.
 
-## Video
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `DMA_BASE` | `0x00` | RW | The frame buffer's address; taken at the frame boundary, so a new base never tears the frame being sent |
+| `DMA_LENGTH` | `0x04` | RW | Not used |
+| `DMA_ENABLE` | `0x08` | RW | The scan-out reads the frame buffer |
+| `DMA_OFFSET` | `0x0C` | R | Reads 0 |
+| `VTG_ENABLE` | `0x10` | RW | The video timing runs (with `DMA_ENABLE`: the picture) |
+| `VTG_MODE` | `0x14` | RW | No effect |
+| `WIDTH` | `0x18` | RW | Bits 11:0: the pitch, the pixels from one row of the frame buffer to the next (512 or more: the VI's filters are off). Bit 16: the VI's gamma correction. Bit 18: the TV system to use until the game programs the VI (1: PAL). Bit 19, read only: the TV system the scan-out is using |
+| `WINDOW` | `0x1C` | RW | The picture's window in the field: bits 15:8 its first line, bits 24:16 its lines (0: the whole field) |
+| `HWINDOW` | `0x20` | RW | Its window in the line: bits 9:0 its first clock, bits 25:16 its width in clocks |
+| `SCALE` | `0x24` | RW | The steps through the frame buffer, with 10 fraction bits: bits 10:0 the pixels a clock of the window steps (at most 1), bits 26:16 the rows a line steps (at most 2) |
+| `ROWWORDS` | `0x28` | RW | The words the scan-out reads of a row (11 bits) |
 
-### CSR
+## GB_CART
 
-Base address (`VIDEO_FRAMEBUFFER` block): `0xF000_0A00`
+A Game Boy cartridge in the Pocket's slot (`rtl/soc/gb_cart.sv`), read and written a byte at a time: what the Transfer
+Pak uses.
 
-| Name         | Offset | Dir | Width | Description |
-| ------------ | ------ | --- | ----- | ----------- |
-| `dma_base`   | `0x0`  | RW  | 32    | The framebuffer's address (RGB565). Taken at the frame boundary, so a new base never tears the frame being sent. Defaults to `0x40C0_0000`. |
-| `dma_length` | `0x4`  | RW  | 32    | Not used: the mode sets the length. |
-| `dma_enable` | `0x8`  | RW  | 1     | Scan-out on. |
-| `dma_offset` | `0xC`  | R   | 32    | Reads 0. |
-| `vtg_enable` | `0x10` | RW  | 1     | Video timing on (both enables: the picture). |
-| `vtg_mode`   | `0x14` | RW  | 1     | 0: 268 x 240, 1: 320 x 240 (see `docs/resolution.md`); taken at the end of a frame. |
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `ID` | `0x00` | R | `0x4742_0001` |
+| `CTRL` | `0x04` | RW | Bit 0 `ON`: the cartridge out of reset, the bus driven. Bit 1 `TRUST`: chip select and writes allowed (it is a Game Boy's cartridge) |
+| `ACCESS` | `0x08` | RW | Write: an access starts (not while `BUSY`): `DATA` bits 7:0, `ADDR` bits 23:8, `WE` bit 24. Read: `BUSY` bit 31 and the byte read in `DATA` |
 
-# Video
+## MONITOR
 
-## CSR
+The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's blocks in hardware
+(`rtl/soc/rcp_mi.sv`, `rcp_vi.sv`, `rcp_ai.sv`, `rcp_si.sv`). Only the runtime uses these.
 
-Base address (`APF_VIDEO` block): `0xF000_0400`. Single 32 bit video register at `0x0`. Split as follows:
-
-| Name               | Dir | Width | Description                                                                                                                                                                                     |
-| ------------------ | --- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vblank_status`    | R   | 1     | 1 when in vblank, 0 otherwise.                                                                                                                                                                  |
-| `vblank_triggered` | R   | 1     | Indicates when vblank occurs. Becomes 1 at vblank, and is set to 0 whenever read. If you read 1, vblank has started between your two reads.                                                     |
-| `frame_counter`    | R   | 30    | Counts the number of frames displayed since startup. Comparing this value to a previous value can be used to track frame changes. A frame change is considered to occur at the start of vblank. |
-
-# 3D pipeline
-
-Mirlo draws 3D with two cores and a rasterizer (`docs/geometry_core.md`, `docs/mrdp.md`):
-
-* The **game CPU** (`mips_core`, with a single-precision FPU) runs the program and writes a display list (GDL) into SDRAM.
-* The **geometry core** (`mips_geom`, no FPU) walks the GDL, transforms, lights, clips and sets up triangles. It has a private ROM (`0x2000_0000`) and RAM (`0x2000_8000`), and a vector unit attached as its CFU.
-* **MRDP**, an N64-style rasterizer, receives the geometry core's commands and draws into the framebuffers.
-
-The two cores hand off frames through the **mailbox**.
-
-> Register addresses shift between builds -- derive them from the
-> generated `csr.h` (`tools/mirlo_regs.py`), never hardcode.
-
-## MRDP
-
-Base address (`MRDP` block): `0xF000_0700`. The command format is documented in `docs/mrdp.md`. Once `frame_init()` has run, only the geometry core writes commands.
-
-| Name          | Offset | Dir | Width | Description |
-| ------------- | ------ | --- | ----- | ----------- |
-| `cmd_data`    | `0x0`  | W   | 32    | Push one command word. Poll `cmd_status.level` first: a word written while the FIFO is full is lost (and counted in `cmd_dropped`). |
-| `cmd_status`  | `0x4`  | R   | 32    | `level` (low bits): the command FIFO's fill level; `full`: a write now would be lost. |
-| `cmd_dropped` | `0x8`  | R   | 16    | Command words written while the FIFO was full. |
-| `sync_count`  | `0xC`  | R   | 32    | SYNC FULLs completed: every write before them is in DRAM. |
-| `load_count`  | `0x10` | R   | 32    | LOAD TILEs completed (their staging memory is free again). |
-| `status`      | `0x14` | R   | 32    | bit 0 `idle` (no command in progress, nothing queued, no write pending); bits 31:16 unknown opcodes skipped. |
-
-## Mailbox
-
-Base address (`MAILBOX` block): `0xF000_0600`. Bidirectional doorbell + 32-bit message word; each
-direction raises a level interrupt on the receiver (`geom` -> the geometry
-core's interrupt input; `game` -> the game CPU's Cause.IP2, which the
-software leaves masked: it polls).
-
-| Name           | Dir | Width | Description |
-| -------------- | --- | ----- | ---------- |
-| `game_msg`     | RW  | 32    | Message from the game CPU to the geometry CPU (typically the `main_ram` address of the display list to process). |
-| `game_kick`    | W   | 1     | Raise the geometry-core doorbell. |
-| `geom_ack`     | W   | 1     | (geometry core) clear the geometry-core doorbell. |
-| `geom_msg`     | RW  | 32    | Message from the geometry CPU to the game CPU (e.g. "frame N geometry done"). |
-| `geom_kick`    | W   | 1     | (geometry core) raise the game-CPU doorbell. |
-| `game_ack`     | W   | 1     | (game CPU) clear the game-CPU doorbell. |
-| `status`       | R   | 2     | bit0 `geom_pending`, bit1 `game_pending`. |
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads |
+| `CTL` | `0x04` | RW | Bit 0 `OWN`: the game's interrupt line is the one below, not the RSP's own. Bit 1 `RCP`: that line. Bit 2 `MI`: the game's interrupt is the MI's line. Bit 3 `VI`: the VI is the hardware's. Bit 4 `AI`: the AI is the hardware's |
+| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run |
+| `MASK` | `0x0C` | RW | Which of them interrupt the monitor |
+| `KICK` | `0x10` | RW | A write of 1s sets `PEND`'s bits |
+| `LEVEL` | `0x14` | R | Bit 0: the RSP's interrupt, as it is |
+| `MIRAISE` | `0x18` | W | A write of 1s sets bits of the MI's interrupt register (SI, AI, VI, PI, DP: bits 1 to 5) |
+| `MICLR` | `0x1C` | W | A write of 1s clears them |
+| `MIINTR` | `0x20` | R | Bits 5:0: the MI's interrupts. Bits 13:8: its mask. Bit 16: the PI's engine is running |
+| `PIDST` | `0x24` | W | The PI's engine: the destination word (in the RDRAM, or anywhere in the SDRAM when bits 23:21 are not 0) |
+| `PISRC` | `0x28` | W | Its source word in the SDRAM (bit 24: from the word's second half) |
+| `PILEN` | `0x2C` | RW | The words to copy (bits 23:22: the bytes of the last one, 0 for all four): the write starts the copy. Read: the words left, and bit 31 while it runs |
+| `VITHR` | `0x30` | W | The last origin (in units of 64 bytes) at which a picture of the mode's size fits in the RDRAM: beyond it the scan-out shows black |
+| `AIRATE` | `0x34` | RW | Write: the resampler's step (source frames for each 48 kHz sample, 16 fraction bits). Read: the AI's rate register as the game wrote it |
+| `SIDONE` | `0x38` | W | A write of 1: the runtime has run the PIF's commands (the SI's busy flag clears) |
+| `PI2` | `0x3C` | RW | Bit 0: the cartridge's domain 2 is a FlashRAM (the game's reads of it are the status word, its writes go nowhere) |
