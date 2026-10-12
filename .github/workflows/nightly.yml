@@ -3,9 +3,12 @@
 # artifact is the tree a user copies onto the Pocket's SD card: downloaded, it is the zip to unpack there.
 # The job fails, and publishes nothing, if that fit does not close timing with the sources as they are.
 #
-# It runs on a self-hosted runner labelled `quartus`: a machine with Quartus Prime Lite 25.1std (QUARTUS_BIN, or
-# ~/altera/25.1std/quartus/bin), a GCC for MIPS (MIPS_CC, MIPS_BIN), Python 3, meson and ninja. tools/ci has that
-# machine as a container (tools/ci/runner.sh).
+# It also runs for a pull request that changes the record of the fits or the build itself: the seed a pull request
+# records is compiled and must close.
+#
+# Quartus comes from a public container image of Quartus Prime Lite 23.1std.1, named by its digest. For this device
+# that version places and routes as 25.1std, the one of README.md, does: the same seed gives the same bitstream,
+# byte for byte, so a seed found with one is good for the other.
 name: Nightly
 
 on:
@@ -16,18 +19,30 @@ on:
     - cron: '0 22 * * *'
     - cron: '0 23 * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - projects/fits.json
+      - tools/nightly.sh
+      - tools/fits.py
+      - tools/area2/fit.sh
 
 permissions:
   contents: read
 
 concurrency:
-  group: nightly
+  group: nightly-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  QUARTUS_IMAGE: docker.io/chriz2600/quartus-lite@sha256:50eac410e54617e93ad6c13d9129f7e52c89108a819ded31e66d1eb4577cd8ef
+  QUARTUS_IN_IMAGE: /opt/intelFPGA_lite/23.1/quartus/bin
+  MIPS_CC: mips-linux-gnu-gcc-13
 
 jobs:
   build:
-    runs-on: [self-hosted, linux, quartus]
-    timeout-minutes: 180
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
     steps:
       - name: Is it midnight in Madrid?
         id: when
@@ -46,6 +61,25 @@ jobs:
         if: steps.when.outputs.run == 'yes'
         with:
           submodules: recursive
+
+      - name: The tools
+        if: steps.when.outputs.run == 'yes'
+        run: |
+          # room for the image (12 GB unpacked): what the runner carries and this build does not use
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends gcc-13-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build
+          docker pull -q "$QUARTUS_IMAGE"
+          # quartus_sh, as the build calls it: the image's, on this tree at the same path
+          mkdir -p "$RUNNER_TEMP/quartus"
+          cat > "$RUNNER_TEMP/quartus/quartus_sh" <<'SH'
+          #!/bin/sh
+          exec docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" "$QUARTUS_IMAGE" "$QUARTUS_IN_IMAGE/quartus_sh" "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/quartus/quartus_sh"
+          echo "QUARTUS_BIN=$RUNNER_TEMP/quartus" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/quartus/quartus_sh" --version
+          df -h / | tail -1
 
       - name: Build
         if: steps.when.outputs.run == 'yes'
