@@ -410,8 +410,9 @@ always_ff @(posedge clk) begin
         2'd2: inc = !ax.s && (fg || zst);
         default: inc = ax.s && (fg || zst);
         endcase
-        i = zmag + {31'd0, inc};
-        res <= ax.s ? -i : i;
+        // (the rounded magnitude, negated for a negative: -(m + inc) is ~m + !inc -- one adder)
+        i = (zmag ^ {32{ax.s}}) + {31'd0, inc ^ ax.s};
+        res <= i;
         st <= S_DONE;
     end
     S_DONE: if (valid) st <= S_IDLE;

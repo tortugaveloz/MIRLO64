@@ -116,7 +116,9 @@ module rdp_mem (
     // ======================================================================
     reg        r_act, r_load, r_z, r_c, r_set;
     reg        r_h, r_hall, q_hin;            // hidden words: wanted; all asked for; still coming back
-    reg [26:0] r_hg, r_hgl, q_hg;             // the group to ask for, the last, the one to come back
+    // (a span is 65 groups at most: the last one is known by its low seven bits)
+    reg [17:0] r_hg;                          // the group to ask for
+    reg [6:0]  r_hgl, q_hg;                   // the last, the one to come back
     reg [29:0] r_zb, r_cb;                // the rows' word addresses
     reg [8:0]  r_idx, r_last;             // the word to ask for next, the last (the row's words: x >> 1)
     reg        r_tog, r_all;              // both spans: the colour word is next; every command is out
@@ -131,7 +133,8 @@ module rdp_mem (
     assign rd_busy  = r_act;
 
     // ---- loads
-    reg [29:0] w_next, w_recv, w_last;
+    reg [29:0] w_next;                    // the word to ask for
+    reg [11:0] l_ask, l_get;              // the words still to ask for less one, still to come back
     reg        issued_all;
     reg [1:0]  lmode, lo;                 // the mode; the source's byte offset in its word
     reg [10:0] ldst;                      // TMEM's 16-bit word of the next aligned word (mode 1: the texel)
@@ -319,12 +322,12 @@ module rdp_mem (
                     r_tog <= 1'b0; q_tog <= 1'b0; r_all <= 1'b0;
                     z_have <= 10'd0; c_have <= 10'd0;
                     r_h <= rd_h && !rd_load; r_hall <= !(rd_h && !rd_load); q_hin <= rd_h && !rd_load;
-                    r_hg <= rd_cw0[29:3]; q_hg <= rd_cw0[29:3]; r_hgl <= rd_cwl[29:3];
+                    r_hg <= rd_cw0[20:3]; q_hg <= rd_cw0[9:3]; r_hgl <= rd_cwl[9:3];
                     h_done <= !(rd_h && !rd_load);
                     if (rd_load) begin
                         w_next <= rd_cbase[31:2];
-                        w_recv <= rd_cbase[31:2];
-                        w_last <= rd_cbase[31:2] + {18'd0, ld_reads} - 30'd1;
+                        l_ask <= ld_reads - 12'd1;
+                        l_get <= ld_reads;
                         issued_all <= 1'b0;
                         lmode <= rd_lmode; lo <= rd_cbase[1:0];
                         ldst <= rd_ldst; lleft <= rd_ln;
@@ -337,7 +340,8 @@ module rdp_mem (
             end else if (r_load) begin
                 // read commands: back to back, or (TLUT) one at a time
                 if (ld_want && cmd_free) begin
-                    if (w_next == w_last) issued_all <= 1'b1;
+                    if (l_ask == 12'd0) issued_all <= 1'b1;
+                    l_ask <= l_ask - 12'd1;
                     w_next <= w_next + 30'd1;
                     l_out <= 1'b1;
                 end
@@ -346,7 +350,7 @@ module rdp_mem (
                     lprev <= m_rdata;
                     lfirst <= 1'b0;
                     if (!lfirst) begin la <= l_aligned; la_v <= 1'b1; lt <= 2'd0; end
-                    w_recv <= w_recv + 30'd1;
+                    l_get <= l_get - 12'd1;
                     l_out <= 1'b0;
                 end
                 // an aligned word into TMEM
@@ -376,18 +380,18 @@ module rdp_mem (
                         end
                     endcase
                 end
-                if (lleft == 11'd0 && !la_v && issued_all && w_recv == w_last + 30'd1) r_act <= 1'b0;
+                if (lleft == 11'd0 && !la_v && issued_all && l_get == 12'd0) r_act <= 1'b0;
             end else begin
                 // the hidden words first, a command a cycle
                 if (h_want && cmd_free) begin
-                    if (r_hg == r_hgl) r_hall <= 1'b1;
-                    r_hg <= r_hg + 27'd1;
+                    if (r_hg[6:0] == r_hgl) r_hall <= 1'b1;
+                    r_hg <= r_hg + 18'd1;
                 end
                 if (m_rdata_valid && q_hin) begin
-                    hlbw_addr <= {r_set, q_hg[6:0]};
+                    hlbw_addr <= {r_set, q_hg};
                     lbw_data <= m_rdata;
                     hlbw_we <= 1'b1;
-                    q_hg <= q_hg + 27'd1;
+                    q_hg <= q_hg + 7'd1;
                     if (q_hg == r_hgl) begin
                         q_hin <= 1'b0; h_done <= 1'b1;
                         if (!r_z && !r_c) r_act <= 1'b0;

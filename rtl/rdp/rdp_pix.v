@@ -333,7 +333,13 @@ module rdp_pix (
     // ======================================================================
     // P2: r = P - (D * frac >> 9); S, T clamped to the 27-bit multiplier input
     // ======================================================================
+    // The products S * r and T * r go down by 27 - sh places (W is 2.30, lang/c/mrdp/mrdp_setup.h mrdp_slope30: 41 - 14;
+    // none above sh 27). r is taken up by the low part of that here, sh mod 8 places, so that what is left for the two
+    // 45-bit products is one of four shifts, 27, 19, 11 or 3 (sq: sh / 8) -- sh 28..30: up 3 and down 3
     wire [19:0] dfrac = d1 * f1;
+    wire [16:0] r1 = p1 - {6'd0, dfrac[19:9]};
+    wire        sh_top = sh1 > 5'd27;
+    wire [2:0]  sj1 = sh_top ? 3'd3 : sh1[2:0];
     function automatic [26:0] sat27;
         input [31:0] v;
         begin
@@ -344,16 +350,16 @@ module rdp_pix (
     endfunction
     reg        v2;
     reg [9:0]  x2;
-    reg [16:0] r2;
-    reg [4:0]  sh2;
+    reg [23:0] r2;
+    reg [1:0]  sq2;
     reg [26:0] sc2, tc2;
     reg [15:0] s2r, t2r;                 // S and T as the affine and the direct paths take them (s10.5 in 16 bits), decided here: only the perspective path wants more
     reg [35:0] shade2;
     reg [15:0] depth2;
     always @(posedge clk) begin
         v2 <= v1 & ~rst; x2 <= x1; bs2 <= bs1; ph2 <= ph1;
-        r2 <= p1 - {6'd0, dfrac[19:9]};
-        sh2 <= sh1;
+        r2 <= {7'd0, r1} << sj1;
+        sq2 <= sh_top ? 2'd3 : sh1[4:3];
         sc2 <= sat27(s1r); tc2 <= sat27(t1r);
         s2r <= p_direct ? s1r[15:0] : sat16_32($signed(s1r) >>> 11);
         t2r <= p_direct ? t1r[15:0] : sat16_32($signed(t1r) >>> 11);
@@ -365,8 +371,8 @@ module rdp_pix (
     // ======================================================================
     reg        v3;
     reg [9:0]  x3;
-    reg signed [44:0] ps3, pt3;
-    reg [4:0]  sh3;
+    reg signed [51:0] ps3, pt3;
+    reg [1:0]  sq3;
     reg [15:0] s3r, t3r;
     reg [35:0] shade3;
     reg [15:0] depth3;
@@ -374,25 +380,38 @@ module rdp_pix (
         v3 <= v2 & ~rst; x3 <= x2; bs3 <= bs2; ph3 <= ph2;
         ps3 <= $signed(sc2) * $signed({1'b0, r2});
         pt3 <= $signed(tc2) * $signed({1'b0, r2});
-        sh3 <= sh2;
+        sq3 <= sq2;
         s3r <= s2r; t3r <= t2r; shade3 <= shade2; depth3 <= depth2;
     end
 
     // ======================================================================
     // P4: s10.5 coordinates (perspective, affine, or direct)
     // ======================================================================
-    function automatic [15:0] sat16_45;
-        input signed [44:0] v;
-        sat16_45 = (v > 45'sd32767) ? 16'h7FFF : ((v < -45'sd32768) ? 16'h8000 : v[15:0]);
+    // a product down by 27, 19, 11 or 3 places (q: 0..3), saturated to 16 bits: the 16 bits from there, when all above
+    // them are the sign
+    function automatic [15:0] sat16_q;
+        input signed [51:0] v;
+        input [1:0] q;
+        reg [15:0] lo;
+        reg        in0, in1, in2, in3, ok;
+        begin
+            in0 = v[51:42] == {10{v[51]}};
+            in1 = in0 && v[41:34] == {8{v[51]}};
+            in2 = in1 && v[33:26] == {8{v[51]}};
+            in3 = in2 && v[25:18] == {8{v[51]}};
+            case (q)
+                2'd0:    begin lo = v[42:27]; ok = in0; end
+                2'd1:    begin lo = v[34:19]; ok = in1; end
+                2'd2:    begin lo = v[26:11]; ok = in2; end
+                default: begin lo = v[18:3];  ok = in3; end
+            endcase
+            sat16_q = ok ? lo : v[51] ? 16'h8000 : 16'h7FFF;
+        end
     endfunction
     function automatic [15:0] sat16_32;
         input signed [31:0] v;
         sat16_32 = (v > 32'sd32767) ? 16'h7FFF : ((v < -32'sd32768) ? 16'h8000 : v[15:0]);
     endfunction
-    // W is 2.30 (lang/c/mrdp/mrdp_setup.h mrdp_slope30): 41 - 14, never below 0
-    wire [5:0] shamt = (sh3 > 5'd27) ? 6'd0 : 6'd27 - {1'b0, sh3};
-    wire signed [44:0] ps_sh = ps3 >>> shamt;
-    wire signed [44:0] pt_sh = pt3 >>> shamt;
     reg        v4;
     reg [9:0]  x4;
     reg [15:0] s4, t4;
@@ -406,7 +425,7 @@ module rdp_pix (
         if (p_direct || !persp) begin
             s4 <= s3r; t4 <= t3r;
         end else begin
-            s4 <= sat16_45(ps_sh); t4 <= sat16_45(pt_sh);
+            s4 <= sat16_q(ps3, sq3); t4 <= sat16_q(pt3, sq3);
         end
         shade4 <= shade3; depth4 <= depth3;
     end

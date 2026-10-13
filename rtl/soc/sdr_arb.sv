@@ -47,28 +47,36 @@ logic [IW-1:0] cur;             // the port holding the grant
 logic          held;            // cur keeps it (it asked last cycle and got served)
 logic [4:0]    beats;
 
+// the first port of v round the ring from cur + 1 (cur itself the last): {found, the port; cur when none}.
+// Two priority chains by the port's place against cur -- those above it, then those up to it -- and no modulo.
+function automatic logic [IW:0] ring(input logic [N-1:0] v, input logic [IW-1:0] c);
+    logic f; logic [IW-1:0] p;
+    f = 0; p = c;
+    for (int i = N - 1; i >= 0; i--) if (v[i] && IW'(i) <= c) begin p = IW'(i); f = 1; end
+    for (int i = N - 1; i >= 0; i--) if (v[i] && IW'(i) > c)  begin p = IW'(i); f = 1; end
+    return {f, p};
+endfunction
 // the next port: cur if held and still asking, else urgent first, else round-robin after cur
 logic [IW-1:0] pick, pu, pn;
-logic          any, fu, fn;
+logic          any, fu;
+logic [IW:0]   rn;
 always_comb begin
     any = |p_valid;
-    fu = 0; fn = 0; pu = cur; pn = cur;
-    for (int k = 1; k <= N; k++) begin
-        if (!fu && p_valid[(int'(cur) + k) % N] && p_urgent[(int'(cur) + k) % N]) begin pu = IW'((int'(cur) + k) % N); fu = 1; end
-        if (!fn && p_valid[(int'(cur) + k) % N]) begin pn = IW'((int'(cur) + k) % N); fn = 1; end
-    end
+    {fu, pu} = ring(p_valid & p_urgent, cur);
+    rn = ring(p_valid, cur);
+    pn = rn[IW-1:0];
     if (held && p_valid[cur] && beats < 5'(MAXB)) pick = cur;
     else pick = fu ? pu : pn;
 end
 // the next other port: as above, cur left out
 logic [IW-1:0] ou, on;
 logic          fou, fon;
+logic [N-1:0]  p_oth;
 always_comb begin
-    fou = 0; fon = 0; ou = cur; on = cur;
-    for (int k = 1; k < N; k++) begin
-        if (!fou && p_valid[(int'(cur) + k) % N] && p_urgent[(int'(cur) + k) % N]) begin ou = IW'((int'(cur) + k) % N); fou = 1; end
-        if (!fon && p_valid[(int'(cur) + k) % N]) begin on = IW'((int'(cur) + k) % N); fon = 1; end
-    end
+    p_oth = p_valid;
+    p_oth[cur] = 0;
+    {fou, ou} = ring(p_oth & p_urgent, cur);
+    {fon, on} = ring(p_oth, cur);
 end
 always_ff @(posedge clk) begin
     la_valid <= !rst && fon;

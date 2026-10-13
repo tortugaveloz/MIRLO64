@@ -242,6 +242,8 @@ wire  [5:0]  tq_n = 6'(tq_w - tq_r);
 wire  [4:0]  tq_h = tq[tq_r];
 wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
+// (the next read's address in its row: one adder -- a pair's B word a row of the picture on, its next A word back, else the next word)
+wire  [23:0] raddr_n = raddr + ((avg_f && !bsel) ? PROW : avg_f ? PBACK : 24'd1);
 always_ff @(posedge clk) begin
     if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
                    col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; end
@@ -272,12 +274,12 @@ always_ff @(posedge clk) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
                 bsel <= 1'b1;
-                raddr <= raddr + PROW;
+                raddr <= raddr_n;
             end else if (m_valid && m_ready) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
                 bsel <= 1'b0;
-                raddr <= raddr + (avg_f ? PBACK : 24'd1);
+                raddr <= raddr_n;
                 if (col == nw_f - 11'd1) begin            // a row's last word: the next row
                     col <= 0;
                     raddr <= rowp_n; rowp <= rowp_n; yacc <= yan[9:0];
@@ -456,20 +458,32 @@ always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], v
 assign aa_on = aa_s[1] && N64FB && !nofilt_v;
 assign dd_on = dd_s[1] && N64FB && !nofilt_v;
 assign dv_on = dv_s[1] && aa_on;
-// second smallest and second largest of six (11 compares)
+function automatic logic one6(input logic [5:0] x);               // exactly one of six
+    return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
+endfunction
+// second smallest and second largest of six, by rank: each pair compared once (15 compares; equal values in the order
+// of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one
 function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
-    logic [4:0] l0, h0, l1, h1, l2, h2, sa, sb, la, lb;
-    l0 = a < b ? a : b; h0 = a < b ? b : a;
-    l1 = c < d ? c : d; h1 = c < d ? d : c;
-    l2 = e < f ? e : f; h2 = e < f ? f : e;
-    // the smallest low's pair: the second smallest is the least of the other lows and that pair's high
-    if (l0 <= l1 && l0 <= l2)  begin sa = l1 <= l2 ? l1 : l2; sb = h0; end
-    else if (l1 <= l2)         begin sa = l0 <= l2 ? l0 : l2; sb = h1; end
-    else                       begin sa = l0 <= l1 ? l0 : l1; sb = h2; end
-    if (h0 >= h1 && h0 >= h2)  begin la = h1 >= h2 ? h1 : h2; lb = l0; end
-    else if (h1 >= h2)         begin la = h0 >= h2 ? h0 : h2; lb = l1; end
-    else                       begin la = h0 >= h1 ? h0 : h1; lb = l2; end
-    return {sa <= sb ? sa : sb, la >= lb ? la : lb};
+    logic [4:0] v [6];
+    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
+    logic [4:0] lo, hi;
+    v[0] = a; v[1] = b; v[2] = c; v[3] = d; v[4] = e; v[5] = f;
+    for (int i = 0; i < 6; i++) begin
+        bf[i] = 6'd0;
+        for (int j = i + 1; j < 6; j++) bf[i][j] = v[j] < v[i];
+    end
+    for (int i = 0; i < 6; i++)
+        for (int j = 0; j < i; j++) bf[i][j] = !bf[j][i];
+    for (int i = 0; i < 6; i++) begin
+        af[i] = ~bf[i];
+        af[i][i] = 1'b0;
+    end
+    lo = 5'd0; hi = 5'd0;
+    for (int i = 0; i < 6; i++) begin
+        if (one6(bf[i])) lo = lo | v[i];
+        if (one6(af[i])) hi = hi | v[i];
+    end
+    return {lo, hi};
 endfunction
 function automatic logic [7:0] pen(input logic [4:0] c, input logic [9:0] m, input logic [2:0] w);
     logic [4:0] mn, mx;
@@ -534,10 +548,9 @@ always_ff @(posedge clk_vid) if (adv) begin
 end
 // divot: the median of three, by channel (a neighbour not in the picture is the centre)
 function automatic logic [7:0] med3(input logic [7:0] a, b, c);
-    logic [7:0] lo, hi, m;
-    lo = a < b ? a : b; hi = a < b ? b : a;
-    m  = hi < c ? hi : c;
-    return lo > m ? lo : m;                 // max(min(a, b), min(max(a, b), c))
+    logic ba, ca, cb;                       // (b before a, c before a, c before b: the one that exactly one of the others comes before)
+    ba = b < a; ca = c < a; cb = c < b;
+    return ({8{ba ^ ca}} & a) | ({8{!ba ^ cb}} & b) | ({8{ca ^ cb}} & c);
 endfunction
 wire [23:0] dl = fv[2] ? fa2 : fa1, dr = fv[0] ? fa0 : fa1;
 wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);

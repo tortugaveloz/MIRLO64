@@ -546,20 +546,16 @@ module rdp_top (
             default:    ea = es[2:0];
         endcase
     end
-    wire [31:0] e_q = e_ram[ea], ade_q = ade_ram[ea];
-    // e (TRI_INIT, two clocks ahead of its product k DaDe) or e + DaDe (the row step)
-    wire [31:0] e_add = e_q + ((st == S_TRI_INIT) ? 32'd0 : ade_q);
-    reg  [31:0] e_add1, e_add2;
-    always @(posedge clk) begin
-        e_add1 <= e_add; e_add2 <= e_add1;
-    end
     wire vset_w = st == S_VSET && (vs == 4'd15 || (vs == 4'd0 && !attr_on(tflags, vi)));
     wire vset_on = vs == 4'd15;
     wire tinit_w = st == S_TRI_INIT && mi >= 5'd5 && mi <= 5'd12;
     wire step_w = !es[3];
     wire [2:0]  e_wa = vset_w ? vi : tinit_w ? mi[2:0] - 3'd5 : es[2:0];
-    wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0)
-                     : tinit_w ? e_add2 + mul_p[31:0] : e_add;
+    // (TRI_INIT's write of e + k DaDe reads e where it writes it, as the product comes -- two clocks after DaDe was
+    // read at ea for it; one adder for that and for the row step's e + DaDe)
+    wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ea];
+    wire [31:0] e_add = e_q + (tinit_w ? mul_p[31:0] : ade_q);
+    wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0) : e_add;
     always @(posedge clk) begin
         if (vset_w || tinit_w || step_w) e_ram[e_wa] <= e_wd;
         if (vset_w) ade_ram[vi] <= vset_on ? vde : 32'd0;
@@ -915,11 +911,13 @@ module rdp_top (
                     begin : rect_setup
                         reg [2:0] ds;
                         reg signed [31:0] dsdx, dtdy, sv, tv, dcol, drow;
+                        reg signed [10:0] dc11;
                         ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
                         sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
                         dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}; dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
-                        dcol = $signed({22'd0, xs}) - $signed({22'd0, rx0});
-                        drow = $signed({{20{y[11]}}, y}) - $signed({{20{ry0[11]}}, ry0});
+                        dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
+                        dcol = {{21{dc11[10]}}, dc11};
+                        drow = rdiff(y, ry0);
                         case (mi)
                             5'd0: begin mul_a <= dsdx; mul_b <= (op == 6'h25) ? drow : dcol; end
                             5'd1: begin mul_a <= dtdy; mul_b <= (op == 6'h25) ? dcol : drow; end

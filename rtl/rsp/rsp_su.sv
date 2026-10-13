@@ -46,6 +46,12 @@ module rsp_su (
     output logic [31:0] c_b,            // rt
     input  wire         c_done,
     input  wire  [31:0] c_res,          // MFC0, MFC2, CFC2
+    // the vector registers' read addresses (their memories register them): of the instruction E holds in the cycle
+    // to come, its rd field (vs), and the register it reads otherwise -- rd for MFC2 / MTC2, rt for the rest (vt);
+    // c_rb is that of the one in E now
+    output logic [4:0]  c_ra_n,
+    output logic [4:0]  c_rb_n,
+    output logic [4:0]  c_rb,
 
     // (simulation) each instruction as it leaves E, and each register write
     output logic        tr_e,
@@ -244,6 +250,11 @@ assign c_valid = e_valid && e_c.cop && !hazard;
 assign c_ins = e_ins;
 assign c_a = ea;
 assign c_b = eb;
+function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
+    return (i[31:26] == 6'h12 && i[25:24] == 2'b00 && i[22:21] == 2'b00) ? i[15:11] : i[20:16];
+endfunction
+assign c_ra_n = stall_e ? e_ins[15:11] : ins_d[15:11];
+assign c_rb_n = stall_e ? c_rb : vrb(ins_d);
 
 wire [31:0] e_res = e_c.link ? {20'h0, e_pc + 12'd8} : e_c.cop ? c_res : alu;
 assign stall_e = e_valid && (hazard || (e_c.cop && !c_done) || (m_stall && (e_c.load || e_c.store)));
@@ -280,6 +291,7 @@ always_ff @(posedge clk) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
             e_pc <= d_pc; e_ins <= ins_d; e_c <= decode(ins_d);
         end
+        if (!stall_e) c_rb <= vrb(ins_d);
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
         end else if (brk) begin

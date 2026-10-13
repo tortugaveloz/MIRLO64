@@ -24,7 +24,7 @@ the RSP.
 | `rtl/rsp/rsp_su.sv` | the scalar unit: the RSP's MIPS subset on a five-stage pipeline |
 | `rtl/rsp/rsp_vu.sv` | the vector unit: COP2 and the vector loads and stores (LWC2, SWC2) |
 | `rtl/rsp/rsp_dpram.sv` | DMEM's memory: four banks of block RAM |
-| `rtl/rsp/rsp_lutram.v` | a 32-word LUT RAM: one element of the vector registers |
+| `rtl/rsp/rsp_lutram.v` | a 32-word LUT RAM, 16 bytes wide with a write enable a byte: one copy of the vector registers |
 
 `rtl/rsp.qip` lists them for Quartus. The SoC instantiates `rsp_top` once, in
 `rtl/soc/mirlo_mips.sv`.
@@ -231,11 +231,14 @@ the four lanes stand four multiply-accumulate units (`lane_mul`): a
 multiplier, the accumulator adder and the clamp, with none of the add, compare
 or clip logic.
 
-The storage is always eight elements wide. Each element of the register file
-is three copies of a 32-word LUT RAM (`rsp_lutram`), read in the cycle: copy A
-at vs and copy C at vt, addressed straight from the instruction word, for the
-operands of a computation; copy B for stores, MFC2, MTC2 and load writes that
-merge. The accumulator and the flags are registers for all eight elements. The
+The storage is always eight elements wide. The register file is two copies of
+a 32-word LUT RAM (`rsp_lutram`), each a whole register wide and written a byte
+at a time: a load or MTC2 writes its bytes over a register's and reads nothing.
+One copy is read at the instruction's vs, the other at its vt, for the operands
+of a computation -- or at the register MFC2 or MTC2 names, a store's, or the one
+STV has reached. Each memory registers its read address itself, a cycle ahead:
+the scalar unit gives the addresses of the instruction that E holds next. The
+accumulator and the flags are registers for all eight elements. The
 element broadcast of vt (each element its own, one element of each pair, one
 of each half, or a single element for the whole register) is also formed for
 all eight elements at once.

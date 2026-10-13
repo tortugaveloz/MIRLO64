@@ -863,8 +863,12 @@ wire [31:0] e_b  = e_m_b ? m_res : e_w_b ? w_res : e_rb;
 wire [31:0] e_bv  = (!FAST && e_c.b_imm) ? (e_c.imm_zero ? {16'd0, e_insn[15:0]} : sx16(e_insn[15:0])) : e_b;
 // the compares, for slt and the traps (32 bits: with a 64-bit operand slt
 // runs at M and a trap is a Reserved Instruction -- d_cx)
-wire        e_lt   = $signed(e_a) < $signed(e_bv);
-wire        e_ltu  = e_a < e_bv;
+// (FAST: from the adder, which subtracts for all but an add -- e_k_sub: no borrow is "not below", and the difference's sign
+// decides a signed compare of operands of one sign)
+logic       e_k_sub;
+wire [32:0] e_cs;
+wire        e_lt   = FAST ? ((e_a[31] != e_bv[31]) ? e_a[31] : e_cs[31]) : $signed(e_a) < $signed(e_bv);
+wire        e_ltu  = FAST ? !e_cs[32] : e_a < e_bv;
 wire        e_eq   = e_a == e_bv;
 wire [5:0]  e_fn  = e_insn[5:0];
 wire [4:0]  e_sh  = (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07) ? e_a[4:0] : e_insn[10:6];
@@ -879,12 +883,12 @@ wire [32:0] e_shr = $signed(e_shx) >>> e_sh;
 wire [31:0] e_shv = e_sl ? rev32(e_shr[31:0]) : e_shr[31:0];
 
 // (FAST) the result by its kind, registered with the instruction: e_k_grp 0
-// add or subtract (e_k_f), 1 a shift, 2 one of e_k_op's, 3 a compare (e_k_f:
+// add or subtract (e_k_sub), 1 a shift, 2 one of e_k_op's, 3 a compare (e_k_f:
 // unsigned) -- or nothing (e_k_op[0])
 logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 // (the carry out, for the upper word of a 64-bit add or subtract, which M does)
-wire        e_fsub = FAST ? e_k_f : e_c.alu == A_SUB;
-wire [32:0] e_cs = {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
+wire        e_fsub = FAST ? e_k_sub : e_c.alu == A_SUB;
+assign      e_cs = {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
 wire [31:0] e_addsub = e_cs[31:0];
 logic [31:0] e_misc;
 always_comb begin
@@ -950,9 +954,9 @@ always_comb begin
     default: e_taken = 1'b0;
     endcase
 end
-wire [31:0] e_target = e_c.br == B_J  ? {e_pc[31:28], e_insn[25:0], 2'b00}
-                     : e_c.br == B_JR ? e_a
-                     : e_pc + 32'd4 + {{14{e_insn[15]}}, e_insn[15:0], 2'b00};
+// (a jump's or a branch's own target is what D made of it for the guess, d_ptarget, kept: no adder here)
+logic [31:0] e_ptarget;
+wire [31:0] e_target = e_c.br == B_JR ? e_a : e_ptarget;
 // the delay slot it annuls, when that is at E by now
 assign e_kill = FAST && rd_res && rd_annul && e_valid && e_dly;
 
@@ -1181,9 +1185,13 @@ logic        m_xc, m_xltu;
 wire [63:0]  m_a64 = v64(m_a_hx, m_a_lo), m_b64 = v64(m_st_hx, m_st_lo);
 wire [31:0]  m_xha = m_a_hx ^ {32{m_a_lo[31]}};
 wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_st_hx ^ {32{m_st_lo[31]}};
-wire         m_xsub = m_c.x64 == X_SUB;
-wire [31:0]  m_xsum = m_xha + (m_xhb ^ {32{m_xsub}}) + 32'(m_xc);
-wire         m_xlt = (m_xha != m_xhb) ? (m_c.x64 == X_SLT ? $signed(m_xha) < $signed(m_xhb) : m_xha < m_xhb) : m_xltu;
+// (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
+// and the upper words' go through this adder: no borrow out of it is "not below", its sign decides operands of one sign)
+wire         m_xsub = m_c.x64 == X_SUB || (FAST && (m_c.x64 == X_SLT || m_c.x64 == X_SLTU));
+wire [32:0]  m_xsum_c = {1'b0, m_xha} + {1'b0, m_xhb ^ {32{m_xsub}}} + 33'(m_xc);
+wire [31:0]  m_xsum = m_xsum_c[31:0];
+wire         m_xlt = FAST ? (m_c.x64 == X_SLT ? ((m_xha[31] != m_xhb[31]) ? m_xha[31] : m_xsum[31]) : !m_xsum_c[32])
+                   : (m_xha != m_xhb) ? (m_c.x64 == X_SLT ? $signed(m_xha) < $signed(m_xhb) : m_xha < m_xhb) : m_xltu;
 // the upper word's hx: its difference from the lower word's sign (HI and LO's are stored so)
 logic [31:0] m_xhx;
 always_comb begin
@@ -1872,7 +1880,9 @@ always_ff @(posedge clk) begin
             e_fexc <= d_fexc; e_fexc_code <= d_fexc_code;
             e_serial <= d_serial;
             e_bp <= d_k_pred && f_deliver;
+            e_ptarget <= d_ptarget;
             e_k_grp <= 2'd3; e_k_op <= 3'd1; e_k_f <= 1'b0;                 // (nothing)
+            e_k_sub <= d_cx.alu != A_ADD;                                   // (the adder subtracts: sub, and for the compares)
             case (d_cx.alu)
             A_ADD:  e_k_grp <= 2'd0;
             A_SUB:  begin e_k_grp <= 2'd0; e_k_f <= 1'b1; end

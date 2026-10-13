@@ -768,6 +768,9 @@ synthesis at its fast effort, and a placement effort multiplier of 10. The fitte
   assignments, and starts a full compile in the background (`quartus_map` only with `map`). The log is
   `projects_a2_<tag>.compile.log`. `QUARTUS_BIN` names Quartus's `bin` directory. The macros it appends set the
   configuration the bitstream is built with (the caches' sizes among them); `EXTRA_MACROS` adds others.
+- `ooc.sh <tag> <unit>` synthesises one unit alone (the CPU, the RDP, the RSP, the scan-out or the registers) with the
+  project's settings and the same macros: a minute or two, and the same count for the same source, where the whole
+  design's synthesis can move a unit nobody touched from one run to the next.
 - `closure.py <output_files dir>...` reads the whole `mirlo.sta.summary` and prints the worst slack of all analyses
   and the setup and hold slack of the CPU's clock, `clk_sys` and `clk_sys2x`.
 - `summ.sh <projects dir>...` prints the fit's status and utilisation, the worst slacks, and a check that the SDRAM's
