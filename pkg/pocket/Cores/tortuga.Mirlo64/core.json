@@ -3,7 +3,7 @@
     "magic": "APF_VER_1",
     "metadata": {
       "platform_ids": [
-        "mirlo"
+        "n64"
       ],
       "shortname": "Mirlo64",
       "description": "MIRLO64: Nintendo 64 games on the Analogue Pocket, on an original SoC with its own MIPS CPU, RSP and RDP",

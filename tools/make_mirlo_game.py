@@ -10,7 +10,7 @@ where a game that uses the copy the Pocket loaded wants it. That holds for
 a file's first 49 MiB: what it has from there up, to 65 MiB at most, is not
 in the SDRAM (docs/mips.md, "The memory of an N64 game").
 
-The Pocket's file browser lists the .bin files in Assets/mirlo/common. The
+The Pocket's file browser lists the .bin files in Assets/n64/common. The
 Pocket loads the file to 0x40000000 (data slot 0) and the boot ROM
 (lang/mips/boot) jumps to it; the game reads its blocks itself, by tag,
 through the APF bridge. File layout:

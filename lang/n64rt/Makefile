@@ -1,4 +1,4 @@
-# n64rt.sys: the program of the core's data slot 3 (Assets/mirlo/common/n64rt.sys), the runtime that runs an N64 game's
+# n64rt.sys: the program of the core's data slot 3 (Assets/n64/common/n64rt.sys), the runtime that runs an N64 game's
 # own ROM (a .z64 in slot 0) with the game's own libultra: loader/main.c plus the runtime's objects (n64rt.mk).
 # It is built for the SoC as the bitstream has it (RSP, the CPU's monitor level), so these are fixed here: RSP=1 OWN=1.
 #

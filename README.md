@@ -31,19 +31,23 @@ MIRLO 64 is experimental and not every game works. What is known of v0.1:
 ## Installing on the Pocket
 
 1. Download `tortuga.Mirlo64_<version>.zip` from the [releases](https://github.com/tortugaveloz/MIRLO64/releases).
-2. Unzip it onto the **root** of the Pocket's SD card, merging with the folders already there. It adds only Mirlo's own files:
+2. Unzip it onto the **root** of the Pocket's SD card, merging with the folders already there. It adds these files:
 
    ```
-   Assets/mirlo/common/          n64rt.sys (the runtime) and n64savedb.txt; where Mirlo's games go
+   Assets/n64/common/            n64rt.sys (the runtime) and n64savedb.txt; where the games go
    Cores/tortuga.Mirlo64/        the core: mirlo.rev (the bitstream), core.json, ...
-   Platforms/mirlo.json          the platform: Console > Nintendo 64
-   Platforms/_images/mirlo.bin   its image
+   Platforms/n64.json            the platform: Console > Nintendo 64
+   Platforms/_images/n64.bin     its image
    ```
 
-3. Put the games (games in `.z64` format) in `Assets/mirlo/common/`.
+   The platform is `n64`: its file and its image are the same ones another core of that platform would bring.
+
+3. Put the games (games in `.z64` format) in `Assets/n64/common/`.
 4. On the Pocket: **openFPGA → Console → Nintendo 64**, then pick a game.
 
-Saves (`.sav`) appear in `Saves/mirlo/common/` when you quit a game. To update the core, unzip a newer release the same way; it replaces the files in `Cores/tortuga.Mirlo64/`.
+Saves (`.sav`) appear in `Saves/n64/common/` when you quit a game. To update the core, unzip a newer release the same way; it replaces the files in `Cores/tortuga.Mirlo64/`.
+
+**Coming from version 0.1**, whose platform was `mirlo`: move your games from `Assets/mirlo/common/` to `Assets/n64/common/` and your saves from `Saves/mirlo/` to `Saves/n64/`; `Assets/mirlo/`, `Platforms/mirlo.json` and `Platforms/_images/mirlo.bin` can then be deleted.
 
 ### The games' format
 
@@ -72,7 +76,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 
 ### Saves
 
-The Pocket writes them to `Saves/mirlo/common/` when you quit the core. A file appears once the game has saved.
+The Pocket writes them to `Saves/n64/common/` when you quit the core. A file appears once the game has saved.
 
 | File | What |
 |---|---|

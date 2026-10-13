@@ -10,9 +10,9 @@ zip holds, from the SD card's root:
 
     Cores/tortuga.Mirlo64/   the core definition (pkg/pocket), mirlo.rev,
                              LICENSE.txt, NOTICE.txt
-    Platforms/mirlo.json     the platform (Console > Nintendo 64) and its image
-    Platforms/_images/mirlo.bin
-    Assets/mirlo/common/     n64rt.sys, n64savedb.txt (pkg/pocket) and
+    Platforms/n64.json     the platform (Console > Nintendo 64) and its image
+    Platforms/_images/n64.bin
+    Assets/n64/common/     n64rt.sys, n64savedb.txt (pkg/pocket) and
                              PUT_ROMS_HERE.txt: where the games go
 
 so a user unzips it onto the card's root and is done. Entries are written in
@@ -59,12 +59,12 @@ def main():
                 continue                       # the bitstream comes from the argument
             files.append((rel, p))
     files.append((CORE + "/mirlo.rev", rev))
-    files.append(("Assets/mirlo/common/n64rt.sys", sys_file))
+    files.append(("Assets/n64/common/n64rt.sys", sys_file))
     files.append((CORE + "/LICENSE.txt", os.path.join(ROOT, "LICENSE")))
     files.append((CORE + "/NOTICE.txt", os.path.join(ROOT, "NOTICE")))
     files.sort()
     dirs = sorted({"/".join(r.split("/")[:i]) for r, _ in files for i in range(1, r.count("/") + 1)}
-                  | {"Assets", "Assets/mirlo", "Assets/mirlo/common"})
+                  | {"Assets", "Assets/n64", "Assets/n64/common"})
     with zipfile.ZipFile(out, "w") as z:
         for d in dirs:
             add_dir(z, d)

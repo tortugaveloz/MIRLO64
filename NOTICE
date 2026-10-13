@@ -124,7 +124,7 @@ LICENSE.TXT (Apache-2.0 with LLVM exceptions); see the submodules.
 -------------------------------------------------------------------------------
 Save-type database
 
-pkg/pocket/Assets/mirlo/common/n64savedb.txt is a table of facts about
+pkg/pocket/Assets/n64/common/n64savedb.txt is a table of facts about
 cartridges (which save chip each has), compiled by tools/build_savedb.py from
 public lists; the script holds the address of each list and the file's header
 says how each was used. It contains no ROM data.

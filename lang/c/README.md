@@ -39,6 +39,6 @@ flags (`-march=vr4300 -mabi=32 -EB -msingle-float`; doubles in software).
 cd lang/c/examples/helloworld && make             # -> build/build.bin
 ```
 
-`build/build.bin` is your program: copy it to `Assets/mirlo/common/` on the
+`build/build.bin` is your program: copy it to `Assets/n64/common/` on the
 SD card, or upload it over JTAG (`tools/jtag/jtag_program_and_run.sh`, see the
 top-level README).
