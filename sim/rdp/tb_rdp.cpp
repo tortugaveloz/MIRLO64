@@ -176,7 +176,9 @@ static unsigned grng;
 static unsigned gr() { grng = grng * 1664525u + 1013904223u; return grng >> 8; }
 static unsigned gr(unsigned n) { return gr() % n; }
 static int grs(int n) { return (int)gr(2 * n + 1) - n; }
-static const uint32_t R_CIMG = 0x200000, R_ZIMG = 0x280000, R_TEX = 0x100000;
+// (the random streams' images: the depth image a multiple of 8 KiB above the colour image -- in the same bank of the SoC's SDRAM,
+// word for word, TB_SDRAM's rows -- or TB_ZIMG=<address>: where given, 0x280800 a bank on)
+static const uint32_t R_CIMG = 0x200000, R_ZIMG = getenv("TB_ZIMG") ? (uint32_t)strtoul(getenv("TB_ZIMG"), 0, 0) : 0x280000, R_TEX = 0x100000;
 static void cmd2(uint32_t a, uint32_t b) { cmds.push_back(a); cmds.push_back(b); }
 // TB_CC=1: the combiner's arithmetic under test -- cycle types 0 and 1 only, the
 // blender passing the combiner's colour alone (no FORCE_BL, P = the pixel), every
