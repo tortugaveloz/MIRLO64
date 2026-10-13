@@ -1,4 +1,4 @@
-/* The save-type database: a text file on the SD card (Assets/mirlo/common/n64savedb.txt, data.json's slot 4), one
+/* The save-type database: a text file on the SD card (Assets/n64/common/n64savedb.txt, data.json's slot 4), one
  * line per cartridge -- the cartridge's ID (the four characters at ROM 0x3B..0x3E, "?" for any) and its save type --
  * which the Pocket loads beside the program. This is the lookup, and nothing else: a pure function of the file's
  * bytes, which the runtime calls once at boot (n64rt_io.c) and a host test calls with any bytes (test/savedb_host.c).

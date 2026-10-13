@@ -12,7 +12,7 @@
  * The same on the JTAG UART when a pad's words change (tools/jtag/sfl_term.py).
  *
  * On a Pocket: this file built (make padtest in lang/mips/test -> build/padtest.bin) goes where the core's runtime goes, as
- * Assets/mirlo/common/n64rt.sys (keep the real one aside); start the core with any game file (it is loaded and ignored). In the
+ * Assets/n64/common/n64rt.sys (keep the real one aside); start the core with any game file (it is loaded and ignored). In the
  * simulation: ROM=<any file> tb_soc build/padtest.bin -c 100 -o <dir> -e 10, PAD / PAD2 / PAD3 / PAD4 for the pads
  * (sim/mips_soc/tb_soc.cpp) and INTERACT=<address>:<value> for the settings. */
 #include <stdint.h>
