@@ -926,7 +926,7 @@ int main(int argc, char **argv)
                 // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
                 // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
                 // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again
-                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF, PAD.., PAD_MASH, AILOG: the run's own file, none
+                // then (CPUTRACE, counted from there, EXCSTAT, CPUSTAT, XTRACE, PCTOP, PCPROF, PAD.., PAD_MASH, AILOG and RSPLOG: the run's own file, none
                 // unless named) or at each use (PAD_FILE, RAMDUMP, RSPDUMP and its RSPDUMP_CTL ...).
                 // <dir>/quit ends the copies.
                 if (const char *ck = getenv("CKPT")) {
@@ -945,7 +945,7 @@ int main(int argc, char **argv)
                                     std::string run = go + ".run";
                                     rename(go.c_str(), run.c_str());
                                     if (fork() == 0) {
-                                        unsetenv("CKPT"); unsetenv("AILOG");
+                                        unsetenv("CKPT"); unsetenv("AILOG"); unsetenv("RSPLOG");
                                         long more = 30;
                                         if (FILE *f = fopen(run.c_str(), "r")) {
                                             char ln[1024];
@@ -1068,6 +1068,36 @@ int main(int argc, char **argv)
                     rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->mrdp_sync;
                 }
                 f_last = frames;
+            }
+            // RSPLOG=<file>: the RSP's runs, a line each as it halts: the sys cycle it left halt at, the task's type and flags (the
+            // OSTask in DMEM 0xFC0: 1 gfx, 2 audio; flags bit 0: a task taken up again after a yield), the cycles it ran, SP_STATUS's
+            // signals as it stopped (libultra's: bit 0 a yield asked for, 1 yielded, 2 task done), the instructions, the cycles
+            // with a DMA under way, with a run of RDP commands waiting behind the one being fetched, and -- a yield was asked
+            // for while it ran -- the cycles from the asking to the halt (else -1). (A run from a checkpoint: its own file.)
+            {
+                static FILE *rl; static const char *rl_name;
+                const char *rn = getenv("RSPLOG");
+                if (rn != rl_name) { rl_name = rn; rl = rn ? fopen(rn, "w") : nullptr; }
+                if (rl) {
+                    static int was_halt = 1, was_sig0; static long t_start, n_ins, n_dma, n_wait, t_yield = -1; static uint32_t ty, fl;
+                    const int halt = t->audio_state & 1, sig0 = t->rsp_sig & 1;
+                    if (was_halt && !halt) {
+                        auto &dm = t->rootp->soc_sim_top__DOT__soc__DOT__rsp__DOT__dmem__DOT__mem;
+                        t_start = sys; ty = dm[0x3F0]; fl = dm[0x3F1]; n_ins = n_dma = n_wait = 0; t_yield = sig0 ? sys : -1;
+                    }
+                    if (!halt) {
+                        if (t->rsp_stat & 8) n_ins++;
+                        if (t->rsp_stat & 2) n_dma++;
+                        if (t->rsp_stat & 16) n_wait++;
+                        if (sig0 && !was_sig0) t_yield = sys;
+                    }
+                    if (!was_halt && halt) {
+                        fprintf(rl, "%ld %u %x %ld %x %ld %ld %ld %ld\n", t_start, ty, fl, sys - t_start, (unsigned)t->rsp_sig, n_ins, n_dma, n_wait,
+                                t_yield >= 0 ? sys - t_yield : -1L);
+                        static unsigned n_lines; if ((++n_lines & 63) == 0) fflush(rl);
+                    }
+                    was_halt = halt; was_sig0 = sig0;
+                }
             }
             // RSPSTAT=1: where the RSP's time goes, by the task under way (the
             // port's 0xA3 / 0xA4 marks: built with RSPDUMP=1), a line a second
