@@ -13,11 +13,9 @@ name: Nightly
 
 on:
   schedule:
-    # GitHub's schedule is in UTC: 22:00 is midnight in Madrid in summer, 23:00 in winter. The first step lets
-    # through the one of the two that is midnight there (by which of them this run is, not by the clock: a
-    # scheduled run can start late).
-    - cron: '0 22 * * *'
-    - cron: '0 23 * * *'
+    # midnight in Madrid, summer and winter time (GitHub may start a scheduled run late)
+    - cron: '0 0 * * *'
+      timezone: "Europe/Madrid"
   workflow_dispatch:
   pull_request:
     paths:
@@ -35,6 +33,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  TZ: Europe/Madrid               # the nightly's name carries the day in Madrid
   QUARTUS_IMAGE: docker.io/chriz2600/quartus-lite@sha256:50eac410e54617e93ad6c13d9129f7e52c89108a819ded31e66d1eb4577cd8ef
   QUARTUS_IN_IMAGE: /opt/intelFPGA_lite/23.1/quartus/bin
   MIPS_CC: mips-linux-gnu-gcc-13
@@ -44,26 +43,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      - name: Is it midnight in Madrid?
-        id: when
-        run: |
-          case "$(TZ=Europe/Madrid date +%z)" in
-            +0200) midnight='0 22 * * *' ;;
-            *)     midnight='0 23 * * *' ;;
-          esac
-          if [ "${{ github.event_name }}" != schedule ] || [ "${{ github.event.schedule }}" = "$midnight" ]; then
-            echo "run=yes" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=no" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.when.outputs.run == 'yes'
         with:
           submodules: recursive
 
       - name: The tools
-        if: steps.when.outputs.run == 'yes'
         run: |
           # room for the image (12 GB unpacked): what the runner carries and this build does not use
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -82,7 +66,6 @@ jobs:
           df -h / | tail -1
 
       - name: Build
-        if: steps.when.outputs.run == 'yes'
         id: build
         run: |
           tools/nightly.sh "$RUNNER_TEMP/nightly"
@@ -93,7 +76,6 @@ jobs:
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Publish the zip
-        if: steps.when.outputs.run == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.name }}
