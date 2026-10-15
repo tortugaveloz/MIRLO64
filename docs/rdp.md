@@ -104,10 +104,11 @@ change with pixels in flight.
 | 0x35 | set tile | format, size, line, TMEM address, palette, clamp, mirror, mask, shift |
 | 0x36 | fill rectangle | |
 | 0x37-0x3B | fill, fog, blend, primitive, environment colour | primitive colour also sets the primitive LOD fraction |
+| 0x2C | set convert | K0 to K3, a YUV texel's conversion; K4 and K5, two inputs of the combiner |
 | 0x3C | set combine | both cycles |
 | 0x3D-0x3F | texture, depth, colour image | |
 
-Any other opcode (set key, set convert, the undefined ones) is counted in
+Any other opcode (set key, the undefined ones) is counted in
 `unknown_ops` and skipped as a two-word command.
 
 ## Drawing a primitive
@@ -130,6 +131,14 @@ pixels and the write-back of the row before overlap. Only pixels that passed
 are written, by byte enables; a word with none is not written. The depth span
 is written only with Z_UPD. A primitive ends when its last pixel is back in
 memory.
+
+A row's spans are read as runs: all of the depth span's words, then all of the
+colour span's. The write-back is a run too: the colour words as their pixels
+come out of the pipeline, then the depth words from the line buffers. The
+SDRAM keeps one row open in each of its four banks, and a colour image and a
+depth image can be in the same bank word for word (their addresses equal
+modulo 8 KiB); words of the two in turn would close and open a row at every
+word.
 
 The colour span is read only when it is needed: with FORCE_BL, when a blender
 cycle in use selects memory; without it, when the last cycle's P is memory
@@ -195,7 +204,9 @@ texture image as it is in memory, from a source that may start at any byte:
 * **load TLUT**: up to 256 16-bit entries, each written four times over (64
   bits an entry);
 * a load into a 32-bit RGBA tile is split: R and G go to the lower half of
-  TMEM, B and A to the same word of the upper half.
+  TMEM, B and A to the same word of the upper half;
+* a load into a 16-bit YUV tile is split the same way: a pixel pair's U Y0 V
+  Y1 as U V to the lower half and Y0 Y1 to the upper.
 
 An odd row's 64-bit words go into TMEM with their halves changed places, and
 are sampled so. A row is odd by the load's own count: LOAD TILE's rows, or
@@ -219,16 +230,17 @@ A texel is decoded when it is sampled, by the tile's size and format:
 | | 4-bit | 8-bit | 16-bit | 32-bit |
 |---|---|---|---|---|
 | RGBA | as I | as I | 5551 | 8888 |
-| YUV | as I | as I | read as 5551 | read as 8888 |
+| YUV | as I | as I | U, V, Y, Y (the pair's U V and the pixel's Y) | read as 8888 |
 | CI | as I | as I | read as 5551 | read as 8888 |
 | IA | 3 + 1 | 4 + 4 | 8 + 8 | read as 8888 |
 | I | 4 | 8 | the upper byte | read as 8888 |
 
-An I texel gives its value on all four channels. With the TLUT enabled a 4-
-or 8-bit texel of any format is an index instead (a 4-bit one with the
-tile's palette above it), and the entry is RGBA5551 or IA 8 + 8 by the other
-modes' TLUT type; 16- and 32-bit texels are never looked up. YUV is not
-converted.
+An I texel gives its value on all four channels. With the TLUT enabled every
+texel is an index instead, whatever its format and size: a 4-bit one with the
+tile's palette above it, an 8-bit one as it is, and of a 16- or 32-bit one the
+first byte of its word (a game can load its depth image as a texture and take
+a table's entry by the depth's top byte). The entry is RGBA5551 or IA 8 + 8 by
+the other modes' TLUT type.
 
 ### Filter
 
@@ -238,6 +250,14 @@ by which triangle of it the fractions fall in. A pixel reads the three at
 once, so TMEM is kept three times (`rdp_tmem.v`), each copy with a second
 small memory of the TLUT's entries for the lookup. The loads write all the
 copies alike.
+
+A pass whose BI_LERP bit is off (BI_LERP_0 for the first cycle, BI_LERP_1 for
+the second) converts a YUV texel instead of filtering it: the texel at the
+coordinates, U and V less 128, with SET CONVERT's K0 to K3 (signed, as
+`2K + 1` 256ths): `R = Y + K0 V`, `G = Y + K1 U + K2 V`, `B = Y + K3 U`, and
+the alpha Y. With CONVERT_ONE the second cycle converts the first cycle's
+texel. Only a YUV tile's texels are converted, and each channel is clamped to
+a byte.
 
 ### TEXEL1 and LOD
 
@@ -288,8 +308,13 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
   coverage is multiplied by it (CVG_X_ALPHA): a fully covered opaque texel
   keeps all 8 samples.
 * SHADE is saturated to a byte, 0..255, when it enters the pipeline.
-* The primitive LOD fraction is an input. NOISE, the LOD fraction, the key
-  and the convert inputs read 0.
+* The primitive LOD fraction is an input. NOISE, the LOD fraction and the key
+  inputs read 0.
+* **K4** (as B) and **K5** (as C) are SET CONVERT's, 9 bits each, read as
+  COMBINED is in those places: K4 is negative from 0x180, K5 a signed 9-bit
+  number. With them `(TEXEL0 - K4) * K5 + TEXEL0` finishes a YUV texel's
+  conversion, and `(TEXEL0 - TEXEL1) * K5 + TEXEL1` with K5 at 255 is
+  TEXEL0.
 
 ### Alpha and coverage
 
@@ -313,10 +338,20 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 
 ### Depth
 
-The depth image is 16 bits a pixel and linear: the interpolated Z shifted
-right by 15 and clamped to 0..65535. With the Z source select, or for a
-primitive without Z coefficients, the depth is the primitive depth. The
-modes, with dz the primitive's depth step:
+The depth is the N64's 18 bits: the interpolated Z shifted right by 13 and
+kept inside 0..0x3FFFF. With the Z source select, or for a primitive without
+Z coefficients, the depth is the primitive depth. The depth image's word is
+the N64's too: 14 bits of the depth as a floating-point number -- an
+exponent of three bits, the count of the depth's leading ones, and the 11
+bits under them -- above the top two bits of the pixel's dz code. The far
+end of the range keeps all 18 bits; the near end (exponent 0, the first
+half) keeps 12. 0xFFFC is the far plane. A game can read the image with the
+CPU or as a texture as it would on the console.
+
+The compares are of the 18 bits against what the word keeps. The modes, with
+dz the primitive's depth step (and never less than what the memory's word
+has lost at its exponent, so that a surface drawn over itself is within it
+at any depth):
 
 * **Opaque**: in front, or -- without a coverage overflow -- within dz behind.
 * **Interpenetrating**: as opaque; and where a pixel in front, within dz,
@@ -324,7 +359,7 @@ modes, with dz the primitive's depth step:
 * **Translucent**: in front.
 * **Decal**: within dz either way, and not over a cleared depth.
 
-A stored depth of `0xFFFF` is the cleared one and passes the first three.
+A stored depth at the far plane is the cleared one and passes the first three.
 
 ### Blender
 
@@ -430,18 +465,20 @@ A picture 512 wide or more is shown with the filters off.
 ## Not implemented, or approximated
 
 * **Colour images** other than 16-bit ones are not drawn to.
-* **Depth** is 16-bit linear, not the N64's compressed format, and the
-  memory's dz is not stored.
+* **Depth**: the memory's dz is kept to its top two bits, as the word has
+  room for, and the blender's coverage weight does not use it.
 * **LOD**: none. No detail, sharpen or level selection; the LOD fraction
   reads 0.
 * **TEXEL1** is the next tile at the same coordinates. In the second cycle
   of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
-* **YUV** textures are not converted; SET_CONVERT and SET_KEY are skipped.
-  The key, convert and noise inputs of the combiner read 0.
+* **YUV** textures are converted only from 16-bit YUV tiles, each channel
+  clamped to a byte (the console keeps 9 bits); a pass that converts takes
+  the texel at the coordinates, unfiltered. SET_KEY is skipped; the key and
+  noise inputs of the combiner read 0.
 * **Shade** is not corrected to the covered sample; only Z is.
 * **Scissor**: the interlace field bits are not read.
-* **Other modes**: detail, sharpen, LOD enable, the bilerp and convert bits
-  and the key enable are not read.
+* **Other modes**: detail, sharpen, LOD enable and the key enable are not
+  read.
 
 ## How it is verified
 
@@ -507,3 +544,17 @@ Where the area goes, without figures:
 * **Registered stages.** Each combiner and blender cycle is two stages, the
   operand selects then the arithmetic, and the decoded texels are registered
   before the filter.
+
+### A timing option kept in reserve
+
+The YUV conversion's input is selected in front of its multiplies: the
+pass's own corner texel, or with CONVERT_ONE the first pass's texel. That
+select sits on one of the system clock's longest paths (from the pass bit
+through the multiplies to the texel the pass gives). It can be taken off:
+a second pass that converts gives no filtered texel, so its corner register
+(`ta8b`, stage P8b) is free and can be loaded with the first pass's texel,
+and the conversion then reads the corner alone. The result is the same
+pixel for pixel. It closes timing on more fitter seeds, but the fitter
+spends more logic on it than it saves, so it is not done while timing
+closes without it: it is the change to make if a later addition makes the
+system clock's timing hard to close.

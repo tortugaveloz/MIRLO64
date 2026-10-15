@@ -32,6 +32,8 @@ module rdp_pix (
     input  wire [31:0] cc_lo,
     input  wire [31:0] prim, env, fog, blend,   // RGBA, R in [31:24]
     input  wire [7:0]  prim_lod_frac,
+    input  wire [8:0]  k4, k5,      // SET CONVERT's K4 (the combiner's B 7) and K5 (C 15)
+    input  wire [35:0] cv_k03,      // SET CONVERT's K0..K3, 9 bits each (K0 at [35:27]): a YUV texel's conversion
     input  wire [15:0] prim_z,
     input  wire [15:0] z_tol,       // the primitive's depth step (a decal's tolerance; the coverage's dz)
     input  wire [15:0] prim_dz,     // SET_PRIM_DEPTH's delta
@@ -124,7 +126,8 @@ module rdp_pix (
         input [8:0] v;
         cc_xc = {v[8], v};
     endfunction
-    // cc_eval0: the first cycle, whose operands are 0..511 (COMBINED is 0 there; bit 9 of A, B, C is clear).
+    // cc_eval0: the first cycle's alpha, whose operands are 0..511 (COMBINED is 0 there; bit 9 of A, B, C is clear). Its colours
+    // take cc_eval1: K4 as B and K5 as C are signed numbers.
     function automatic [8:0] cc_eval0;
         input [9:0] a, b, c;
         input [8:0] d;
@@ -177,7 +180,8 @@ module rdp_pix (
                    : { v[15:11], v[15:13], v[10:6], v[10:8], v[5:1], v[5:3], {8{v[0]}} };
     endfunction
     // a texel as TMEM gives it (tmem_fetch): the 16-bit word it is in, the
-    // upper half's word (32-bit), its place in the word
+    // upper half's word (32-bit; YUV's Y0 Y1 for its pair's U V), its place in
+    // the word (YUV: s[0], Y0 or Y1)
     function automatic [31:0] texel;
         input [2:0]  fmt;
         input [1:0]  size;
@@ -190,7 +194,8 @@ module rdp_pix (
             b = sl[0] ? v[7:0] : v[15:8];
             case (size)
                 2'd3: texel = { v, h };
-                2'd2: texel = (fmt == 3'd3) ? tex16(1'b1, v) : (fmt <= 3'd2) ? tex16(1'b0, v) : {4{v[15:8]}};
+                2'd2: texel = (fmt == 3'd1) ? { v, {2{sl[0] ? h[7:0] : h[15:8]}} }      // YUV: U V Y Y
+                            : (fmt == 3'd3) ? tex16(1'b1, v) : (fmt <= 3'd2) ? tex16(1'b0, v) : {4{v[15:8]}};
                 2'd1: texel = (fmt == 3'd3) ? { {3{b[7:4], b[7:4]}}, b[3:0], b[3:0] } : {4{b}};
                 default: texel = (fmt == 3'd3) ? { {3{n[3:1], n[3:1], n[3:2]}}, {8{n[0]}} } : {4{n, n}};
             endcase
@@ -283,8 +288,37 @@ module rdp_pix (
         cvd <= {cvd[59:0], dup0 ? cvd[3:0] : cvg_in};
     end
     wire [31:0] zin_c = z0r + zc0;
-    wire signed [31:0] zq = $signed(zin_c) >>> 15;
-    wire [15:0] dz = zq < 0 ? 16'd0 : (zq > 32'sd65535 ? 16'hFFFF : zq[15:0]);
+    // the depth: the N64's 18 bits. The depth image's word (the model's z_enc / z_dec): 14 of them as a floating-point number --
+    // the exponent the count of the depth's leading ones, 0..7, the mantissa the 11 bits under them -- above the top two bits
+    // of the pixel's dz code
+    wire signed [31:0] zq = $signed(zin_c) >>> 13;
+    wire [17:0] dz = zq < 0 ? 18'd0 : (zq > 32'sd262143 ? 18'h3FFFF : zq[17:0]);
+    function automatic [13:0] z_enc;
+        input [17:0] z;
+        casez (z[17:11])
+            7'b0??????: z_enc = {3'd0, z[16:6]};
+            7'b10?????: z_enc = {3'd1, z[15:5]};
+            7'b110????: z_enc = {3'd2, z[14:4]};
+            7'b1110???: z_enc = {3'd3, z[13:3]};
+            7'b11110??: z_enc = {3'd4, z[12:2]};
+            7'b111110?: z_enc = {3'd5, z[11:1]};
+            7'b1111110: z_enc = {3'd6, z[10:0]};
+            default:    z_enc = {3'd7, z[10:0]};
+        endcase
+    endfunction
+    function automatic [17:0] z_dec;
+        input [15:0] w;
+        case (w[15:13])
+            3'd0: z_dec = {1'b0, w[12:2], 6'd0};
+            3'd1: z_dec = {2'b10, w[12:2], 5'd0};
+            3'd2: z_dec = {3'b110, w[12:2], 4'd0};
+            3'd3: z_dec = {4'b1110, w[12:2], 3'd0};
+            3'd4: z_dec = {5'b11110, w[12:2], 2'd0};
+            3'd5: z_dec = {6'b111110, w[12:2], 1'd0};
+            3'd6: z_dec = {7'b1111110, w[12:2]};
+            default: z_dec = {7'b1111111, w[12:2]};
+        endcase
+    endfunction
 
     // ======================================================================
     // P1: normalise W, table lookup
@@ -310,10 +344,17 @@ module rdp_pix (
     reg        u5_cs, u5_ms, u5_ct, u5_mt;
     reg [8:0]  u6_tmem, u6_line;
     reg [1:0]  u6_size, u8t_size;
-    reg        u8_size0;
+    reg        u6_yuv;                     // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
+    // the pass converts YUV instead of filtering (mrdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
+    // tile's pass, 10 for the next tile's) off; the texel a YUV tile's -- the pass's own, or with CONVERT_ONE (other_h 9) the
+    // second pass converts the first's texel (texA9), the tile's
+    wire       t_yuv  = t_fmt == 3'd1 && t_size == 2'd2;
+    wire       t1_yuv = t1_fmt == 3'd1 && t1_size == 2'd2;
+    reg        conv6, conv7, conv8, conv8t, conv8b;
+    reg        u8_size0, u8_size1;
     reg [3:0]  u8_pal;
     reg [2:0]  u8t_fmt;
-    wire       tlut_on = other_h[15] && !u8t_size[1];
+    wire       tlut_on = other_h[15];
     reg        v1;
     reg [9:0]  x1;
     reg [16:0] p1;
@@ -322,12 +363,12 @@ module rdp_pix (
     reg [4:0]  sh1;
     reg [31:0] s1r, t1r;
     reg [35:0] shade1;
-    reg [15:0] depth1;
+    reg [17:0] depth1;
     always @(posedge clk) begin
         v1 <= v0 & ~rst; x1 <= x0; bs1 <= bs0; ph1 <= ph0;
         p1 <= rom_p; d1 <= rom_d; f1 <= wn[23:15]; sh1 <= sh_c;
         s1r <= s0r; t1r <= t0r; shade1 <= shade0;
-        depth1 <= (z_src_p || !p_zbuf) ? prim_z : dz;
+        depth1 <= (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     end
 
     // ======================================================================
@@ -355,7 +396,7 @@ module rdp_pix (
     reg [26:0] sc2, tc2;
     reg [15:0] s2r, t2r;                 // S and T as the affine and the direct paths take them (s10.5 in 16 bits), decided here: only the perspective path wants more
     reg [35:0] shade2;
-    reg [15:0] depth2;
+    reg [17:0] depth2;
     always @(posedge clk) begin
         v2 <= v1 & ~rst; x2 <= x1; bs2 <= bs1; ph2 <= ph1;
         r2 <= {7'd0, r1} << sj1;
@@ -375,7 +416,7 @@ module rdp_pix (
     reg [1:0]  sq3;
     reg [15:0] s3r, t3r;
     reg [35:0] shade3;
-    reg [15:0] depth3;
+    reg [17:0] depth3;
     always @(posedge clk) begin
         v3 <= v2 & ~rst; x3 <= x2; bs3 <= bs2; ph3 <= ph2;
         ps3 <= $signed(sc2) * $signed({1'b0, r2});
@@ -416,7 +457,7 @@ module rdp_pix (
     reg [9:0]  x4;
     reg [15:0] s4, t4;
     reg [35:0] shade4;
-    reg [15:0] depth4;
+    reg [17:0] depth4;
     always @(posedge clk) begin
         v4 <= v3 & ~rst; x4 <= x3; bs4 <= bs3; ph4 <= ph3;
         // the tile fields P5's shift and origin take (the pass's tile)
@@ -453,7 +494,7 @@ module rdp_pix (
     reg [9:0]  x5;
     reg signed [23:0] vs5r, vt5r;
     reg [35:0] shade5;
-    reg [15:0] depth5;
+    reg [17:0] depth5;
     always @(posedge clk) begin
         v5 <= v4 & ~rst; x5 <= x4; bs5 <= bs4; ph5 <= ph4;
         // and the clamp, mirror and mask of P5b
@@ -508,11 +549,13 @@ module rdp_pix (
     reg [10:0] s06, s16, t06, t16;
     reg [4:0]  fs6, ft6;
     reg [35:0] shade6;
-    reg [15:0] depth6;
+    reg [17:0] depth6;
     always @(posedge clk) begin
         v6 <= v5 & ~rst; x6 <= x5; bs6 <= bs5; ph6 <= ph5;
         // the TMEM addresses of P7
         u6_tmem <= ph5 ? t1_tmem : t_tmem; u6_line <= ph5 ? t1_line : t_line; u6_size <= ph5 ? t1_size : t_size;
+        u6_yuv <= ph5 ? t1_yuv : t_yuv;
+        conv6 <= !cyc[1] && !(ph5 ? other_h[10] : other_h[11]) && ((ph5 && !other_h[9]) ? t1_yuv : t_yuv);
         s06 <= s0c; s16 <= s1c; t06 <= t0c; t16 <= t1c; fs6 <= fsc; ft6 <= ftc;
         shade6 <= shade5; depth6 <= depth5;
     end
@@ -521,12 +564,13 @@ module rdp_pix (
     // P7: TMEM addresses of the three texels the filter takes -- (s1, t0),
     // (s0, t1), and (s0, t0) or, in the 2 x 2's lower triangle, (s1, t1);
     // unfiltered, (s0, t0). A row is `line` 64-bit words:
-    // 16-bit word tmem*4 + t*line*4 + s (16- and 32-bit texels), s/2, s/4.
+    // 16-bit word tmem*4 + t*line*4 + s (16- and 32-bit texels), s/2, s/4
+    // (and s/2 in each half for a YUV pair). A converted pass takes (s0, t0).
     // On an odd row the halves of each 64-bit word change places (word ^ 2),
     // as the N64's: they did when the row was loaded (rdp_mem).
     // ======================================================================
     wire        upper6 = ({1'b0, fs6} + {1'b0, ft6}) < 6'd32;
-    wire        selA6 = upper6 || point;
+    wire        selA6 = upper6 || point || conv6;
     wire [19:0] row0 = t06 * u6_line;
     wire [19:0] row1 = t16 * u6_line;
     function automatic [10:0] taddr;
@@ -536,9 +580,9 @@ module rdp_pix (
         reg [10:0] a;
         begin
             a = {u6_tmem, 2'b00} + {row[8:0], 2'b00}
-              + (u6_size[1] ? sc : u6_size[0] ? {1'b0, sc[10:1]} : {2'b00, sc[10:2]});
+              + ((u6_size[1] && !u6_yuv) ? sc : (u6_size[0] || u6_yuv) ? {1'b0, sc[10:1]} : {2'b00, sc[10:2]});
             a[1] = a[1] ^ odd;
-            taddr = (u6_size == 2'd3) ? {1'b0, a[9:0]} : a;
+            taddr = (u6_size == 2'd3 || u6_yuv) ? {1'b0, a[9:0]} : a;
         end
     endfunction
     reg        v7;
@@ -547,9 +591,9 @@ module rdp_pix (
     reg [4:0]  fs7, ft7;
     reg        up7;
     reg [35:0] shade7;
-    reg [15:0] depth7;
+    reg [17:0] depth7;
     always @(posedge clk) begin
-        v7 <= v6 & ~rst; x7 <= x6; bs7 <= bs6; ph7 <= ph6;
+        v7 <= v6 & ~rst; x7 <= x6; bs7 <= bs6; ph7 <= ph6; conv7 <= conv6;
         tm_a0 <= selA6 ? taddr(row0, s06, t06[0]) : taddr(row1, s16, t16[0]);
         tm_a1 <= taddr(row0, s16, t06[0]);
         tm_a2 <= taddr(row1, s06, t16[0]);
@@ -559,7 +603,8 @@ module rdp_pix (
     end
 
     // ======================================================================
-    // P8: TMEM's words arrive; a 4- or 8-bit texel is the TLUT's address
+    // P8: TMEM's words arrive; with the TLUT on a texel is its address (a 4-bit texel with the tile's palette, an 8-bit one, the
+    // first byte of a 16- or 32-bit one's word)
     // ======================================================================
     reg        v8;
     reg [9:0]  x8;
@@ -567,11 +612,11 @@ module rdp_pix (
     reg [4:0]  fs8, ft8;
     reg        up8;
     reg [35:0] shade8;
-    reg [15:0] depth8;
+    reg [17:0] depth8;
     always @(posedge clk) begin
-        v8 <= v7 & ~rst; x8 <= x7; bs8 <= bs7; ph8 <= ph7;
-        // the TLUT index (4- and 8-bit texels)
-        u8_size0 <= ph7 ? t1_size[0] : t_size[0]; u8_pal <= ph7 ? t1_pal : t_pal;
+        v8 <= v7 & ~rst; x8 <= x7; bs8 <= bs7; ph8 <= ph7; conv8 <= conv7;
+        // the TLUT index
+        u8_size0 <= ph7 ? t1_size[0] : t_size[0]; u8_size1 <= ph7 ? t1_size[1] : t_size[1]; u8_pal <= ph7 ? t1_pal : t_pal;
         sl0_8 <= sl0_7; sl1_8 <= sl1_7; sl2_8 <= sl2_7;
         fs8 <= fs7; ft8 <= ft7; up8 <= up7;
         shade8 <= shade7; depth8 <= depth7;
@@ -582,7 +627,7 @@ module rdp_pix (
         reg [3:0] n;
         begin
             n = sl == 2'd0 ? v[15:12] : sl == 2'd1 ? v[11:8] : sl == 2'd2 ? v[7:4] : v[3:0];
-            tl_idx = u8_size0 ? (sl[0] ? v[7:0] : v[15:8]) : {u8_pal, n};
+            tl_idx = u8_size1 ? v[15:8] : u8_size0 ? (sl[0] ? v[7:0] : v[15:8]) : {u8_pal, n};
         end
     endfunction
     assign tl_a0 = tl_idx(tm_q0, sl0_8);
@@ -597,9 +642,9 @@ module rdp_pix (
     reg [4:0]  fs8t, ft8t;
     reg        up8t;
     reg [35:0] shade8t;
-    reg [15:0] depth8t;
+    reg [17:0] depth8t;
     always @(posedge clk) begin
-        v8t <= v8 & ~rst; x8t <= x8; bs8t <= bs8; ph8t <= ph8;
+        v8t <= v8 & ~rst; x8t <= x8; bs8t <= bs8; ph8t <= ph8; conv8t <= conv8;
         // the texel's decode
         u8t_fmt <= ph8 ? t1_fmt : t_fmt; u8t_size <= ph8 ? t1_size : t_size;
         q0t <= tm_q0; q1t <= tm_q1; q2t <= tm_q2; h0t <= tm_h0; h1t <= tm_h1; h2t <= tm_h2;
@@ -632,9 +677,9 @@ module rdp_pix (
     reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
     reg [5:0]  ws8b, wt8b;                  // the weights of those edges
     reg [35:0] shade8b;
-    reg [15:0] depth8b;
+    reg [17:0] depth8b;
     always @(posedge clk) begin
-        v8b <= v8t & ~rst; x8b <= x8t; bs8b <= bs8t; ph8b <= ph8t;
+        v8b <= v8t & ~rst; x8b <= x8t; bs8b <= bs8t; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
         ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
         wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
@@ -663,16 +708,45 @@ module rdp_pix (
     // the pixel's group in the raw hidden buffer: its word's address (the
     // row's word base + x / 2) by 8; its place there, k
     wire [9:0]  hw8b = (bs8b ? rwb1 : rwb0) + {1'b0, x8b[9:1]};
-    // the texel the pass gives: filtered, or the corner's; a two_pass pixel's first pass is kept (texA9) for its second,
-    // which gives TEXEL1 (tex19; TEXEL0 is tex9)
-    wire [31:0] tex_cur = point ? ta8b : filt9;
-    reg  [31:0] texA9, tex19;
+    // YUV -> RGB (mrdp.c yuv_convert): from a texel (U, V, Y, Y), U and V less 128, the K's as 2K + 1 in 1/256ths --
+    // R = Y + K0 V, G = Y + K1 U + K2 V, B = Y + K3 U, each clamped to a byte; A = Y. Beside the filter, from the corner
+    // (a converted pass's is (s0, t0)), or with CONVERT_ONE the first pass's texel in the second (texA9).
+    function automatic [7:0] cv_ch;
+        input [7:0]         y;
+        input signed [19:0] p;              // the products' sum, + 128
+        reg   signed [19:0] q;
+        begin
+            q = p >>> 8;
+            cv_ch = clamp8($signed({12'd0, y}) + q);
+        end
+    endfunction
+    function automatic [31:0] yuv_conv;
+        input [31:0] t;
+        reg signed [8:0]  u, v;
+        reg signed [9:0]  k0, k1, k2, k3;
+        reg signed [19:0] pr, pg, pb;
+        begin
+            u = $signed({1'b0, t[31:24]}) - 9'sd128;
+            v = $signed({1'b0, t[23:16]}) - 9'sd128;
+            k0 = {cv_k03[35:27], 1'b1}; k1 = {cv_k03[26:18], 1'b1}; k2 = {cv_k03[17:9], 1'b1}; k3 = {cv_k03[8:0], 1'b1};
+            pr = k0 * v + 20'sd128;
+            pg = k1 * u + k2 * v + 20'sd128;
+            pb = k3 * u + 20'sd128;
+            yuv_conv = { cv_ch(t[15:8], pr), cv_ch(t[15:8], pg), cv_ch(t[15:8], pb), t[15:8] };
+        end
+    endfunction
+    reg  [31:0] texA9;
+    wire [31:0] conv9 = yuv_conv((ph8b && other_h[9]) ? texA9 : ta8b);
+    // the texel the pass gives: filtered, or the corner's, or converted; a two_pass pixel's first pass is kept (texA9) for
+    // its second, which gives TEXEL1 (tex19; TEXEL0 is tex9)
+    wire [31:0] tex_cur = conv8b ? conv9 : point ? ta8b : filt9;
+    reg  [31:0] tex19;
     reg  [3:0]  hk9, hk10a;
     reg        v9;
     reg [9:0]  x9;
     (* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *) reg [31:0] tex9;
     reg [35:0] shade9;
-    reg [15:0] depth9;
+    reg [17:0] depth9;
     always @(posedge clk) begin
         v9 <= v8b & ~rst & (!two_pass | ph8b); x9 <= x8b; bs9 <= bs8b;
         lb_raddr <= {bs8b, x8b[9:1]};           // line buffers: data after the next edge, captured at P10b
@@ -720,7 +794,7 @@ module rdp_pix (
         input [31:0] tex, tex1;
         input [35:0] sh;
         input [35:0] cm;
-        rgb_b = (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
+        rgb_b = (sel == 4'd7) ? cc_xab(k4) : (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
     endfunction
     function automatic [9:0] rgb_c;
         input [4:0]  sel;
@@ -738,6 +812,7 @@ module rdp_pix (
             5'd11: rgb_c = {1'b0, ch9(sh, 2'd3)};
             5'd12: rgb_c = {2'b00, env[7:0]};
             5'd14: rgb_c = {2'b00, prim_lod_frac};
+            5'd15: rgb_c = cc_xc(k5);
             default: rgb_c = 10'd0;
         endcase
     endfunction
@@ -828,12 +903,12 @@ module rdp_pix (
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
         end
     endfunction
-    // the four channels' raw 9 bits (cycle 0: operands 0..511; cycle 1: COMBINED too)
+    // the four channels' raw 9 bits (cycle 0: operands 0..511, and its colours' K4 and K5; cycle 1: COMBINED too)
     function automatic [35:0] cc_arith0;
         input [155:0] o;
-        cc_arith0 = { cc_eval0(o[155:146], o[115:106], o[75:66], o[35:27]),
-                      cc_eval0(o[145:136], o[105:96],  o[65:56], o[26:18]),
-                      cc_eval0(o[135:126], o[95:86],   o[55:46], o[17:9]),
+        cc_arith0 = { cc_eval1(o[155:146], o[115:106], o[75:66], o[35:27]),
+                      cc_eval1(o[145:136], o[105:96],  o[65:56], o[26:18]),
+                      cc_eval1(o[135:126], o[95:86],   o[55:46], o[17:9]),
                       cc_eval0(o[125:116], o[85:76],   o[45:36], o[8:0]) };
     endfunction
     function automatic [35:0] cc_arith1;
@@ -855,7 +930,7 @@ module rdp_pix (
     reg [155:0] o10a;
     reg [31:0]  tex10a, tex1_10a;     // (tex1_*: the next tile's sample, the second cycle's TEXEL0)
     reg [35:0]  shade10a;
-    reg [15:0]  depth10a;
+    reg [17:0]  depth10a;
     always @(posedge clk) begin
         v10a <= v9 & ~rst; x10a <= x9; bs10a <= bs9; hk10a <= hk9;
         o10a <= o0_w;
@@ -867,7 +942,8 @@ module rdp_pix (
     reg [35:0] c010;                   // the first cycle's result: 9 raw bits a channel (cc_eval1)
     reg [31:0] tex10, tex1_10, mem10;
     reg [35:0] shade10;
-    reg [15:0] depth10, zold10;
+    reg [17:0] depth10;
+    reg [15:0] zold10;               // the depth image's word, as it is
     reg        memb10;                // the colour image's bit 0 (the coverage's top bit)
     reg [1:0]  hid10;                 // its hidden two
     always @(posedge clk) begin
@@ -886,7 +962,8 @@ module rdp_pix (
     reg [155:0] o11a;
     reg [31:0]  tex11a, mem11a;
     reg [35:0]  shade11a;
-    reg [15:0]  depth11a, zold11a;
+    reg [17:0]  depth11a, zold11a;    // (zold11a: the word's 18 bits, z_dec)
+    reg [6:0]   zfl11a;               // what a word of the exponents 0, 1, 2 has lost: the least tolerance
     reg         memb11a, memb11;
     reg [1:0]   hid11a, hid11;
     reg [7:0]   c0a11a, c0a11;       // 2-cycle: the first cycle's alpha (the alpha compare's)
@@ -895,7 +972,8 @@ module rdp_pix (
         v11a <= v10 & ~rst; x11a <= x10; bs11a <= bs10;
         o11a <= o1_w;
         tex11a <= tex10; shade11a <= shade10; mem11a <= mem10;
-        depth11a <= depth10; zold11a <= zold10;
+        depth11a <= depth10; zold11a <= z_dec(zold10);
+        zfl11a <= zold10[15:13] == 3'd0 ? 7'h7F : zold10[15:13] == 3'd1 ? 7'h3F : zold10[15:13] == 3'd2 ? 7'h1F : 7'h00;
         memb11a <= memb10; c0a11a <= cc_clamp(c010[8:0]); c0f11a <= cc_a256(c010[8:0]); hid11a <= hid10;
     end
     wire [35:0] c1_w = cc_arith1(o11a);
@@ -904,17 +982,19 @@ module rdp_pix (
     reg [31:0] comb11;
     reg [35:0] shade11;
     reg        af11;                // the combined alpha counts 256 for the coverage multiply (CVG_X_ALPHA)
-    reg [15:0] depth11, zold11;
-    reg [15:0] dlo11, dhi11;       // the depth less and plus the decal tolerance
-    wire [16:0] dsum11a = {1'b0, depth11a} + {1'b0, z_tol};
+    reg [17:0] depth11, zold11;
+    reg [17:0] dlo11, dhi11;       // the depth less and plus the decal tolerance
+    // the tolerance: the primitive's step (16-bit units: its two low bits set) and no less than what the memory's word has lost
+    wire [17:0] ztol11a = {z_tol, 2'b11} | {11'd0, zfl11a};
+    wire [18:0] dsum11a = {1'b0, depth11a} + {1'b0, ztol11a};
     reg [31:0] mem11;
     always @(posedge clk) begin
         v11 <= v11a & ~rst; x11 <= x11a; bs11 <= bs11a;
         comb11 <= (cyc == 2'd2) ? tex11a : { cc_clamp(c1_w[35:27]), cc_clamp(c1_w[26:18]), cc_clamp(c1_w[17:9]), cc_clamp(c1_w[8:0]) };
         af11 <= (cyc != 2'd2) && cc_a256(c1_w[8:0]);
         shade11 <= shade11a; depth11 <= depth11a;
-        dlo11 <= (depth11a < z_tol) ? 16'd0 : depth11a - z_tol;
-        dhi11 <= (dsum11a[16]) ? 16'hFFFF : dsum11a[15:0];
+        dlo11 <= (depth11a < ztol11a) ? 18'd0 : depth11a - ztol11a;
+        dhi11 <= (dsum11a[18]) ? 18'h3FFFF : dsum11a[17:0];
         zold11 <= zold11a; mem11 <= mem11a;
         memb11 <= memb11a; c0a11 <= c0a11a; c0f11 <= c0f11a; hid11 <= hid11a;
     end
@@ -979,19 +1059,19 @@ module rdp_pix (
     wire [2:0]  memcvg = !(im_rd && need_mem) ? 3'd7 : {memb11, hid11};
     wire        ovf    = ({1'b0, memcvg} + cvg_s) >= 4'd8;
     // depth: in front; within the primitive's step nearer / farther; the far plane
-    wire        zmax   = zold11 == 16'hFFFF;
+    wire        zmax   = zold11 == 18'h3FFFF;
     wire        zfront = depth11 < zold11;
     wire        znear  = zold11 >= dlo11;            // depth - dz <= old
     wire        zfar   = zold11 <= dhi11;            // depth + dz >= old
     // interpenetrating: the coverage scaled by how far in front it is, in
-    // steps of 2 dz: ((old >> s) - (depth >> s)) & 15, s = the step's top bit + 1
+    // steps of 2 dz: ((old >> s) - (depth >> s)) & 15, s = the step's top bit + 1 (the step in 16-bit units: + 3 in the depth's 18)
     reg  [4:0]  zsft;                // (static: the primitive's)
     integer zb;
     always @(posedge clk) begin
-        zsft <= 5'd1;
-        for (zb = 1; zb < 16; zb = zb + 1) if (z_tol[zb]) zsft <= zb[4:0] + 5'd1;
+        zsft <= 5'd3;
+        for (zb = 1; zb < 16; zb = zb + 1) if (z_tol[zb]) zsft <= zb[4:0] + 5'd3;
     end
-    wire [19:0] zdif  = ({4'd0, zold11} >> zsft) - ({4'd0, depth11} >> zsft);
+    wire [21:0] zdif  = ({4'd0, zold11} >> zsft) - ({4'd0, depth11} >> zsft);
 
     // ======================================================================
     // P11b: the first half registered -- the coverage, the alphas, the
@@ -1005,14 +1085,14 @@ module rdp_pix (
     reg [9:0]  x11b;
     reg [31:0] comb11b, mem11b;
     reg [35:0] shade11b;
-    reg [15:0] depth11b;
+    reg [13:0] depth11b;           // (the depth as its word's 14 bits from here on: z_enc)
     reg [3:0]  cvg_sb, zdifb;
     reg [7:0]  pa11b, ca11b, sha11b, athr11b;
     reg [2:0]  mcvg11b;
     reg        ovf11b, zmax11b, zfront11b, znear11b, zfar11b, k0_11b;
     always @(posedge clk) begin
         v11b <= v11 & ~rst; x11b <= x11; bs11b <= bs11;
-        comb11b <= comb11; mem11b <= mem11; shade11b <= shade11; depth11b <= depth11;
+        comb11b <= comb11; mem11b <= mem11; shade11b <= shade11; depth11b <= z_enc(depth11);
         cvg_sb <= cvg_s; zdifb <= zdif[3:0];
         pa11b <= pa11; ca11b <= ca11; sha11b <= sha11; athr11b <= athr;
         mcvg11b <= memcvg; ovf11b <= ovf;
@@ -1043,8 +1123,9 @@ module rdp_pix (
     // (copy mode: the texel's alpha bit, 7 or 0)
     wire [2:0]  cv311 = (cyc == 2'd2) ? {3{comb11b[7]}} : cvo;
     // without a depth compare the memory coverage's weight shifts by the
-    // primitive's dz (the N64's dzpixenc, ours + 3, up to 15): (static)
+    // primitive's dz (the N64's dzpixenc, ours + 3, up to 15): (static). The code's top two bits go into the depth's word
     reg  [2:0]  shb;
+    reg  [1:0]  dzc;
     always @(posedge clk) begin : shb_calc
         reg [4:0] e, d;
         integer q;
@@ -1058,6 +1139,7 @@ module rdp_pix (
         if (e > 5'd15) e = 5'd15;
         d = 5'd15 - e;
         shb <= z_cmp ? 3'd0 : (e >= 5'd12) ? d[2:0] : 3'd4;
+        dzc <= e[3:2];
     end
 
     // ======================================================================
@@ -1153,7 +1235,7 @@ module rdp_pix (
     reg [31:0] comb12a, mem12a;
     reg [7:0]  pa12a, sha12a;
     reg [2:0]  mcvg12a;
-    reg [15:0] depth12a;
+    reg [13:0] depth12a;
     reg        pass12a, ben12a, ovf12a;
     reg [2:0]  cv312a, cv312, cv313, cv313b;
     always @(posedge clk) begin
@@ -1171,7 +1253,7 @@ module rdp_pix (
     reg [31:0] comb12, mem12;
     reg [7:0]  pa12, sha12;
     reg [2:0]  mcvg12;
-    reg [15:0] depth12;
+    reg [13:0] depth12;
     reg        pass12, ben12, ovf12;
     always @(posedge clk) begin
         v12 <= v12a & ~rst; x12 <= x12a; bs12 <= bs12a;
@@ -1192,7 +1274,7 @@ module rdp_pix (
     reg [9:0]  x13a;
     reg [63:0] bo13a;
     reg [31:0] comb13;
-    reg [15:0] depth13;
+    reg [13:0] depth13;
     reg        pass13, ben13, ovf13;
     always @(posedge clk) begin
         v13a <= v12 & ~rst; x13a <= x12; bs13a <= bs12;
@@ -1209,7 +1291,7 @@ module rdp_pix (
     reg [17:0] frc;                 // the divisor's reciprocal
     reg        fblend, fdiv, fclr;
     reg [31:0] comb13b;
-    reg [15:0] depth13b;
+    reg [13:0] depth13b;
     reg        pass13b;
     always @(posedge clk) begin
         v13b <= v13a & ~rst; x13b <= x13a; bs13b <= bs13a;
@@ -1277,7 +1359,7 @@ module rdp_pix (
         col_dt <= dnoise ? nz5[2:0] : dt13;
         col_dg <= dnoise ? nz5[5:3] : dt13;
         col_db <= dnoise ? nz5[8:6] : dt13;
-        out_depth <= depth13b;
+        out_depth <= {depth13b, dzc};
         out_cpass <= pass13b;
         out_zpass <= pass13b && z_upd;
     end

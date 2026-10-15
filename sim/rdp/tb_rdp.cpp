@@ -176,7 +176,9 @@ static unsigned grng;
 static unsigned gr() { grng = grng * 1664525u + 1013904223u; return grng >> 8; }
 static unsigned gr(unsigned n) { return gr() % n; }
 static int grs(int n) { return (int)gr(2 * n + 1) - n; }
-static const uint32_t R_CIMG = 0x200000, R_ZIMG = 0x280000, R_TEX = 0x100000;
+// (the random streams' images: the depth image a multiple of 8 KiB above the colour image -- in the same bank of the SoC's SDRAM,
+// word for word, TB_SDRAM's rows -- or TB_ZIMG=<address>: where given, 0x280800 a bank on)
+static const uint32_t R_CIMG = 0x200000, R_ZIMG = getenv("TB_ZIMG") ? (uint32_t)strtoul(getenv("TB_ZIMG"), 0, 0) : 0x280000, R_TEX = 0x100000;
 static void cmd2(uint32_t a, uint32_t b) { cmds.push_back(a); cmds.push_back(b); }
 // TB_CC=1: the combiner's arithmetic under test -- cycle types 0 and 1 only, the
 // blender passing the combiner's colour alone (no FORCE_BL, P = the pixel), every
@@ -304,6 +306,11 @@ static void rand_combine()
             if (gr(5) == 0) { hi &= ~31u; }                    // ... and the RGB as C (selection 0)
             if (gr(4) == 0) { lo &= ~(7u << 6 | 7u); }
             if (gr(4) == 0) { hi &= ~(15u << 5); lo = (lo & ~(15u << 24)) | 0u; }
+            // SET CONVERT's constants: K5 as C and K4 as B, in either cycle
+            if (gr(5) == 0) hi = (hi & ~(31u << 15)) | 15u << 15;
+            if (gr(5) == 0) lo = (lo & ~(15u << 28)) | 7u << 28;
+            if (gr(8) == 0) hi = (hi & ~31u) | 15u;
+            if (gr(8) == 0) lo = (lo & ~(15u << 24)) | 7u << 24;
         }
         cmd2(0x3C000000u | hi, lo);
     }
@@ -330,8 +337,9 @@ static void rand_stream(unsigned seed, int n)
         else if (k < 68) rand_tile(gr(8));
         else if (k < 74) rand_timg();
         else if (k < 84) rand_load();
-        else if (k < 90) cmd2((cc_mode && gr(2) ? 0x3Au + gr(2) : 0x37u + gr(5)) << 24 | gr(256), gr() << 8 | gr(256));        // fill, fog, blend, prim, env
-        else if (k < 92) cmd2(0x2E000000u, gr() << 8 | gr(256));                              // prim depth
+        else if (k < 90) cmd2((cc_mode && gr(2) ? (gr(3) ? 0x3Au + gr(2) : 0x2Cu) : 0x37u + gr(5)) << 24 | gr(256), gr() << 8 | gr(256));        // fill, fog, blend, prim, env (TB_CC: and convert)
+        else if (k < 91) cmd2(0x2E000000u, gr() << 8 | gr(256));                              // prim depth
+        else if (k < 92) cmd2(0x2C000000u | gr(1 << 22), gr() << 8 | gr(256));                // convert: K4, K5 (the combiner's)
         else if (k < 94) {                                                                    // scissor
             unsigned x0 = gr(4 * 100), y0 = gr(4 * 80);
             cmd2(0x2D000000u | x0 << 12 | y0, (x0 + gr(4 * 320 - x0 + 1)) << 12 | (y0 + gr(4 * 240 - y0 + 1)));

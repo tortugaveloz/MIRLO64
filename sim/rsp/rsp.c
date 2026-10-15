@@ -499,6 +499,19 @@ static void vec_store(rsp_t *s, uint32_t in)
         }
         break;
     }
+    case 9: {                                       /* SFV */
+        /* bits 14..7 of four lanes, a byte every fourth in the 16 from the
+         * 8-byte block: lanes 0-3 (e 0), 1,2,3,0 (e 4), 4-7 (e 8), 5,6,7,4
+         * (e 12) -- a JPEG microcode's U and V. Other
+         * elements: not done. */
+        if (e & 3u) { s->unimpl++; break; }
+        uint32_t index = addr & 7u; addr &= ~7u;
+        for (unsigned i = 0; i < 4; i++) {
+            unsigned lane = (e & 8u) >> 1 | ((i + (e >> 2 & 1u)) & 3u);
+            dmw8(s, addr + ((index + 4u * i) & 15u), v[lane] >> 7);
+        }
+        break;
+    }
     case 10: {                                      /* SWV */
         uint32_t index = addr & 7u; addr &= ~7u;
         for (unsigned i = e; i < e + 16u; i++) dmw8(s, addr + (index++ & 15u), vb(v, i));
@@ -513,7 +526,7 @@ static void vec_store(rsp_t *s, uint32_t in)
         }
         break;
     }
-    default: s->unimpl++; break;                    /* SFV */
+    default: s->unimpl++; break;
     }
 }
 

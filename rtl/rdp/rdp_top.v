@@ -8,7 +8,8 @@
 // copy mode are in, and the images are the game's (RGBA5551, the N64's byte
 // order). The coverage (anti-aliasing) is the N64's (lang/c/mrdp/mrdp.h,
 // MRDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
-// pixels carry their 8-sample masks. Not done: TEXEL1 / LOD, YUV.
+// pixels carry their 8-sample masks. YUV textures are converted (SET_CONVERT).
+// Not done: LOD.
 //
 // Commands are executed one at a time. A primitive is drawn row by row: the
 // row's Z and color spans are read into on-chip line buffers, the pixels run
@@ -53,6 +54,8 @@ module rdp_top (
     reg [31:0] cc_lo;
     reg [31:0] fill, fog, blend, prim, env;
     reg [7:0]  prim_lod_frac;
+    reg [8:0]  k4, k5;              // SET CONVERT's two constants of the combiner
+    reg [35:0] cv_k03;              // SET CONVERT's K0..K3, 9 bits each (K0 at [35:27]): a YUV texel's conversion
     reg [15:0] prim_z, prim_dz;
     reg [11:0] sc_xh, sc_yh, sc_xl, sc_yl;
     reg [31:0] cimg, zimg, timg;
@@ -261,7 +264,7 @@ module rdp_top (
         .clk(clk), .rst(rst),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
-        .prim_lod_frac(prim_lod_frac), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
+        .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
         .prim_dz(prim_dz), .need_mem(need_mem), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
         .p_shade(p_shade), .p_tex(p_tex), .p_zbuf(p_zbuf), .p_direct(p_direct),
         .t_fmt(ts_fmt), .t_size(ts_sz), .t_pal(ts_pal), .t_line(ts_line), .t_tmem(ts_tmem),
@@ -601,7 +604,7 @@ module rdp_top (
             old_hold[0] <= 4'd0; old_hold[1] <= 4'd0;
             sync_count <= 0; load_count <= 0; unknown_ops <= 0;
             other_h <= 0; other_l <= 0; cc_hi <= 0; cc_lo <= 0;
-            fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; prim_z <= 0;
+            fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
             timg_size <= 2'd0; cimg_ok <= 1'b0;
@@ -722,6 +725,7 @@ module rdp_top (
                         mi <= 5'd0;
                         st <= S_RECT_INIT;
                     end
+                    6'h2C: begin cv_k03 <= {w0[21:0], w1[31:18]}; k4 <= w1[17:9]; k5 <= w1[8:0]; busy_exec <= 1'b0; end
                     6'h2D: begin sc_xh <= w0[23:12]; sc_yh <= w0[11:0]; sc_xl <= w1[23:12]; sc_yl <= w1[11:0]; busy_exec <= 1'b0; end
                     6'h2E: begin prim_z <= {w1[30:16], 1'b0}; prim_dz <= w1[15:0]; busy_exec <= 1'b0; end      // the N64's: 15 bits, and its delta
                     6'h2F: begin other_h <= w0[23:0]; other_l <= w1; busy_exec <= 1'b0; end
@@ -1043,7 +1047,8 @@ module rdp_top (
                     rq_cbase <= timg + ((l_kind == 2'd2) ? {8'd0, l_ti, 1'b0}
                                                          : ({9'd0, l_ti} << timg_size) >> 1);
                     rq_ldst <= l_dst; rq_ln <= l_n;
-                    rq_lmode <= (l_kind == 2'd2) ? 2'd2 : (ts_fmt == 3'd0 && ts_sz == 2'd3) ? 2'd1 : 2'd0;
+                    rq_lmode <= (l_kind == 2'd2) ? 2'd2 : (ts_fmt == 3'd0 && ts_sz == 2'd3) ? 2'd1
+                              : (ts_fmt == 3'd1 && ts_sz == 2'd2) ? 2'd3 : 2'd0;   // (3: YUV 16)
                     // (the odd rows' words go in swapped: by dxt, or a LOAD TILE's by its rows)
                     rq_ldxt <= (l_kind == 2'd0) ? w1[11:0] : 12'd0;
                     rq_lodd <= l_kind == 2'd1 && l_odd;

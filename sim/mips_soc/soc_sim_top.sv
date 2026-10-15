@@ -42,6 +42,7 @@ module soc_sim_top (
     // not taken, 3 an instruction leaves E, 4 a command run waits for the one
     // being fetched, 5 commands being fetched or drawn
     output wire  [5:0]  rsp_stat,
+    output wire  [7:0]  rsp_sig,            // SP_STATUS's signals (libultra: 0 yield asked, 1 yielded, 2 task done)
     // (MEMSTAT) the SDRAM this cycle: [5:0] the port whose request was taken
     // (0 scan-out, 1 CPU, 2 RDP, 3 RSP DMA, 4 bridge, 5 command fetch), [8:6]
     // the controller's command {ras_n, cas_n, we_n} and [10:9] its bank, [11]
@@ -140,6 +141,7 @@ assign fb_gamma  = soc.fb_gamma;                              // (the scan-out's
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
 assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.mrdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
                     soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
+assign rsp_sig   = soc.rsp.st_sig;
 assign rsp_stat  = {soc.dpc_status[3], soc.dpc.end_valid, soc.rsp.tr_e, soc.rsp_r_valid && !soc.p_ready[3],
                     soc.rsp.ds != 0, !soc.rsp_halted};
 assign cpu_stat  = {soc.sys.cpu.d_valid, 3'(soc.sys.cpu.port), soc.sys.cpu.flush, soc.sys.cpu.m_live && soc.sys.cpu.m_st && soc.sys.cpu.wb_full,
