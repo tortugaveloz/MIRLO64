@@ -215,7 +215,9 @@ It implements:
 * the loads LBV, LSV, LLV, LDV, LQV, LRV, LPV, LUV, LTV and the stores SBV,
   SSV, SLV, SDV, SQV, SRV, SPV, SUV, STV, at any address and element.
 
-Not implemented: LHV, LFV, LWV, SHV, SFV, SWV, VRNDP, VRNDN, VMULQ, VMACQ and
+SHV and SFV (the packed stores of every second and every fourth byte) take one
+cycle; SFV only with an element that is a multiple of 4. Not implemented:
+LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ, VMACQ and
 the reserved COP2 functions. They change nothing and set `unimpl`.
 
 ### Four lanes
@@ -391,8 +393,8 @@ Everything specific to the RSP is in `sim/rsp`.
 | `make_div_rom.py` | the reciprocal ROM |
 
 The model is the contract: the RTL must have the same state after each
-instruction. The model covers slightly more than the RTL (it has LHV, SHV and
-SWV, and gives the reserved functions a result).
+instruction. The model covers slightly more than the RTL (it has LHV and SWV,
+and gives the reserved functions a result).
 
 ### Lockstep bench
 
