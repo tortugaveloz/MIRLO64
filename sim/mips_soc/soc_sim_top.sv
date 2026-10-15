@@ -14,7 +14,7 @@ module soc_sim_top (
     output wire  [31:0] br_offset, br_length, br_addr,
     input  wire  [31:0] cont1_key, cont2_key, cont3_key, cont4_key,     // the dock's pads: KEY_TYPE in [31:28] (0: none)
     input  wire  [31:0] cont1_joy, cont2_joy, cont3_joy, cont4_joy,
-    input  wire   [3:0] ia_address,         // the Pocket's interact bus (the core's settings: interact.json), INTERACT=<address>:<value>
+    input  wire   [5:0] ia_address,         // the Pocket's interact bus (the core's settings: interact.json), INTERACT=<address>:<value>
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output wire  [12:0] sdram_a,

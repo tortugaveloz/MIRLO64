@@ -690,31 +690,31 @@ scan-out instead.
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
-| D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
-| Z button | `0x1000_0124` | `interact1[9:5]` | None (5), **L** (0), R (2), ZL (3), ZR (4) |
-| L button | `0x1000_0118` | `interact0[24:20]` | **None** (5), L (1), R (2), ZL (0), ZR (4) |
-| R button | `0x1000_011C` | `interact0[29:25]` | None (5), L (1), **R** (0), ZL (3), ZR (4) |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), Right stick (1) |
-| Start button | `0x1000_0130` | `interact1[21:20]` | None (2), **Start** (0), Select+Start (1) |
-| Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
+| Shift key | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4), Select (6) |
+| Normal: A B X Y / L R | `0x1000_0140` | `interact2[4:0]` | **Auto** (0), A B cR cL / Z R (1), cR cD cU cL / Z R (2), A B cR cL / R Z (3), A B cU Z / Z R (4) |
+| Shift: A B X Y / L R | `0x1000_0144` | `interact2[9:5]` | **Auto** (0), Same as normal (1), cR cD cU cL (2), A B cU cD (3), / L R (shoulders) (4) |
+| Shift: D-pad | `0x1000_0148` | `interact2[14:10]` | **Auto** (0), Same as normal (1), C buttons (2), Half stick (3), N64 D-pad (4), Stick and D-pad (5) |
+| D-pad keys | `0x1000_014C` | `interact2[19:15]` | **N64 stick** (0), N64 D-pad (1), Stick and D-pad (2), C buttons (3) |
+| Save for this game, Forget this game | `0x1000_0154` | `interact2[29]`, `[28]` | actions: a write of 2 saves, of 3 forgets |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y) and C-Right (X); it remaps what
-each button sends, and the runtime sees only the resulting key bits.
+The four layout lists are not persistent (the Pocket starts them on Auto), so Save for this game is how a layout is kept. The
+Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y) and C-Right (X); it remaps what each button
+sends, and the runtime sees only the resulting key bits. The settings Z button, L button, R button, Start button and D-pad of
+earlier builds are gone from the menu (the Pocket shows 16 entries at most); their fields read 0.
 
-- **Button codes** (Z, L, R, Modifier): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 or any other value none; 0 is the
-  setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
-  key may serve two N64 buttons.
-- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select. With "C buttons" set to Right stick
-  the right stick adds all four, beyond half its range.
-- **Modifier**: while its key is held, X, B, Y and A are C-up, C-down, C-left and C-right, and the D-pad gives half the
-  stick's deflection. The key itself never reaches the game.
-- **Start**: the Pocket's Start; or Select and Start together, which then count for nothing else; or none.
-- **Stick**: with D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
-  stick's two bytes (`0x80` the centre, a dead zone of 12, scaled to 80 at the end of the range). A pad the dock
-  reports with analog sticks (type 3) gives the stick alone. A pad reported without (type 2) is believed when its stick
-  bytes are not all `0x00` or all `0xFF`, and gives the D-pad keys while its stick is centred. The Pocket's own
-  controls give the D-pad keys.
-- **D-pad** (the N64's): nothing, the D-pad keys, or a stick beyond half its range as the four directions.
+- **Layers.** Every Pocket key (A B X Y L R ZL ZR Select Start, L3 R3 on a dock pad) and the three groups (the D-pad keys, the
+  left and the right analog stick) has an N64 output in two layers: Normal, and Shift while the Shift key is held (that key
+  never reaches the game). The table is 30 five-bit fields in the runtime's RAM (`n64rt_ctrl.h`, `n64rt_pad.h`).
+- **Which layout.** Each list on Auto takes the layout from the game's saved record (a `.ctl` file, `data.json` slot 5, written
+  by Save for this game), else from the family of the cartridge's ID (Platformer, Shooter, Skate, Racing, Fighter:
+  `n64rt_ctrl_games` in `n64rt_ctrl.h`), else Standard. A list that names a layout puts it over that. A family owns only the
+  Shift key (Select) and the table.
+- **Standard**: A A, B B, X C-right, Y C-left, L Z, R R, Select C-down, Start Start; the D-pad keys are the N64's stick at full
+  deflection (half while Shift is held). With **Stick** L or R stick, the analog stick's two bytes (`0x80` the centre, a
+  dead zone of 12, scaled to 80 at the end of the range) drive the stick; a pad the dock reports with analog sticks (type 3)
+  gives the stick alone, one reported without (type 2) is believed when its bytes are not all `0x00` or all `0xFF`.
+- **C buttons** with Right stick: the right stick adds all four C buttons beyond half its range.
 
 `lang/mips/test/padtest.c` is a program that shows on the screen, for the four pads, the key word, the stick bytes and
 the N64 controller they make with the current settings. It is installed in the runtime's place

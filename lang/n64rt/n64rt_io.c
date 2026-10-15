@@ -514,6 +514,59 @@ s32 n64rt_osPiRawReadIo(u32 dev, u32 *data) { return io_read(0xB0000000u | dev, 
 
 /* ---- SI: controller 1 is the Pocket's (or the dock's first pad) --------------- */
 #include "n64rt_pad.h"          /* the keys and the settings to the N64 controller (a pure function: host-tested) */
+#include "n64rt_ctrl.h"         /* the preset families, a game's own layout (the Controls slot) and the menu's layout lists laid over them */
+static n64rt_ctrl_state_t s_ctrl = { .family = -1 };   /* this game's saved layout and its family (n64rt_ctrl.h) */
+static u32 s_ctrl_act;                          /* INTERACT2's ACT_A and ACT_B bits when last looked at (an action flips its bits) */
+#define CTRL_ACT_A (1u << CSR_APF_INTERACT_INTERACT2_ACT_A_OFFSET)
+#define CTRL_ACT_B (1u << CSR_APF_INTERACT_INTERACT2_ACT_B_OFFSET)
+static u32 ctrl_slot_size(u32 want)             /* the Controls slot's file size in the core's table (0: no file); `want` sets it, so the Pocket writes the file */
+{
+    u32 prev = apf_bridge_slot_id_read();
+    apf_bridge_slot_id_write(LAYOUT_CTRL_SLOT);
+    bridge_settle();
+    u32 size = apf_bridge_file_size_read();
+    if (want && size != want) { apf_bridge_file_size_write(want); bridge_settle(); }
+    apf_bridge_slot_id_write(prev);
+    return size;
+}
+static void ctrl_init(void)
+{
+    const u32 w = n64rt_rom_word(0x38u), v = n64rt_rom_word(0x3Cu);       /* the cartridge's ID: 0x3B..0x3E */
+    const unsigned char id[4] = { (unsigned char)w, (unsigned char)(v >> 24), (unsigned char)(v >> 16), (unsigned char)(v >> 8) };
+    s_ctrl.family = n64rt_ctrl_family(id);
+    s_ctrl.saved_ok = n64rt_ctrl_load((const volatile u32 *)(uintptr_t)LAYOUT_CTRL, ctrl_slot_size(0), &s_ctrl.saved);
+    s_ctrl_act = apf_interact_interact2_read() & (CTRL_ACT_A | CTRL_ACT_B);
+    n64rt_log("n64rt: controller layout: family %d, %s\n", s_ctrl.family, s_ctrl.saved_ok ? "saved for this game" : "none saved");
+}
+/* the Pocket's actions ("Save for this game", "Forget this game"): a press flips INTERACT2's ACT_B (Save) or both ACT_A and ACT_B (Forget).
+ * Looked at at each poll of a controller; two actions between two polls are one (a forget; the Pocket's own menu does not let a person
+ * press two in a frame). A flip of ACT_A alone (a write of 1) is nothing. */
+static n64rt_ctrl_pick_t ctrl_picks(void)
+{
+    n64rt_ctrl_pick_t pk = { apf_interact_interact2_normal_read(), apf_interact_interact2_shift_read(),
+                             apf_interact_interact2_shift_dpad_read(), apf_interact_interact2_dpad_keys_read() };
+    return pk;
+}
+static void ctrl_poll(void)
+{
+    const u32 v = apf_interact_interact2_read();
+    const u32 now = v & (CTRL_ACT_A | CTRL_ACT_B);
+    const u32 flipped = now ^ s_ctrl_act;
+    if (!flipped) return;
+    s_ctrl_act = now;
+    if (flipped == (CTRL_ACT_A | CTRL_ACT_B)) {         /* forget */
+        ((volatile u32 *)(uintptr_t)LAYOUT_CTRL)[0] = 0;
+        s_ctrl.saved_ok = 0;
+    } else if (flipped == CTRL_ACT_B) {                 /* save: the layout in use */
+        n64rt_ctrl_t c;
+        const n64rt_ctrl_pick_t pk = ctrl_picks();
+        n64rt_ctrl_capture(&s_ctrl, &pk, apf_interact_interact0_read(), apf_interact_interact1_read(), &c);
+        n64rt_ctrl_store((volatile u32 *)(uintptr_t)LAYOUT_CTRL, &c);
+        ctrl_slot_size(LAYOUT_CTRL_BYTES);
+        s_ctrl.saved = c;
+        s_ctrl.saved_ok = 1;
+    }
+}
 static void read_pad(OSContPad *p, int index)
 {
     u32 k, j;
@@ -523,7 +576,12 @@ static void read_pad(OSContPad *p, int index)
     case 2:  k = apf_input_cont3_key_read(); j = apf_input_cont3_joy_read(); break;
     default: k = apf_input_cont4_key_read(); j = apf_input_cont4_joy_read(); break;
     }
-    n64rt_pad_map(k, j, apf_interact_interact0_read(), apf_interact_interact1_read(), &p->button, &p->stick_x, &p->stick_y);
+    ctrl_poll();
+    u32 s0 = apf_interact_interact0_read(), s1 = apf_interact_interact1_read();
+    u32 map[5];
+    const n64rt_ctrl_pick_t pk = ctrl_picks();
+    n64rt_ctrl_effective(&s_ctrl, &pk, &s0, &s1, map);
+    n64rt_pad_map(k, j, s0, s1, map, &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG
     /* (make PADLOG=1) what the dock sends and what the game gets, on the JTAG UART whenever a pad's words change, at most every 20 reads
@@ -1154,6 +1212,7 @@ void n64rt_io_init(void)
 {
     n64rt_eeprom_init();
     eep_db_init();
+    ctrl_init();
     n64rt_pak_init();
     extern void n64rt_audio_init(void), n64rt_gfx_init(void);
     n64rt_audio_init();
