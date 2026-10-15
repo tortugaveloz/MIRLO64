@@ -11,6 +11,7 @@
 **/build/
 
 # Game files, bitstreams
+/Example roms/
 *.rbf
 *.rbf_r
 *.rev

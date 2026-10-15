@@ -7,7 +7,7 @@ interrupt are in [mips.md](mips.md), the filters in [rdp.md](rdp.md) (The scan-o
 
 ## The frame
 
-The Pocket is sent one frame size, 640 x 240, progressive: the single scaler mode of
+Original sends a 640 x 240 progressive frame: scaler slot 0 of
 `pkg/pocket/Cores/tortuga.Mirlo64/video.json`, shown 4:3. A line is the VI's own, 640 pixel clocks wide; the pixel clock
 is `clk_vid`, 12.5 MHz (the system clock divided by 5), one clock a pixel.
 
@@ -69,7 +69,13 @@ would run past it shows black too.
 
 "Crop Vertical" (none, 8 or 12 lines) blanks that many lines at the top and at the bottom of the picture, and "Crop
 Right" (none or 1 column) its last column, a column being a pixel of a 320-wide picture. They are relative to the
-picture's window; the frame and its timing do not change.
+picture's window; Original keeps the same frame and timing.
+
+"Screen Size" adds Fit, Stretch, Hybrid and Overscale after this scan-out. The
+adapter captures the full 640 x 240 field without reducing its horizontal
+samples. Native framing uses the Pocket's scaler; other sizes and Hybrid use
+bilinear filtering. See [display-modes.md](display-modes.md) for presets,
+aspect correction, latency and memory use.
 
 ## Tests
 

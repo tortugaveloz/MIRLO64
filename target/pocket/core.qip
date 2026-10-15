@@ -13,3 +13,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "wishbone.sv"]
 
 set_global_assignment -name QIP_FILE                  [file join $::quartus(qip_path) "chip_id.qip"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "pocket_video.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "pocket_video_memory.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "pocket_video_psram.sv"]

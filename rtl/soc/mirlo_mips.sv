@@ -104,6 +104,7 @@ module mirlo_mips #(
     output logic         vga_hsync,
     output logic   [7:0] vga_r,
     output logic         vga_vsync,
+    output wire [9:0]     video_x, video_y, video_w, video_h,
     input  wire          wishbone_ack,
     output wire   [29:0] wishbone_adr,
     output wire    [1:0] wishbone_bte,
@@ -611,6 +612,7 @@ n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .c
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,
+    .picture_x(video_x), .picture_y(video_y), .picture_w(video_w), .picture_h(video_h),
     .vga_r, .vga_g, .vga_b, .vga_hsync, .vga_vsync, .vga_de, .vga_skip);
 assign p_we[0] = 0; assign p_wdata[0] = 0; assign p_be[0] = 4'hF;
 

@@ -61,6 +61,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 
 | Setting | Choices | What it does |
 |---|---|---|
+| Screen Size | **Original**, Fit, Stretch, Hybrid, Overscale | Fit or fill the display; [framing and filtering](docs/display-modes.md) |
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |

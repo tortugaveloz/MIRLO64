@@ -61,6 +61,7 @@ input   wire    [31:0]  savestate_size,
 input   wire    [31:0]  savestate_maxloadsize,
 
 output  reg             osnotify_inmenu,
+output  reg             osnotify_docked,
 
 output  reg             savestate_start,        // core should detect rising edge on this,
 input   wire            savestate_start_ack,    // and then assert ack for at least 1 cycle
@@ -195,6 +196,7 @@ initial begin
     savestate_start <= 0;
     savestate_load <= 0;
     osnotify_inmenu <= 0;
+    osnotify_docked <= 0;
 
     status_setup_done_queue <= 0;
     target_dataslot_read_queue <= 0;
@@ -440,6 +442,11 @@ always @(posedge clk) begin
             end else begin
                 hstate <= ST_DONE_CODE;
             end
+        end
+        16'h00B2: begin
+            // OS Notify: Docked State (also works with no controller).
+            osnotify_docked <= host_20[0];
+            hstate <= ST_DONE_OK;
         end
         16'h00B0: begin
             // OS Notify: Menu State

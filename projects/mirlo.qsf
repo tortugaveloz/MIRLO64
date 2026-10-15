@@ -20,7 +20,7 @@ set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 # ==============================================================================
 # Compiler Assignments
 # ==============================================================================
-set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
+set_global_assignment -name NUM_PARALLEL_PROCESSORS 2
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 # Parts of the design this build leaves out (Verilog macros):
 # the geom CFU's edge-setup ops (0x62, 0x64..0x67) and blend ops (0x40/0x41/
@@ -45,7 +45,7 @@ set_global_assignment -name SAVE_DISK_SPACE OFF
 # negative, compile three seeds in parallel (copies of projects/ with a
 # different SEED each) and keep the one that closes. With
 # PLACEMENT_EFFORT_MULTIPLIER 10.0 (below).
-set_global_assignment -name SEED 34
+set_global_assignment -name SEED 3
 # Off: smart recompilation can skip synthesis when only a memory's init file
 # changed -- the geometry core's ROM is one.
 set_global_assignment -name SMART_RECOMPILE OFF
@@ -798,3 +798,31 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # two -- as small as the old reduced set, since the unit's float<->fixed
 # conversion ops went when the triangle stream became fixed point.
 
+
+# Display frame-store pads; preserve the controller's electrical timing.
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram0_wait
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram1_wait
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_adv_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_adv_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_cre
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_cre
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ce0_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ce0_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ce1_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ce1_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_oe_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_oe_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_we_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_we_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ub_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ub_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_lb_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_lb_n

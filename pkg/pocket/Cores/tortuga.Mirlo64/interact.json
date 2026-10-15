@@ -1,4 +1,5 @@
 {"interact":{"magic":"APF_VER_1","variables":[
+{"name":"Screen Size","id":237,"type":"list","enabled":true,"persist":true,"address":"0x10000140","defaultval":0,"options":[{"value":0,"name":"Original"},{"value":2,"name":"Fit (maintain aspect ratio)"},{"value":1,"name":"Fill screen (stretch)"},{"value":4,"name":"Hybrid"},{"value":3,"name":"Fill screen (overscale)"}],"writeonly":true},
 {"name":"Crop Vertical","id":235,"type":"list","enabled":true,"persist":true,"address":"0x1000010C","defaultval":1,"options":[{"value":0,"name":"None"},{"value":8,"name":"8 lines"},{"value":12,"name":"12 lines"}],"writeonly":true},
 {"name":"Crop Right","id":236,"type":"list","enabled":true,"address":"0x10000114","persist":true,"defaultval":1,"options":[{"value":0,"name":"None"},{"value":1,"name":"1 column"}],"writeonly":true},
 {"name":"Expansion Pak","id":238,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":true},

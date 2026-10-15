@@ -58,3 +58,30 @@
 # ==============================================================================
 # Set Input Transition
 # ==============================================================================
+
+# ==============================================================================
+# The PSRAMs (target/pocket/pocket_video_psram.sv; used by the Pocket display frame store)
+# ==============================================================================
+# Their clock rises three quarters into clk_sys's cycle, out of a DDR register
+# on the doubled clock (one in two of its falling edges). What the FPGA
+# drives at clk_sys's rising edge a chip takes three quarters of a period on
+# (tSP 3 ns before its edge, tHD 2 ns after; 0.5 ns of board), and what a chip
+# puts out after its edge (tACLK 9 ns at most, held tKOH 2 ns past the next)
+# the pads' registers take at clk_sys's rising edge a period and a quarter
+# after the chip's: the second one after it. The asynchronous accesses use
+# the same pads over several cycles: these bounds hold for them with room to
+# spare.
+set ps_sys {ic|mp1|mf_pllbase_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+set ps_sys2x {ic|mp1|mf_pllbase_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}
+if {[get_collection_size [get_pins -nowarn $ps_sys]] > 0} {
+    foreach c {cram0 cram1} {
+        create_generated_clock -name ${c}_clk -source [get_pins $ps_sys2x] -edges {4 6 8} [get_ports ${c}_clk]
+        set outs [get_ports "${c}_a[*] ${c}_dq[*] ${c}_adv_n ${c}_cre ${c}_ce0_n ${c}_ce1_n ${c}_oe_n ${c}_we_n ${c}_ub_n ${c}_lb_n"]
+        set_output_delay -clock ${c}_clk -max 3.5 $outs
+        set_output_delay -clock ${c}_clk -min -2.5 $outs
+        set ins [get_ports "${c}_dq[*] ${c}_wait"]
+        set_input_delay -clock ${c}_clk -max 9.5 $ins
+        set_input_delay -clock ${c}_clk -min 2.0 $ins
+        set_multicycle_path -setup -end 2 -from [get_clocks ${c}_clk] -to [get_clocks $ps_sys]
+    }
+}

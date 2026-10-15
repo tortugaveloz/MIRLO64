@@ -249,6 +249,15 @@ int main(int argc, char **argv)
             if (!seq.empty()) t->vi_pal = sys_of(frames);       // (V_j asks for F_j's system)
             vs_at = sys_cyc; hs_n = 0; hs_short = 0; hs_ds.clear();
             if (frames >= 3) {
+                const unsigned left = std::min(PX0, 640u), top = std::min(Y0 + CV, 240u);
+                const unsigned right = std::min(PX0 + PW - std::min(PW, 2 * CR), 640u);
+                const unsigned bottom = std::min(Y0 + R - std::min(R, CV), 240u);
+                const unsigned bw = PW > 2 * CR && right > left ? right - left : 0;
+                const unsigned bh = R > 2 * CV && bottom > top ? bottom - top : 0;
+                if (t->picture_x != left || t->picture_y != top || t->picture_w != bw || t->picture_h != bh) {
+                    printf("picture bounds: %u,%u %ux%u; expected %u,%u %ux%u\n", t->picture_x, t->picture_y,
+                           t->picture_w, t->picture_h, left, top, bw, bh); errs++;
+                }
                 if (rows.size() != 240) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
                 for (unsigned ys = 0; ys < rows.size() && ys < 240; ys++) {
                     if (rows[ys].size() != 640 * 3) { printf("row %u: %zu px\n", ys, rows[ys].size() / 3); errs++; continue; }

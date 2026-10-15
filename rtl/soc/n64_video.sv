@@ -98,6 +98,7 @@ module n64_video #(
     output logic        vga_hsync,
     output logic        vga_vsync,
     output logic        vga_de,
+    output wire [9:0]   picture_x, picture_y, picture_w, picture_h, // cropped bounds, clk_vid
     output logic        vga_skip        // (always 0: a pixel a clock)
 );
 
@@ -578,6 +579,17 @@ always_ff @(posedge clk_vid) begin
     crop_bot <= py0_v + nr_v - cvl;
     crop_rgt <= win_end[9:0] - {7'd0, cv_s2[6:5], 1'b0};
 end
+// Describe the same window/masks as the RGB path, clipped to the 640x240
+// field. Empty or over-cropped windows must not wrap into a large rectangle.
+wire [9:0] picture_right = crop_rgt > 640 ? 10'd640 : crop_rgt;
+wire [9:0] picture_bottom = crop_bot > 240 ? 10'd240 : crop_bot;
+wire [9:0] picture_limit = picture_bottom > {1'b0, lin_s2} ? {1'b0, lin_s2} : picture_bottom;
+assign picture_x = px0_v > 640 ? 10'd640 : px0_v;
+assign picture_y = crop_top > 240 ? 10'd240 : crop_top;
+assign picture_w = !blk_s[1] && pw_v > {7'd0, cv_s2[6:5], 1'b0} && picture_right > picture_x
+                 ? picture_right - picture_x : 10'd0;
+assign picture_h = !blk_s[1] && nr_v > (cvl << 1) && picture_limit > picture_y
+                 ? picture_limit - picture_y : 10'd0;
 // the display line d shows the row fetched at d - 1, so its window is the lines py0 + 1 .. py0 + nr
 wire  crop = blk_s[1] || vcount > {1'b0, lin_s2}      // (active lines are vcount 1..240)
           || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt || hcount <= px0_v || !cv;

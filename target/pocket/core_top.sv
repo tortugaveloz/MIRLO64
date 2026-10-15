@@ -274,31 +274,7 @@ module core_top (
   assign port_tran_sd            = 1'bz;
   assign port_tran_sd_dir        = 1'b0;  // SD is input and not used
 
-  // tie off the rest of the pins we are not using
-  assign cram0_a                 = 'h0;
-  assign cram0_dq                = {16{1'bZ}};
-  assign cram0_clk               = 0;
-  assign cram0_adv_n             = 1;
-  assign cram0_cre               = 0;
-  assign cram0_ce0_n             = 1;
-  assign cram0_ce1_n             = 1;
-  assign cram0_oe_n              = 1;
-  assign cram0_we_n              = 1;
-  assign cram0_ub_n              = 1;
-  assign cram0_lb_n              = 1;
-
-  assign cram1_a                 = 'h0;
-  assign cram1_dq                = {16{1'bZ}};
-  assign cram1_clk               = 0;
-  assign cram1_adv_n             = 1;
-  assign cram1_cre               = 0;
-  assign cram1_ce0_n             = 1;
-  assign cram1_ce1_n             = 1;
-  assign cram1_oe_n              = 1;
-  assign cram1_we_n              = 1;
-  assign cram1_ub_n              = 1;
-  assign cram1_lb_n              = 1;
-
+  // Unused memory interfaces (the PSRAM pads are connected below).
   // assign dram_a                  = 'h0;
   // assign dram_ba                 = 'h0;
   // assign dram_dq                 = {16{1'bZ}};
@@ -428,6 +404,7 @@ module core_top (
   wire savestate_load_err;
 
   wire osnotify_inmenu;
+  wire osnotify_docked;
 
   // bridge target commands
   // synchronous to clk_74a
@@ -516,6 +493,7 @@ module core_top (
       .savestate_load_err (savestate_load_err),
 
       .osnotify_inmenu(osnotify_inmenu),
+      .osnotify_docked(osnotify_docked),
 
       .target_dataslot_read    (target_dataslot_read),
       .target_dataslot_write   (target_dataslot_write),
@@ -994,10 +972,13 @@ module core_top (
       .apf_input_cont4_joy (cont4_joy),
       .apf_input_cont4_trig(cont4_trig),
 
-      .apf_interact_address(interact_addr),
+      .apf_interact_address(interact_addr[3:0]),
       .apf_interact_data(interact_data),
       .apf_interact_q(interact_q),
-      .apf_interact_wr(interact_wr),
+      // The SoC has only 16 interact words. Do not alias Pocket-only
+      // settings (word 16 onwards) onto its controller mapping words.
+      .apf_interact_wr(interact_wr && interact_addr < 6'd16),
+      .video_x(video_x), .video_y(video_y), .video_w(video_w), .video_h(video_h),
 
       .apf_rtc_date_bcd(rtc_date_bcd_s),
       .apf_rtc_time_bcd(rtc_time_bcd_s),
@@ -1119,38 +1100,61 @@ module core_top (
   wire de;
   wire skip;
   wire [23:0] rgb888;                   // the scan-out's 8:8:8 (rtl/soc/n64_video.sv)
+  wire [9:0] video_x, video_y, video_w, video_h;
 
-  reg [23:0] rgb_delay = 0;
-
-  reg de_delay = 0;
-  reg de_delay2 = 0;
-  reg vs_delay = 0;
-  reg hs_delay = 0;
-  reg skip_delay = 0;
-
-  always @(posedge clk_vid) begin
-    rgb_delay <= rgb888;
-
-    de_delay  <= de; // period when rgb_delay is valid
-    de_delay2 <= de_delay;
-    vs_delay  <= vsync;
-    hs_delay  <= hsync;
-    skip_delay <= skip;
+  // Pocket-only setting at bridge 0x10000140 (interact word 16).
+  reg [2:0] screen_mode = 0;
+  (* async_reg = "true" *) reg [1:0] video_reset_sync = 2'b11;
+  always @(posedge clk_vid) video_reset_sync <= {video_reset_sync[0], reset};
+  always @(posedge clk_sys) begin
+    if (reset) screen_mode <= 0;
+    else if (interact_wr && interact_addr == 6'd16)
+      screen_mode <= interact_data[2:0];
   end
-
-  reg [3:0] de_counter = 0;
 
   assign video_rgb_clock = clk_vid;
   assign video_rgb_clock_90 = clk_vid_90deg;
-  // Outside DE: 0 (the one scaler slot, 0, video.json's 640 x 240; no frame feature bits: every picture is progressive).
-  assign video_rgb = de_delay ? rgb_delay : 24'd0;
-  // DE exactly where the (one-cycle-delayed) pixels are: 640 a line, the N64 VI's
-  // own line (rtl/soc/n64_video.sv), a pixel a clock of the 12.5 MHz pixel clock.
-  assign video_de = de_delay;
-  // (no pixel is skipped: the scan-out's vga_skip is 0)
-  assign video_skip = skip_delay;
-  assign video_vs = vs_delay;
-  assign video_hs = hs_delay;
+  wire display_valid, display_we, display_last, display_ready, display_rvalid;
+  wire display_idle, display_memory_ready;
+  wire [21:0] display_addr;
+  wire [31:0] display_wdata, display_rdata;
+  wire [5:0] ps_a;
+  wire [31:0] ps_dq_o, ps_dq_i;
+  wire ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en;
+  wire [1:0] ps_ce_n, ps_wait;
+  wire [3:0] ps_bm_n;
+  pocket_video_psram display_ram (
+      .clk(clk_sys), .rst(reset),
+      .z_valid(display_valid), .z_ready(display_ready), .z_we(display_we),
+      .z_addr(display_addr), .z_wdata(display_wdata), .z_wmask(4'hf), .z_last(display_last),
+      .z_rvalid(display_rvalid), .z_rdata(display_rdata), .z_idle(display_idle),
+      .cfg(4'b0101), .cfg_wr(1'b0), .ready(display_memory_ready), .wait_err(),
+      .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe), .o_adv_n(ps_adv_n),
+      .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre), .o_ce_n(ps_ce_n),
+      .o_bm_n(ps_bm_n), .o_clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait)
+  );
+  pocket_video_psram_phy display_ram_phy (
+      .clk(clk_sys), .clk2x(clk_mem), .o_a(ps_a), .o_dq(ps_dq_o), .o_dq_oe(ps_dq_oe),
+      .o_adv_n(ps_adv_n), .o_oe_n(ps_oe_n), .o_we_n(ps_we_n), .o_cre(ps_cre),
+      .o_ce_n(ps_ce_n), .o_bm_n(ps_bm_n), .clk_en(ps_clk_en), .i_dq(ps_dq_i), .i_wait(ps_wait),
+      .cram0_a, .cram1_a, .cram0_dq, .cram1_dq, .cram0_wait, .cram1_wait,
+      .cram0_clk, .cram1_clk, .cram0_adv_n, .cram1_adv_n, .cram0_cre, .cram1_cre,
+      .cram0_ce0_n, .cram0_ce1_n, .cram1_ce0_n, .cram1_ce1_n,
+      .cram0_oe_n, .cram1_oe_n, .cram0_we_n, .cram1_we_n,
+      .cram0_ub_n, .cram0_lb_n, .cram1_ub_n, .cram1_lb_n
+  );
+  pocket_video video_output (
+      .clk_vid(clk_vid), .rst_vid(video_reset_sync[1]), .clk_sys(clk_sys), .rst_sys(reset),
+      .screen_mode(screen_mode), .docked(osnotify_docked),
+      .source_x(video_x), .source_y(video_y), .source_w(video_w), .source_h(video_h),
+      .m_valid(display_valid), .m_we(display_we), .m_last(display_last),
+      .m_addr(display_addr), .m_wdata(display_wdata), .m_ready(display_ready),
+      .m_rvalid(display_rvalid), .m_rdata(display_rdata), .m_idle(display_idle),
+      .memory_ready(display_memory_ready),
+      .rgb(rgb888), .de(de), .hs(hsync), .vs(vsync), .skip(skip),
+      .video_rgb(video_rgb), .video_de(video_de), .video_hs(video_hs),
+      .video_vs(video_vs), .video_skip(video_skip)
+  );
 
   ////////////////////////////////////////////////////////////////////////////////////////
   // Sound
