@@ -197,6 +197,7 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
     }
     if (t->fmt == 1 && t->size == 2) {                                /* YUV */
         uint32_t i = ((row + ((uint32_t)s >> 1)) ^ odd) & 0x3FF;
+        if (tlut) return texel_expand(tlut_fmt, m[0x400 | ((unsigned)(m[i] >> 8) << 2)]);   /* (its pair's U V word: U is the index) */
         c.r = (uint8_t)(m[i] >> 8); c.g = (uint8_t)m[i];
         c.b = c.a = (uint8_t)((s & 1) ? m[0x400 | i] : m[0x400 | i] >> 8);
         return c;
@@ -210,7 +211,7 @@ static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int 
     }
     if (t->size == 2) {
         if (t->fmt == 3) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
-        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as in Clayfighter's logo) */
+        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as the console does) */
         c.r = c.g = c.b = c.a = (uint8_t)(v >> 8);                /* I: the first byte */
     } else if (t->size == 1) {
         if (t->fmt == 3) { c.r = c.g = c.b = (uint8_t)((b >> 4) * 17u); c.a = (uint8_t)((b & 15u) * 17u); }   /* IA 4 4 */
