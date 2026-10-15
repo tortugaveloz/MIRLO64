@@ -502,7 +502,7 @@ static void vec_store(rsp_t *s, uint32_t in)
     case 9: {                                       /* SFV */
         /* bits 14..7 of four lanes, a byte every fourth in the 16 from the
          * 8-byte block: lanes 0-3 (e 0), 1,2,3,0 (e 4), 4-7 (e 8), 5,6,7,4
-         * (e 12) -- the JPEG microcodes' U and V (Ogre Battle 64). Other
+         * (e 12) -- a JPEG microcode's U and V. Other
          * elements: not done. */
         if (e & 3u) { s->unimpl++; break; }
         uint32_t index = addr & 7u; addr &= ~7u;

@@ -22,7 +22,7 @@
 //
 //   LTV, STV        a byte a cycle (every graphics microcode has them, none
 //                   runs them often)
-//   SHV, SFV        one cycle (the JPEG microcodes' YUV packing: Ogre Battle 64)
+//   SHV, SFV        one cycle (a JPEG microcode's YUV packing)
 // Not implemented (no microcode of the ROMs scanned has them -- sim/rsp/
 // rom_ucode_scan.py; they do nothing and set `unimpl`): LHV LFV LWV, SWV, SFV
 // at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ and the reserved

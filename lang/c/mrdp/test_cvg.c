@@ -245,7 +245,7 @@ int main(void)
     check("no AA: ... and not 9", 9, 3, 0x0001);
 
     /* 8. a triangle without texture coefficients (its command has no S, T, W block) still takes TEXEL0 from the tile's texel
-     * (0, 0): S = T = W = 0 and the texture stages run (as the hardware does; Link's tunic collar, G_TEXTURE off with a combiner that reads
+     * (0, 0): S = T = W = 0 and the texture stages run (as the hardware does; a character's collar, G_TEXTURE off with a combiner that reads
      * TEXEL0, was black). A 4 x 1 RGBA16 texture, red, at 0x30000, in tile 0 (loaded through tile 7). */
     setup((1u << 6) | (1u << 22) | (1u << 18));
     for (unsigned i = 0; i < 4; i++) { mem[0x30000 + 2 * i] = 0xF8; mem[0x30000 + 2 * i + 1] = 0x01; }
@@ -258,7 +258,7 @@ int main(void)
     tri_vleft(10 << 16);
     check("no texture coefficients: TEXEL0 is the tile's texel (0, 0)", 12, 3, c5551(255, 0, 0, 1));
 
-    /* 9. RGB_DITHER_SEL 2 is noise (G_CD_NOISE: OoT's dust): a flat grey with its low three bits at 4 goes up a step in
+    /* 9. RGB_DITHER_SEL 2 is noise (G_CD_NOISE: a game's dust): a flat grey with its low three bits at 4 goes up a step in
      * about half of the pixels, at no place of a 4 x 4 pattern -- a pixel and the one four to its right differ somewhere
      * (with the Bayer matrix the picture repeats every four pixels), and each channel has its own random bits */
     setup((1u << 6) | (1u << 22) | (1u << 18));
@@ -279,7 +279,7 @@ int main(void)
     }
 
     /* 10. The shade enters the combiner saturated to a byte: below 0 -> 0, above 255 -> 255 (with 9 bits, 0..511, a lit surface's
-     * shade overshoots 255 at its edges -- Link's tunic with Navi's light -- and the raw 9 bits of the first cycle's TEXEL0 * SHADE
+     * shade overshoots 255 at its edges -- a lit character's clothes -- and the raw 9 bits of the first cycle's TEXEL0 * SHADE
      * went past 255; as COMBINED, the second cycle's C, they are a negative number: a black pixel). A flat shade (R, G, B, A) =
      * (300, 600, -50, 450) is (255, 255, 0, 255) here; PRIM = (100, 100, 100, 128). */
 #define SH_TRI(r, g, b, a) tri_shade(10 << 16, (r), (g), (b), (a))
@@ -293,7 +293,7 @@ int main(void)
     cmd(0x3A000000u, 0x64646480u); CC_RGB(4, 3, 10, 7);
     SH_TRI(200, 100, 0, 0);
     check("shade: in range, unchanged", 12, 3, c5551(50, 0, 0, 1));
-    /* Link's tunic: 2 cycles, PRIM (255) * SHADE, then ENV (200) * COMBINED. With a shade of 300 the first cycle gave 299, whose
+    /* A lit garment: 2 cycles, PRIM (255) * SHADE, then ENV (200) * COMBINED. With a shade of 300 the first cycle gave 299, whose
      * bit 8 made COMBINED a negative C and the pixel black; the shade as a byte (255): 254, then 200 * 254 + 0x80 >> 8 = 198 */
     setup(AA_OPA);
     cmd(0x2F000000u | (1u << 20) | (3u << 6) | (3u << 4), (1u << 3) | (1u << 6) | (1u << 13) | (3u << 26) | (2u << 18));
@@ -305,7 +305,7 @@ int main(void)
     check("shade: 2-cycle PRIM * SHADE then ENV * COMBINED, a shade past 255 is not black", 12, 3, c5551(198, 198, 198, 1));
 
     /* 11. A 2-cycle pixel's second combiner cycle takes the first cycle's TEXEL1 as its TEXEL0: the next tile's sample (the N64's;
-     * Mario Golf's ground reads (COMBINED - TEXEL0) * A + TEXEL0 there, the RGBA16 grass in tile 1 under an I8 detail in tile 0).
+     * a ground can read (COMBINED - TEXEL0) * A + TEXEL0 there, the RGBA16 grass in tile 1 under an I8 detail in tile 0).
      * Tile 0: one red texel, tile 1: one green one (RGBA16, S = T = 0), the combiner cycle 0 = the constant, cycle 1 = TEXEL0 or
      * TEXEL1: TEXEL0 is tile 1's green, TEXEL1 tile 0's red. */
     for (int k = 0; k < 2; k++) {
@@ -336,7 +336,7 @@ int main(void)
         check(k ? "2-cycle: TEXEL1 in the second cycle is the tile's sample (red)" : "2-cycle: TEXEL0 in the second cycle is the next tile's sample (green)",
               12, 3, k ? c5551(255, 0, 0, 1) : c5551(0, 255, 0, 1));
     }
-    /* 11. With the TLUT on a 16-bit texel is an index too: the first byte of its word (a game loads its depth image as a
+    /* 12. With the TLUT on a 16-bit texel is an index too: the first byte of its word (a game loads its depth image as a
      * texture and takes a table's entry by the depth's top byte). A 4 x 1 texture of 0x4C37 in tile 0; the table's entry 0x4C
      * green, 0x37 (the word's other byte) red, all the others blue. */
     setup((1u << 6) | (1u << 22) | (1u << 18));
@@ -358,7 +358,7 @@ int main(void)
     tri_vleft(10 << 16);
     check("TLUT on, a 16-bit texel: the entry of its first byte", 12, 3, c5551(0, 255, 0, 1));
 
-    /* 12. The depth image's word is the N64's: an exponent (the depth's leading ones) and the 11 bits under them, above the top
+    /* 13. The depth image's word is the N64's: an exponent (the depth's leading ones) and the 11 bits under them, above the top
      * two bits of the pixel's dz code (a flat triangle's code is 3: 0). Opaque, no AA, Z_CMP and Z_UPD. */
 #define Z_OPA ((1u << 4) | (1u << 5) | (1u << 6) | (1u << 22) | (1u << 18))
 #define ZWORD(x, y) rd16(0, ZIMG + ((uint32_t)(y) * W + (uint32_t)(x)) * 2)
@@ -399,7 +399,7 @@ int main(void)
     check("depth: a decal farther than that is not drawn", 12, 3, c5551(0, 0, 255, 1));
     with_z = 0; zval = 0x40000000u;
 
-    /* 13. SET CONVERT's K4 and K5 are the combiner's B 7 and C 15, 9 bits each: K4 a negative number from 0x180 (as COMBINED),
+    /* 14. SET CONVERT's K4 and K5 are the combiner's B 7 and C 15, 9 bits each: K4 a negative number from 0x180 (as COMBINED),
      * K5 a signed 9-bit. PRIM is a grey of 200, ENV of 250. */
 #define K45(k4, k5) cmd(0x2C000000u, (uint32_t)(k4) << 9 | (uint32_t)(k5))
     setup(AA_OPA);
@@ -419,7 +419,7 @@ int main(void)
     tri_vleft(10 << 16);
     check("combiner: (PRIM - K4 -64) * K5 128 -> 132", 12, 3, c5551(132, 132, 132, 1));
 
-    /* 12. A YUV texture (Ogre Battle 64's JPEG backgrounds): the image's U Y0 V Y1 loaded as U V to TMEM's lower half and Y0 Y1
+    /* 15. A YUV texture (a JPEG picture decoded by the RSP): the image's U Y0 V Y1 loaded as U V to TMEM's lower half and Y0 Y1
      * to its upper, converted by the texture filter (1-cycle, G_TC_CONV: BI_LERP_0 off) with SET_CONVERT's K0..K3, then the
      * combiner's (TEXEL0 - K4) * K5 + TEXEL0 -- the game's own words (EC15FD5D 3B78E42A: K 175, -43, -89, 222, 114, 42). The pair
      * U 168, Y0 100, V 108, Y1 200: u 40, v -20, the K's 2K + 1. Texel 0 (Y 100): R 100 + (351 * -20 + 128 >> 8) = 73, G 100 +
