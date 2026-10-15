@@ -3,8 +3,8 @@
 # artifact is the tree a user copies onto the Pocket's SD card: downloaded, it is the zip to unpack there.
 # The job fails, and publishes nothing, if that fit does not close timing with the sources as they are.
 #
-# It also runs for a pull request that changes the record of the fits or the build itself: the seed a pull request
-# records is compiled and must close.
+# It can also be run by hand (Actions > Nightly > Run workflow) on any branch: that branch is built with the seed its
+# projects/fits.json records -- a check that a pull request's record closes, when one is wanted.
 #
 # Quartus comes from a public container image of Quartus Prime Lite 23.1std.1, named by its digest. For this device
 # that version places and routes as 25.1std, the one of README.md, does: the same seed gives the same bitstream,
@@ -17,13 +17,6 @@ on:
     - cron: '0 0 * * *'
       timezone: "Europe/Madrid"
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/nightly.yml
-      - projects/fits.json
-      - tools/nightly.sh
-      - tools/fits.py
-      - tools/area2/fit.sh
 
 permissions:
   contents: read
