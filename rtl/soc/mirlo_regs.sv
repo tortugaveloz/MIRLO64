@@ -55,7 +55,7 @@ module mirlo_regs (
     // APF input
     input  wire  [3:0][31:0] cont_key, cont_joy, cont_trig,
     // APF interact
-    input  wire  [3:0]  ia_address,
+    input  wire  [5:0]  ia_address,
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
@@ -184,56 +184,73 @@ always_ff @(posedge clk) begin
     end
 end
 
-// ---- APF interact (slot 0: A, B, Z, Start, L, R at 5 bits each; slot 1:
-// C-up/down/left/right at 5 bits, stick [21:20], D-pad [23:22], Show FPS
-// [24], Start = Select+Start [25]) -- docs/control.md, Interact API
+// ---- APF interact: fields 2-15 in the two slots -- docs/control.md.
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
+// The controller layout lists (interact.json has 16 entries at most, so a layout is not one entry per field): bus words 16-19 are five-bit
+// fields (Normal, Shift, Shift: D-pad, D-pad keys; 0 is Auto), word 20 is "Analog sticks (dock)" (resets to 1, the default); word 21 is the Pocket's actions -- a write flips ia_act_a
+// with bit 0 set, ia_act_b with bit 1 (a write of 2 is Save, 3 both: Forget; 1 is nothing) -- and the CPU compares the two bits with the
+// ones it saw. The Pocket reads the fields back (ia_q: words 16-20, as it reads words 2-15); the actions are writeonly and read as 0.
+logic [4:0]  iaf [5];
+logic        ia_act_a, ia_act_b;
+wire         iaf_sel = ia_address[5:3] == 3'b010 && ia_address[2:0] < 3'd5;          // words 16-20
+wire  [31:0] iaw0 = {2'd0, ia_act_b, ia_act_a, 3'd0, iaf[4], iaf[3], iaf[2], iaf[1], iaf[0]};
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
+    if (rst) begin
+        ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0;
+        for (int i = 0; i < 5; i++) iaf[i] <= (i == 4) ? 5'd1 : 5'd0;
+        ia_act_a <= 0; ia_act_b <= 0;
+    end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
+        if (ia_wr && iaf_sel) iaf[ia_address[2:0]] <= ia_data[4:0];
+        if (ia_wr && ia_address == 6'd21) begin
+            if (ia_data[0]) ia_act_a <= !ia_act_a;
+            if (ia_data[1]) ia_act_b <= !ia_act_b;
+        end
         if (ia_wr) case (ia_address)
-            4'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
-            4'd1:  begin ia1 <= ia_data; ia_ch1 <= 1; end
-            4'd2:  ia0[4:0]   <= ia_data[4:0];
-            4'd3:  ia0[9:5]   <= ia_data[4:0];
-            4'd4:  ia0[14:10] <= ia_data[4:0];
-            4'd5:  ia0[19:15] <= ia_data[4:0];
-            4'd6:  ia0[24:20] <= ia_data[4:0];
-            4'd7:  ia0[29:25] <= ia_data[4:0];
-            4'd8:  ia1[4:0]   <= ia_data[4:0];
-            4'd9:  ia1[9:5]   <= ia_data[4:0];
-            4'd10: ia1[14:10] <= ia_data[4:0];
-            4'd11: ia1[19:15] <= ia_data[4:0];
-            4'd12: ia1[21:20] <= ia_data[1:0];
-            4'd13: ia1[23:22] <= ia_data[1:0];
-            4'd14: ia1[24]    <= ia_data[0];
-            default: ia1[25]  <= ia_data[0];
+            6'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
+            6'd1:  begin ia1 <= ia_data; ia_ch1 <= 1; end
+            6'd2:  ia0[4:0]   <= ia_data[4:0];
+            6'd3:  ia0[9:5]   <= ia_data[4:0];
+            6'd4:  ia0[14:10] <= ia_data[4:0];
+            6'd5:  ia0[19:15] <= ia_data[4:0];
+            6'd6:  ia0[24:20] <= ia_data[4:0];
+            6'd7:  ia0[29:25] <= ia_data[4:0];
+            6'd8:  ia1[4:0]   <= ia_data[4:0];
+            6'd9:  ia1[9:5]   <= ia_data[4:0];
+            6'd10: ia1[14:10] <= ia_data[4:0];
+            6'd11: ia1[19:15] <= ia_data[4:0];
+            6'd12: ia1[21:20] <= ia_data[1:0];
+            6'd13: ia1[23:22] <= ia_data[1:0];
+            6'd14: ia1[24]    <= ia_data[0];
+            6'd15: ia1[25]    <= ia_data[0];
+            default: ;
         endcase
     end
     case (ia_address)
-    4'd0:  ia_q <= ia0;
-    4'd1:  ia_q <= ia1;
-    4'd2:  ia_q <= {27'd0, ia0[4:0]};
-    4'd3:  ia_q <= {27'd0, ia0[9:5]};
-    4'd4:  ia_q <= {27'd0, ia0[14:10]};
-    4'd5:  ia_q <= {27'd0, ia0[19:15]};
-    4'd6:  ia_q <= {27'd0, ia0[24:20]};
-    4'd7:  ia_q <= {27'd0, ia0[29:25]};
-    4'd8:  ia_q <= {27'd0, ia1[4:0]};
-    4'd9:  ia_q <= {27'd0, ia1[9:5]};
-    4'd10: ia_q <= {27'd0, ia1[14:10]};
-    4'd11: ia_q <= {27'd0, ia1[19:15]};
-    4'd12: ia_q <= {30'd0, ia1[21:20]};
-    4'd13: ia_q <= {30'd0, ia1[23:22]};
-    4'd14: ia_q <= {31'd0, ia1[24]};
-    default: ia_q <= {31'd0, ia1[25]};
+    6'd0:  ia_q <= ia0;
+    6'd1:  ia_q <= ia1;
+    6'd2:  ia_q <= {27'd0, ia0[4:0]};
+    6'd3:  ia_q <= {27'd0, ia0[9:5]};
+    6'd4:  ia_q <= {27'd0, ia0[14:10]};
+    6'd5:  ia_q <= {27'd0, ia0[19:15]};
+    6'd6:  ia_q <= {27'd0, ia0[24:20]};
+    6'd7:  ia_q <= {27'd0, ia0[29:25]};
+    6'd8:  ia_q <= {27'd0, ia1[4:0]};
+    6'd9:  ia_q <= {27'd0, ia1[9:5]};
+    6'd10: ia_q <= {27'd0, ia1[14:10]};
+    6'd11: ia_q <= {27'd0, ia1[19:15]};
+    6'd12: ia_q <= {30'd0, ia1[21:20]};
+    6'd13: ia_q <= {30'd0, ia1[23:22]};
+    6'd14: ia_q <= {31'd0, ia1[24]};
+    6'd15: ia_q <= {31'd0, ia1[25]};
+    default: ia_q <= iaf_sel ? {27'd0, iaf[ia_address[2:0]]} : 32'd0;
     endcase
 end
 
@@ -389,6 +406,7 @@ always_ff @(posedge clk) begin
     R_APF_INTERACT_INTERACT_CHANGED0:   r_rdata <= {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1:           r_rdata <= ia1;
     R_APF_INTERACT_INTERACT_CHANGED1:   r_rdata <= {31'd0, ia_ch1};
+    R_APF_INTERACT_INTERACT2:           r_rdata <= iaw0;
     R_APF_VIDEO_VIDEO:                  r_rdata <= {vb_count, vb_trig, vb_d};
     R_CTRL_SCRATCH:                     r_rdata <= scratch;
     R_CTRL_BUS_ERRORS:                  r_rdata <= {16'd0, bus_errors};

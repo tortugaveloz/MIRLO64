@@ -34,6 +34,7 @@ localparam logic [15:0] R_APF_INTERACT_INTERACT0 = 16'h0300;
 localparam logic [15:0] R_APF_INTERACT_INTERACT_CHANGED0 = 16'h0304;
 localparam logic [15:0] R_APF_INTERACT_INTERACT1 = 16'h0308;
 localparam logic [15:0] R_APF_INTERACT_INTERACT_CHANGED1 = 16'h030C;
+localparam logic [15:0] R_APF_INTERACT_INTERACT2 = 16'h0310;
 localparam logic [15:0] R_APF_VIDEO_VIDEO = 16'h0400;
 localparam logic [15:0] R_CTRL_RESET = 16'h0500;
 localparam logic [15:0] R_CTRL_SCRATCH = 16'h0504;
