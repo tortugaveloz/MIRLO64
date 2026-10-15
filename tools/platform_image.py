@@ -5,7 +5,7 @@
     tools/platform_image.py -d <in.bin> <out.png>       the Pocket's file -> a picture, to look at it
 
 The Pocket's file is the picture in grey, turned a quarter turn counter-clockwise (165 pixels a row, 521 rows), two
-bytes a pixel: its brightness and a zero.
+bytes a pixel: its darkness (255 less its brightness: the Pocket shows 0 as white) and a zero.
 """
 import sys
 
@@ -20,12 +20,13 @@ def main():
         data = open(a[1], "rb").read()
         if len(data) != W * H * 2:
             sys.exit(f"{a[1]}: {len(data)} bytes, not {W * H * 2}")
-        Image.frombytes("L", (H, W), data[0::2]).transpose(Image.ROTATE_270).save(a[2])
+        dark = Image.frombytes("L", (H, W), data[0::2]).transpose(Image.ROTATE_270)
+        dark.point(lambda v: 255 - v).save(a[2])
     elif len(a) == 2:
         im = Image.open(a[0])
         if im.size != (W, H):
             sys.exit(f"{a[0]}: {im.size[0]} x {im.size[1]}, not {W} x {H}")
-        grey = im.convert("L").transpose(Image.ROTATE_90).tobytes()
+        grey = im.convert("L").point(lambda v: 255 - v).transpose(Image.ROTATE_90).tobytes()
         out = bytearray(W * H * 2)
         out[0::2] = grey
         open(a[1], "wb").write(out)
