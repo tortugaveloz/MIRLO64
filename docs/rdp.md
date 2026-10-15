@@ -544,3 +544,17 @@ Where the area goes, without figures:
 * **Registered stages.** Each combiner and blender cycle is two stages, the
   operand selects then the arithmetic, and the decoded texels are registered
   before the filter.
+
+### A timing option kept in reserve
+
+The YUV conversion's input is selected in front of its multiplies: the
+pass's own corner texel, or with CONVERT_ONE the first pass's texel. That
+select sits on one of the system clock's longest paths (from the pass bit
+through the multiplies to the texel the pass gives). It can be taken off:
+a second pass that converts gives no filtered texel, so its corner register
+(`ta8b`, stage P8b) is free and can be loaded with the first pass's texel,
+and the conversion then reads the corner alone. The result is the same
+pixel for pixel. It closes timing on more fitter seeds, but the fitter
+spends more logic on it than it saves, so it is not done while timing
+closes without it: it is the change to make if a later addition makes the
+system clock's timing hard to close.
