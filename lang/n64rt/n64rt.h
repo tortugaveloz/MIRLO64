@@ -224,6 +224,13 @@ typedef struct {
     u32          nhooks;
 } n64rt_game_t;
 
+/* The word a CIC's IPL3 writes as osCicId (0x8000_0310): the 6103's 0x17D7, the 6105's 0x17D9, the 6106's 0x17D8; the
+ * others write nothing there (0). The 6103's and the 6106's IPL3 also leave it in IMEM's first word (n64rt_rsp.c). */
+static inline u32 n64rt_cic_id(u32 cic)
+{
+    return cic == 6103u ? 0x17D7u : cic == 6105u ? 0x17D9u : cic == 6106u ? 0x17D8u : 0u;
+}
+
 /* The ROM as its own file, unchanged -- a .z64 the Pocket loaded at 1 MiB
  * (N64RT_ROM_FILE_OFF), the program being another file at 0: rom_size is that
  * file's size (data slot 0's). Places it and runs the game; never returns. */

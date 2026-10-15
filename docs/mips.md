@@ -311,7 +311,7 @@ The loader then:
 8. Replaces the dividing 64-bit helpers in the boot segment (below).
 9. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
-   console's boot leaves it.
+   console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
 10. Turns the pass-through on, sets up the monitor's wake-ups, the VI's window and the AI's default rate, and enters
     the game at its entry point with Status `0x3400_0000` (CU0, CU1, FR, interrupts off), the stack at the top of the
     RDRAM and MCTL.GAME set.
@@ -321,9 +321,9 @@ The loader then:
 | Boot code | Entry point | What is left in memory | `osCicId` |
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
-| 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM's first word `0xFFFF_FFFF`, IMEM's `0x17D7` | `0x17D7` |
+| 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
 | 6105 | the header's | the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
-| 6106 | the header's less `0x20_0000` | | 0 |
+| 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
 know. Software checks these leftovers, so they are part of a valid console.
