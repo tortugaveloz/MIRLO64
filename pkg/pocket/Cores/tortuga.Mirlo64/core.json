@@ -6,11 +6,11 @@
         "n64"
       ],
       "shortname": "Mirlo64",
-      "description": "MIRLO64: Nintendo 64 games on the Analogue Pocket, on an original SoC with its own MIPS CPU, RSP and RDP",
+      "description": "MIRLO 64: A Nintendo 64 core for the Analogue Pocket",
       "author": "tortuga",
       "url": "https://github.com/tortugaveloz/MIRLO64",
-      "version": "0.1",
-      "date_release": "2026-10-10"
+      "version": "0.2",
+      "date_release": "2026-10-16"
     },
     "framework": {
       "target_product": "Analogue Pocket",
