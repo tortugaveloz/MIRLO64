@@ -17,9 +17,8 @@
 //   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res (WIDTH 512 or more)
 //            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
 //            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
-//            base + one row leaves the base as it is. A serrated picture is sent a field at a time, as the VI sends it:
-//            each from the origin the game wrote last (`base_f`), which libultra's retrace handler picks by CURRENT's
-//            field bit (`fld`, below; rtl/soc/n64_video.sv).
+//            base + one row leaves the base as it is. A serrated picture is sent woven, its 480 rows in order from the
+//            base (rtl/soc/n64_video.sv).
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
 //            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
@@ -56,9 +55,7 @@ module rcp_vi (
     output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE or Y_SCALE changed
     // the scan-out's
     output wire  [25:0] base,           // the framebuffer's byte address in the SDRAM
-    output wire  [25:0] base_f,         // the origin the game wrote last: a serrated picture's field's
-    output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (sent as 480i, a field at a time)
-    output wire         fld,            // the interlace field of the N64's field under way (CURRENT's bit 0 while SERRATE is set)
+    output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (sent woven)
     output logic        black,
     output logic        gamma,
     output logic        aa,             // AA_MODE 0 or 1: the scan-out's anti-alias filter (MIRLO_VI_AA)
@@ -78,7 +75,6 @@ always @(posedge clk) begin
 end
 
 logic [22:0] org_b;             // the base: the origin the scan-out takes
-logic [22:0] org_r;             // the origin as the game wrote it last
 logic [11:0] wid;
 logic [8:0]  vint;
 logic        st_gamma, st_serr, hs_zero, gm_f;
@@ -94,10 +90,10 @@ logic [1:0]  hold;
 logic        field;
 assign vi_clr = wr_s && a == 4'd4;
 always_ff @(posedge clk) begin
-    if (rst) begin org_b <= 23'd0; org_r <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
+    if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
     else if (wr_s) case (a)
     4'd0: begin st_gamma <= wd[3]; st_serr <= wd[6]; st_aa <= !wd[9]; st_dv <= wd[4]; st_dd <= wd[16]; end
-    4'd1: begin if (!row_up) org_b <= wd[22:0]; org_r <= wd[22:0]; end
+    4'd1: if (!row_up) org_b <= wd[22:0];
     4'd2: wid <= wd[11:0];
     4'd3: vint <= wd[9:1];
     4'd6: begin                                      // a value that names a TV system sets it; any other (0, noise) leaves it as it was
@@ -142,9 +138,7 @@ end
 
 // ---------------------------------------------------------------- what the scan-out takes
 assign base = {3'b111, org_b};
-assign base_f = {3'b111, org_r};
 assign il = st_serr && |wid[11:9];
-assign fld = field;
 always_ff @(posedge clk) begin
     black <= hs_zero || org_b[22:6] > thr;
     if (sc_latch) begin gm_f <= st_gamma; aa <= st_aa; divot <= st_dv; dedither <= st_dd; end

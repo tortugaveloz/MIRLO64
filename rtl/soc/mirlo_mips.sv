@@ -262,8 +262,8 @@ logic        vi_line, vi_latch, vi_irq, vi_chg, vi_clr, vi_blk, vi_gm, mon_vi;
 logic        vi_aa, vi_dv, vi_dd;
 wire  [4:0]  vid_crop_v;           // the core's video options (interact.json): crop lines at the top and bottom,
 wire  [1:0]  vid_crop_r;           // and pixels at the right (n64_video.sv)
-logic [25:0] vi_base, vi_base_f;
-logic        vi_il, vi_fld;
+logic [25:0] vi_base;
+logic        vi_il;
 logic [31:0] vi_rd, ai_rd;
 logic        mon_ai, ai_clr, ai_chg, ai_req;
 logic        ai_irq /*verilator public_flat_rd*/, ai_fw /*verilator public_flat_rd*/, ai_step_we /*verilator public_flat_rd*/, ai_ack /*verilator public_flat_rd*/;   // (the bench's AILOG)
@@ -586,7 +586,7 @@ assign p_urgent[4] = 0;
 // With MONITOR.CTL's VI bit the scan-out's base, gamma and black are the VI registers'; else the CSRs'
 rcp_vi vi (.clk, .rst, .sc_line(vi_line), .sc_latch(vi_latch), .tv_pal, .tv_def(fb_pal), .vi_pal(vi_pal_rq), .thr(vi_thr),
     .a(x_addr[5:2]), .wd(x_wdata), .wr_s(xs == X_VIW), .rd(vi_rd), .vi_clr,
-    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .base_f(vi_base_f), .il(vi_il), .fld(vi_fld), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
+    .irq(vi_irq), .chg(vi_chg), .base(vi_base), .il(vi_il), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
 // ---------------------------------------------------------------- the AI (MIRLO_AI: rcp_ai.sv)
 // The Pocket's audio FIFO has two writers: the CSR's (the runtime's software AI, a program's) and the AI's
 rcp_ai ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(ai_rd), .clr(ai_clr), .irq(ai_irq), .chg(ai_chg),
@@ -607,7 +607,7 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 // ---------------------------------------------------------------- the scan-out
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
-    .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_origin2(vi_base_f), .vi_il(mon_vi && vi_il), .vi_fld(vi_fld), .vblank,
+    .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_il(mon_vi && vi_il), .vblank,
     .vi_width(fb_width), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
