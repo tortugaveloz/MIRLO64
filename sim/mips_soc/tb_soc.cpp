@@ -26,10 +26,10 @@
 //                    nonvolatile slot is read back through the port, as many
 //                    bytes as the program left in the core's table for it,
 //                    into <dir>/slot<n>.bin
-// What the Pocket writes below 49 MiB is the SDRAM's as it is (docs/mips.md,
-// the bridge's map) and is put into the chip model at once; the rest -- a
-// big ROM's end, the slots' files -- goes through the bridge's port, a word
-// at a time. BRIDGE_ALL=1: all of it through the port, as the Pocket does it
+// What the Pocket writes below 65 MiB -- the program, the ROM -- is put into
+// the chip models at once, where the bridge's map puts it (docs/mips.md); the
+// rest -- the slots' files -- goes through the bridge's port, a word at a
+// time. BRIDGE_ALL=1: all of it through the port, as the Pocket does it
 // (some 6 clocks a word).
 //   VERIFY=1         when the load is over, and again at the end (then less
 //                    the program's megabyte and the saves), the chips'
@@ -177,6 +177,132 @@ static void chip_step()
     }
 }
 
+// ---- the PSRAMs (AS1C8M16PL-70: two chips side by side as 32 bits, each two
+// dies of 4 M words; rtl/soc/psram.sv: die 0 the scan-out's woven picture, die 1 a 64 MiB ROM's last 16 MiB). What the chips see is what the PHY's
+// registers hold, stepped twice a sys cycle (h: half cycles, 7.96 ns): after
+// clk's rising edge, and after its falling edge -- which is the chips' rising
+// clock edge when the PHY has the clock on. The checks are the datasheet's,
+// to that half cycle: a burst (the latency of the die's BCR, which the
+// controller must have written; no burst over a row's 128 words; CE# high
+// between two), an asynchronous access (70 ns from the address to the data,
+// WE# low 45 ns, the data 20 ns before its end), a BCR's write (CRE). What a
+// chip does not drive, or not yet, reads as rubbish.
+static std::vector<uint16_t> psm[2][2];             // [die][chip]
+static struct {
+    uint16_t bcr[2] = { 0x9D1F, 0x9D1F };
+    bool burst, bwr; int die, edges, lat; uint32_t baddr;
+    bool ce_was[2] = { false, false }; long t_ce_hi[2] = { -100, -100 };
+    bool adv_was = true, we_was = true, oe_was = true; long t_adv_lo = -100, t_we_lo = -100, t_oe_lo = -100, t_dq = -100;
+    uint32_t aaddr, dq_was; int a_was;
+    long n_burst, n_bword, n_async, n_cfg;
+} ps;
+static long ps_h;
+static uint32_t ps_in_next; static int ps_wait_next; static bool ps_in_pend;
+// Stepped twice a cycle of clk: after its rising edge (neg false) and three
+// quarters into it (neg true), where the chips' clock rises -- the pin is
+// looked at: high there and still high after clk's next rising edge.
+static void psram_step(bool neg)
+{
+    ps_h++;
+    static bool ck_was;
+    if (!t->reset) {
+        if (!neg && (bool)t->ps_clk_en != ck_was) ERR("psram h %ld: the chips' clock is not high from three quarters into a cycle to a quarter into the next", ps_h);
+        ck_was = t->ps_clk_en;
+    }
+    // (what the chips drive after their clock's edge is at the pads after the
+    // clock's way out and tACLK, past clk's next rising edge: here it changes
+    // right after that edge)
+    if (!neg && ps_in_pend) { t->ps_dq_in = ps_in_next; ps_in_pend = false; }
+    const int ce_n = t->ps_ce_n;
+    const bool ce[2] = { !(ce_n & 1), !(ce_n & 2) };
+    const bool adv = t->ps_adv_n, we = t->ps_we_n, oe = t->ps_oe_n, drv = t->ps_dq_oe, cre = t->ps_cre, clk = t->ps_clk_en;
+    const uint32_t dq = t->ps_dq_out; const int a = t->ps_a;
+    if (t->reset) return;
+    if (ce[0] && ce[1]) ERR("psram h %ld: both dies' CE# low", ps_h);
+    for (int d = 0; d < 2; d++) {
+        if (ce[d] && !ps.ce_was[d] && ps_h - ps.t_ce_hi[d] < 2) ERR("psram h %ld: die %d's CE# high for less than 15 ns", ps_h, d);
+        if (!ce[d] && ps.ce_was[d]) { ps.t_ce_hi[d] = ps_h; if (ps.burst && ps.die == d) ps.burst = false; }
+    }
+    const int die = ce[1] ? 1 : 0;
+    const bool sel = ce[0] || ce[1];
+    if (dq != ps.dq_was || a != ps.a_was) ps.t_dq = ps_h;
+    uint32_t in = 0x5AA55AA5u; int wait = 3;
+    if (neg && clk && sel) {                                    // a clock edge at a selected die
+        if (ps.bcr[die] & 0x8000u) ERR("psram h %ld: a clocked access to die %d, which is asynchronous (BCR %04x)", ps_h, die, ps.bcr[die]);
+        if (!ps.burst) {
+            if (adv) ERR("psram h %ld: a clock edge with CE# low and no burst begun", ps_h);
+            else {
+                if (!drv || (dq >> 16) != (dq & 0xFFFFu)) ERR("psram h %ld: a burst's address not driven alike to both chips", ps_h);
+                if (cre) ERR("psram h %ld: a clocked register access (not modelled)", ps_h);
+                static const int lc[8] = { 8, -1, 2, 3, 4, 5, 6, -1 };
+                ps.burst = true; ps.die = die; ps.bwr = !we; ps.edges = 0; ps.lat = lc[(ps.bcr[die] >> 11) & 7];
+                ps.baddr = (uint32_t)a << 16 | (dq & 0xFFFFu);
+                ps.n_burst++;
+                if (ps.lat < 0) ERR("psram h %ld: a reserved latency code", ps_h);
+            }
+        } else {
+            ps.edges++;
+            if (!adv) ERR("psram h %ld: ADV# low inside a burst", ps_h);
+            int j = ps.bwr ? ps.edges - (ps.lat + 1) : ps.edges - ps.lat;
+            if (j >= 0) {
+                uint32_t w = (ps.baddr + (uint32_t)j) & 0x3FFFFFu;
+                if (j > 0 && (w & 127u) == 0) ERR("psram h %ld: a burst over a row's end (word %06x)", ps_h, w);
+                ps.n_bword++;
+                if (ps.bwr) {
+                    if (!drv) ERR("psram h %ld: a burst's write data not driven", ps_h);
+                    const int bm = t->ps_bm_n;
+                    uint16_t &m0 = psm[die][0][w], &m1 = psm[die][1][w];
+                    if (!(bm & 8)) m0 = (m0 & 0x00FF) | ((dq >> 16) & 0xFF00);
+                    if (!(bm & 4)) m0 = (m0 & 0xFF00) | ((dq >> 16) & 0x00FF);
+                    if (!(bm & 2)) m1 = (m1 & 0x00FF) | (dq & 0xFF00);
+                    if (!(bm & 1)) m1 = (m1 & 0xFF00) | (dq & 0x00FF);
+                } else {
+                    if (oe) ERR("psram h %ld: a burst's read data with OE# high", ps_h);
+                    if (drv) ERR("psram h %ld: the bus driven against a burst's read data", ps_h);
+                    in = (uint32_t)psm[die][0][w] << 16 | psm[die][1][w]; wait = 0;
+                }
+            }
+        }
+        ps_in_next = in; ps_wait_next = wait; ps_in_pend = true;
+    } else if (!ps.burst) {
+        // ---- asynchronous: the address while ADV# is low, then a write's WE# or a read's OE#
+        if (sel && !clk) {
+            if (!adv) { if (ps.adv_was) ps.t_adv_lo = ps_h; ps.aaddr = (uint32_t)a << 16 | (dq & 0xFFFFu); }
+            if (!we && ps.we_was) ps.t_we_lo = ps_h;
+            if (!oe && ps.oe_was) ps.t_oe_lo = ps_h;
+            if (we && !ps.we_was) {                            // a write's end
+                if (ps_h - ps.t_we_lo < 6) ERR("psram h %ld: WE# low for less than 45 ns", ps_h);
+                if (ps_h - ps.t_adv_lo < 9) ERR("psram h %ld: a write ends less than 70 ns after its address", ps_h);
+                if (ps_h - ps.t_dq < 3) ERR("psram h %ld: write data changed less than 20 ns before WE# rose", ps_h);
+                if (cre) {
+                    int rs = (int)((ps.aaddr >> 18) & 3u);
+                    if (rs == 2) { ps.bcr[die] = (uint16_t)ps.aaddr; ps.n_cfg++; printf("[psram: die %d's BCR = %04x]\n", die, ps.bcr[die]); }
+                    else if (rs == 0 && (uint16_t)ps.aaddr == 0x0010) ps.n_cfg++;      // the RCR: the whole array refreshed
+                    else ERR("psram h %ld: a register write that is not the BCR's or the RCR's default (select %d, %04x)", ps_h, rs, (unsigned)(uint16_t)ps.aaddr);
+                } else {
+                    if (!drv) ERR("psram h %ld: an asynchronous write's data not driven", ps_h);
+                    uint32_t w = ps.aaddr & 0x3FFFFFu; const int bm = t->ps_bm_n;
+                    uint16_t &m0 = psm[die][0][w], &m1 = psm[die][1][w];
+                    if (!(bm & 8)) m0 = (m0 & 0x00FF) | ((ps.dq_was >> 16) & 0xFF00);
+                    if (!(bm & 4)) m0 = (m0 & 0xFF00) | ((ps.dq_was >> 16) & 0x00FF);
+                    if (!(bm & 2)) m1 = (m1 & 0x00FF) | (ps.dq_was & 0xFF00);
+                    if (!(bm & 1)) m1 = (m1 & 0xFF00) | (ps.dq_was & 0x00FF);
+                    ps.n_async++;
+                }
+            }
+            if (!oe && we && adv) {                            // a read
+                if (drv) ERR("psram h %ld: the bus driven against an asynchronous read", ps_h);
+                if (ps_h - ps.t_adv_lo >= 9 && ps_h - ps.t_oe_lo >= 3) {
+                    uint32_t w = ps.aaddr & 0x3FFFFFu;
+                    in = (uint32_t)psm[die][0][w] << 16 | psm[die][1][w];
+                    if (ps.oe_was) ps.n_async++;
+                }
+            }
+        }
+        t->ps_dq_in = in; (void)wait;
+    }
+    ps.ce_was[0] = ce[0]; ps.ce_was[1] = ce[1]; ps.adv_was = adv; ps.we_was = we; ps.oe_was = oe; ps.dq_was = dq; ps.a_was = a;
+}
 
 // CPUTRACE=from,count: the game CPU's instructions as it retires them (pc,
 // word, the register written) and the exceptions it takes, `count` of them
@@ -300,8 +426,8 @@ static void cpu_stat_step(long sys)
 struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
 static Slot slots[8];
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
-static const uint32_t FILE_SDRAM_END = 49u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_SDRAM
-static const uint32_t FILE_DROP_END = 65u << 20;    // and LAYOUT_FILE_MAX)
+static const uint32_t FILE_PSRAM_END = 33u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
+static const uint32_t FILE_ROM_END = 65u << 20;     // and LAYOUT_FILE_MAX)
 static const int PROG_SLOT = 3;                     // with ROM=: the program's (data.json's "Runtime")
 static bool read_file(const char *path, std::vector<uint8_t> &d)
 {
@@ -341,9 +467,22 @@ static bool read_data_json(const std::string &path)
 struct BrJob { int slot; bool write; uint32_t addr; size_t off, len; };
 static std::deque<BrJob> br_jobs;
 static size_t br_pos;
-// The chips' models against the files, each byte where the bridge's map puts
-// its address: the SDRAM below 49 MiB, nothing from there up to 65 MiB (the bridge drops it),
-// else the SDRAM at the address's low 26 bits. `end`: less what a program
+// Where the bridge's map puts a word the Pocket writes (rtl/soc/mirlo_mips.sv): the SDRAM below 1 MiB, the PSRAM from there to
+// 33 MiB (at the address mod 32 MiB: its word's bit 22 the die), the SDRAM at the address less 32 MiB up to 65 MiB, else the
+// SDRAM at the address's low 26 bits
+static void place(uint32_t a, uint32_t w)
+{
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; psm[x >> 22][0][x & 0x3FFFFFu] = (uint16_t)(w >> 16); psm[x >> 22][1][x & 0x3FFFFFu] = (uint16_t)w; }
+    else if (a >= FILE_PSRAM_END && a < FILE_ROM_END) wr_word((a - (32u << 20)) / 4, w);
+    else wr_word((a & 0x3FFFFFFu) / 4, w);
+}
+static uint32_t placed(uint32_t a)
+{
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu]; }
+    if (a >= FILE_PSRAM_END && a < FILE_ROM_END) return rd_word((a - (32u << 20)) / 4);
+    return rd_word((a & 0x3FFFFFFu) / 4);
+}
+// The chips' models against the files, each byte where the bridge's map puts its address. `end`: less what a program
 // changes -- the first megabyte and the saves.
 static long verify(const char *when, bool end)
 {
@@ -354,10 +493,7 @@ static long verify(const char *when, bool end)
         for (size_t i = 0; i < d.size(); i += 4) {
             uint32_t a = slots[k].addr + (uint32_t)i, got, want = be32(d, i);
             if (end && a < (1u << 20)) continue;
-            if (a < FILE_SDRAM_END || a >= FILE_DROP_END) got = rd_word((a & 0x3FFFFFFu) / 4);
-            else {
-                continue;
-            }
+            got = placed(a);
             if (d.size() - i < 4) got &= ~0u << 8 * (4 - (d.size() - i));
             n++;
             if (got != want && bad++ < 8) printf("[verify %s: slot %d's file at bridge %08x: %08x, the file has %08x]\n", when, k, a, got, want);
@@ -508,15 +644,23 @@ int main(int argc, char **argv)
     // into the chip model at once, unless BRIDGE_ALL
     const bool bridge_all = getenv("BRIDGE_ALL") != nullptr, slots_first = getenv("SLOTS_FIRST") != nullptr;
     const bool verify_on = getenv("VERIFY") != nullptr;
+    for (int d = 0; d < 2; d++) for (int c = 0; c < 2; c++) {
+        psm[d][c].resize(1u << 22);
+        for (uint32_t i = 0; i < (1u << 22); i++) psm[d][c][i] = (uint16_t)(i * 2654435761u >> 13 ^ (0xC3A5u << c));   // (never written: not zeros)
+    }
     for (int pass = 0; pass < 2 && !noload; pass++)
         for (int k = 0; k < 8; k++) {
             const std::vector<uint8_t> &d = slots[k].data;
             if (d.empty() || ((k == 0 || k == prog) != (pass == (slots_first ? 1 : 0)))) continue;
             slots[k].size = (uint32_t)d.size();
             size_t len = (d.size() + 3) & ~(size_t)3, direct = 0;
-            if (!bridge_all && slots[k].addr < FILE_SDRAM_END) {
-                direct = len < FILE_SDRAM_END - slots[k].addr ? len : FILE_SDRAM_END - slots[k].addr;
-                for (size_t i = 0; i < direct; i += 4) wr_word((slots[k].addr + (uint32_t)i) / 4, be32(d, i));
+            if (!bridge_all && slots[k].addr < FILE_ROM_END) {
+                direct = len < FILE_ROM_END - slots[k].addr ? len : FILE_ROM_END - slots[k].addr;
+                for (size_t i = 0; i < direct; i += 4) {
+                    const uint32_t a = slots[k].addr + (uint32_t)i;
+                    if (a >= (56u << 20) && a < (64u << 20)) wr_word(a / 4, be32(d, i));   // (56 MiB to 64: the SDRAM's own write first)
+                    place(a, be32(d, i));
+                }
             }
             if (direct < len) br_jobs.push_back({k, true, slots[k].addr + (uint32_t)direct, direct, len - direct});
         }
@@ -727,6 +871,7 @@ int main(int argc, char **argv)
                 }
             }
         }
+        if (sys_edge) psram_step(false);
         chip_step();
         uint16_t v = 0;
         for (int i = 0; i < 8; i++) if (pend_c[i] == cyc) { v = pend_v[i]; pend_c[i] = -1; }
@@ -735,6 +880,7 @@ int main(int argc, char **argv)
         cpu_to(cyc * 2L * TB_CPU_N + TB_CPU_N);
         t->clk_sys2x = 0; if (!sys_edge) t->clk_sys = 0;
         t->eval();
+        if (!sys_edge) psram_step(true);
         if (!sys_edge) {
             static long ut = getenv("UTRACE") ? atol(getenv("UTRACE")) : 0;
             if (ut && t->uart_we) { ut--; printf("[u %ld pc %08x xreq %d xaddr %08x byte %02x]\n", sys, t->cpu_pc, t->x_req, t->x_addr, t->uart_byte); }
@@ -1143,6 +1289,8 @@ int main(int argc, char **argv)
     fflush(stdout);
     printf("\n%ld sys cycles, %ld frames, %ld SDRAM protocol errors; cpu pc %08x cause %08x epc %08x\n",
            sys, frames, errors, t->cpu_pc, t->cpu_cause, t->cpu_epc);
+    printf("PSRAM: %ld asynchronous accesses, %ld register writes%s%s\n", ps.n_async, ps.n_cfg, t->ps_ready ? "" : "; NOT set up",
+           ps.n_burst ? "; bursts too (there should be none)" : "");
     if (const char *so = getenv("SLOTS_OUT"))
         for (int k = 1; k < 8; k++) if (!slots[k].back.empty()) {
             std::string path = std::string(so) + "/slot" + std::to_string(k) + ".bin";

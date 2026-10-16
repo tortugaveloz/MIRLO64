@@ -8,6 +8,8 @@
 //   n64_bus (the geom core + the audio core) -----------|
 //   the Pocket's bridge --------------------------------/
 //
+//   the bridge's port (a ROM's first 32 MiB) -- psram -- psram_phy -- the two PSRAMs
+//
 // The map is MIRLO's (lang/c keeps its addresses):
 //   0x2000_0000  the geom core's ROM (its own), 0x2000_8000 its RAM (the TCM;
 //                the game CPU reads and writes it through the TCM's port B)
@@ -88,6 +90,13 @@ module mirlo_mips #(
     inout  wire   [15:0] sdram_dq,
     output logic         sdram_ras_n,
     output logic         sdram_we_n,
+    // the Pocket's two PSRAMs (rtl/soc/psram.sv)
+    output wire   [21:16] cram0_a, cram1_a,
+    inout  wire   [15:0] cram0_dq, cram1_dq,
+    output wire          cram0_clk, cram1_clk, cram0_adv_n, cram1_adv_n, cram0_cre, cram1_cre,
+    output wire          cram0_ce0_n, cram0_ce1_n, cram1_ce0_n, cram1_ce1_n,
+    output wire          cram0_oe_n, cram1_oe_n, cram0_we_n, cram1_we_n,
+    output wire          cram0_ub_n, cram0_lb_n, cram1_ub_n, cram1_lb_n,
     input  wire          serial_rx,
     output wire          serial_tx,
     // a Game Boy cartridge in the Pocket's slot (gb_cart.sv; MIRLO_GB_CART -- without it: off)
@@ -247,15 +256,20 @@ wire x_si  = !x_addr[30] && x_addr[28:20] == 9'h048;
 wire x_pif = !x_addr[30] && x_addr[28:20] == 9'h1FC && x_addr[10:6] == 5'h1F;
 // MIRLO_PI2: the cartridge's bus as the game CPU's lw / sw reach it (mips_core's PI2W): domain 2, 0x0800_0000..0x0FFF_FFFF (the
 // save: SRAM or FlashRAM; the core leaves its command register, 0x0801_xxxx, to the runtime), and lw of the ROM,
-// 0x1000_0000..0x12FF_FFFF (what of it is in the SDRAM, at 1 MiB) -- KSEG0 or KSEG1, as the MI's. The PI's engine does the
-// access (rcp_mi.sv: between copies) at the SDRAM's word: the ROM's at 1 MiB + the offset, domain 2's at the save's memory
-// (0x0332_0000 + the offset's 17 bits) -- or, with MONITOR.PI2's FlashRAM bit, a read is the status word the runtime keeps at
-// 0x0334_0100 and a write goes nowhere (a command is the runtime's: it traps)
+// 0x1000_0000..0x13FF_FFFF -- KSEG0 or KSEG1, as the MI's. The PI's engine does the access (rcp_mi.sv: between copies): a ROM
+// offset o below 32 MiB at the PSRAM's word ((1 MiB + o) / 4) mod 8 M (io_ps: the word the bridge wrote it to), from 32 MiB at
+// the SDRAM's 1 MiB + o - 32 MiB; domain 2's at the save's memory (0x0332_0000 + the offset's 17 bits) -- or, with
+// MONITOR.PI2's FlashRAM bit, a read is the status word the runtime keeps at 0x0334_0100 and a write goes nowhere (a command is
+// the runtime's: it traps)
 wire x_d2  = !x_addr[30] && x_addr[28:27] == 2'b01;
 wire x_rom = !x_addr[30] && x_addr[28:26] == 3'b100;
+// The runtime's window on the ROM, 0x3000_0000..0x33FF_FFFF (physical, uncached: its byte o is the ROM's, the Pocket's file's at
+// 1 MiB + o): as the cartridge's reads; a word written to the PSRAM's part is written (a check of the chips)
+wire x_psw = x_addr[31:26] == 6'b001100;
+wire io_ps = !x_addr[25];
 logic        d2_flash, io_ack;
 logic [31:0] pa_dat_r /*verilator public_flat_rd*/;      // (the bridge's port's read data: below)
-wire  [23:0] io_adr = x_rom ? {x_addr[25:20] + 6'd1, x_addr[19:2]} : d2_flash ? 24'hCD_0040 : {9'h199, x_addr[16:2]};
+wire  [23:0] io_adr = (x_rom || x_psw) ? {x_addr[25:20] + (x_addr[25] ? 6'd33 : 6'd1), x_addr[19:2]} : d2_flash ? 24'hCD_0040 : {9'h199, x_addr[16:2]};
 logic [31:0] mi_w_rd;
 logic        mi_line, mon_mi;
 logic        vi_line, vi_latch, vi_irq, vi_chg, vi_clr, vi_blk, vi_gm, mon_vi;
@@ -280,7 +294,8 @@ wire         si_op = xs == X_IDLE && x_req && !x_ack && x_si;
 logic [31:0] si_rd, si_q, si_wdata;
 logic        si_irq, si_clr, si_ev, si_done, si_busy, si_req, si_we, si_ack;
 logic [23:0] si_adr;
-logic        d_req, d_we, d_ack;
+logic        d_req, d_we, d_ack, d_ps;
+logic        ps_ready;                                   // (the PSRAMs are set up: below)
 logic [23:0] d_adr;
 logic [3:0]  d_sel;
 logic [31:0] d_wdata;
@@ -313,7 +328,7 @@ always_ff @(posedge clk) begin
         else if (x_ai) begin x_rdata <= ai_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_si) begin x_rdata <= si_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_pif) xs <= X_PIF;
-        else if (x_d2 || x_rom) begin if (x_we && (x_rom || d2_flash)) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
+        else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
         else if (x_grom) begin x_rdata <= 0; x_ack <= 1; end
         else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
         else begin x_rdata <= 0; x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
@@ -388,8 +403,8 @@ mirlo_regs regs (.clk, .rst,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
     .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq,
     .mon_mi, .mi_line, .mi_w_mi(mi_op && x_mi), .mi_w_pi(mi_op && x_pi), .mi_w_we(x_we), .mi_w_a(x_addr[3:2]), .mi_w_wd(x_wdata), .mi_w_rd,
-    .d_req, .d_we, .d_adr, .d_sel, .d_wdata, .d_rdata(pa_dat_r), .d_ack,
-    .io_req(xs == X_CART), .io_we(x_we), .io_adr, .io_wd(x_wdata), .io_ack, .d2_flash,
+    .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata(pa_dat_r), .d_ack,
+    .io_req(xs == X_CART), .io_we(x_we), .io_adr, .io_ps(io_ps && (x_rom || x_psw)), .io_wd(x_wdata), .io_ack, .d2_flash, .ps_ready,
     .mon_vi, .vi_thr, .vi_irq, .vi_chg, .vi_clr,
     .mon_ai, .ai_irq, .ai_clr, .ai_chg, .ai_dac, .ai_step_we, .ai_step_wd,
     .si_irq, .si_clr, .si_ev, .si_done,
@@ -518,29 +533,36 @@ assign p_urgent[2] = 0;
 
 // ---------------------------------------------------------------- the Pocket's bridge
 // Its addresses (apf_wishbone_master's words; 0 is the SDRAM's first), as
-// docs/mips.md has them ("The memory of an N64 game"). A write:
-//   below 49 MiB        to the SDRAM, at that address: the program and the
-//                       ROM's first 48 MiB
-//   49 MiB to 65 MiB    dropped (what a ROM has past its first 48 MiB)
+// docs/mips.md has them ("The memory of an N64 game"), by their megabyte. A
+// write:
+//   below 1 MiB         to the SDRAM, at that address: the program
+//   1 MiB to 33 MiB     to the PSRAM, at the address mod 32 MiB: the ROM's
+//                       first 32 MiB (the die's word: the address's word mod
+//                       8 M, as the PI's engine and the CPU's cartridge reads
+//                       have it -- no adder)
+//   33 MiB to 65 MiB    to the SDRAM at the address less 32 MiB: the rest of
+//                       a ROM of up to 64 MiB, at 1 MiB to 33 MiB
 //   anything else       to the SDRAM, at the address's low 26 bits
 // A read is always the SDRAM's, at the address's low 26 bits: the Pocket
 // reads back the nonvolatile slots, and nothing of a ROM.
-// So no byte of a ROM reaches the SDRAM from 49 MiB to 56, where the
+// So no byte of a ROM reaches the SDRAM from 33 MiB on, where the
 // accessories' and the saves' slots are: data.json has them at their SDRAM
 // address with bit 26 set (113 MiB up), and the Pocket reads a nonvolatile
 // one back from there when the core quits.
 // What is written from 56 MiB to 64 MiB, the RDRAM's place, goes to the SDRAM
-// as well, first. A ROM's bytes do no harm in the RDRAM before the game
-// starts, and the save slots of a data.json older than this map (they were
-// at the RDRAM's top) are read back as they were loaded -- with any game that
-// leaves that memory alone.
-logic        pa_ack, pa_done, br_ps_ack, br_ps_ackd;
-wire  [6:0]  br_mib    = wishbone_master_adr[24:18];
-wire         br_ps     = br_mib[6:4] == 3'd3 ? br_mib[3:0] != 4'd0 : br_mib == 7'h40;      // 0x31 to 0x40
-wire         br_rd     = br_mib[6:3] == 4'b0111;                                           // 0x38 to 0x3F
-wire         br_x      = br_ps && wishbone_master_we;                                      // dropped: it ends the access
-wire         br_ps_req = wishbone_master_cyc && wishbone_master_stb && br_x && (!br_rd || pa_done) &&
-                         !br_ps_ack && !br_ps_ackd;                                        // (the master drops its request after the ack)
+// at that address as well, first. A ROM's bytes do no harm in the RDRAM
+// before the game starts, and the save slots of a data.json older than this
+// map (they were at the RDRAM's top) are read back as they were loaded --
+// with any game that leaves that memory alone.
+logic        pa_ack, pa_done;
+wire  [6:0]  br_mib = wishbone_master_adr[24:18];
+wire         br_lo  = br_mib != 7'd0 && (br_mib[6:5] == 2'd0 || br_mib == 7'd32);       // 1 to 32: the PSRAM's
+wire         br_hi  = br_mib[6:5] == 2'd1 ? br_mib != 7'd32 : br_mib == 7'd64;            // 33 to 64
+wire         br_rd  = br_mib[6:3] == 4'b0111;                                       // 56 to 63: the SDRAM's own write first
+wire         br_two = wishbone_master_we && br_hi && br_rd;
+wire         br_mv  = wishbone_master_we && br_hi && (!br_rd || pa_done);          // to the SDRAM less 32 MiB
+wire  [6:0]  br_mm  = br_mib - 7'd32;
+wire  [29:0] br_adr = br_mv ? {wishbone_master_adr[29:24], br_mm[5:0], wishbone_master_adr[17:0]} : wishbone_master_adr;
 // MIRLO_PI: the PI's engine (rcp_mi.sv) is a second master of this port, while the bridge is idle (pa_dma: its access)
 logic        pa_dma;
 always_ff @(posedge clk) begin
@@ -566,21 +588,44 @@ assign ai_ack = pa_dma && pa_ack && pa_ai;
 assign si_ack = pa_dma && pa_ack && pa_si;
 wire         pd_req = pa_si ? si_req : pa_ai ? ai_req : d_req;
 wire  [23:0] pd_adr = pa_si ? si_adr : pa_ai ? ai_adr : d_adr;
-port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req : wishbone_master_cyc && (!br_x || br_rd) && !pa_done), .stb(pa_dma || wishbone_master_stb), .we(pa_dma ? (pa_si ? si_we : d_we && !pa_ai) : wishbone_master_we),
-    .adr(pa_dma ? {6'd0, pd_adr} : wishbone_master_adr), .dat_w(pa_dma ? (pa_si ? si_wdata : d_wdata) : wishbone_master_dat_w), .sel(pa_dma ? d_sel : wishbone_master_sel),
+// The port is the PSRAM's only master (x_*): the bridge's writes from 1 MiB to 33 MiB, and the engine's reads of a ROM's first
+// 32 MiB (its copies, the game CPU's words)
+logic        pa_x_valid, pa_x_ack;
+logic [31:0] ps_x_rdata;
+wire         pa_x_sel = pa_dma ? !pa_ai && !pa_si && d_ps : wishbone_master_we && br_lo;
+port_apf pa (.clk, .rst, .cyc(pa_dma ? pd_req : wishbone_master_cyc), .stb(pa_dma || wishbone_master_stb), .we(pa_dma ? (pa_si ? si_we : d_we && !pa_ai) : wishbone_master_we),
+    .adr(pa_dma ? {6'd0, pd_adr} : br_adr), .dat_w(pa_dma ? (pa_si ? si_wdata : d_wdata) : wishbone_master_dat_w), .sel(pa_dma ? d_sel : wishbone_master_sel),
     .ack(pa_ack), .dat_r(pa_dat_r),
+    .x_sel(pa_x_sel), .x_valid(pa_x_valid), .x_ack(pa_x_ack), .x_rdata(ps_x_rdata),
     .p_valid(p_valid[4]), .p_we(p_we[4]), .p_addr(p_addr[4]), .p_wdata(p_wdata[4]), .p_be(p_be[4]),
     .p_ready(p_ready[4]), .p_rvalid(p_rvalid[4]), .p_rdata);
 always_ff @(posedge clk) begin
-    br_ps_ack  <= br_ps_req;
-    br_ps_ackd <= br_ps_ack;
-    if (!wishbone_master_cyc) pa_done <= 1'b0;          // (a write to both: the SDRAM has it)
-    else if (pa_ack && !pa_dma && br_x) pa_done <= 1'b1;
+    if (!wishbone_master_cyc) pa_done <= 1'b0;          // (a write to both: the SDRAM's own first)
+    else if (pa_ack && !pa_dma && br_two) pa_done <= 1'b1;
 end
-assign wishbone_master_ack   = br_x ? br_ps_ack : pa_ack && !pa_dma;
+assign wishbone_master_ack   = pa_ack && !pa_dma && (!br_two || pa_done);
 assign wishbone_master_dat_r = pa_dat_r;
 assign wishbone_master_err = 1'b0;
 assign p_urgent[4] = 0;
+
+// ---------------------------------------------------------------- the PSRAMs
+// a word at a time, the bridge's port's accesses: it holds one until its ack; the word is the port's SDRAM word's 23 low bits
+logic [5:0]  ps_o_a;
+logic [31:0] ps_o_dq, ps_i_dq;
+logic        ps_o_dq_oe, ps_o_adv_n, ps_o_oe_n, ps_o_we_n, ps_o_cre;
+logic [1:0]  ps_o_ce_n;
+logic [3:0]  ps_o_bm_n;
+// (the chips' 150 us are the SDRAM's own wait, 200 us)
+psram psram (.clk, .rst, .wake(sdr_ready),
+    .x_valid(pa_x_valid), .x_we(p_we[4]), .x_addr(p_addr[4][22:0]), .x_wdata(p_wdata[4]), .x_be(p_be[4]),
+    .x_ack(pa_x_ack), .x_rdata(ps_x_rdata), .ready(ps_ready),
+    .o_a(ps_o_a), .o_dq(ps_o_dq), .o_dq_oe(ps_o_dq_oe), .o_adv_n(ps_o_adv_n), .o_oe_n(ps_o_oe_n), .o_we_n(ps_o_we_n),
+    .o_cre(ps_o_cre), .o_ce_n(ps_o_ce_n), .o_bm_n(ps_o_bm_n), .i_dq(ps_i_dq));
+psram_phy psphy (.clk, .o_a(ps_o_a), .o_dq(ps_o_dq), .o_dq_oe(ps_o_dq_oe), .o_adv_n(ps_o_adv_n), .o_oe_n(ps_o_oe_n),
+    .o_we_n(ps_o_we_n), .o_cre(ps_o_cre), .o_ce_n(ps_o_ce_n), .o_bm_n(ps_o_bm_n), .i_dq(ps_i_dq),
+    .cram0_a, .cram1_a, .cram0_dq, .cram1_dq, .cram0_clk, .cram1_clk,
+    .cram0_adv_n, .cram1_adv_n, .cram0_cre, .cram1_cre, .cram0_ce0_n, .cram0_ce1_n, .cram1_ce0_n, .cram1_ce1_n,
+    .cram0_oe_n, .cram1_oe_n, .cram0_we_n, .cram1_we_n, .cram0_ub_n, .cram0_lb_n, .cram1_ub_n, .cram1_lb_n);
 
 // ---------------------------------------------------------------- the VI (MIRLO_VI: rcp_vi.sv)
 // With MONITOR.CTL's VI bit the scan-out's base, gamma and black are the VI registers'; else the CSRs'

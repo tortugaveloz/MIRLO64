@@ -1,5 +1,5 @@
 /* The runtime's program, n64rt.sys (data slot 3 of the core): it runs the N64 game in slot 0, a .z64 ROM as it is. The Pocket
- * loads this file at 0 and the ROM at 1 MiB (N64RT_ROM_FILE_OFF), untouched.
+ * loads this file at 0 and the ROM at 1 MiB (N64RT_ROM_FILE_OFF: its first 32 MiB go to the PSRAM), untouched.
  *
  * The game runs its own libultra (N64RT_OWN), so nothing but the ROM is needed, and nothing of any game is in this program or
  * in the runtime: no table, no row, no patch, no address. What IPL3 knows comes from the ROM image -- the CIC from the boot
@@ -7,10 +7,11 @@
  * Expansion Pak: 8 MiB, which a game reads from osMemSize and uses as it finds), the core takes the game's TLB instructions
  * and its TLB exceptions itself, and the save's kind is what the game does (n64rt_io.c). Build: lang/n64rt/Makefile. */
 #include <stdio.h>
+#include <system.h>
 #include <generated/csr.h>
 #include "n64rt.h"
 
-#define ROM ((const volatile u32 *)(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF))
+#define ROM ((const volatile u32 *)(uintptr_t)N64RT_ROM_WIN)      /* (the file at 1 MiB, through the core's window on the ROM) */
 #ifndef GAME_MEM
 #define GAME_MEM 0x800000u              /* (the console has the Expansion Pak: a valid machine for every game) */
 #endif
@@ -68,9 +69,14 @@ int main(void)
     u32 size = apf_bridge_file_size_read();
     printf("\nMirlo's N64 loader: a file of %lu bytes in slot 0\n", (unsigned long)size);
     /* a small file that is no ROM: a program linked to run where it is (a
-     * test of the core's: lang/mips/test, its memory from 1 MiB) */
+     * test of the core's: lang/mips/test, its memory from 1 MiB) -- copied
+     * there, to the SDRAM, from the PSRAM the Pocket wrote it to */
+    while ((monitor_id_read() & 0x180u) != 0x180u) ;          /* (the PSRAM set up: the window answers) */
     if (size >= 64u && size < 0x100000u && ROM[0] != 0x80371240u) {
         printf("loader: a program of %lu bytes at 1 MiB\n", (unsigned long)size);
+        volatile u32 *to = (volatile u32 *)(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF);
+        for (u32 i = 0; i < (size + 3u) / 4u; i++) to[i] = ROM[i];
+        flush_cpu_dcache(); flush_cpu_icache();
         ((void (*)(void))(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF))();
     }
     if (size < 0x101000u || ROM[0] != 0x80371240u)

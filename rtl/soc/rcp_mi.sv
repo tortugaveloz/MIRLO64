@@ -28,11 +28,17 @@
 // one word more), and of any length in bytes (PILEN [23:22]: the bytes of the last word, 0 a whole one; its byte enables).
 // It also does the game CPU's word accesses to the cartridge's bus (mirlo_mips.sv's X_CART: io_*), one at a time
 // between copies -- a read waits for the copy under way to end, as libultra's osPiReadIo waits for the PI.
+// ROM64 (with PI2; docs/mips.md "The ROM"): a ROM's first 32 MiB are in the PSRAM, at the Pocket's bridge address mod 32 MiB
+// -- the SDRAM word the ROM's word would have at 1 MiB, its 23 low bits. PISRC bit 25 says the copy's source is there (src's
+// 23 low bits: the PSRAM's word; a copy that would start there and end in the SDRAM is the runtime's), and io_ps that a CPU
+// read is (io_adr's 23 low bits); d_ps marks such a read for mirlo_mips.sv, which does it at the PSRAM in place of the
+// SDRAM. Every write is the SDRAM's.
 `default_nettype none
 
 module rcp_mi #(
     parameter bit PI = 0,
-    parameter bit PI2 = 0
+    parameter bit PI2 = 0,
+    parameter bit ROM64 = 0
 ) (
     input  wire         clk, rst,
     input  wire         sp_lvl, vi_pulse, dp_pulse,
@@ -43,7 +49,7 @@ module rcp_mi #(
     input  wire         raise_we, clr_we,
     input  wire  [5:0]  csr_bits,
     input  wire         dst_we, src_we, len_we,
-    input  wire  [24:0] csr_wd,
+    input  wire  [25:0] csr_wd,
     output wire  [5:0]  intr, mask_o,
     output wire         pi_busy,
     output wire  [20:0] pi_cnt,
@@ -56,6 +62,7 @@ module rcp_mi #(
     // the engine's access to the SDRAM (via the bridge's port)
     output wire         d_req, d_we,
     output wire  [23:0] d_adr,
+    output wire         d_ps,                   // ROM64: the read is the PSRAM's (d_adr's 23 low bits)
     output wire  [3:0]  d_sel,
     output wire  [31:0] d_wdata,
     input  wire  [31:0] d_rdata,                // (the port's read data: in the cycle of d_ack and after it)
@@ -63,6 +70,7 @@ module rcp_mi #(
     // PI2: the game CPU's access to the cartridge's bus (held until io_ack, which is d_ack's cycle: the data is d_rdata)
     input  wire         io_req, io_we,
     input  wire  [23:0] io_adr,
+    input  wire         io_ps,                  // ROM64: the read is the PSRAM's
     input  wire  [31:0] io_wd,
     output wire         io_ack
 );
@@ -135,12 +143,14 @@ generate if (PI) begin : g_pi
     logic [1:0]  tail;                          // PI2: the last word's bytes (0: all four)
     logic        half, half_n;                  // PI2: the source starts at a word's second half (the next copy's)
     logic [15:0] carry;                         // PI2: the source word's second half, the next word's first
+    logic        ps;                            // ROM64: the source is the PSRAM's
     wire         last = cnt == 21'd1;
     assign pi_busy = st != P_IDLE && st != P_IO;
     assign pi_cnt  = cnt;
     assign d_req   = st != P_IDLE;
     assign d_we    = st == P_WR || (PI2 && st == P_IO && io_we);
     assign d_adr   = st == P_WR ? dst : (PI2 && st == P_IO) ? io_adr : src;
+    assign d_ps    = PI2 && ROM64 && (st == P_IO ? io_ps : st != P_WR && ps);
     assign d_sel   = PI2 && st == P_WR && last && tail != 2'd0 ? {1'b1, tail[1], tail == 2'd3, 1'b0} : 4'hF;
     assign d_wdata = (PI2 && st == P_IO) ? io_wd : (PI2 && half) ? {carry, d_rdata[31:16]} : d_rdata;
     assign io_ack  = PI2 && st == P_IO && d_ack;
@@ -150,7 +160,7 @@ generate if (PI) begin : g_pi
         else begin
             if (pi_wr && w_wd[0] && pi_busy) abort <= 1'b1;
             if (dst_we) dst <= {PI2 && csr_wd[23:21] != 3'd0 ? csr_wd[23:21] : 3'b111, csr_wd[20:0]};
-            if (src_we) begin src <= csr_wd[23:0]; half_n <= PI2 && csr_wd[24]; end
+            if (src_we) begin src <= csr_wd[23:0]; half_n <= PI2 && csr_wd[24]; ps <= PI2 && ROM64 && csr_wd[25]; end
             case (st)
             P_IDLE: begin
                 abort <= 1'b0;
@@ -179,7 +189,7 @@ generate if (PI) begin : g_pi
     end
 end else begin : g_nopi
     assign pi_busy = 1'b0; assign pi_cnt = 21'd0;
-    assign d_req = 1'b0; assign d_we = 1'b0; assign d_adr = 24'd0;
+    assign d_req = 1'b0; assign d_we = 1'b0; assign d_adr = 24'd0; assign d_ps = 1'b0;
     assign d_sel = 4'hF; assign d_wdata = 32'd0; assign io_ack = 1'b0;
     assign pi_done = 1'b0;
 end endgenerate

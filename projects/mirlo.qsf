@@ -798,3 +798,28 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # two -- as small as the old reduced set, since the unit's float<->fixed
 # conversion ops went when the triangle stream became fixed point.
 
+# The PSRAMs' pads (rtl/soc/psram.sv): every register at its pad
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram0_dq[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to cram1_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_adv_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_adv_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_cre
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_cre
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ce0_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ce0_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ce1_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ce1_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_oe_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_oe_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_we_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_we_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_ub_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_ub_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_lb_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_lb_n

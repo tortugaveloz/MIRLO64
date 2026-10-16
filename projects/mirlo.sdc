@@ -58,3 +58,9 @@
 # ==============================================================================
 # Set Input Transition
 # ==============================================================================
+
+# ==============================================================================
+# The PSRAMs (rtl/soc/psram.sv: a ROM's first 32 MiB) are driven asynchronously, every pin a register at its pad
+# (projects/mirlo.qsf) held for whole cycles of clk_sys -- 96 ns from the address to the data taken, against the chips'
+# 70 -- and their clock is never started: nothing to constrain.
+# ==============================================================================

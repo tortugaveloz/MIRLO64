@@ -252,7 +252,6 @@ void n64rt_gfx_init(void)
      * ROM put it there to run it), unless it wipes it (below) */
     if (n64rt_game && n64rt_game->rom_size >= 0x1000u) {
         volatile u32 *t = (volatile u32 *)(uintptr_t)N64RT_K1(n64rt_game->mem_size > 0x2000u ? n64rt_game->mem_size - 0x1000u : 0x1000u);
-        const u32 *rom = (const u32 *)(uintptr_t)n64rt_game->rom_sdram;
         u32 keep[0x400];
         /* (the 6103's and the 6106's IPL3 end by filling both memories with
          * 0xFFFFFFFF and writing their osCicId into IMEM's first word: games
@@ -261,7 +260,7 @@ void n64rt_gfx_init(void)
          * code its first task never ends; another, finding anything else,
          * never starts its game) */
         const u32 fill = n64rt_game->cic == 6103u || n64rt_game->cic == 6106u;
-        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = fill ? 0xFFFFFFFFu : k >= 0x10u ? rom[k] : 0u; }
+        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = fill ? 0xFFFFFFFFu : k >= 0x10u ? n64rt_rom_word(4u * k) : 0u; }
         dma_in(0u, N64RT_PHYS(t), 0x1000u);
         if (fill) { t[0] = n64rt_cic_id(n64rt_game->cic); dma_in(0x1000u, N64RT_PHYS(t), 0x1000u); }
         for (u32 k = 0; k < 0x400u; k++) t[k] = keep[k];

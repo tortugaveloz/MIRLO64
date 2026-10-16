@@ -213,8 +213,7 @@ void n64rt_run(const n64rt_game_t *g)
     /* The RDP's hidden-bit plane (layout.h LAYOUT_HID: the coverage's other two bits of each 16-bit word of RDRAM):
      * all ones, as the hardware starts it -- a pixel the RDP has not drawn has the coverage its bit 0 says (7 or 3) */
     for (u32 a = 0; a < 0x00100000u; a += 4) *(volatile u32 *)(uintptr_t)(LAYOUT_HID + a) = 0xFFFFFFFFu;
-    const u32 *rom = (const u32 *)(uintptr_t)g->rom_sdram;
-    for (u32 i = 0; i < g->boot_len / 4u; i++) *rd32(g->boot_vram + 4u * i) = rom[g->boot_rom / 4u + i];
+    for (u32 i = 0; i < g->boot_len / 4u; i++) *rd32(g->boot_vram + 4u * i) = n64rt_rom_word(g->boot_rom + 4u * i);
     /* What IPL3 leaves in the RDRAM's first 0x400 bytes: for a CIC-6103 boot, a copy of its own code, ROM 0x4C0..0x8C0 at 0
      * (the game's boot segment, from 0x400 on, covers the rest). Banjo-Kazooie checks three of those words -- 0x1D8, 0x22C,
      * 0x238 (a lui/lw from 0xA0000000, compared with the ROM's own 0x698, 0x6EC, 0x6F8) -- and when one differs it keeps its
@@ -225,7 +224,7 @@ void n64rt_run(const n64rt_game_t *g)
 #else
     if (g->cic == 6103u && g->rom_size >= 0x8C0u && g->mem_size <= 0x7F0000u - 0x1000u)   /* (a game with the whole 8 MiB has the runtime's structures from 0x200) */
 #endif
-        for (u32 i = 0; i < 0x400u / 4u; i++) *rd32(4u * i) = rom[0x4C0u / 4u + i];
+        for (u32 i = 0; i < 0x400u / 4u; i++) *rd32(4u * i) = n64rt_rom_word(0x4C0u + 4u * i);
     /* A CIC-6106 boot leaves its own second stage at 0 the same way, the 0x2BC bytes of ROM 0x4F0..0x7AC, which are stored
      * enciphered: its first stage copies them word by word, each XORed with the next value of x <- x * 0x0260BCD5 (32 bits),
      * x starting from the CIC's seed, 0x85, as 0x85 * 0x0260BCD5 + 1, and jumps there (the code that writes the boot words
@@ -237,11 +236,11 @@ void n64rt_run(const n64rt_game_t *g)
     if (g->cic == 6106u && g->rom_size >= 0x7ACu && g->mem_size <= 0x7F0000u - 0x1000u)
 #endif
         for (u32 i = 0, x = 0x85u * 0x0260BCD5u + 1u; i < (0x7ACu - 0x4F0u) / 4u; i++, x *= 0x0260BCD5u)
-            *rd32(4u * i) = rom[0x4F0u / 4u + i] ^ x;
+            *rd32(4u * i) = n64rt_rom_word(0x4F0u + 4u * i) ^ x;
     /* What a CIC-6105 IPL3 leaves at 0x2FE1C0: a word of its own code, ROM 0x750 (0xAD170014, the `sw s7, 20(t0)` that stores the
      * boot parameters). Donkey Kong 64 (a 6105 game) checks it right after osInitialize and, finding anything else, spins on it
      * for ever: a black screen. Every 6105 ROM has the same IPL3, so this is the CIC's, whatever the game. */
-    if (g->cic == 6105u && g->rom_size >= 0x1000u) *rd32(0x2FE1C0u) = rom[0x750u / 4u];
+    if (g->cic == 6105u && g->rom_size >= 0x1000u) *rd32(0x2FE1C0u) = n64rt_rom_word(0x750u);
     /* The boot information words, as the real IPL3 leaves them (osTvType from the console's PIF -- see below --, osRomType 0 cartridge, osRomBase, osResetType 0 cold, osVersion 0). osCicId is written by
      * the 6103's IPL3 (`addiu t1, 0x17d7; sw t1, 16(t0)`), the 6105's (0x17d9) and the 6106's (0x17d8, in its enciphered second
      * stage) and by no other we have read (6101, 6102, the PAL 7102: nothing, the word stays 0): n64rt_cic_id. It was the
@@ -418,8 +417,9 @@ static void late_apply(int all)
  * n64rt_boot_rom) or as one game file (tools/make_mirlo_game.py: the port's
  * program and the ROM as block ROM0, the port's Makefile's
  * ROM0@0x100000=<rom.z64>; n64rt_boot_game_file). The ROM is read where
- * that leaves it (layout.h), in the SDRAM: a ROM of up to 48 MiB. Nothing
- * is moved. The port links its boot stack below
+ * that leaves it (layout.h): what the Pocket loaded from 1 MiB to 33 MiB is
+ * in the PSRAM, the rest of it in the SDRAM, where the bridge wrote it -- all
+ * through the core's window, N64RT_ROM_WIN. Nothing is moved. The port links its boot stack below
  * N64RT_ROM_FILE_OFF (--defsym=_fstack=0x400FFFF0). */
 #define FILE_SDRAM 0x40000000u
 static void no_rom(const char *msg) __attribute__((noreturn));
@@ -429,14 +429,25 @@ static void no_rom(const char *msg)
     notice(N64RT_RDRAM_SDRAM, msg);         /* (on the screen too: nothing of the game's is in the RDRAM yet) */
     for (;;) ;
 }
-/* the word the Pocket loaded at an offset from the program's start */
+/* the word the Pocket loaded at an offset from the program's start: below 1 MiB the SDRAM's, from there the window's */
 static u32 file_word(u32 off)
 {
-    return *(const volatile u32 *)(uintptr_t)(FILE_SDRAM + off);
+    if (off < N64RT_ROM_FILE_OFF) return *(const volatile u32 *)(uintptr_t)(FILE_SDRAM + off);
+    return *(const volatile u32 *)(uintptr_t)(N64RT_ROM_WIN + (off - N64RT_ROM_FILE_OFF));
 }
 u32 n64rt_rom_word(u32 off)
 {
-    return *(const volatile u32 *)(uintptr_t)(n64rt_game->rom_sdram + off);
+    return file_word(n64rt_game->rom_sdram - FILE_SDRAM + off);
+}
+void n64rt_rom_copy(void *dst, u32 off, u32 size)
+{
+    u8 *d = dst;
+    u32 w = 0, have = ~0u;
+    for (u32 i = 0; i < size; i++) {
+        u32 a = off + i;
+        if ((a & ~3u) != have) { have = a & ~3u; w = n64rt_rom_word(have); }
+        d[i] = (u8)(w >> (24u - 8u * (a & 3u)));
+    }
 }
 /* what both ways in begin with */
 static void boot_checks(void)
@@ -446,16 +457,36 @@ static void boot_checks(void)
      * run on it, so the Pocket reads back from them what it loaded. */
     if (*(const volatile u32 *)(uintptr_t)(0xBFC00000u + LAYOUT_MARK_OFS) != LAYOUT_MARK)
         no_rom("This program needs a newer Mirlo core, with its data.json: nothing was started. The saves are as they were.");
+    /* (the ROM in the PSRAM and its window: MONITOR.ID bit 7, and the chips set up, bit 8) */
+    while ((monitor_id_read() & 0xFFFF0180u) != 0x4D4F0180u) {
+        if ((monitor_id_read() & 0xFFFF0080u) != 0x4D4F0080u) no_rom("This program needs a newer Mirlo core: nothing was started.");
+    }
 }
 /* the ROM is `size` bytes at `off` of what the Pocket loaded */
 static void rom_at(n64rt_game_t *g, u32 off, u32 size)
 {
-    if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_SDRAM || (off & 3u) || size < 0x1000u)
+    if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_MAX || (off & 3u) || size < 0x1000u)
         no_rom("no ROM at 1 MiB of what the Pocket loaded");
-    if (size > LAYOUT_FILE_SDRAM - off) no_rom("ROM exceeds maximum file size of 48 MiB.");
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
+#ifdef N64RT_DEBUG
+    if (size > N64RT_ROM_PSRAM_MAX) {
+        /* (what a simulation compares with the file: words either side of where the SDRAM's part starts and the last one,
+         * and a copy across it) */
+        const n64rt_game_t *was = n64rt_game;
+        n64rt_game = g;
+        u8 b[16];
+        const u32 t = N64RT_ROM_PSRAM_MAX, at[4] = { t - 4u, t, t + 0x00800000u, size - 4u };
+        n64rt_rom_copy(b, t - 6u, 16);
+        printf("n64rt: a ROM of %lu bytes, from %08lx on in the SDRAM: words", (unsigned long)size, (unsigned long)t);
+        for (int i = 0; i < 4; i++) if (at[i] < size) printf(" %08lx=%08lx", (unsigned long)at[i], (unsigned long)n64rt_rom_word(at[i]));
+        printf("; bytes at %08lx:", (unsigned long)(t - 6u));
+        for (int i = 0; i < 16; i++) printf(" %02x", b[i]);
+        printf("\n");
+        n64rt_game = was;
+    }
+#endif
 }
 
 void n64rt_boot_game_file(n64rt_game_t *g)
@@ -463,7 +494,6 @@ void n64rt_boot_game_file(n64rt_game_t *g)
     boot_checks();
     u32 fsz = apf_bridge_file_size_read();
     if (fsz < 64u) no_rom("no game file");
-    if (fsz > LAYOUT_FILE_SDRAM) no_rom("ROM exceeds maximum file size of 48 MiB.");
     u32 ft[8];
     for (u32 i = 0; i < 8u; i++) ft[i] = file_word(fsz - 32u + 4u * i);
     if (memcmp(&ft[4], "MIRLODATA", 10) != 0 || ft[3] != 1u) no_rom("no game file footer");

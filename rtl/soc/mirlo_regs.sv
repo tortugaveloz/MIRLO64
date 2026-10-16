@@ -114,6 +114,7 @@ module mirlo_regs (
     output wire  [31:0] mi_w_rd,
     output wire         d_req, d_we,                 // the PI engine's access to the SDRAM
     output wire  [23:0] d_adr,
+    output wire         d_ps,                        // the engine's read is the PSRAM's (a 64 MiB ROM's last 16 MiB: rcp_mi.sv)
     output wire  [3:0]  d_sel,
     output wire  [31:0] d_wdata,
     input  wire  [31:0] d_rdata,
@@ -122,9 +123,12 @@ module mirlo_regs (
     // the cartridge's domain 2 is a FlashRAM (its CPU reads are the status word, its writes go nowhere)
     input  wire         io_req, io_we,
     input  wire  [23:0] io_adr,
+    input  wire         io_ps,
     input  wire  [31:0] io_wd,
     output wire         io_ack,
     output logic        d2_flash,
+    // the PSRAMs (psram.sv) are set up -- MONITOR.ID bit 8
+    input  wire         ps_ready,
     // MIRLO_VI: the VI in hardware (rcp_vi.sv; MONITOR.CTL bit 3 takes the scan-out and the MI's VI from it)
     output logic        mon_vi,
     output logic [16:0] vi_thr,
@@ -297,6 +301,9 @@ localparam int VI_PRESENT = MI_PRESENT;
 localparam int AI_PRESENT = MI_PRESENT;
 localparam int SI_PRESENT = MI_PRESENT;
 localparam int PI2_PRESENT = PI_PRESENT;
+// (MONITOR.ID bit 7) a ROM's first 32 MiB in the PSRAM, at the bridge's address mod 32 MiB, the rest in the SDRAM: the engine
+// (PISRC bit 25: the PSRAM's) and the game CPU's reads of the cartridge reach them (rcp_mi.sv, mirlo_mips.sv)
+localparam int ROM64_PRESENT = PI2_PRESENT;
 localparam int MON_PRESENT = 1;
 logic sp_d, tick_d;
 always_ff @(posedge clk) begin
@@ -320,12 +327,12 @@ end
 assign mon_irq = mon_own && ((mon_pend & mon_mask) != 0);
 
 // the MI, and the PI's engine
-rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
+rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT), .ROM64(ROM64_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
     .raise_we(wr && a == R_MONITOR_MIRAISE), .clr_we(wr && a == R_MONITOR_MICLR), .csr_bits(r_wdata[5:0]),
-    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[24:0]),
+    .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[25:0]),
     .intr(mi_intr), .mask_o(mi_mask), .pi_busy, .pi_cnt,
     .w_mi(mi_w_mi), .w_pi(mi_w_pi), .w_we(mi_w_we), .w_a(mi_w_a), .w_wd(mi_w_wd), .w_rd(mi_w_rd), .line(mi_line),
-    .d_req, .d_we, .d_adr, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_wd, .io_ack);
+    .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_ps, .io_wd, .io_ack);
 
 assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's resampler step, rcp_ai.sv)
 assign ai_step_wd = r_wdata[19:0];
@@ -416,7 +423,7 @@ always_ff @(posedge clk) begin
     R_VIDEO_FRAMEBUFFER_ROWWORDS:       r_rdata <= {21'd0, fb_nw};
     R_VIDEO_FRAMEBUFFER_VTG_ENABLE:     r_rdata <= {31'd0, fb_vtg_enable};
     R_VIDEO_FRAMEBUFFER_VTG_MODE:       r_rdata <= {31'd0, fb_mode};
-    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6;
+    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_CTL:                      r_rdata <= {27'd0, mon_ai, mon_vi, mon_mi, mon_rcp, mon_own};
     R_MONITOR_AIRATE:                   r_rdata <= {18'd0, ai_dac};
     R_MONITOR_PI2:                      r_rdata <= {31'd0, d2_flash};

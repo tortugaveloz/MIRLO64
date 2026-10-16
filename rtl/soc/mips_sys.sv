@@ -95,13 +95,15 @@ localparam bit CPU_AIW = 1'b1;
 localparam bit CPU_SIW = 1'b1;
 // MIRLO_PI2: mips_core's PI2W -- the cartridge's bus, domain 2 and the ROM's reads (rcp_mi.sv's PI2: the PI's engine)
 localparam bit CPU_PI2W = CPU_PIW;
+// and the ROM's last 16 MiB (0x1300_0000..: a ROM of up to 64 MiB, mirlo_mips.sv)
+localparam bit CPU_ROM64W = CPU_PI2W;
 `ifndef MIRLO_CPU_IC_LOG2
 `define MIRLO_CPU_IC_LOG2 10
 `endif
 `ifndef MIRLO_CPU_DC_LOG2
 `define MIRLO_CPU_DC_LOG2 10
 `endif
-mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .FAST(CPU_FAST), .FPG(CPU_FPG),
+mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .FAST(CPU_FAST), .FPG(CPU_FPG),
             .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB)) cpu (
     .clk, .rst, .reset_pc(32'hBFC0_0000),
     .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_wrun(s_wrun),

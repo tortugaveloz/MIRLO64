@@ -174,6 +174,8 @@ module mips_core #(
     // MI: and the cartridge's bus (rtl/soc/rcp_mi.sv's PI2: the PI's engine does the access): domain 2, 0x0800_0000..0x0FFF_FFFF
     // but its 0x0801_xxxx (a FlashRAM's command register: the runtime's), and the ROM, 0x1000_0000..0x12FF_FFFF
     parameter bit PI2W = 0,
+    // PI2W: and the ROM's last 16 MiB too, 0x1300_0000..0x13FF_FFFF (a ROM of up to 64 MiB: mirlo_mips.sv)
+    parameter bit ROM64W = 0,
     // the VR4300's 64-bit integer registers and instructions (see above)
     parameter bit W64 = 1,
     parameter bit W64_ALU = 0,
@@ -1020,7 +1022,7 @@ wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e
 wire e_hwx = MI && mon_mi && !e_fexc && !e_misalign && e_ea[31] && !e_ea[30] && (e_c.ld == M_LW || e_c.st == S_SW) &&
              (e_ea[28:20] == 9'h043 || (VIW && e_ea[28:20] == 9'h044) || (AIW && e_ea[28:20] == 9'h045) || (PIW && e_ea[28:20] == 9'h046 && e_ea[19:2] == 18'd4) ||
               (SIW && (e_ea[28:20] == 9'h048 || (e_ea[28:20] == 9'h1FC && e_ea[10:6] == 5'h1F))) ||
-              (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && !(e_ea[25] && e_ea[24])))));
+              (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && (ROM64W || !(e_ea[25] && e_ea[24]))))));
 // (MCTL bit 10, mon_mem4: a console without the Expansion Pak -- the upper 4 MiB of the window are nothing of the game's either,
 // and the monitor answers as the console does: a game that sizes the memory itself finds 4 MiB)
 wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22])) && kseg01(e_ea);   // (a mapped address is the TLB's)

@@ -452,7 +452,7 @@ static s32 pi_copy(u32 dev, void *dram, u32 size, s32 dir)
                   (unsigned long)dev, (unsigned long)size);
         return -1;
     }
-    copy_words(d, (const u8 *)(uintptr_t)(n64rt_game->rom_sdram + off), size);
+    n64rt_rom_copy(d, off, size);                    /* (through the window: the PSRAM's part and the SDRAM's) */
     n64rt_late_poll();
     return 0;
 }
@@ -1208,7 +1208,7 @@ static u64 s_field_t0;
  * trap, VI and DP are set by the hardware's own pulses, and the line is the hardware's. What the runtime raises or
  * clears itself it says through MIRAISE / MICLR; a copy of the cartridge's it does not do itself, the engine does.
  * Without them (a core before this, or this one's MI unset) every access is emulated as it was. */
-static u32 s_mi_hw, s_pi_hw, s_pi_hw_n, s_pi_sw_n, s_pi_half_n;
+static u32 s_mi_hw, s_pi_hw, s_pi_hw_n, s_pi_sw_n, s_pi_half_n, s_pi_ps_n, s_rom64_hw;
 /* The AI in hardware (MIRLO_AI, MONITOR.ID bit 4; rtl/soc/rcp_ai.sv; n64rt_ai_hw_event below): the game's accesses to the AI are
  * real bus accesses -- the queue, the reader and the resampler to the Pocket's FIFO are the hardware's, and AI_STATUS clears the
  * MI's AI bit itself -- and the runtime is woken (MONITOR.PEND bit 3) only when AI_DACRATE is written, to give the resampler
@@ -1239,6 +1239,7 @@ void n64rt_mi_init(void)
     s_ai_hw = (id & 16u) != 0u;
     s_si_hw = (id & 32u) != 0u;
     s_pi2_hw = s_pi_hw && (id & 64u) != 0u;
+    s_rom64_hw = s_pi2_hw && (id & 128u) != 0u;
     if (s_pi2_hw && n64rt_game && n64rt_game->rom_sdram != 0x40100000u)
         n64rt_log("n64rt: the ROM is not at 1 MiB: the game's own reads of it (the PI's in hardware) would be wrong\n");
 }
@@ -1346,8 +1347,8 @@ static void mon_field_log(void)
 {
     if (s_fields % 60u != 0u) return;
     extern u32 n64rt_mon_codes[32], n64rt_mon_epc, n64rt_mon_fast_count(void);
-    n64rt_log("n64rt: MI %s%s, PI DMAs: engine %lu (%lu from a half word), copied %lu; monitor entries on the fast path %lu\n", s_mi_hw ? (s_pi_hw ? "and PI in hardware" : "in hardware") : "emulated",
-              s_vi_hw ? ", VI in hardware" : "", (unsigned long)s_pi_hw_n, (unsigned long)s_pi_half_n, (unsigned long)s_pi_sw_n, (unsigned long)n64rt_mon_fast_count());
+    n64rt_log("n64rt: MI %s%s, PI DMAs: engine %lu (%lu from a half word, %lu from the PSRAM), copied %lu; monitor entries on the fast path %lu\n", s_mi_hw ? (s_pi_hw ? "and PI in hardware" : "in hardware") : "emulated",
+              s_vi_hw ? ", VI in hardware" : "", (unsigned long)s_pi_hw_n, (unsigned long)s_pi_half_n, (unsigned long)s_pi_ps_n, (unsigned long)s_pi_sw_n, (unsigned long)n64rt_mon_fast_count());
     n64rt_log("n64rt: monitor, field %lu: swaps %lu | int %lu sys %lu fpu-ish %lu adel %lu ades %lu tlb %lu ri %lu | MI intr %02lx mask %02lx line %lu sp %lu | game at %08lx\n",
               (unsigned long)s_fields, (unsigned long)n64rt_swaps, (unsigned long)n64rt_mon_codes[31], (unsigned long)n64rt_mon_codes[8], (unsigned long)n64rt_mon_codes[11],
               (unsigned long)n64rt_mon_codes[4], (unsigned long)n64rt_mon_codes[5], (unsigned long)(n64rt_mon_codes[2] + n64rt_mon_codes[3]),
@@ -1563,7 +1564,7 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
     return n <= 126u && n <= 0x800u - (pa & 0x7FFu) ? n : (n + 1u) & ~1u;
 }
 /* A cartridge DMA by the engine, if it can do it (1): words of the SDRAM to words of the SDRAM. Into the RDRAM from the ROM
- * and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
+ * (MONITOR.ID bit 7: its first 32 MiB from the PSRAM, PISRC bit 25) and, with PI2 (MONITOR.ID bit 6), from a cartridge address 2 mod 4,
  * of any length, and from domain 2 (the save's memory; a FlashRAM's array, or its status words); from the RDRAM into
  * domain 2 (an SRAM, a FlashRAM's page buffer). Without PI2 only whole words, word-aligned at both ends, from the ROM. It
  * ends in the PI interrupt, the engine's. The game's D-cache lines over an RDRAM destination go first: the engine writes
@@ -1571,7 +1572,7 @@ static u32 pi_wr_bytes(u32 pa, u32 len)
 static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
 {
     const u32 cpa = dev & 0x1FFFFFFFu, rdram = N64RT_RDRAM_SDRAM + pa;
-    u32 src = 0, dst = 0;
+    u32 src = 0, dst = 0, ps = 0;
     if (size == 0u || (pa & 3u) || pa + size > 0x800000u || (size >> 2) >= (1u << 21) - 1u) goto soft;
     if (cpa >= 0x08000000u && cpa < 0x10000000u) {                   /* domain 2: the save */
         if (!s_pi2_hw) goto soft;
@@ -1582,7 +1583,12 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     } else if (!rd && cpa >= 0x10000000u && cpa < 0x1FC00000u) {    /* the ROM */
         u32 off = cpa - 0x10000000u;
         if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) goto soft;
-        src = n64rt_game->rom_sdram + off;
+        /* (the core's own placement, the ROM at 1 MiB: its first 32 MiB in the PSRAM -- the word the SDRAM's would be, its 23
+         * low bits --, the rest in the SDRAM from 1 MiB; a copy across 32 MiB stays the runtime's) */
+        if (!s_rom64_hw || n64rt_game->rom_sdram != 0x40100000u) goto soft;
+        if (off + size <= N64RT_ROM_PSRAM_MAX) { ps = 1u; src = 0x40100000u + off; }
+        else if (off >= N64RT_ROM_PSRAM_MAX) src = 0x40100000u + (off - N64RT_ROM_PSRAM_MAX);
+        else goto soft;
     } else goto soft;
     if (rd) src = rdram; else dst = rdram;
     if ((src & 1u) || (!s_pi2_hw && ((src | size) & 3u))) goto soft;
@@ -1593,10 +1599,11 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     }
     monitor_pidst_write((dst - 0x40000000u) >> 2);                    /* (an RDRAM word: 0xE0_0000 + its word, which a core without
                                                                        * PI2 takes as its 21 bits) */
-    monitor_pisrc_write((src - 0x40000000u) >> 2 | ((src >> 1) & 1u) << 24);
+    monitor_pisrc_write((((src - 0x40000000u) >> 2) & 0x00FFFFFFu) | ((src >> 1) & 1u) << 24 | ps << 25);
     monitor_pilen_write(s_pi2_hw ? ((size + 3u) >> 2) | (size & 3u) << 22 : size >> 2);
     s_pi_hw_n++;
     if (src & 2u) s_pi_half_n++;
+    s_pi_ps_n += ps;
     return 1;
 soft:
     s_pi_sw_n++;

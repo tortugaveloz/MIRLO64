@@ -241,13 +241,20 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
 /* The usual ways in. The Pocket loaded the program at 0x4000_0000 and the
  * ROM at N64RT_ROM_FILE_OFF from there, as the block ROM0 of a game file
  * that holds both (n64rt_boot_game_file) or as a file of its own, a .z64 as
- * it is, of rom_size bytes (n64rt_boot_rom). Each sets g->rom_sdram and
- * rom_size, then n64rt_run(g); the port fills in the rest of g.
- * The ROM is read where the Pocket's load leaves it, in the SDRAM, and never
- * moved (lang/mips/include/layout.h): a ROM of up to 48 MiB.
- * n64rt_rom_word() reads a word of it. */
+ * it is, of rom_size bytes (n64rt_boot_rom). Each sets g->rom_sdram (the
+ * bridge's place of it, 0x4000_0000 + its offset in the file) and rom_size,
+ * then n64rt_run(g); the port fills in the rest of g.
+ * The ROM is read where the Pocket's load leaves it and never moved
+ * (lang/mips/include/layout.h): its first 32 MiB in the PSRAM, the rest in
+ * the SDRAM (MONITOR.ID bit 7), both through the core's window at
+ * N64RT_ROM_WIN, whose byte o is the file's at 1 MiB + o -- the cartridge's
+ * reads of the ROM, decoded as the game's are. n64rt_rom_word() and
+ * n64rt_rom_copy() read it. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
+#define N64RT_ROM_PSRAM_MAX 0x02000000u    /* the ROM's part in the PSRAM */
+#define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
+void n64rt_rom_copy(void *dst, u32 off, u32 size);
 void n64rt_boot_game_file(n64rt_game_t *g) __attribute__((noreturn));
 
 /* the RDRAM window, as the runtime's native code reaches it */
