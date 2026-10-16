@@ -467,7 +467,6 @@ static void rom_at(n64rt_game_t *g, u32 off, u32 size)
 {
     if (off < N64RT_ROM_FILE_OFF || off >= LAYOUT_FILE_MAX || (off & 3u) || size < 0x1000u)
         no_rom("no ROM at 1 MiB of what the Pocket loaded");
-    if (size > N64RT_ROM_MAX || size > LAYOUT_FILE_MAX - off) no_rom("ROM exceeds maximum file size of 64 MiB.");
     if (file_word(off) != 0x80371240u) no_rom("the ROM is not a .z64 ROM");
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
@@ -495,7 +494,6 @@ void n64rt_boot_game_file(n64rt_game_t *g)
     boot_checks();
     u32 fsz = apf_bridge_file_size_read();
     if (fsz < 64u) no_rom("no game file");
-    if (fsz > LAYOUT_FILE_MAX) no_rom("ROM exceeds maximum file size of 64 MiB.");
     u32 ft[8];
     for (u32 i = 0; i < 8u; i++) ft[i] = file_word(fsz - 32u + 4u * i);
     if (memcmp(&ft[4], "MIRLODATA", 10) != 0 || ft[3] != 1u) no_rom("no game file footer");

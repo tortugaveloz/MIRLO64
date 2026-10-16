@@ -251,7 +251,6 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
  * reads of the ROM, decoded as the game's are. n64rt_rom_word() and
  * n64rt_rom_copy() read it. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
-#define N64RT_ROM_MAX      0x04000000u
 #define N64RT_ROM_PSRAM_MAX 0x02000000u    /* the ROM's part in the PSRAM */
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);

@@ -324,17 +324,17 @@ leaves the UART out).
 The loader then:
 
 1. Reads slot 0's size. The file must start with `0x80371240`; a file that does not is refused with a plain red screen
-   (a byte-swapped ROM is named as such on the UART). A file under 1 MiB that is not a ROM is copied to the SDRAM at 1 MiB and called there, as a program.
+   (a byte-swapped ROM is named as such on the UART). A file under 1 MiB that is not a ROM is copied to the SDRAM at
+   1 MiB and called there, as a program.
 2. Finds the CIC from the CRC-32 of the boot code (ROM `0x40` - `0xFFF`) and the entry point from the header.
-3. Refuses a ROM of more than 64 MiB with a notice on the screen ("ROM exceeds maximum file size of 64 MiB.").
-4. Takes the TV system from the header's destination code.
-5. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
+3. Takes the TV system from the header's destination code.
+4. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
    address, as IPL3 does.
-6. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
-7. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
+5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
+6. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
    runtime takes what the core has from these and from `MONITOR.ID`, not from its own build.
-8. Replaces the dividing 64-bit helpers in the boot segment (below).
-9. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
+7. Replaces the dividing 64-bit helpers in the boot segment (below).
+8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
 10. Turns the pass-through on, sets up the monitor's wake-ups, the VI's window and the AI's default rate, and enters
