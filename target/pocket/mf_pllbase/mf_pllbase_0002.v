@@ -36,7 +36,7 @@ module  mf_pllbase_0002(
 		.operation_mode("normal"),
 		.number_of_clocks(6),
 		// the N64's own figures: 62.5 MHz (the RCP's), its double, a fifth
-		// for the video (12.5 MHz: n64_video's one pixel clock, video_skip for the narrow sizes), and with MIRLO_CPU_CLK=32 the CPU's 93.75
+		// for the video (25 MHz: n64_video's pixel clock -- a woven frame's pixel a clock, any other's two, the second skipped), and with MIRLO_CPU_CLK=32 the CPU's 93.75
 		.output_clock_frequency0("62.500000 MHz"),
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
@@ -46,11 +46,11 @@ module  mf_pllbase_0002(
 		.output_clock_frequency2("125.000000 MHz"),
 		.phase_shift2("4000 ps"),
 		.duty_cycle2(50),
-		.output_clock_frequency3("12.500000 MHz"),
+		.output_clock_frequency3("25.000000 MHz"),
 		.phase_shift3("0 ps"),
 		.duty_cycle3(50),
-		.output_clock_frequency4("12.500000 MHz"),
-		.phase_shift4("20000 ps"),
+		.output_clock_frequency4("25.000000 MHz"),
+		.phase_shift4("10000 ps"),
 		.duty_cycle4(50),
 		.output_clock_frequency5("93.750000 MHz"),
 		.phase_shift5("0 ps"),

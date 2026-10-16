@@ -369,11 +369,9 @@ static long verify(const char *when, bool end)
 }
 
 // VGA=1: every frame the scan-out's pads send -- a pixel on each rising
-// clk_vid with DE high, a row to DE's fall, a frame to vsync's rise -- to
-// dir/vNNNNNN.ppm (one in `every`). The words outside DE are read as the Pocket reads them: the scaler slot after a line's
-// DE, the frame's features at VS's rise ([1] interlaced, [2] odd, [3] last); the fields of an interlaced frame are woven
-// as the Pocket weaves them (the odd field's rows on the odd lines), and a frame closed by its last field goes to
-// dir/wNNNNNN.ppm.
+// clk_vid with DE high and skip low, a row to DE's fall, a frame to vsync's rise -- to
+// dir/vNNNNNN.ppm (one in `every`): 640 x 240, or 640 x 480 for a serrated picture's woven frame. The scaler slot the
+// last line's end said (the word outside DE: 1 for a woven frame) goes in the VGAT log.
 static long g_sys;                                   // (sys cycles, for the bench's own log)
 static void vga_sample(const std::string &dir, long every)
 {
@@ -382,34 +380,15 @@ static void vga_sample(const std::string &dir, long every)
     static int pde, pvs;
     static long nf;
     if (t->vga_de && !t->vga_skip) { row.push_back((uint8_t)t->vga_r); row.push_back((uint8_t)t->vga_g); row.push_back((uint8_t)t->vga_b); }   // (8:8:8)
-    static int slot, feat, feat_n;                   // the slot the last line's end said; this frame's features; the next frame's
-    static std::vector<std::vector<uint8_t>> weave;
+    static int slot;                                 // the slot the last line's end said
     const uint32_t word = (uint32_t)t->vga_r << 16 | (uint32_t)t->vga_g << 8 | t->vga_b;
     if (pde && !t->vga_de && !t->vga_skip) { rows.push_back(row); row.clear(); if ((word & 7u) == 0) slot = (word >> 13) & 0x7FF; }
-    static long outside;                             // pads outside DE that are not 0 (the slot words, the features)
+    static long outside;                             // pads outside DE that are not 0 (the slot words)
     if (!t->vga_de && !t->vga_skip && (t->vga_r | t->vga_g | t->vga_b)) outside++;
     if (!pvs && t->vga_vsync) {
-        feat_n = word & 0xF;
         static const bool vgat = getenv("VGAT") != nullptr;      // VGAT=1: each frame's size, slot and period (sys cycles) in the log
         static long last_sys;
-        if (vgat) { printf("[vga frame %ld: %zu rows, %ld sys cycles since the last; %ld pad words outside DE not 0; slot %d, features %x]\n", nf, rows.size(), g_sys - last_sys, outside, slot, feat); last_sys = g_sys; }
-        if ((feat & 2) && !dir.empty()) {
-            if (weave.size() != 2 * rows.size()) weave.assign(2 * rows.size(), {});
-            for (size_t k = 0; k < rows.size(); k++) weave[2 * k + ((feat >> 2) & 1)] = rows[k];
-            if ((feat & 8) && nf % every <= 1) {
-                size_t ww = 0;
-                for (auto &r : weave) if (r.size() > ww) ww = r.size();
-                ww /= 3;
-                char path[512];
-                snprintf(path, sizeof path, "%s/w%06ld.ppm", dir.c_str(), nf);
-                if (ww) if (FILE *f = fopen(path, "wb")) {
-                    fprintf(f, "P6 %zu %zu 255\n", ww, weave.size());
-                    for (auto &r : weave) { r.resize(3 * ww, 0); fwrite(r.data(), 1, 3 * ww, f); }
-                    fclose(f);
-                }
-            }
-        }
-        feat = feat_n;
+        if (vgat) { printf("[vga frame %ld: %zu rows, %ld sys cycles since the last; %ld pad words outside DE not 0; slot %d]\n", nf, rows.size(), g_sys - last_sys, outside, slot); last_sys = g_sys; }
         size_t w = 0;
         for (auto &r : rows) if (r.size() > w) w = r.size();
         w /= 3;
@@ -588,7 +567,7 @@ int main(int argc, char **argv)
     long max_sys = mcycles * 1000000;
     opts_load();
     time_t t0 = time(nullptr);
-    int vid_phase = 0;                              // clk_vid: sys / 5
+    int vid_phase = 0;                              // clk_vid: sys / 2.5 (25 MHz)
     int pvb = 0;
     long audio_words = 0;
     bool done = false;
@@ -690,8 +669,8 @@ int main(int argc, char **argv)
                 t->cont1_joy = joy[0]; t->cont2_joy = joy[1]; t->cont3_joy = joy[2]; t->cont4_joy = joy[3];
             }
         }
-        {   // clk_vid: its period in clk_sys2x cycles -- 10 (12.5 MHz: sys / 5); VID_DIV2=5 25 MHz (branch hires-b-prog60), 22 the sys / 11 of old
-            static const int vdiv2 = getenv("VID_DIV2") ? atoi(getenv("VID_DIV2")) : 10;
+        {   // clk_vid: its period in clk_sys2x cycles -- 5 (25 MHz: sys / 2.5); VID_DIV2=10 the 12.5 MHz of old
+            static const int vdiv2 = getenv("VID_DIV2") ? atoi(getenv("VID_DIV2")) : 5;
             if (++vid_phase == vdiv2) vid_phase = 0;
             t->clk_vid = vid_phase < (vdiv2 + 1) / 2;
         }
