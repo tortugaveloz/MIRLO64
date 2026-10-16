@@ -3,8 +3,8 @@
 The RDP of MIRLO 64 (`rtl/rdp`) draws the N64's own command stream: what a
 program's microcode, running on the RSP ([rsp.md](rsp.md)), leaves in memory
 for it. It decodes the N64's commands, walks the N64's triangle coefficients,
-keeps the N64's 4 KiB of TMEM and writes a 16-bit colour image and a 16-bit
-depth image in the N64's memory.
+keeps the N64's 4 KiB of TMEM and writes a 16-bit or 8-bit colour image and a
+16-bit depth image in the N64's memory.
 
 Its contract is a C reference model (integer arithmetic only): for the same
 command stream the RTL writes the same memory, byte for byte. The benches in
@@ -407,10 +407,22 @@ alpha compare enable.
 ### The colour image
 
 The colour image is the program's: RGBA5551 in the N64's byte order, two
-pixels a 32-bit word with the left one first. Only 16-bit colour images are
-drawn to: a primitive sent while the colour image has another size is
-dropped. A row must start on a 4-byte boundary (an image 4-aligned, of even
-width).
+pixels a 32-bit word with the left one first. A row must start on a 4-byte
+boundary (an image 4-aligned, of even width).
+
+An 8-bit colour image (SET_COLOR_IMAGE's size 1) has a byte a pixel, at the
+image's address plus y times its width plus x -- what software uses to draw a
+colour-indexed texture, which it then draws with its palette. A pixel's byte is
+the blender's red, not dithered (in copy mode the texel's red, in fill mode the
+fill colour's byte for the address: bits 31:24 at a multiple of 4). The image
+is only written: the pixels read neither it nor a depth image, and no hidden
+coverage goes with it. Its rows must start on a 4-byte boundary too (an image
+4-aligned, its width a multiple of 4). The pixel pipeline's results go through
+the line buffers as a 16-bit image's, the byte in a pixel's colour bits 15:8,
+and the write engine puts each pair of pixels into its half of the memory word
+by byte enables.
+
+A primitive sent while the colour image is a 32-bit one is dropped.
 
 Bit 0 of a pixel is the top bit of its 3-bit coverage. The other two bits,
 the N64's hidden bits, are in a plane of their own:
@@ -464,7 +476,8 @@ A picture 512 wide or more is shown with the filters off.
 
 ## Not implemented, or approximated
 
-* **Colour images** other than 16-bit ones are not drawn to.
+* **Colour images**: 32-bit ones are not drawn to; an 8-bit one is written
+  only (no image read, no depth, no hidden coverage).
 * **Depth**: the memory's dz is kept to its top two bits, as the word has
   room for, and the blender's coverage weight does not use it.
 * **LOD**: none. No detail, sharpen or level selection; the LOD fraction
@@ -502,6 +515,7 @@ switches:
   is not a multiple of 16 makes rows share hidden-plane groups.
 * `TB_CC=1` makes random streams in which the combiner's result reaches
   memory unblended.
+* `TB_C8=1` makes the random stream's colour image an 8-bit one.
 * `TB_SDRAM=1` gives the memory the SDRAM controller's timing (rows, turns
   between reads and writes, refresh); `TB_CPU=<percent>` adds another master.
 * `TB_FAST=1` is a memory that takes every request; `TB_PROF=1` prints the
@@ -510,7 +524,9 @@ switches:
 
 `tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
 at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
-seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with `TB_CC`, and `cc_unit.sh`.
+seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
+(`TB_C8`, at widths 320 and 292 and with `TB_SDRAM`), seeds with `TB_CC`, and
+`cc_unit.sh`.
 A run passes when the bench prints `RTL == model`.
 
 A frame's time is the RSP's and the RDP's together, on one SDRAM with the
