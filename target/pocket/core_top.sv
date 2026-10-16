@@ -275,29 +275,7 @@ module core_top (
   assign port_tran_sd_dir        = 1'b0;  // SD is input and not used
 
   // tie off the rest of the pins we are not using
-  assign cram0_a                 = 'h0;
-  assign cram0_dq                = {16{1'bZ}};
-  assign cram0_clk               = 0;
-  assign cram0_adv_n             = 1;
-  assign cram0_cre               = 0;
-  assign cram0_ce0_n             = 1;
-  assign cram0_ce1_n             = 1;
-  assign cram0_oe_n              = 1;
-  assign cram0_we_n              = 1;
-  assign cram0_ub_n              = 1;
-  assign cram0_lb_n              = 1;
-
-  assign cram1_a                 = 'h0;
-  assign cram1_dq                = {16{1'bZ}};
-  assign cram1_clk               = 0;
-  assign cram1_adv_n             = 1;
-  assign cram1_cre               = 0;
-  assign cram1_ce0_n             = 1;
-  assign cram1_ce1_n             = 1;
-  assign cram1_oe_n              = 1;
-  assign cram1_we_n              = 1;
-  assign cram1_ub_n              = 1;
-  assign cram1_lb_n              = 1;
+  // (the PSRAMs: rtl/soc/psram.sv, the SoC's -- a ROM's first 32 MiB)
 
   // assign dram_a                  = 'h0;
   // assign dram_ba                 = 'h0;
@@ -847,10 +825,10 @@ module core_top (
   // The RAM address the core programmed, as a bridge address (apf_wishbone_master
   // maps bridge 0 to SDRAM 0x4000_0000). A CSR the CPU writes before the
   // request, so it is stable when core_bridge_cmd samples it (clk_74a and
-  // clk_sys are asynchronous groups in core_constraints.sdc). From 49 MiB up
-  // with bit 26 set: there the bridge's plain addresses are a game file's end,
-  // which is not the SDRAM's (rtl/soc/mirlo_mips.sv, the bridge's map).
-  wire ram_data_high = ram_data_address[25:24] == 2'b11 && ram_data_address[23:20] != 4'd0;
+  // clk_sys are asynchronous groups in core_constraints.sdc). From 1 MiB up
+  // with bit 26 set: there the bridge's plain addresses are a ROM's, which is
+  // not at that address in the SDRAM (rtl/soc/mirlo_mips.sv, the bridge's map).
+  wire ram_data_high = ram_data_address[25:20] != 6'd0;
   assign target_dataslot_bridgeaddr = {5'h0, ram_data_high, ram_data_address[25:0]};
 
   // Only the request and its type are synchronised. The slot, offset and length are
@@ -1059,6 +1037,10 @@ module core_top (
       .sdram_dm(dram_dqm),
       .sdram_dq(dram_dq),
       .sdram_ras_n(dram_ras_n),
+      .cram0_a, .cram0_dq, .cram0_clk, .cram0_adv_n, .cram0_cre, .cram0_ce0_n, .cram0_ce1_n,
+      .cram0_oe_n, .cram0_we_n, .cram0_ub_n, .cram0_lb_n,
+      .cram1_a, .cram1_dq, .cram1_clk, .cram1_adv_n, .cram1_cre, .cram1_ce0_n, .cram1_ce1_n,
+      .cram1_oe_n, .cram1_we_n, .cram1_ub_n, .cram1_lb_n,
       .sdram_we_n(dram_we_n)
   );
 

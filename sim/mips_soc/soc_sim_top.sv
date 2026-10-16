@@ -70,9 +70,19 @@ module soc_sim_top (
     input  wire  [29:0] wbm_adr,
     input  wire  [31:0] wbm_dat_w,
     output wire         wbm_ack,
-    output wire  [31:0] wbm_dat_r
+    output wire  [31:0] wbm_dat_r,
+    // the PSRAMs' pads as the PHY's registers hold them (the chips' model is the bench's)
+    output wire  [5:0]  ps_a,
+    output wire  [31:0] ps_dq_out,
+    output wire         ps_dq_oe, ps_adv_n, ps_oe_n, ps_we_n, ps_cre, ps_clk_en,
+    output wire  [1:0]  ps_ce_n,
+    output wire  [3:0]  ps_bm_n,
+    input  wire  [31:0] ps_dq_in,
+    output wire         ps_ready
 );
 wire [15:0] dq;
+wire [15:0] c0dq, c1dq;
+wire c0clk, c1clk;
 // the Pocket's cartridge port (MIRLO_GB_CART: a Game Boy cartridge on it, +gbcart=<rom>)
 wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
 wire [15:0] gb_a;
@@ -107,6 +117,10 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .clk_sys, .clk_sys2x, .clk_sys2x_90deg(clk_sys2x), .clk_vid, .reset,
     .clk_cpu,
     .sdram_a, .sdram_ba, .sdram_cas_n, .sdram_cke, .sdram_clock(), .sdram_dm, .sdram_dq(dq), .sdram_ras_n, .sdram_we_n,
+    .cram0_a(), .cram1_a(), .cram0_dq(c0dq), .cram1_dq(c1dq),
+    .cram0_clk(c0clk), .cram1_clk(c1clk), .cram0_adv_n(), .cram1_adv_n(), .cram0_cre(), .cram1_cre(),
+    .cram0_ce0_n(), .cram0_ce1_n(), .cram1_ce0_n(), .cram1_ce1_n(),
+    .cram0_oe_n(), .cram1_oe_n(), .cram0_we_n(), .cram1_we_n(), .cram0_ub_n(), .cram0_lb_n(), .cram1_ub_n(), .cram1_lb_n(),
     .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
     .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
     .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync,
@@ -117,6 +131,13 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .wishbone_master_sel(4'hF), .wishbone_master_stb(wbm_cyc), .wishbone_master_we(wbm_we),
     .wishbone_sel(), .wishbone_stb(), .wishbone_we()
 );
+assign c0dq = soc.ps_o_dq_oe ? 16'bz : ps_dq_in[31:16];
+assign c1dq = soc.ps_o_dq_oe ? 16'bz : ps_dq_in[15:0];
+assign ps_a = soc.ps_o_a;           assign ps_dq_out = soc.ps_o_dq;   assign ps_dq_oe = soc.ps_o_dq_oe;
+assign ps_adv_n = soc.ps_o_adv_n;   assign ps_oe_n = soc.ps_o_oe_n;   assign ps_we_n = soc.ps_o_we_n;
+assign ps_cre = soc.ps_o_cre;       assign ps_clk_en = c0clk & c1clk;       // (the pins: the bench looks at them each quarter it steps in)
+assign ps_ce_n = soc.ps_o_ce_n;     assign ps_bm_n = soc.ps_o_bm_n;
+assign ps_ready = soc.ps_ready;
 assign dq_oe  = soc.phy.oe_reg;
 assign dq_out = soc.phy.out_reg;
 assign dq = dq_oe ? 16'bz : dq_in;

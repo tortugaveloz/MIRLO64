@@ -5,6 +5,7 @@
 # lang/mips/boot and lang/c/geom).
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/sdr_phy.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/sdr_ctrl.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/psram.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/sdr_arb.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/afifo.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/fifo_fwft.sv"]

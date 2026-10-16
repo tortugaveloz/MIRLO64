@@ -20,7 +20,7 @@ soc)
     S="$R/rtl/soc"
     "$VL" --cc --exe --build -j 8 -O3 ${VL_THREADS:+--threads $VL_THREADS} -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN \
         --x-assign fast --x-initial fast -Mdir "${OBJ:-$HERE/obj_soc}" --top-module soc_sim_top $DEFS ${TBC:+-CFLAGS "$TBC"} -I"$S" -I"$R/rtl/vpu" \
-        "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
+        "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/psram.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
         "$S/n64_bus.sv" "$S/mirlo_regs.sv" "$S/rcp_mi.sv" "$S/rcp_vi.sv" "$S/rcp_dpc_view.sv" "$S/rcp_ai.sv" "$S/rcp_si.sv" "$S/n64_ports.sv" "$S/cpu_port.sv" "$S/n64_geom.sv" "$S/n64_uart.sv" "$S/jtag_uart_bridge.v" \
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
         "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" "$R/rtl/mips/mips_lite.sv" "$R/rtl/mips/mips_geom.sv" \

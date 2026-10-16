@@ -116,7 +116,10 @@ end
 endmodule
 
 // ---- the Pocket's bridge (apf_wishbone_master: word addresses from 0x1000_0000;
-// what of them is the SDRAM's: mirlo_mips.sv, the bridge's map)
+// what of them is the SDRAM's: mirlo_mips.sv, the bridge's map). x_sel: the
+// access is the PSRAM's instead (a ROM's first 32 MiB -- the bridge's writes
+// there, the PI engine's reads) -- x_valid until x_ack, a read's data x_rdata
+// in its cycle.
 module port_apf (
     input  wire         clk, rst,
     input  wire         cyc, stb, we,
@@ -125,6 +128,10 @@ module port_apf (
     input  wire  [3:0]  sel,
     output logic        ack,
     output logic [31:0] dat_r,
+    input  wire         x_sel,
+    output wire         x_valid,
+    input  wire         x_ack,
+    input  wire  [31:0] x_rdata,
     output logic        p_valid, p_we,
     output logic [23:0] p_addr,
     output logic [31:0] p_wdata,
@@ -134,7 +141,8 @@ module port_apf (
 );
 typedef enum logic [1:0] { A_IDLE, A_REQ, A_WAIT, A_ACK } ast_t;
 ast_t st;
-assign p_valid = st == A_REQ;
+assign p_valid = st == A_REQ && !x_sel;
+assign x_valid = st == A_REQ && x_sel;
 assign p_we = we;
 assign p_addr = adr[23:0];
 assign p_wdata = dat_w;
@@ -144,7 +152,8 @@ always_ff @(posedge clk) begin
     if (rst) st <= A_IDLE;
     else case (st)
     A_IDLE: if (cyc && stb && !ack) st <= A_REQ;
-    A_REQ:  if (p_ready) begin if (we) begin ack <= 1; st <= A_ACK; end else st <= A_WAIT; end
+    A_REQ:  if (x_sel) begin if (x_ack) begin dat_r <= x_rdata; ack <= 1; st <= A_ACK; end end
+            else if (p_ready) begin if (we) begin ack <= 1; st <= A_ACK; end else st <= A_WAIT; end
     A_WAIT: if (p_rvalid) begin dat_r <= p_rdata; ack <= 1; st <= A_ACK; end
     A_ACK:  st <= A_IDLE;                   // (the master drops its request after the ack)
     endcase

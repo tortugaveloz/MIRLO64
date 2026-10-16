@@ -3,14 +3,17 @@
  * for every game, whatever its ROM's size and the RDRAM it uses:
  *
  *   SDRAM  0 -  1 MiB   the program (the runtime)
- *          1 - 49 MiB   the ROM's first 48 MiB, where the Pocket loads it
+ *          1 - 33 MiB   a ROM's bytes from 32 MiB on (a ROM of more than 32 MiB)
  *         49 - 56 MiB   the accessories and the saves (data.json's slots 1 and 2)
  *         56 - 64 MiB   the N64's RDRAM (mips_core's window)
+ *   PSRAM  0 - 32 MiB   a ROM's first 32 MiB
  *
  * The Pocket's bridge (rtl/soc/mirlo_mips.sv) writes what it is given below
- * 49 MiB to the SDRAM at its address and drops what it is given from 49 MiB
- * to 65 MiB (what a ROM has past its first 48 MiB: the runtime refuses such
- * a ROM). The program is loaded at 0 and the ROM at 1 MiB --
+ * 1 MiB to the SDRAM at its address, what it is given from 1 MiB to 33 MiB to
+ * the PSRAM at the address mod 32 MiB, and from 33 MiB to 65 MiB to the SDRAM
+ * at the address less 32 MiB. The runtime reads the ROM through its window
+ * (N64RT_ROM_WIN, lang/n64rt/n64rt.h), as the cartridge's reads do: its byte
+ * o is the file's at 1 MiB + o. The program is loaded at 0 and the ROM at 1 MiB --
  * as two files, or as a game file with both in it -- so a ROM never reaches
  * the accessories' area: a slot there has, as its address in data.json, its
  * SDRAM address with bit 26 set (LAYOUT_SLOT_BRIDGE), where no ROM is.
@@ -25,11 +28,11 @@
 #ifndef __LAYOUT_H
 #define __LAYOUT_H
 
-#define LAYOUT_MARK         0x4D4C0002      /* "ML", layout 2 */
+#define LAYOUT_MARK         0x4D4C0003      /* "ML", layout 3 (2: the ROM's first 48 MiB in the SDRAM at 1 MiB) */
 #define LAYOUT_MARK_OFS     8
 
-#define LAYOUT_FILE_SDRAM   0x03100000      /* what the Pocket loads below this is in the SDRAM where it loads it; */
-#define LAYOUT_FILE_MAX     0x04100000      /* from it up to this the bridge drops what it is given */
+#define LAYOUT_FILE_PSRAM   0x02100000      /* what the Pocket loads from 1 MiB to this is in the PSRAM; */
+#define LAYOUT_FILE_MAX     0x04100000      /* from it up to this, in the SDRAM at the address less 32 MiB */
 #define LAYOUT_SLOT_BRIDGE  0x04000000      /* a slot's address in data.json: its SDRAM offset | this */
 
 /* the accessories, the saves and the save-type database, SDRAM 0x4310_0000 - 0x437F_FFFF. 0x4310_0000 -
