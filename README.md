@@ -22,7 +22,6 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 MIRLO 64 is experimental and not every game works. What is known of v0.1:
 
-* **Interlaced pictures are shown as 640 x 240**: each line is the average of two of the picture's rows.
 * ROMs of up to 48 MiB. A larger one is not started: the core shows "ROM exceeds maximum file size of 48 MiB."
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controller 1 can have a pak.

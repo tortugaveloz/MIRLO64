@@ -12,7 +12,7 @@ static inline void n64rt_vi_fit(unsigned y0, unsigned rows, unsigned ys, unsigne
     if (rows > 1u && y0 < 239u && y0 + rows > 240u) {
         r = 240u - y0;
         s = (ys * (rows - 1u)) / (r - 1u);          /* (the window's last line, line rows - 1, is the line r - 1; rounded down: never a row past the VI's last) */
-        if (s > 0x7FFu) s = 0x7FFu;
+        if (s > 0x800u) s = 0x800u;
     }
     *rows_o = r; *ys_o = s;
 }

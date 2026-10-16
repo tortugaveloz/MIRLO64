@@ -23,9 +23,9 @@ TB_CROPV=3 TB_CROPR=2 run $T 8 1 30 320
 TB_CROPV=5 TB_CROPR=1 run $T 8 0 30 440
 TB_PAL=1 run $T 6 1 30 320; TB_PAL=1 run $T 6 0 30 440
 TB_SEQ=0,1,1,0,0 run $T 2 1 30 320
-# serrated pictures (VI_CTRL SERRATE, hi-res), shown as 640 x 240 progressive, no 480i: each line the average of
-# the picture's rows 2k and 2k + 1 -- libultra's modes (WIDTH 640, Y_SCALE 2.0), a 1280 pitch (WIDTH 1280, Y_SCALE 1.0, 237 lines), a window, the crop, PAL, the TV
-# system changing; a serrated 240-row buffer (640ps), or a pitch that is not a 640-pixel row's multiple (704s), is not a pair of fields: as it is
+# serrated pictures (VI_CTRL SERRATE, hi-res), sent as 480i: a field a frame from the origin the game wrote for it, its slot word and
+# features -- libultra's modes (WIDTH 640, Y_SCALE 2.0), a 1280 pitch (WIDTH 1280, Y_SCALE 1.0, 237 lines), a window, the crop, PAL, the TV
+# system changing; a serrated 240-row buffer (640ps), or another pitch (704s): fields too, both from the buffer's start
 run $T 3 0 30 640s; run $T 4 1 30 1280s; run $T 5 0 30 640ps; run $T 6 0 30 704s
 TB_ROWS=237 TB_Y0=1 run $T 2 0 30 1280s; TB_ROWS=237 TB_Y0=1 run $T 6 0 30 640s
 TB_PX0=100 TB_PW=400 TB_Y0=20 TB_ROWS=150 run $T 8 0 30 640s
@@ -33,7 +33,7 @@ TB_CROPV=5 TB_CROPR=1 run $T 8 0 30 1280s
 TB_PAL=1 run $T 6 0 30 640s; TB_PAL=1 run $T 7 0 30 1280s
 TB_SEQ=0,1,1,0,0 run $T 2 0 30 640s
 # the SDRAM loaded: the scan-out granted 16 words in each round of n + 1 masters (the arbiter's round robin: 6 ports, so 5 is its worst case, 16.7 %); a serrated
-# frame needs 14.7 % (153,600 words in a field), and a pair of fields' reads must not leave a pixel black
+# picture's field reads what a hi-res frame does (76,800 words)
 TB_LOAD=2 run $T 3 0 30 640s; TB_LOAD=5 run $T 3 0 30 1280s; TB_LOAD=5 run $T 4 0 30 640s; TB_LOAD=5 TB_PAL=1 run $T 5 0 30 1280s
 TB_RDY=25 run $T 6 0 30 640s
 # PAL: libultra's mode (V_SYNC 0x271, V_START 0x5F0239: 237 lines from the field's first line, Y_SCALE 1.0) and a wide one: V_START 0x2F0269 = 285 lines from before the

@@ -89,7 +89,8 @@ static u32 s_vi_width_cur = 320, s_vi_gamma_cur;
  * (i X_SCALE) >> 10 at the window's clock i and its row (j Y_SCALE) >> 10 at its line j, the rows WIDTH pixels apart. The VI's
  * registers as the game wrote them (the software VI) or the hardware's (n64rt_vi_hw_event) are kept here, and given
  * to the scan-out with the field, in `vi_width_gamma`. A hi-res picture (WIDTH 512 or more) has X_SCALE 1.0 and 640 of its
- * pixels a line; an interlaced one (Y_SCALE 2.0, or WIDTH 1280 with 1.0: two rows' pitch) its first field's rows. */
+ * pixels a line; an interlaced one (Y_SCALE 2.0, or WIDTH 1280 with 1.0: two rows' pitch) a field's rows, from the origin the
+ * game wrote for the field (rtl/soc/n64_video.sv: 480i). */
 #include "n64rt_vifit.h"
 static u32 s_vi_l = 240;                /* the mode's window: the lines it shows (V_END - V_START) / 2 */
 static u32 s_vi_ys = 0x400;             /* VI_Y_SCALE's step, 2.10 */
@@ -130,7 +131,7 @@ static u32 vi_pic_bytes(void)
     if (w < 2u) w = 320u;
     vi_window(&px0, &pw, &y0, &rows);
     if (!rows) rows = 240u;
-    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
     return w * 2u * (((rows * ys) >> 10) + 2u);
 }
@@ -140,7 +141,7 @@ static void vi_width_gamma(void)
     if (w < 2u || w > 4094u) w = 320u;
     vi_window(&px0, &pw, &y0, &rows);
     const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
-    u32 ys = s_vi_ys > 0x7FFu ? 0x7FFu : s_vi_ys ? s_vi_ys : 0x400u;
+    u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;     /* (2.0 at most: a serrated picture's field, every other row) */
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
     /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word, and one more */
     const u32 nw = ((((pw - 1u) * xs) >> 10) + 8u) / 2u + 1u;
