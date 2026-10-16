@@ -61,7 +61,13 @@ module rdp_top (
     reg [31:0] cimg, zimg, timg;
     reg [10:0] cimg_width, timg_width;
     reg [1:0]  timg_size;
-    reg        cimg_ok;             // the colour image is a 16-bit one (all that is drawn to)
+    reg        cimg_ok;             // the colour image is a 16-bit or an 8-bit one (what is drawn to)
+    // An 8-bit colour image (lang/c/mrdp/mrdp.c wr8): a pixel is a byte at cimg + y * width + x, the blender's red as it
+    // is (copy: the texel's; fill: the fill colour's byte for the address). Written only: the pixels read neither it nor
+    // a depth, and no hidden coverage goes with it. The pixel pipe's results go through the new buffers as for a 16-bit
+    // image, the byte in a pixel's colour bits 15:8; the write engine puts a word's two pixels in their half of the
+    // memory word (rdp_mem wr_c8). The rows must start on a 4-byte boundary, as a 16-bit image's.
+    reg        cimg8;
 
     // The 8 tiles, in two small RAMs (SET_TILE writes the format half,
     // SET_TILESIZE and LOAD_TILE the size half): as flip-flops they were 688
@@ -89,10 +95,10 @@ module rdp_top (
     wire rd_p    = (cyc == 2'd1) ? (other_l[29:28] == 2'd1 || (other_l[29:28] == 2'd0 && rd_mem0))
                                  : other_l[31:30] == 2'd1;
     // (and the memory's coverage: IM_RD, with AA_EN or CVG_X_ALPHA)
-    wire need_mem = cyc[1] ? 1'b0 : (other_l[6] && (other_l[3] || other_l[12])) ? 1'b1
+    wire need_mem = (cyc[1] || cimg8) ? 1'b0 : (other_l[6] && (other_l[3] || other_l[12])) ? 1'b1
                   : !other_l[14] ? rd_p : (cyc == 2'd1) ? (rd_mem0 | rd_mem1) : rd_mem0;
-    wire z_cmp = other_l[4] && !cyc[1];       // (copy and fill mode have no depth)
-    wire z_upd = other_l[5] && !cyc[1];
+    wire z_cmp = other_l[4] && !cyc[1] && !cimg8;       // (copy and fill mode have no depth, nor an 8-bit image)
+    wire z_upd = other_l[5] && !cyc[1] && !cimg8;
 
     // ======================================================================
     // command intake
@@ -259,13 +265,14 @@ module rdp_top (
     reg         set_cur;            // the line-buffer set of the row being drawn
     wire [9:0]  px_x;
     wire [15:0] px_color, px_depth;
+    wire [7:0]  px_r8;
     wire [1:0]  px_hid;
     rdp_pix pix (
         .clk(clk), .rst(rst),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
         .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
-        .prim_dz(prim_dz), .need_mem(need_mem), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
+        .prim_dz(prim_dz), .need_mem(need_mem), .c8(cimg8), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
         .p_shade(p_shade), .p_tex(p_tex), .p_zbuf(p_zbuf), .p_direct(p_direct),
         .t_fmt(ts_fmt), .t_size(ts_sz), .t_pal(ts_pal), .t_line(ts_line), .t_tmem(ts_tmem),
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
@@ -283,7 +290,7 @@ module rdp_top (
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
         .lb_raddr(pix_lb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd),
         .hl_raddr(pix_hl_ra), .hl_rdata(pix_hl_rd), .rwb0(rwb[0]), .rwb1(rwb[1]), .out_hid(px_hid),
-        .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_depth(px_depth),
+        .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_r8(px_r8), .out_depth(px_depth),
         .out_cpass(px_cpass), .out_zpass(px_zpass), .busy(pix_busy));
 
     // ======================================================================
@@ -326,7 +333,7 @@ module rdp_top (
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
-        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z),
+        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set),
         .res_a(res_q[0]), .res_b(res_q[1]),
         .lbr_addr(mem_lb_ra), .lbr_zdata(znew_rd), .lbr_cdata(cnew_rd), .lbr_zmask(zm_rd), .lbr_cmask(cm_rd),
@@ -415,7 +422,7 @@ module rdp_top (
         input [2:0] a;
         attr_on = a < 3'd4 ? fl[2] : a < 3'd7 ? fl[1] : fl[0];
     endfunction
-    reg [31:0] row_off;            // y * width * 2 (color / Z images)
+    reg [31:0] row_off;            // y * width * 2 (color / Z images; an 8-bit colour image's y * width)
     reg [9:0]  xs, xe_m1;
     reg [10:0] xe;
     reg [9:0]  px_cnt;
@@ -607,7 +614,7 @@ module rdp_top (
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
-            timg_size <= 2'd0; cimg_ok <= 1'b0;
+            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0;
         end else begin
             // ---- the engines take their requests
             if (rq_pend && rd_ready && old_hold[rq_set] == 4'd0 && hz_ok) rq_pend <= 1'b0;
@@ -624,7 +631,7 @@ module rdp_top (
                 msk_be <= px_x[0] ? 2'b10 : 2'b01;
                 cm_wd <= {2{px_cpass}};
                 zm_wd <= {2{px_zpass}};
-                cn_wd <= {px_color, px_hid, px_color, px_hid};
+                cn_wd <= cimg8 ? {2{px_r8, 10'd0}} : {px_color, px_hid, px_color, px_hid};
                 zn_wd <= {px_depth, px_depth};
                 nb_be <= px_x[0] ? 2'b01 : 2'b10;       // the even pixel in [31:16]
                 cn_we <= px_cpass;
@@ -676,7 +683,7 @@ module rdp_top (
                 exec_go <= 1'b0;
                 busy_exec <= 1'b1;
                 if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && !cimg_ok) begin
-                    busy_exec <= 1'b0;          // not a 16-bit colour image: nothing drawn
+                    busy_exec <= 1'b0;          // a 32-bit colour image: nothing drawn
                 end else if (is_tri) begin
                     kind_tri <= 1'b1; kind_texrect <= 1'b0; kind_rect <= 1'b0; kind_fillmode <= 1'b0;
                     tflags <= op[2:0];
@@ -755,7 +762,11 @@ module rdp_top (
                     6'h3C: begin cc_hi <= w0[23:0]; cc_lo <= w1; busy_exec <= 1'b0; end
                     6'h3D: begin timg <= w1; timg_width <= {1'b0, w0[9:0]} + 11'd1; timg_size <= w0[20:19]; busy_exec <= 1'b0; end
                     6'h3E: begin zimg <= w1; busy_exec <= 1'b0; end
-                    6'h3F: begin cimg <= w1; cimg_width <= {1'b0, w0[9:0]} + 11'd1; cimg_ok <= w0[20:19] == 2'd2; busy_exec <= 1'b0; end
+                    6'h3F: begin
+                        cimg <= w1; cimg_width <= {1'b0, w0[9:0]} + 11'd1;
+                        cimg_ok <= w0[20:19] == 2'd2 || w0[20:19] == 2'd1; cimg8 <= w0[20:19] == 2'd1;
+                        busy_exec <= 1'b0;
+                    end
                     default: begin unknown_ops <= unknown_ops + 16'd1; busy_exec <= 1'b0; end
                     endcase
                 end
@@ -808,7 +819,7 @@ module rdp_top (
             end
 
             // ---- triangle: edge and attribute values at the first row, and
-            // that row's offset into the images (y * width * 2)
+            // that row's offset into the images (y * width * 2; an 8-bit image's y * width)
             S_TRI_INIT: begin
                 begin : tri_init
                     reg [31:0] k;
@@ -826,7 +837,7 @@ module rdp_top (
                     case (mi)
                         5'd2:  exh <= t_xh + mul_p[31:0];
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
-                        5'd13: row_off <= {mul_p[30:0], 1'b0};
+                        5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
                     endcase
                     mi <= mi + 5'd1;
@@ -866,7 +877,7 @@ module rdp_top (
                     st <= kind_fillmode ? S_FILL : S_SETUP;
                     if (!kind_fillmode) begin
                         set_cur <= !set_cur;
-                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b1; rq_set <= !set_cur;
+                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8; rq_set <= !set_cur;
                         rq_zbase <= zimg + row_off; rq_cbase <= cimg + row_off; rq_x0 <= xa; rq_x1 <= {1'b0, xb};
                         rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
                     end
@@ -890,7 +901,7 @@ module rdp_top (
                     mi <= 5'd0;
                     st <= S_SETUP;
                     set_cur <= !set_cur;
-                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b1; rq_set <= !set_cur;
+                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= cimg + row_off; rq_x0 <= aa_min; rq_x1 <= aa_xe;
                     rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
                 end
@@ -992,7 +1003,7 @@ module rdp_top (
             // its setup, or here when the row had none)
             S_NEXT: if (!kind_tri || es_done) begin
                 y <= y + 12'sd1;
-                row_off <= row_off + {20'd0, cimg_width, 1'b0};
+                row_off <= row_off + (cimg8 ? {21'd0, cimg_width} : {20'd0, cimg_width, 1'b0});
                 exh <= exh + t_dxh;
                 es_done <= 1'b0;
                 st <= S_ROW;
@@ -1001,7 +1012,7 @@ module rdp_top (
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
                 if (mi == 5'd0) begin mul_a <= sx12(y); mul_b <= {21'd0, cimg_width}; end
-                if (mi == 5'd2) begin row_off <= {mul_p[30:0], 1'b0}; st <= S_ROW; end
+                if (mi == 5'd2) begin row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0}; st <= S_ROW; end
                 mi <= mi + 5'd1;
             end
 

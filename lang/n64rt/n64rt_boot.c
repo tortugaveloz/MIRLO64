@@ -226,21 +226,33 @@ void n64rt_run(const n64rt_game_t *g)
     if (g->cic == 6103u && g->rom_size >= 0x8C0u && g->mem_size <= 0x7F0000u - 0x1000u)   /* (a game with the whole 8 MiB has the runtime's structures from 0x200) */
 #endif
         for (u32 i = 0; i < 0x400u / 4u; i++) *rd32(4u * i) = rom[0x4C0u / 4u + i];
+    /* A CIC-6106 boot leaves its own second stage at 0 the same way, the 0x2BC bytes of ROM 0x4F0..0x7AC, which are stored
+     * enciphered: its first stage copies them word by word, each XORed with the next value of x <- x * 0x0260BCD5 (32 bits),
+     * x starting from the CIC's seed, 0x85, as 0x85 * 0x0260BCD5 + 1, and jumps there (the code that writes the boot words
+     * below and fills the RSP's memories). The boot code is the CIC's (rom_cic knows it by its CRC), so these words are the
+     * same for every such ROM. */
+#ifdef N64RT_OWN
+    if (g->cic == 6106u && g->rom_size >= 0x7ACu)
+#else
+    if (g->cic == 6106u && g->rom_size >= 0x7ACu && g->mem_size <= 0x7F0000u - 0x1000u)
+#endif
+        for (u32 i = 0, x = 0x85u * 0x0260BCD5u + 1u; i < (0x7ACu - 0x4F0u) / 4u; i++, x *= 0x0260BCD5u)
+            *rd32(4u * i) = rom[0x4F0u / 4u + i] ^ x;
     /* What a CIC-6105 IPL3 leaves at 0x2FE1C0: a word of its own code, ROM 0x750 (0xAD170014, the `sw s7, 20(t0)` that stores the
      * boot parameters). Donkey Kong 64 (a 6105 game) checks it right after osInitialize and, finding anything else, spins on it
      * for ever: a black screen. Every 6105 ROM has the same IPL3, so this is the CIC's, whatever the game. */
     if (g->cic == 6105u && g->rom_size >= 0x1000u) *rd32(0x2FE1C0u) = rom[0x750u / 4u];
     /* The boot information words, as the real IPL3 leaves them (osTvType from the console's PIF -- see below --, osRomType 0 cartridge, osRomBase, osResetType 0 cold, osVersion 0). osCicId is written by
-     * the 6103's IPL3 (`addiu t1, 0x17d7; sw t1, 16(t0)`) and the 6105's (0x17d9) and by no other we have read (6101, 6102, the PAL
-     * 7102: nothing, the word stays 0; the 6106's IPL3 is not among the ones read -- no ROM of it to disassemble --, 0 here). It
-     * was the decimal CIC number (6101..6106), which no boot code leaves there; libultra itself does not read it.
+     * the 6103's IPL3 (`addiu t1, 0x17d7; sw t1, 16(t0)`), the 6105's (0x17d9) and the 6106's (0x17d8, in its enciphered second
+     * stage) and by no other we have read (6101, 6102, the PAL 7102: nothing, the word stays 0): n64rt_cic_id. It was the
+     * decimal CIC number (6101..6106), which no boot code leaves there; libultra itself does not read it.
      * A game's own libultra (N64RT_OWN) has osTvType from the ROM's region (tv_of_region): the console is the one the cartridge
      * was made for; the VI's timing follows what the game then programs (V_SYNC: rtl/soc/rcp_vi.sv), starting from this. */
     *rd32(BOOT_TV_TYPE) = n64rt_tv;
     *rd32(BOOT_ROM_TYPE) = 0;
     *rd32(BOOT_ROM_BASE) = 0xB0000000u;
     *rd32(BOOT_RESET_TYPE) = 0;
-    *rd32(BOOT_CIC_ID) = g->cic == 6103u ? 0x17D7u : g->cic == 6105u ? 0x17D9u : 0u;
+    *rd32(BOOT_CIC_ID) = n64rt_cic_id(g->cic);
     *rd32(BOOT_VERSION) = 0;
     *rd32(BOOT_MEM_SIZE) = g->mem_size;
 

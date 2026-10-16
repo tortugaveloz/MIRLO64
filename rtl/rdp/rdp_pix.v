@@ -38,6 +38,7 @@ module rdp_pix (
     input  wire [15:0] z_tol,       // the primitive's depth step (a decal's tolerance; the coverage's dz)
     input  wire [15:0] prim_dz,     // SET_PRIM_DEPTH's delta
     input  wire        need_mem,    // the colour span is read (rdp_top): the memory's coverage is there
+    input  wire        c8,          // the colour image is an 8-bit one (rdp_top cimg8): no depth, memory reads 0
     input  wire        p_aa,        // a triangle: Z moves to the first covered sample
     input  wire [31:0] z_dx, z_dy,  // its DzDx, DzDy
     input  wire [31:0] fill,
@@ -91,6 +92,7 @@ module rdp_pix (
     output reg         out_set,
     output reg  [9:0]  out_x,
     output wire [15:0] out_color,      // RGBA5551, the RGB dithered (rdp_dither_add); bit 0 the coverage's top bit
+    output reg  [7:0]  out_r8,         // an 8-bit image's byte: the red, not dithered (fill: the fill colour's byte)
     output reg  [1:0]  out_hid,        // the coverage's two hidden bits
     output reg  [15:0] out_depth,
     output reg         out_cpass,        // write the color
@@ -224,8 +226,8 @@ module rdp_pix (
     wire       point    = other_h[13:12] == 2'd0;
     wire       a_cmp    = other_l[0];
     wire       z_src_p  = other_l[2];
-    wire       z_cmp    = other_l[4] && !cyc[1];    // (copy and fill mode have no depth)
-    wire       z_upd    = other_l[5] && !cyc[1];
+    wire       z_cmp    = other_l[4] && !cyc[1] && !c8;    // (copy and fill mode have no depth, nor an 8-bit image)
+    wire       z_upd    = other_l[5] && !cyc[1] && !c8;
     wire       decal    = other_l[11:10] == 2'd3;
     wire       cvg_x_a  = other_l[12];
     wire       force_bl = other_l[14];
@@ -951,7 +953,7 @@ module rdp_pix (
         c010 <= c0_w;
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
-        mem10 <= un565(x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16]);
+        mem10 <= un565(c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16]);
         memb10 <= x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= hl_rdata[{hk10a, 1'b0} +: 2];
     end
@@ -1356,6 +1358,7 @@ module rdp_pix (
         col_a  <= (cyc == 2'd3) ? (x13b[0] ? fill[0] : fill[16]) : cv313b[2];
         out_hid <= (cyc == 2'd3) ? {2{x13b[0] ? fill[0] : fill[16]}} : cv313b[1:0];
         col_lo <= (cyc == 2'd3) ? 9'd0 : { fin[26:24], fin[18:16], fin[10:8] };
+        out_r8 <= (cyc == 2'd3) ? fill[{~x13b[1:0], 3'd0} +: 8] : fin[31:24];
         col_dt <= dnoise ? nz5[2:0] : dt13;
         col_dg <= dnoise ? nz5[5:3] : dt13;
         col_db <= dnoise ? nz5[8:6] : dt13;

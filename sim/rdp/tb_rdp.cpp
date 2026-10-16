@@ -319,10 +319,12 @@ static void rand_stream(unsigned seed, int n)
 {
     // TB_CW=<w>: the colour image's width (320; Banjo-Kazooie's is 292: rows share hidden-plane groups)
     static const unsigned cw1 = getenv("TB_CW") ? (unsigned)atoi(getenv("TB_CW")) - 1u : 319u;
+    // TB_C8=1: the colour image an 8-bit one (a byte a pixel), as software draws a colour-indexed texture
+    static const unsigned csz = getenv("TB_C8") && atoi(getenv("TB_C8")) ? 1u : 2u;
     grng = seed * 2654435761u + 12345u;
     for (uint32_t i = 0; i < SIZE; i++) rsp_mem[i] = (uint8_t)gr(256);
     cmds.clear();
-    cmd2(0x3F000000u | 2u << 19 | cw1, R_CIMG);
+    cmd2(0x3F000000u | csz << 19 | cw1, R_CIMG);
     cmd2(0x3E000000u, R_ZIMG);
     cmd2(0x2D000000u, 320u << 14 | 240u << 2);
     for (int t = 0; t < 8; t++) rand_tile((unsigned)t);
@@ -351,7 +353,7 @@ static void rand_stream(unsigned seed, int n)
             // triangle), then the colour image again. TB_RAND_CZ=2: the depth image stays
             // the colour image for whatever comes
             static const int cz = getenv("TB_RAND_CZ") ? atoi(getenv("TB_RAND_CZ")) : 0;
-            uint32_t w = 0x3F000000u | (gr(6) ? 2u : gr(4)) << 19 | cw1;
+            uint32_t w = 0x3F000000u | (gr(6) ? csz : gr(4)) << 19 | cw1;
             if (cz == 1 && gr(3) == 0) {
                 cmd2(0x3F000000u | 2u << 19 | cw1, R_ZIMG);
                 cmd2(0x2F000000u | 3u << 20 | gr(1u << 20), gr());
@@ -366,7 +368,7 @@ static void rand_stream(unsigned seed, int n)
         else if (k < 98) cmd2((0x26u + gr(4)) << 24, 0);                                      // syncs
         else cmd2(gr(4) ? (0x2Au + gr(3)) << 24 | gr(0xFFFFFF) : gr(8) << 24 | gr(0xFFFFFF), gr() << 8);   // not drawn: key, convert, 0..7
     }
-    cmd2(0x3F000000u | 2u << 19 | cw1, R_CIMG);
+    cmd2(0x3F000000u | csz << 19 | cw1, R_CIMG);
     cmd2(0x29000000u, 0);
 }
 

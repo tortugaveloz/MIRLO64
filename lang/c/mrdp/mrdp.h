@@ -217,7 +217,7 @@ typedef struct {
     mrdp_tile_t tile[8];
     uint16_t tmem[4][1024];
     uint16_t tmem16[2048];                 /* MRDP_N64: TMEM as the N64's, in 16-bit words (see mrdp.c) */
-    uint8_t cimg_size;                     /* MRDP_N64: the colour image's (2: 16-bit, all that is drawn to) */
+    uint8_t cimg_size;                     /* MRDP_N64: the colour image's (2: 16-bit, 1: 8-bit -- mrdp.c wr8; a 32-bit one is not drawn to) */
     uint8_t timg_size;                     /* MRDP_N64: the texture image's texel size */
 
     /* counters */
