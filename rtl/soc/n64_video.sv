@@ -13,16 +13,15 @@
 //    floor(j Y_SCALE / 1024) (`vi_ys`: 0x400 a row a line, 0x800 every other row: a hi-res picture's even rows),
 //    the rows `vi_width` pixels apart (the VI's WIDTH: a hi-res picture's 1280 is two rows of 640). Nearest pixel and
 //    row, the VI's filters at the framebuffer's own pixels, as the VI has them (below). One path for every size.
-//    A SERRATED hi-res picture (VI_CTRL's SERRATE: 640 x 480 as two fields of 240 rows)
-//    is not sent as 480i, which the Pocket does not take reliably: it is the same 640 x 240 progressive frame, each line the
-//    average of the rows 2k and 2k + 1 of the picture (`vi_avg`; what a CRT mixes of the two fields; docs/resolution.md).
+//    A SERRATED hi-res picture (VI_CTRL's SERRATE: 640 x 480 as two fields of 240 rows) is sent as the VI sends it, 480i:
+//    a field a frame, each read from the origin the game wrote for it (`vi_origin2`) by the same path, and told to the Pocket
+//    as an interlaced field, even or odd by the VI's own field (`vi_fld`; docs/resolution.md).
 //  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new
 //    origin never tears the frame being sent) and the frame's rows are read in
 //    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter gives
 //    the scan-out no priority (a priority scheme was tried on the Pocket and went badly). A row is
 //    `vi_nw` words from the row's first, the next row the one Y_SCALE's accumulator reaches (0, 1 or 2 pitches on;
-//    a hi-res picture reads 320 words a row: 18.4 MB/s as a 320-wide one did; the rows of a serrated one are read in pairs, a
-//    word of the one and the word of the other in turn, and the pair's average is what goes to the FIFO: 36.8 MB/s).
+//    a hi-res picture reads 320 words a row: 18.4 MB/s as a 320-wide one did, a field of a serrated one too).
 //  - the FIFO crosses sys -> vid; each word carries the frame's epoch bit (what is left of a frame is dropped by
 //    the vid side instead of resetting a dual-clock FIFO) and a row-start bit (the vid side starts each row at one,
 //    dropping what the last row left).
@@ -33,8 +32,9 @@
 //    the frame's four lines (a quarter of a millisecond) before the frame
 //    boundary, when the base is latched: the VI interrupt, which a game answers
 //    with its new framebuffer.
-//  - the pads outside DE are 0: the one scaler slot is 0, video.json's 640 x 240, and every picture is progressive (no frame
-//    feature bits, no slot words).
+//  - the pads outside DE: after each line's DE the scaler slot of the next frame (video.json: 0 640 x 240 progressive, 1 640 x 480
+//    for the fields of a serrated picture; rgb[14:13]), during VS the next frame's features (rgb[3:1]: [1] interlaced, [2] odd
+//    field, [3] last field), else 0.
 //
 // The picture's pixels come through a pipeline whose steps are not clocks but source pixels (`adv`): a pixel a
 // step, so that the VI's filters see the framebuffer's pixels and not the output's, however it is scaled. A line's
@@ -56,7 +56,9 @@ module n64_video #(
     input  wire         rst_vid,
     input  wire         enable,         // sys: scan out (else black, no DMA)
     input  wire  [25:0] vi_origin,      // sys: the framebuffer's byte address (ORIGIN_MASK: its span)
-    input  wire         vi_avg,         // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): its rows 2k and 2k + 1 averaged into the line k
+    input  wire  [25:0] vi_origin2,     // sys: the origin the game wrote last: a serrated picture's field is read from it
+    input  wire         vi_il,          // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): sent as 480i
+    input  wire         vi_fld,         // sys: the VI's interlace field of the N64's field under way (1: the odd one)
     output logic        vblank,         // sys
     input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
     input  wire         vi_black,       // sys: H_START 0 (osViBlack): black
@@ -75,7 +77,7 @@ module n64_video #(
     input  wire  [7:0]  vi_y0,          // sys: its first line in the field
     input  wire  [8:0]  vi_rows,        // sys: its lines (0: the whole field)
     input  wire  [10:0] vi_xs,          // sys: the VI's X_SCALE (2.10, at most 1.0)
-    input  wire  [10:0] vi_ys,          // sys: its Y_SCALE (2.10, at most 2.0)
+    input  wire  [11:0] vi_ys,          // sys: its Y_SCALE (2.10, at most 2.0: 0x800, a serrated picture's field)
     input  wire  [10:0] vi_nw,          // sys: the words a row reads (the runtime: the window's last pixel and the priming)
     input  wire         osd_en,         // (the OSD of the 320 x 240 frame is gone: unused)
     input  wire         fps_en,
@@ -109,6 +111,8 @@ module n64_video #(
 // = 250,000 clocks of clk_vid, 1,250,000 of clk_sys, 50.000 Hz exactly. A PAL mode shows 237 lines too. vi_pal is taken at the
 // frame boundary (tv_pal, sys) and the timing changes at the end of that field, so the change never cuts a field short.
 localparam logic [9:0] HRES = 10'd640, HSYNC_S = 10'd656, HSYNC_E = 10'd704;
+// VS rises and falls six clocks before an HS (the Pocket's video interface: no HS in the three clocks after VS)
+localparam logic [9:0] VSYNC_X = 10'd650;
 localparam logic [9:0] SHORT_V = 10'd253;                // the first short line (both systems)
 localparam logic [9:0] HSCAN_N = 10'd789, HSCAN_P = 10'd799;     // the line's last clock (the count is one more)
 localparam int         SHORT_LINES_N = 9, SHORT_LINES_P = 50;
@@ -133,6 +137,8 @@ wire  [9:0] SHORT_PX    = pal_v ? SHORT_PX_P : SHORT_PX_N;
 wire  [9:0] VSCAN       = pal_v ? VSCAN_P : VSCAN_N;
 wire  [9:0] SHORT_END   = SHORT_V + (pal_v ? 10'(SHORT_LINES_P) : 10'(SHORT_LINES_N)) - 10'd1;
 logic       hactive, vactive, hsync, vsync;
+logic       ann, rn;
+
 logic       short_ln;               // the line vcount names (the lines SHORT_V .. SHORT_V + SHORT_LINES - 1) is shorter
 always_ff @(posedge clk_vid) begin
     if (rst_vid) begin
@@ -144,12 +150,14 @@ always_ff @(posedge clk_vid) begin
         if (hcount == HSYNC_S) hsync <= 1;
         if (hcount == HSYNC_E) hsync <= 0;
         if (hcount == (short_ln ? HSCAN - SHORT_PX : HSCAN)) hcount <= 0;
+        if (hcount == VSYNC_X) begin
+            if (vcount == VRES + 10'd1) vsync <= 1;
+            if (vcount == VRES + 10'd9) vsync <= 0;
+        end
         if (hcount == HSYNC_S) begin
             vcount <= vcount + 10'd1;
             if (vcount == 0) vactive <= 1;
             if (vcount == VRES) vactive <= 0;
-            if (vcount == VRES + 10'd1) vsync <= 1;
-            if (vcount == VRES + 10'd9) vsync <= 0;
             if (vcount == VSCAN) begin vcount <= 0; pal_v <= pal_s[1]; end
             if (vcount == SHORT_V - 10'd1) short_ln <= 1;                // (vcount is the line before: it counts up now)
             if (vcount == SHORT_END) short_ln <= 0;
@@ -157,6 +165,20 @@ always_ff @(posedge clk_vid) begin
     end
 end
 wire de = hactive & vactive;
+// 480i: the frame announced (ann: the next frame is a serrated picture's field -- what the frame now shown is, taken at its line 0
+// and held, so that its lines' slot words and its VS say it) and the next frame's field (rn: the VI's, taken at the line 240 --
+// rcp_vi turns it at the line 235, before the VS, and the game's retrace handler answers it with that field's origin before the
+// frame boundary). A frame that is not what was announced (the first of a mode) is sent black, and the next is right.
+logic       ilf_v1, ilf_v2, fld_v1, fld_v2;
+logic       il_f;                    // sys: the frame being read is a serrated picture's field (taken at the frame boundary)
+always_ff @(posedge clk_vid) begin
+    ilf_v1 <= il_f; ilf_v2 <= ilf_v1; fld_v1 <= vi_fld; fld_v2 <= fld_v1;
+    if (rst_vid) begin ann <= 0; rn <= 0; end
+    else begin
+        if (hcount == 0 && vcount == 0) ann <= ilf_v2;
+        if (hcount == 0 && vcount == VRES) rn <= fld_v2;
+    end
+end
 // the frame boundary (vid): where the next frame's base is latched and its read begins, and the vid side's epoch.
 // LATCH_EARLY lines before the last line of the frame -- not vblank's first line: the VI interrupt that the game answers with
 // its new framebuffer (vi_frame, 4 lines before the end of the picture) has all of vblank, less LATCH_EARLY lines, to
@@ -196,17 +218,14 @@ logic [9:0]  issued, got;          // (the reads in flight are their difference)
 // draws it with (the window and the X_SCALE: static for the frame)
 logic        all;
 logic [8:0]  orow, nr, nrm1;
-logic [10:0] nw_f, stride_f, ys_f;
+logic [10:0] nw_f, stride_f;
+logic [11:0] ys_f;
 logic [9:0]  px0_f, pw_f;
 logic [7:0]  y0_f;
 logic [10:0] xs_f;
 logic        nofilt_f;             // a hi-res picture (512 pixels or more a row): the filters are off
-// A serrated picture's rows are the 640-pixel rows of a hi-res picture, 320 words each, whatever the pitch (WIDTH 640 with Y_SCALE 2.0: the pitch is one
-// row, a line steps two; WIDTH 1280 with Y_SCALE 1.0: the pitch is two rows, a line steps one pitch): a line is the pair at row 2k, 2k + 1, 640 words on from the line before
-localparam logic [23:0] PROW = 24'd320, PROW2 = 24'd640, PBACK = 24'd1 - 24'd320;   // (a row's words; two; the step from the B word of a pair to the A word of the next: 1 - 320)
-logic        avg_f;                // a serrated picture: the rows 2k and 2k + 1 of the picture averaged (a pair of reads, A then B, a word of each)
-logic        bsel;                 // the next read is the pair's B word (the row one picture row on)
-logic        rtog;                 // the next word kept of a serrated frame is a pair's B word (they come back in order: A, B, A, B ...)
+logic [1:0]  ann_s, rn_s;          // the frame announced and its field, from vid
+always_ff @(posedge clk) begin ann_s <= {ann_s[0], ann}; rn_s <= {rn_s[0], rn}; end
 logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
 logic [10:0] col;                  // the read's word in its row
 logic [23:0] raddr;                // the next read's word address
@@ -220,9 +239,8 @@ wire         keep = m_rvalid && !fb_sys && drop == 0;
 wire         hires  = |vi_width[11:9];                       // 512 or more: a hi-res picture
 wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 // the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
-wire  [11:0] yan    = {2'b00, yacc} + {1'b0, ys_f};
-// (a serrated picture: two rows of the picture a line, whatever the accumulator)
-wire  [23:0] rowp_n = rowp + (avg_f ? PROW2 : yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
+wire  [11:0] yan    = {2'b00, yacc} + ys_f;                    // (at most 0x3FF + 0x800: never both carries)
+wire  [23:0] rowp_n = rowp + (yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
 // a word as the FIFO takes it: two pixels, the left one in the low half --
 // RGBA5551 as the game's (N64FB: its bit 0 the RDP's coverage, "complete"),
 // or MRDP's RGB565
@@ -242,26 +260,22 @@ wire  [5:0]  tq_n = 6'(tq_w - tq_r);
 wire  [4:0]  tq_h = tq[tq_r];
 wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
-// (the next read's address in its row: one adder -- a pair's B word a row of the picture on, its next A word back, else the next word)
-wire  [23:0] raddr_n = raddr + ((avg_f && !bsel) ? PROW : avg_f ? PBACK : 24'd1);
 always_ff @(posedge clk) begin
     if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
-                   col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; end
+                   col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; il_f <= 0; end
     else begin
         if (fb_sys) begin
             epoch_sys <= ~epoch_sys;
-            running <= enable;
+            // (a frame that is not what its VS announced -- the first field of a serrated picture, the first frame after one --: black)
+            running <= enable && vi_il == ann_s[1] && (!vi_il || vi_fld == rn_s[1]);
+            il_f <= vi_il;
             tv_pal <= vi_pal;
-            raddr <= vi_origin[25:2] & ORIGIN_MASK;   // SDRAM word address
-            rowp  <= vi_origin[25:2] & ORIGIN_MASK;
+            raddr <= (vi_il ? vi_origin2[25:2] : vi_origin[25:2]) & ORIGIN_MASK;   // SDRAM word address
+            rowp  <= (vi_il ? vi_origin2[25:2] : vi_origin[25:2]) & ORIGIN_MASK;
             orow <= 0; all <= vi_nr == 0; yacc <= 0; rs_next <= 1'b1;
             nr <= vi_nr; nrm1 <= vi_nr - 9'd1;
             nw_f <= vi_nw; stride_f <= vi_width[11:1] == 0 ? 11'd160 : 11'(vi_width[11:1]); ys_f <= vi_ys;   // (a program that never set the pitch: 320)
             px0_f <= vi_px0; pw_f <= vi_pw; y0_f <= vi_y0; xs_f <= vi_xs; nofilt_f <= hires;
-            // a serrated picture of the two pitches of its fields: WIDTH 1280 (two rows a pitch: Y_SCALE 1.0) or WIDTH 640 with Y_SCALE 2.0; a
-            // serrated 240-row buffer (WIDTH 640, Y_SCALE 1.0) is not a pair of fields, and another pitch is not a 640-pixel row's multiple:
-            // those are shown as any hi-res picture is, the nearest row
-            avg_f <= vi_avg && (vi_width[11:1] == 11'd640 || (vi_width[11:1] == 11'd320 && vi_ys >= 11'h600)); bsel <= 1'b0;
             hid_f <= vi_aa && !hires && N64FB;
             issued <= 0; got <= 0; col <= 0;
             drop <= issued - got - 10'(m_rvalid);
@@ -270,16 +284,10 @@ always_ff @(posedge clk) begin
             if (m_valid && m_ready && m_hid) begin
                 issued <= issued + 10'd1;
                 h_next <= 1'b0;
-            end else if (m_valid && m_ready && avg_f && !bsel) begin     // a pair's A word: its B word is a row of the picture on
-                issued <= issued + 10'd1;
-                rs_next <= 1'b0;
-                bsel <= 1'b1;
-                raddr <= raddr_n;
             end else if (m_valid && m_ready) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
-                bsel <= 1'b0;
-                raddr <= raddr_n;
+                raddr <= raddr + 24'd1;
                 if (col == nw_f - 11'd1) begin            // a row's last word: the next row
                     col <= 0;
                     raddr <= rowp_n; rowp <= rowp_n; yacc <= yan[9:0];
@@ -304,35 +312,10 @@ always_ff @(posedge clk) begin
     end
     if (m_rvalid && tq_h[3]) hreg <= m_rdata;
 end
-// a serrated picture's pair: the A word is kept (areg, and its row start), the B word's arrival writes the average of the two -- per
-// channel (a + b + 1) >> 1 -- of each pixel, its bit 0 (the RDP's "complete", the 565's blue's) the AND of the two
-wire         is_a = avg_f && !rtog, is_b = avg_f && rtog;
-logic [31:0] areg;
-logic        a_rs;
-always_ff @(posedge clk) begin
-    if (keep && is_a) begin areg <= rd_w; a_rs <= tq_h[4]; end
-    if (rst || fb_sys) rtog <= 1'b0; else if (keep) rtog <= ~rtog;
-end
-function automatic logic [15:0] avg_px(input logic [15:0] a, b);
-    logic [5:0] r, g, bl;
-    if (N64FB) begin                                           // RGBA5551
-        r  = 6'(a[15:11]) + 6'(b[15:11]) + 6'd1;
-        g  = 6'(a[10:6])  + 6'(b[10:6])  + 6'd1;
-        bl = 6'(a[5:1])   + 6'(b[5:1])   + 6'd1;
-        return {r[5:1], g[5:1], bl[5:1], a[0] & b[0]};
-    end else begin                                             // RGB565
-        r  = 6'(a[15:11]) + 6'(b[15:11]) + 6'd1;
-        g  = 6'(a[10:5])  + 6'(b[10:5])  + 6'd1;
-        bl = 6'(a[4:0])   + 6'(b[4:0])   + 6'd1;
-        return {r[5:1], g[5:1], bl[5:1]};
-    end
-endfunction
-// (a registered stage in front of the FIFO: the adders' path, with the epoch of the word's arrival)
-wire        f_we_n = keep && !tq_h[3] && !is_a;
-wire [36:0] f_wd_n = is_b ? {a_rs, 4'd0, avg_px(areg[31:16], rd_w[31:16]), avg_px(areg[15:0], rd_w[15:0])} : {tq_h[4], h_nib, rd_w};
+// (a registered stage in front of the FIFO, with the epoch of the word's arrival)
 logic        f_we, f_ep;
 logic [36:0] f_wd;
-always_ff @(posedge clk) begin f_we <= !rst && f_we_n; f_wd <= f_wd_n; f_ep <= epoch_sys; end
+always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3]; f_wd <= {tq_h[4], h_nib, rd_w}; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
@@ -599,6 +582,13 @@ initial for (int v = 0; v < 256; v++) gtab[v] = gsqrt(v);
 logic [7:0] gq_r, gq_g, gq_b;          // pq through the table (pix_d's clock)
 // outputs, a register behind pq
 logic de_d, hs_d, vs_d, cr_d;
+// 480i's words for the Pocket outside DE: the slot of the next frame after each line's DE (green's bits 6:5, rgb[14:13]; core_top
+// passes them on) and, during VS, the next frame's features on blue's bits 3:1 ([1] interlaced, [2] odd field, [3] last field). Every
+// field is flagged the last: the Pocket then puts it on the lines its odd flag says and keeps the other field's -- the weave (with the
+// last flag on one field of two, tried on a Pocket, it put both fields on the same lines and blanked the others). The VI's odd field (rn)
+// is the picture's odd rows: libultra's second origin is one row on.
+wire  [1:0] slot_v = ann ? 2'd1 : 2'd0;
+wire        ft_odd = ann && rn, ft_last = ann;
 logic [23:0] pix_d;
 wire  [7:0]  o_r = gam_s[1] ? gq_r : pix_d[23:16];
 wire  [7:0]  o_g = gam_s[1] ? gq_g : pix_d[15:8];
@@ -609,8 +599,8 @@ always_ff @(posedge clk_vid) begin
     gq_r <= gtab[pq[23:16]]; gq_g <= gtab[pq[15:8]]; gq_b <= gtab[pq[7:0]];
     vga_de <= de_d; vga_hsync <= hs_d; vga_vsync <= vs_d;
     vga_r <= !de_d || cr_d ? 8'd0 : o_r;
-    vga_g <= !de_d || cr_d ? 8'd0 : o_g;
-    vga_b <= !de_d || cr_d ? 8'd0 : o_b;
+    vga_g <= !de_d ? (vs_d ? 8'd0 : {1'b0, slot_v, 5'd0}) : cr_d ? 8'd0 : o_g;
+    vga_b <= !de_d ? (vs_d ? {4'd0, ft_last, ft_odd, ann, 1'b0} : 8'd0) : cr_d ? 8'd0 : o_b;
     vga_skip <= 1'b0;
 end
 

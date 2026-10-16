@@ -1142,8 +1142,9 @@ module core_top (
 
   assign video_rgb_clock = clk_vid;
   assign video_rgb_clock_90 = clk_vid_90deg;
-  // Outside DE: 0 (the one scaler slot, 0, video.json's 640 x 240; no frame feature bits: every picture is progressive).
-  assign video_rgb = de_delay ? rgb_delay : 24'd0;
+  // Outside DE: the scan-out's words for the Pocket -- after a line's DE the scaler slot of the next frame on rgb[14:13], during VS
+  // the next frame's features on rgb[3:1] (rtl/soc/n64_video.sv) -- else 0.
+  assign video_rgb = de_delay ? rgb_delay : {9'd0, rgb_delay[14:13], 9'd0, rgb_delay[3:1], 1'b0};
   // DE exactly where the (one-cycle-delayed) pixels are: 640 a line, the N64 VI's
   // own line (rtl/soc/n64_video.sv), a pixel a clock of the 12.5 MHz pixel clock.
   assign video_de = de_delay;

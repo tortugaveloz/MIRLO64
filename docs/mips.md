@@ -543,9 +543,10 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   field bit alternates and reads only when VI_STATUS has SERRATE set. A write clears the VI interrupt.
 - **VI_V_INTR**: the interrupt rises once a field when the line counter reaches V_INTR / 2. libultra's value 2 is about
   a millisecond ahead of the latch, which is the time the game's retrace handler has to write VI_ORIGIN.
-- **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. For a hi-res interlaced picture whose two fields'
-  origins are one buffer row apart, a write of the base plus one row leaves the base as it is: the frame is both fields,
-  from the lower origin, and the scan-out shows each pair of its rows as one line.
+- **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. A serrated picture (SERRATE with a hi-res WIDTH) is
+  sent a field at a time, each from the origin the game wrote last: libultra's retrace handler writes the origin of the
+  field VI_CURRENT's bit says, as on the console ([resolution.md](resolution.md)). For a hi-res picture that is not
+  serrated, a write of the base plus one buffer row leaves the base as it is.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
   origin at which a picture of the mode's size fits in the RDRAM.

@@ -7,9 +7,10 @@ interrupt are in [mips.md](mips.md), the filters in [rdp.md](rdp.md) (The scan-o
 
 ## The frame
 
-The Pocket is sent one frame size, 640 x 240, progressive: the single scaler mode of
-`pkg/pocket/Cores/tortuga.Mirlo64/video.json`, shown 4:3. A line is the VI's own, 640 pixel clocks wide; the pixel clock
-is `clk_vid`, 12.5 MHz (the system clock divided by 5), one clock a pixel.
+The Pocket is sent the VI's fields: 640 x 240, progressive, or the fields of a 640 x 480 interlaced picture (below). The
+scaler modes of `pkg/pocket/Cores/tortuga.Mirlo64/video.json` are 640 x 240 (0) and 640 x 480 (1), both shown 4:3. A line
+is the VI's own, 640 pixel clocks wide; the pixel clock is `clk_vid`, 12.5 MHz (the system clock divided by 5), one clock
+a pixel.
 
 | TV system | Clocks a line | Lines a field | A field | Rate |
 |---|---|---|---|---|
@@ -52,9 +53,7 @@ scale, and a 640-wide one with a scale of 1.
 Three cases are not the plain rule:
 
 - **A picture 512 pixels wide or more** is shown with the VI's filters off.
-- **A serrated picture** (the VI's interlaced modes with a 640-wide buffer: 480 rows as two fields of 240) is not sent
-  as two fields: it is the same 640 x 240 progressive frame, and each line is the average, per channel, of the rows
-  `2k` and `2k + 1` of the picture, which is what a television mixes of the two fields.
+- **A serrated picture** is sent as 480i (below).
 - **A window taller than the field** from its first line (some PAL modes stretch a 240-row buffer over more lines than
   the frame has) is fitted to what is left of the field, not cut: it has fewer lines and a proportionally larger step
   through the rows, so its first and last lines show the same rows as the VI's (`lang/n64rt/n64rt_vifit.h`).
@@ -65,6 +64,25 @@ The runtime works the window, the scales and the words to read for a row out of 
 `VI_H_START` 0 (libultra's `osViBlack`) shows black. A frame buffer so close to the end of the RDRAM that the picture
 would run past it shows black too.
 
+## Interlaced pictures
+
+A serrated picture (`VI_STATUS`' SERRATE with a hi-res `VI_WIDTH`: 640 x 480 as two fields of 240 lines) is sent as the
+VI sends it, a field each 59.94 Hz frame, and the Pocket weaves the fields into its 640 x 480 scaler mode.
+
+- **The field** is the VI's: `VI_CURRENT`'s bit 0 alternates every field while SERRATE is set, and libultra's retrace
+  handler answers it by writing that field's `VI_ORIGIN` (the odd field's one buffer row on) and `VI_V_START`. The
+  scan-out reads each field from the origin written last, by the same path as any picture: `VI_Y_SCALE` 2.0 steps two rows
+  a line (or `VI_WIDTH` 1280 with 1.0, a pitch of two rows).
+- **The Pocket is told** by the words its video interface takes outside DE: after each line's DE the scaler mode of the
+  next frame (1 for a field, 0 for a progressive picture), and during VS the next frame's features: interlaced, odd for
+  the VI's odd field, and last on every field. Each field then goes on the lines its odd flag names and the other field's
+  stay: the weave. (With the last flag on one field of two, the Pocket put both fields on the same lines and left the
+  others blank.)
+- **A change** between a progressive picture and a serrated one costs one black frame: the first frame of the new kind
+  is not the one the frame before announced.
+
+The field's timing is the progressive one: 264 lines, VS at the same place in both fields.
+
 ## The core's settings
 
 "Crop Vertical" (none, 8 or 12 lines) blanks that many lines at the top and at the bottom of the picture, and "Crop
@@ -74,5 +92,8 @@ picture's window; the frame and its timing do not change.
 ## Tests
 
 `sim/vi_filter/regress.sh` builds the scan-out alone against a model of it (`tb_vi.cpp`) and checks the pads pixel for
-pixel: the filters, pitches and scales other than 320, windows, the crop settings, serrated pictures, PAL and a change
-of TV system between fields. `sim/vi_filter/vifit_test.c` checks the fitted window's arithmetic.
+pixel: the filters, pitches and scales other than 320, windows, the crop settings, serrated pictures (each field's rows,
+the slot words and the features), PAL and a change of TV system between fields. `sim/vi_filter/vifit_test.c` checks the
+fitted window's arithmetic. `lang/n64rt/test/il_test.c` is a game that drives a serrated picture as libultra does: on the
+SoC in `sim/mips_soc` (`VGA=1 VGAT=1`: each frame's slot and features, and the fields woven as the Pocket weaves them, in
+`w*.ppm`) or on a Pocket, where `ROWCODE` puts each row's number in it as a bar code to read off a capture.
