@@ -18,7 +18,8 @@
 //   clocks a field), TB_SEQ=0,1,1,0,...: vi_pal set to the n-th value at the n-th vsync (the TV system changes at the
 //   end of the field: the fields are checked line by line), TB_DUMP=prefix, TB_V.
 // A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out through the DMA port; a frame is taken off
-// the pads and every pixel compared. Outside DE the pads are 0 but for a serrated picture's words for the Pocket: the slot of
+// the pads and every pixel compared (a serrated picture's field has a black line of DE before its 240). Outside DE the pads are 0
+// but for a serrated picture's words for the Pocket: the slot of
 // the next frame (1, 640 x 480) after each line's DE, and during VS the next frame's features (interlaced and the last,
 // every field; odd for the odd field).
 #include "Vn64_video.h"
@@ -257,7 +258,14 @@ int main(int argc, char **argv)
             vs_at = sys_cyc; hs_n = 0; hs_short = 0; hs_ds.clear();
             POFF = fcur ? ODD : 0;
             if (frames >= 3) {
-                if (rows.size() != 240) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
+                // (a serrated picture's field: a black line of DE first, which the Pocket leaves out, then the 240)
+                if (ser) {
+                    if (rows.size() != 241) { printf("frame %d: %zu rows (a field: 241)\n", frames, rows.size()); errs++; }
+                    else {
+                        for (int v : rows[0]) if (v) { printf("frame %d: the field's first line is not black\n", frames); errs++; break; }
+                        rows.erase(rows.begin());
+                    }
+                } else if (rows.size() != 240) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
                 for (unsigned ys = 0; ys < rows.size() && ys < 240; ys++) {
                     if (rows[ys].size() != 640 * 3) { printf("row %u: %zu px\n", ys, rows[ys].size() / 3); errs++; continue; }
                     // the picture's line j is the screen row Y0 + j; black outside the window, and where the crop options blank it

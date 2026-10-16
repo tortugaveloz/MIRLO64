@@ -80,6 +80,11 @@ VI sends it, a field each 59.94 Hz frame, and the Pocket weaves the fields into 
   others blank.)
 - **A change** between a progressive picture and a serrated one costs one black frame: the first frame of the new kind
   is not the one the frame before announced.
+- **Each field has a line of DE more**, black, before its 240: the Pocket leaves out an interlaced field's first line
+  (without it each field's first row was missing and the frame's last two lines were never written).
+- **On the Dock** the Pocket writes each field over the picture it is showing, and its HDMI output runs at 60.00 Hz
+  against the fields' 59.94: for about 0.75 s every 16.7 s the point where the two meet crosses the picture, and a change
+  of picture there shows torn. Progressive pictures are not affected (the Pocket repeats a frame instead).
 
 The field's timing is the progressive one: 264 lines, VS at the same place in both fields.
 

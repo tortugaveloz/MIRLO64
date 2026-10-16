@@ -372,7 +372,7 @@ static long verify(const char *when, bool end)
 // clk_vid with DE high, a row to DE's fall, a frame to vsync's rise -- to
 // dir/vNNNNNN.ppm (one in `every`). The words outside DE are read as the Pocket reads them: the scaler slot after a line's
 // DE, the frame's features at VS's rise ([1] interlaced, [2] odd, [3] last); the fields of an interlaced frame are woven
-// as the Pocket weaves them (the odd field's rows on the odd lines), and a frame closed by its last field goes to
+// as the Pocket weaves them (the field's first line left out, the odd field's rows on the odd lines), and a frame closed by its last field goes to
 // dir/wNNNNNN.ppm.
 static long g_sys;                                   // (sys cycles, for the bench's own log)
 static void vga_sample(const std::string &dir, long every)
@@ -394,6 +394,7 @@ static void vga_sample(const std::string &dir, long every)
         static long last_sys;
         if (vgat) { printf("[vga frame %ld: %zu rows, %ld sys cycles since the last; %ld pad words outside DE not 0; slot %d, features %x]\n", nf, rows.size(), g_sys - last_sys, outside, slot, feat); last_sys = g_sys; }
         if ((feat & 2) && !dir.empty()) {
+            if (!rows.empty()) rows.erase(rows.begin());          // (the Pocket leaves out a field's first line: the scan-out's black one)
             if (weave.size() != 2 * rows.size()) weave.assign(2 * rows.size(), {});
             for (size_t k = 0; k < rows.size(); k++) weave[2 * k + ((feat >> 2) & 1)] = rows[k];
             if ((feat & 8) && nf % every <= 1) {

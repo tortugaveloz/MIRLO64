@@ -138,6 +138,7 @@ wire  [9:0] VSCAN       = pal_v ? VSCAN_P : VSCAN_N;
 wire  [9:0] SHORT_END   = SHORT_V + (pal_v ? 10'(SHORT_LINES_P) : 10'(SHORT_LINES_N)) - 10'd1;
 logic       hactive, vactive, hsync, vsync;
 logic       ann, rn;
+logic       ilf_v1, ilf_v2, fld_v1, fld_v2;     // (il_f and vi_fld, two flip-flops each: below)
 
 logic       short_ln;               // the line vcount names (the lines SHORT_V .. SHORT_V + SHORT_LINES - 1) is shorter
 always_ff @(posedge clk_vid) begin
@@ -156,7 +157,10 @@ always_ff @(posedge clk_vid) begin
         end
         if (hcount == HSYNC_S) begin
             vcount <= vcount + 10'd1;
-            if (vcount == 0) vactive <= 1;
+            // (a serrated picture's field has a line of DE more, black, before its picture: the Pocket leaves out a field's first line
+            // -- tried with a capture: without it each field's first row was missing and the frame's last two lines were never
+            // written, showing whatever the scaler's memory held)
+            if (vcount == (ilf_v2 ? VSCAN : 10'd0)) vactive <= 1;
             if (vcount == VRES) vactive <= 0;
             if (vcount == VSCAN) begin vcount <= 0; pal_v <= pal_s[1]; end
             if (vcount == SHORT_V - 10'd1) short_ln <= 1;                // (vcount is the line before: it counts up now)
@@ -169,7 +173,6 @@ wire de = hactive & vactive;
 // and held, so that its lines' slot words and its VS say it) and the next frame's field (rn: the VI's, taken at the line 240 --
 // rcp_vi turns it at the line 235, before the VS, and the game's retrace handler answers it with that field's origin before the
 // frame boundary). A frame that is not what was announced (the first of a mode) is sent black, and the next is right.
-logic       ilf_v1, ilf_v2, fld_v1, fld_v2;
 logic       il_f;                    // sys: the frame being read is a serrated picture's field (taken at the frame boundary)
 always_ff @(posedge clk_vid) begin
     ilf_v1 <= il_f; ilf_v2 <= ilf_v1; fld_v1 <= vi_fld; fld_v2 <= fld_v1;

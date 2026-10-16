@@ -1,47 +1,29 @@
 {
   "quartus": "25.1std.0 Build 1129 10/21/2025 SC Lite Edition",
-  "sources": "504a8a508fe8d87ea02a49972a0d99d903b8acc3c0d36363f98efbe403d89ff6",
+  "sources": "17d2502976e3800eebcc6537df5b7cc7506d19cb3d7d613f2d3b675f62d01643",
   "fits": [
     {
-      "seed": 4,
-      "worst_slack_ns": 0.083,
-      "alms": 17193,
+      "seed": 9,
+      "worst_slack_ns": 0.107,
+      "alms": 17153,
       "date": "2026-10-16"
     },
     {
-      "seed": 9,
-      "worst_slack_ns": 0.079,
-      "alms": 17195,
+      "seed": 4,
+      "worst_slack_ns": 0.08,
+      "alms": 17207,
       "date": "2026-10-16"
     },
     {
       "seed": 14,
-      "worst_slack_ns": 0.075,
-      "alms": 17212,
-      "date": "2026-10-16"
-    },
-    {
-      "seed": 10,
-      "worst_slack_ns": 0.07,
-      "alms": 17152,
-      "date": "2026-10-16"
-    },
-    {
-      "seed": 11,
-      "worst_slack_ns": 0.053,
-      "alms": 17184,
+      "worst_slack_ns": 0.042,
+      "alms": 17170,
       "date": "2026-10-16"
     },
     {
       "seed": 5,
-      "worst_slack_ns": 0.045,
-      "alms": 17211,
-      "date": "2026-10-16"
-    },
-    {
-      "seed": 8,
-      "worst_slack_ns": 0.033,
-      "alms": 17200,
+      "worst_slack_ns": 0.026,
+      "alms": 17151,
       "date": "2026-10-16"
     }
   ]
