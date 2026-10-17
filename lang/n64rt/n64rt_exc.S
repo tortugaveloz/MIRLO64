@@ -416,7 +416,7 @@ n64rt_mon_tlbq:
     addiu   $k0, $k0, %lo(n64rt_tlbs)
     addu    $k1, $k1, $k0
     lw      $k1, 4($k1)             # span: the entry maps something
-    bnez    $k1, n64rt_mon_slow
+    bnez    $k1, 22f
     mfc0    $k0, $2                 # EntryLo0
     mfc0    $k1, $3                 # EntryLo1
     or      $k0, $k0, $k1
@@ -452,6 +452,107 @@ n64rt_mon_tlbq:
     sw      $10, 12($13)
     TLB_DONE
 21: TLB_EXIT
+# ... and the tlbwi that maps a pair of 4 KiB pages over an entry that mapped one ($k1: its span): osMapTLB moving a window
+# of the game's to other frames, which a game can do a hundred times a field -- some 550 instructions apiece through the full
+# path, a dozen of them on the way here. n64rt_os.c's tlb_write for that case: the entry in both tables, the old pair's pages
+# out of the CPU's translation tables. (Anything else -- a bigger page, an entry that maps nothing now, the only mapped entry,
+# whose first mapping the full path logs -- is the full path's.)
+22: xori    $k1, $k1, 0x1000
+    bnez    $k1, n64rt_mon_slow     # (the old entry's pages are bigger)
+    mfc0    $k0, $5
+    lui     $k1, 0x01FF
+    ori     $k1, $k1, 0xE000
+    and     $k0, $k0, $k1
+    bnez    $k0, n64rt_mon_slow     # (PageMask: bigger pages now)
+    mfc0    $k0, $2
+    mfc0    $k1, $3
+    or      $k0, $k0, $k1
+    andi    $k0, $k0, 2
+    beqz    $k0, n64rt_mon_slow     # (V of neither: it maps nothing now)
+    lui     $k0, %hi(n64rt_tlb_n)
+    lw      $k0, %lo(n64rt_tlb_n)($k0)
+    xori    $k0, $k0, 1
+    beqz    $k0, n64rt_mon_slow     # (the only entry that maps something: the full path may log it)
+    nop
+    TLB_SAVE
+    .irp    n, 15,24,25
+    sd      $\n, CTXL(8*\n)
+    .endr
+    mfc0    $8, $0
+    andi    $8, $8, 31              # the index
+    mfc0    $9, $2
+    mfc0    $10, $3
+    lui     $11, 0x3FFF
+    ori     $11, $11, 0xFFFF
+    and     $9, $9, $11             # lo0 &= 0x3FFFFFFF
+    and     $10, $10, $11           # lo1
+    mfc0    $12, $10
+    lui     $11, 0xFFFF
+    ori     $11, $11, 0xE0FF
+    and     $12, $12, $11           # hi &= ~0x1F00 (no mask)
+    sll     $14, $8, 4
+    lui     $11, %hi(n64rt_tlbr)
+    addiu   $11, $11, %lo(n64rt_tlbr)
+    addu    $14, $14, $11
+    sw      $0, 0($14)              # n64rt_tlbr[i]: mask 0, hi ^ 0x80000000, lo0, lo1
+    lui     $11, 0x8000
+    xor     $11, $12, $11
+    sw      $11, 4($14)
+    sw      $9, 8($14)
+    sw      $10, 12($14)
+    sll     $14, $8, 4
+    sll     $11, $8, 2
+    addu    $14, $14, $11
+    lui     $11, %hi(n64rt_tlbs)
+    addiu   $11, $11, %lo(n64rt_tlbs)
+    addu    $14, $14, $11           # &n64rt_tlbs[i]
+    lui     $11, %hi(n64rt_tlbram)
+    lw      $11, %lo(n64rt_tlbram)($11)
+    beqz    $11, 23f                # (no translation tables)
+    lw      $15, 0($14)             # the old pair's va: its two pages out of both tables (tr_inval), EntryHi put back
+    mfc0    $24, $10
+    mtc0    $15, $10
+    mtc0    $0, $23                 # (COP0 23: {page, the pair's half << 4, flags}: 0 the data table, 8 TR_FETCH)
+    li      $11, 8
+    mtc0    $11, $23
+    li      $11, 16
+    mtc0    $11, $23
+    li      $11, 24
+    mtc0    $11, $23
+    mtc0    $24, $10
+23: lui     $11, 0xFFFF
+    ori     $11, $11, 0xE000
+    and     $11, $12, $11
+    sw      $11, 0($14)             # va: the pair's
+    li      $11, 0x1000
+    sw      $11, 4($14)             # span
+    and     $11, $9, $10
+    andi    $11, $11, 1             # G of both: asid -1, else EntryHi's
+    addiu   $25, $0, -1
+    bnez    $11, 24f
+    nop
+    andi    $25, $12, 0xFF
+24: sw      $25, 16($14)
+    addiu   $25, $0, -1             # pa[0], pa[1]: the frame, or -1 with V clear
+    andi    $11, $9, 2
+    beqz    $11, 25f
+    move    $13, $25
+    srl     $13, $9, 6
+    sll     $13, $13, 12
+25: sw      $13, 8($14)
+    andi    $11, $10, 2
+    beqz    $11, 26f
+    move    $13, $25
+    srl     $13, $10, 6
+    sll     $13, $13, 12
+26: sw      $13, 12($14)
+    lui     $11, %hi(n64rt_tlb_unmaps)
+    sw      $0, %lo(n64rt_tlb_unmaps)($11)
+    lui     $k0, %hi(n64rt_mon_ctx)
+    .irp    n, 15,24,25
+    ld      $\n, CTXL(8*\n)
+    .endr
+    TLB_DONE
 # tlbp: Index := the entry EntryHi names (VPN2 under the entry's mask, ASID unless global), or P (bit 31) if none
 3:  lui     $k0, %hi(n64rt_vic_n)
     lw      $k0, %lo(n64rt_vic_n)($k0)

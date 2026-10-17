@@ -2,8 +2,9 @@
  * linked for 0x8000_0400 that runs as a game under the loader (OWN) on the SoC in sim/mips_soc. What it does:
  *   1. checks the instructions' RESULTS: tlbwi of entries with known registers, tlbr back (PageMask, EntryHi without the bits under
  *      the mask, G in both EntryLo), tlbp finding each by VPN2 / ASID (a global one under another ASID too) and giving P when none,
- *      an Index of 32 or more writing nothing, tlbwr, an entry replaced, an unmap-all after mapped ones. The tlbr reads and tlbp
- *      answers (not tlbwr's Random) are also folded into one checksum, which every runtime must agree on.
+ *      an Index of 32 or more writing nothing, tlbwr, an entry replaced, an entry moved to other frames (a load through it), an
+ *      unmap-all after mapped ones. The tlbr reads and tlbp answers (not tlbwr's Random) are also folded into one checksum,
+ *      which every runtime must agree on.
  *   2. times them, in the CPU's clocks, from a mark to a mark (sim/mips_soc CPUSTAT=1 prints the cycles between): 32 x ROUNDS tlbr
  *      (the refill handler's walk), tlbp that finds nothing (32 entries looked at), tlbp that finds the last entry, tlbwi that
  *      changes nothing (osUnmapTLBAll's), tlbwi that maps and unmaps a page, tlbwr. The marks are stores to 0x0490_0004, which a
@@ -103,6 +104,15 @@ void game_main(void)
     MTC0(10, 0x70000000u); MTC0(0, 0);
     ((void (*)(void))0x70000000u)();
     check(32, MFC0(0), 9);
+    /* an entry moved to other frames over a mapped one (osMapTLB again, the runtime's fast path for it): a load through each
+     * page reads the new frame -- what the CPU's tables had of the old ones is gone */
+    K1(0x00190000u)[0] = 0x11111111u; K1(0x00191000u)[0] = 0x22222222u;
+    K1(0x00192000u)[0] = 0x33333333u; K1(0x00193000u)[0] = 0x44444444u;
+    write_entry(12, 0, 0x02000000u, LO(0x00190000u, 1), LO(0x00191000u, 1));
+    check(33, *(volatile u32 *)0x02000000u, 0x11111111u); check(34, *(volatile u32 *)0x02001000u, 0x22222222u);
+    write_entry(12, 0, 0x02000000u, LO(0x00192000u, 1), LO(0x00193000u, 1));
+    check(35, *(volatile u32 *)0x02000000u, 0x33333333u); check(36, *(volatile u32 *)0x02001000u, 0x44444444u);
+    MTC0(0, 12); TLBR(); check(37, MFC0(2), LO(0x00192000u, 1)); check(38, MFC0(3), LO(0x00193000u, 1)); check(39, MFC0(10), 0x02000000u);
     unmap_all();
     REPORT[1] = s_sum;
     REPORT[0] = s_fails ? 0xBADBAD00u + s_fails : 0x600D600Du;
