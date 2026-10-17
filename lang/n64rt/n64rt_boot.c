@@ -237,6 +237,18 @@ void n64rt_run(const n64rt_game_t *g)
 #endif
         for (u32 i = 0, x = 0x85u * 0x0260BCD5u + 1u; i < (0x7ACu - 0x4F0u) / 4u; i++, x *= 0x0260BCD5u)
             *rd32(4u * i) = n64rt_rom_word(0x4F0u + 4u * i) ^ x;
+    /* A CIC-6105 IPL3 copies the 0x334 bytes of its own second stage, DMEM 0x554..0x888 (ROM 0x554..0x888, which its first stage
+     * does not touch), to RDRAM 4 and jumps there. Those words stay in the RDRAM's first 0x338 bytes: a game with this CIC
+     * compares the word at 0x2E8 with the ROM's own at 0x838 each time it runs a function that
+     * frees its delayed objects, and when it differs frees none of them: its list of them (2560 entries) fills in some 30
+     * seconds of its intro and the game then waits for ever for a free entry, the picture frozen. The words of the boot
+     * information (0x300..) are written over their place below. */
+#ifdef N64RT_OWN
+    if (g->cic == 6105u && g->rom_size >= 0x888u)
+#else
+    if (g->cic == 6105u && g->rom_size >= 0x888u && g->mem_size <= 0x7F0000u - 0x1000u)
+#endif
+        for (u32 i = 0; i < (0x888u - 0x554u) / 4u; i++) *rd32(4u + 4u * i) = n64rt_rom_word(0x554u + 4u * i);
     /* What a CIC-6105 IPL3 leaves at 0x2FE1C0: a word of its own code, ROM 0x750 (0xAD170014, the `sw s7, 20(t0)` that stores the
      * boot parameters). Donkey Kong 64 (a 6105 game) checks it right after osInitialize and, finding anything else, spins on it
      * for ever: a black screen. Every 6105 ROM has the same IPL3, so this is the CIC's, whatever the game. */
