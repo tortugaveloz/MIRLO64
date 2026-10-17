@@ -19,10 +19,14 @@
 // E together (IMEM's second port gives the word after D's) and leave it in
 // the same cycle, the scalar one through E as ever and the computation to the
 // vector unit on c_*. The two touch nothing of each other's: their order does
-// not matter. The fetch then goes on two words on.
+// not matter. The fetch then goes on two words on. With LPAIR (a vector unit of eight lanes) the
+// scalar one may also be a vector load (LBV .. LUV) of a register the computation neither reads
+// nor writes: it goes to the vector unit with it (c_lv, c_lins; its base on c_a).
 `default_nettype none
 
-module rsp_su (
+module rsp_su #(
+    parameter bit LPAIR = 0
+) (
     input  wire         clk,
     input  wire         rst,
     // run: execute. While it is low nothing enters E; pc_load sets the PC.
@@ -53,6 +57,8 @@ module rsp_su (
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
     output logic [31:0] c_b,            // rt
+    output logic        c_lv,           // (LPAIR) a pair's vector load goes with the computation on c_ins: it is c_lins
+    output logic [31:0] c_lins,
     input  wire         c_done,
     input  wire  [31:0] c_res,          // MFC0, MFC2, CFC2
     // the vector registers' read addresses (their memories register them): of the instruction E holds in the cycle
@@ -173,12 +179,17 @@ function automatic logic is_plain(input logic [31:0] i);     // neither a coproc
     return !(op[5:3] == 3'd0 && op[2:0] != 3'd0) && !(op == 6'h00 && (i[5:0] == 6'h08 || i[5:0] == 6'h09 || i[5:0] == 6'h0D))
         && op != 6'h10 && op != 6'h12 && op != 6'h32 && op != 6'h3A;
 endfunction
+// (LPAIR) a vector load, LBV .. LUV, of a register the computation v neither reads nor writes (nor a VNOP / VNULL)
+function automatic logic is_vl(input logic [31:0] i, input logic [31:0] v);
+    return LPAIR && i[31:26] == 6'h32 && i[15:11] <= 5'd7 && v[5:0] != 6'h37 && v[5:0] != 6'h3F
+        && i[20:16] != v[10:6] && i[20:16] != v[15:11] && i[20:16] != v[20:16];
+endfunction
 wire  [31:0] ins_d = i_data;
 logic        stall_e;
 wire         v_first = is_vc(ins_d);
 // (not behind a branch or jump in E: D's instruction is its delay slot)
 wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr))
-                   && (v_first ? is_plain(i_data2) : is_plain(ins_d) && is_vc(i_data2));
+                   && (v_first ? is_plain(i_data2) || is_vl(i_data2, ins_d) : (is_plain(ins_d) || is_vl(ins_d, i_data2)) && is_vc(i_data2));
 wire  [31:0] s_ins_d = (pair_d && v_first) ? i_data2 : ins_d;   // the scalar unit's instruction entering E
 wire  [31:0] v_ins_d = v_first ? ins_d : i_data2;               // a pair's computation
 wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocessors' instruction entering E
@@ -278,6 +289,8 @@ assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15
 wire        s_mwait = m_stall && (e_c.load || e_c.store);
 assign c_valid = e_valid && !hazard && (e_c.cop || (v_e && !s_mwait));
 assign c_ins = v_e ? v_ins : e_ins;
+assign c_lv = v_e && e_c.cop;                    // (a pair's scalar side is a coprocessor's only as a vector load)
+assign c_lins = e_ins;
 assign c_a = ea;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd

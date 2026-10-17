@@ -101,14 +101,15 @@ logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; lo
 logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
-logic [31:0] c_ins, c_a, c_b, c_res;
+logic [31:0] c_ins, c_a, c_b, c_res, c_lins;
+logic        c_lv;
 logic [4:0]  c_ra_n, c_rb_n, c_rb;
 logic        dm_valid, dm_we;       logic [11:0] dm_addr; logic [31:0] dm_wdata;   // the DMA's (whole words): see the DMEM
 
-rsp_su su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
+rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_data, .i_data2, .i2_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_b, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
+    .c_valid, .c_ins, .c_a, .c_b, .c_lv, .c_lins, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 wire         is_cop0 = c_ins[31:26] == 6'h10;
@@ -116,7 +117,8 @@ logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
-rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && !is_cop0), .ins(c_ins), .a(c_a), .b(c_b), .ra_n(c_ra_n), .rb_n(c_rb_n), .rb(c_rb), .done(v_done), .res(v_res),
+rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && !is_cop0), .ins(c_ins), .a(c_a), .b(c_b),
+    .l_valid(c_valid && c_lv), .l_ins(c_lins), .l_a(c_a), .ra_n(c_ra_n), .rb_n(c_rb_n), .rb(c_rb), .done(v_done), .res(v_res),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_be(vm_be), .m_wdata(vm_wdata), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
 
@@ -154,7 +156,7 @@ assign i_data2 = ia_q;
 // bytes in the top word; writes go by the byte's address mod 16 (x_be16,
 // x_wd: byte b in [127 - 8b -: 8]).
 // the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
-wire         vu_own = c_valid && (c_ins[31:26] == 6'h32 || c_ins[31:26] == 6'h3A);
+wire         vu_own = c_valid && (c_ins[31:26] == 6'h32 || c_ins[31:26] == 6'h3A || c_lv);
 logic        x_valid, x_we;
 logic [11:0] x_addr;
 logic [15:0] x_be16;

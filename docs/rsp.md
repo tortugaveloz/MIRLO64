@@ -204,6 +204,17 @@ and no state, so nothing orders them; either waits for the other (a load's
 result, DMEM, the vector unit's lanes). A pair is a cycle instead of two:
 some 7 % of a graphics task's cycles and 9 % of an audio task's.
 
+With eight lanes the scalar instruction of a pair may also be a vector load
+(LBV to LUV) of a register the computation neither reads nor writes (and the
+computation no VNOP or VNULL). The load goes to the vector unit with the
+computation (`c_lv`, `c_lins`, its base on `c_a`); the vector unit starts both
+in the same cycle or neither. The load writes its register the cycle after,
+which is the computation's EX: the computation's write goes a cycle late, from
+`hold` (`wp`), as a computation's behind a load does with four lanes; a
+one-lane write (a reciprocal, VMOV) is not kept and its EX waits instead, and
+no one-lane computation reaches EX under a late write. Another 2.6 % of a
+graphics task.
+
 BREAK stops the unit as it leaves E: the instruction after it is not executed,
 and `pc_next` names it. While halt is set nothing enters E.
 
