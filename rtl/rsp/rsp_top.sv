@@ -80,6 +80,7 @@ module rsp_top #(
     // (simulation) the instructions as they leave E, the register writes
     output logic        tr_e,
     output logic [11:0] tr_e_pc,
+    output logic        tr_e2,              // ... and the next one with it (a pair: tr_e_pc + 4)
     output logic        tr_e_we,
     output logic [4:0]  tr_e_wr,
     output logic        tr_we,
@@ -93,7 +94,8 @@ module rsp_top #(
 logic        su_run, su_brk, su_idle, pc_load;
 logic [11:0] pc_next;
 logic [9:0]  i_addr;
-logic [31:0] i_data;
+logic [31:0] i_data, i_data2;
+logic        i2_ok;
 logic        sm_valid, sm_we;       logic [11:0] sm_addr; logic [1:0] sm_n; logic [31:0] sm_wdata;
 logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; logic [127:0] vm_wdata; logic [3:0] vm_rot;
 logic [31:0] m_rdata;
@@ -104,10 +106,10 @@ logic [4:0]  c_ra_n, c_rb_n, c_rb;
 logic        dm_valid, dm_we;       logic [11:0] dm_addr; logic [31:0] dm_wdata;   // the DMA's (whole words): see the DMEM
 
 rsp_su su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
-    .i_addr, .i_data,
+    .i_addr, .i_data, .i_data2, .i2_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
     .c_valid, .c_ins, .c_a, .c_b, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
-    .tr_e, .tr_e_pc, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
+    .tr_e, .tr_e_pc, .tr_e2, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 wire         is_cop0 = c_ins[31:26] == 6'h10;
 logic        v_done;
@@ -125,16 +127,21 @@ always_ff @(posedge clk) rom_q <= div_rom[rom_addr];
 
 // ----------------------------------------------------------------- IMEM --
 // two ports: the fetch's, and the DMA's -- its writes (a transfer in) and
-// its reads (a transfer out of IMEM: a word a cycle)
+// its reads (a transfer out of IMEM: a word a cycle). With no DMA of IMEM's
+// the second reads the word after the fetch's, for the scalar unit's pairs
 logic [31:0] imem [0:1023];
 logic        iw_we;
 logic [9:0]  iw_addr;
 logic [31:0] iw_data, ia_q;
+logic        im_dma;                  // (below: a DMA of IMEM runs)
+wire  [9:0]  ib_addr = im_dma ? iw_addr : i_addr + 10'd1;    // (one address for the port: a write is a DMA's, im_dma)
 always_ff @(posedge clk) begin
-    if (iw_we) begin imem[iw_addr] <= iw_data; ia_q <= iw_data; end
-    else ia_q <= imem[iw_addr];
+    if (iw_we) begin imem[ib_addr] <= iw_data; ia_q <= iw_data; end
+    else ia_q <= imem[ib_addr];
+    i2_ok <= !rst && !im_dma && !iw_we;
 end
 always_ff @(posedge clk) i_data <= imem[i_addr];
+assign i_data2 = ia_q;
 
 // ----------------------------------------------------------------- DMEM --
 // one access a cycle: the DMA engine's, the vector unit's or the scalar
@@ -146,7 +153,8 @@ always_ff @(posedge clk) i_data <= imem[i_addr];
 // unit has its register's bytes in place and the scalar unit its 1 to 4
 // bytes in the top word; writes go by the byte's address mod 16 (x_be16,
 // x_wd: byte b in [127 - 8b -: 8]).
-wire         vu_own = c_valid && !is_cop0;      // the instruction in E is the vector unit's
+// the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
+wire         vu_own = c_valid && (c_ins[31:26] == 6'h32 || c_ins[31:26] == 6'h3A);
 logic        x_valid, x_we;
 logic [11:0] x_addr;
 logic [15:0] x_be16;
@@ -261,6 +269,7 @@ logic        q_ok;                    // ... and has on its outputs
 logic [1:0]  iq;                      // (out of IMEM) the pair's words read: 2, both
 logic [31:0] ih_q;                    // ... the first
 wire         d_im    = sp_addr[12];   // the transfer is IMEM's
+assign im_dma = ds != D_IDLE && d_im;
 wire         p_ok    = d_im ? iq == 2'd2 : q_ok;
 // RD_LEN / WR_LEN (the microcode's or the host's) is taken into the pending registers (p_*: the length, count and
 // skip, which transfer); the DMA starts from them when the running one is done -- the next cycle on an idle engine

@@ -193,6 +193,17 @@ A coprocessor instruction goes out on `c_valid` / `c_ins` with the values of
 rs and rt and holds E until `c_done`. `rsp_top` answers MFC0 / MTC0 itself and
 passes the rest to the vector unit.
 
+Two instructions issue together, as on the console, when one is a vector
+computation and the other, next to it in either order, a scalar instruction
+that is neither a coprocessor's nor a branch, jump or BREAK -- and D's
+instruction is not a delay slot. IMEM's second port gives D the word after
+its own; the pair enters E together, the scalar instruction takes E's path
+as any other and the computation goes to the vector unit on `c_*` in the same
+cycle, and the fetch goes on two words further. The two share no register
+and no state, so nothing orders them; either waits for the other (a load's
+result, DMEM, the vector unit's lanes). A pair is a cycle instead of two:
+some 7 % of a graphics task's cycles and 9 % of an audio task's.
+
 BREAK stops the unit as it leaves E: the instruction after it is not executed,
 and `pc_next` names it. While halt is set nothing enters E.
 
@@ -315,7 +326,8 @@ MFC2, MTC2, CFC2 and CTC2 take one cycle.
 ## Memories
 
 IMEM is 1024 words with two ports: the fetch, and the DMA (its writes on a
-transfer in, its reads on a transfer out). Only a DMA writes IMEM.
+transfer in, its reads on a transfer out) -- or, with no DMA of IMEM's, the
+word after the fetch's, for a pair. Only a DMA writes IMEM.
 
 DMEM is 4 KiB in `rsp_dpram.sv`: four banks of 256 words, each an `altsyncram`
 in M10K, true dual port with byte enables. Bank k holds bytes 4k to 4k + 3 of
@@ -327,7 +339,7 @@ word. In simulation the same module is one array of 1024 words, which the
 testbenches read.
 
 Port A carries one access per cycle, in this order of priority: the DMA
-engine, the vector unit (when the instruction in E is its own), the scalar
+engine, the vector unit (when the instruction in E is its load or store), the scalar
 unit. Port B is the RDP's XBUS read.
 
 The vector registers are LUT RAM (MLAB), as described above. The scalar
@@ -404,7 +416,8 @@ console does, the header and the boot microcode by DMA through the host
 registers, and then steps the model once for every instruction that leaves E.
 It compares:
 
-* the PC of every instruction;
+* the PC of every instruction (a pair leaving E together: the model runs
+  the two, in order);
 * each scalar register write, when it reaches W;
 * the vector registers, the accumulator and the flags, as each vector
   instruction's effects are complete (`tr_v`). Where a register write that was
