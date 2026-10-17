@@ -190,15 +190,22 @@ texture stages run all the same: TEXEL0 is the tile's texel (0, 0).
 
 ### Rectangles
 
-A rectangle's pixels are whole: all eight samples. The corners' integer parts
-are taken; the lower-right corner is inclusive for a texture rectangle in
-copy mode and for a fill rectangle in fill mode, exclusive otherwise. Its
-depth is the primitive depth.
+A rectangle's pixels are whole: all eight samples. A texture rectangle in
+copy mode and a fill rectangle in fill mode take the corners' integer parts,
+the lower-right corner inclusive. Otherwise the corners' quarter pixels
+count, as for a triangle without AA_EN: a pixel is drawn where its top-left
+sample is inside, `XH <= 4x < XL` and `YH <= 4y < YL`, so a corner with a
+fraction leaves out the pixel it falls in at the upper left and takes it in
+at the lower right (a run of rectangles placed at fractions of a pixel then
+meets without a gap). Its depth is the primitive depth.
 
 A texture rectangle steps S by DsDx along the row and T by DtDy down the
-rows; the flipped one swaps the two. In copy mode DsDx counts a quarter of
-its value. A fill rectangle outside fill mode goes through the pixel pipeline
-like any untextured primitive.
+rows; the flipped one swaps the two. The attribute stepped down the rows
+starts at YH's whole row. The one stepped along the row is the plane at XH
+itself: at column x, its value plus DsDx (or DtDy) times `(4x - XH) / 4` --
+copy mode has no fraction there, and its DsDx counts a quarter of its value.
+A fill rectangle outside fill mode goes through the pixel pipeline like any
+untextured primitive.
 
 ## Textures
 

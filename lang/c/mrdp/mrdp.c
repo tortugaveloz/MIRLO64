@@ -1396,6 +1396,12 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
 
 /* ---- rectangles ----------------------------------------------------------- */
 
+#ifdef MRDP_N64
+#define RECT_QUARTERS 1               /* the corners' quarter pixels count (outside copy and fill mode) */
+#else
+#define RECT_QUARTERS 0
+#endif
+
 static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
 {
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
@@ -1404,17 +1410,27 @@ static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
     prim_t pr = { 0, 1, 0, (int)((w[1] >> 24) & 7), 1, 0, 0, 0 };
     int32_t s = sext(w[2] >> 16, 16), t = sext(w[2], 16);
     int32_t dsdx = sext(w[3] >> 16, 16), dtdy = sext(w[3], 16);
-    int x0 = xh >> 2, x1 = (cyc == 2) ? (xl >> 2) + 1 : (xl >> 2);
-    int y0 = yh >> 2, y1 = (cyc == 2) ? (yl >> 2) + 1 : (yl >> 2);
+    /* Copy mode: the corners' whole pixels, the lower-right one included. Otherwise (MRDP_N64) a pixel is drawn where
+     * its top-left sample is inside: 4x in [XH, XL) and 4y in [YH, YL) in quarter pixels -- a fractional corner leaves
+     * out the pixel it falls in at the upper left and takes it in at the lower right. The row-stepped attribute starts
+     * at YH's whole row; the column-stepped one is the plane at XH itself: at a column x it is the value plus its
+     * delta times (4x - XH) / 4 (in copy mode, with no fraction, at XH's whole column). (MRDP's own: the corners'
+     * whole pixels, the lower-right one excluded) */
+    int q = (cyc != 2) && RECT_QUARTERS, up = q ? 3 : 0;
+    int x0 = xh >> 2, x1 = (cyc == 2) ? (xl >> 2) + 1 : (xl + up) >> 2;
+    int y0 = yh >> 2, y1 = (cyc == 2) ? (yl >> 2) + 1 : (yl + up) >> 2;
     int dshift = (cyc == 2) ? 7 : 5;              /* copy mode: DsDx is 4x */
-    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
-    int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
+    int xa = (xh + up) >> 2, ya = (yh + up) >> 2;
+    if (xa < sc_x0(r)) xa = sc_x0(r);
+    if (ya < sc_y0(r)) ya = sc_y0(r);
+    int xb = x1 < sc_x1(r) ? x1 : sc_x1(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     for (int y = ya; y < yb; y++)
         for (int x = xa; x < xb; x++) {
             int32_t at[NATTR] = { 0 };
-            int32_t ds = (dsdx * (x - x0)) >> dshift, dt = (dtdy * (y - y0)) >> 5;
-            at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ds;
-            at[AT] = flip ? t + ((dtdy * (x - x0)) >> 5) : t + dt;
+            int32_t cq = q ? 4 * x - xh : x - x0;     /* columns from XH: quarters, or whole ones */
+            int cs = q ? 2 : 0;
+            at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ((dsdx * cq) >> (dshift + cs));
+            at[AT] = flip ? t + ((dtdy * cq) >> (5 + cs)) : t + ((dtdy * (y - y0)) >> 5);
             draw_pixel(r, &pr, x, y, at, 0xFFu);
         }
 }
@@ -1424,9 +1440,11 @@ static void fill_rect(mrdp_t *r, const uint32_t *w)
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
     int xl = (w[0] >> 12) & 0xFFF, yl = w[0] & 0xFFF;
     int xh = (w[1] >> 12) & 0xFFF, yh = w[1] & 0xFFF;
-    int x0 = xh >> 2, y0 = yh >> 2;
-    int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl >> 2);
-    int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl >> 2);
+    /* (fill mode: whole pixels, the lower-right one included; otherwise as a texture rectangle's, above) */
+    int up = (cyc != 3) && RECT_QUARTERS ? 3 : 0;
+    int x0 = (xh + up) >> 2, y0 = (yh + up) >> 2;
+    int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl + up) >> 2;
+    int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl + up) >> 2;
     prim_t pr = { 0, 0, 0, 0, 0, 0, 0, 1 };
     int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
