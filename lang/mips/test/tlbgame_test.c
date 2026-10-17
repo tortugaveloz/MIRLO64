@@ -109,11 +109,12 @@ static void deliver(int res, uint32_t code, uint32_t bd)
     MTC0(12, status | 2u);
     MTC0(30, (res == X_REFILL && !exl) ? 0x80000000u : 0x80000180u);
 }
-/* the instruction at pc: as it is, or a mapped page's (below 0x2000_0000, or 0x6000_0000 - 0x7FFF_FFFF) by the entries -- the game's
- * handler may run from one */
+/* the instruction at pc: as it is, or a mapped page's (below 0x2000_0000, 0x5000_0000 - 0x7FFF_FFFF or 0xC000_0000 - 0xEFFF_FFFF)
+ * by the entries -- the game's handler may run from one */
 static uint32_t insn_at(uint32_t pc)
 {
-    if (pc >= 0x20000000u && (pc >> 29) != 3u) return *(volatile uint32_t *)(uintptr_t)pc;
+    const uint32_t n = pc >> 28;
+    if (!(n < 2u || (n >= 5u && n <= 7u) || (n >= 12u && n <= 14u))) return *(volatile uint32_t *)(uintptr_t)pc;
     for (int i = 0; i < 32; i++) {
         uint32_t span = (raw[i].mask + 0x2000u) >> 1, off = pc - (raw[i].hi & 0xFFFFE000u & ~(2u * span - 1u));
         if (raw[i].hi == 0x80000000u || off >= 2u * span) continue;
@@ -305,7 +306,7 @@ int main(void)
 {
     puts_("tlbgame_test\n");
     if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbgame_test: no tables with the monitor in this CPU\ntlbgame_test: FAILED\n"); putc_(4); for (;;); }
-    if ((monitor_id_read() & 0xFFFFFF81u) != 0x4D4F0001u) { puts_("no monitor in this SoC\ntlbgame_test: FAILED\n"); putc_(4); for (;;); }
+    if ((monitor_id_read() & 0xFFFF0001u) != 0x4D4F0001u) { puts_("no monitor in this SoC\ntlbgame_test: FAILED\n"); putc_(4); for (;;); }
     for (int i = 0; i < 32; i++) raw[i].hi = 0x80000000u;
     for (uint32_t i = 0; i < 0x1000; i += 4) K1(0x20000)[i / 4] = 0;
     /* data pages: physical 0x100000 + n * 0x1000 hold n in every word's top, and their offset */
@@ -486,6 +487,29 @@ int main(void)
         uint32_t r = ((uint32_t (*)(void))0x50001000u)();
         check("0x5000_1000: a function fetched there ran", r, 0x1234);
     }
+    /* (and KSEG2 and KSEG3 below 0xF000_0000, mapped as the VR4300 maps them: a game may map the RDRAM at 0xE000_0000 and write
+     * and read its data there a byte at a time) */
+    pte(0xE0000000u, LO(0x11F000, LV | LD | LG), LO(0x120000, LV | LD | LG));
+    pre = LOG(0);
+    check("0xE000_0000: a load", *(volatile uint32_t *)0xE0000000u, 0x1F000000u);
+    check("0xE000_0000: after a refill", LOG(0), pre + 1);
+    check("0xE000_0000: BadVAddr", LOG(8), 0xE0000000u);
+    check("0xE000_0000: Context BadVPN2", LOG(16), 0x80000000u | ((0xE0000000u >> 13) << 4));
+    *(volatile uint8_t *)0xE0000005u = 0x5A;
+    check("0xE000_0005: a byte stored", (*K1(0x11F004) >> 16) & 0xFFu, 0x5A);
+    check("0xE000_0005: and loaded", *(volatile uint8_t *)0xE0000005u, 0x5A);
+    check("0xE000_0000: no other refill", LOG(0), pre + 1);
+    {
+        uint32_t r = ((uint32_t (*)(void))0xE0001000u)();
+        check("0xE000_1000: a function fetched there ran", r, 0x1234);
+    }
+    pte(0xC0000000u, LO(0x11E000, LV | LD | LG), LO(0x11F000, LV | LD | LG));
+    pre = LOG(0);
+    check("0xC000_0000: a load", *(volatile uint32_t *)0xC0000000u, 0x1E000000u);
+    check("0xC000_0000: after a refill", LOG(0), pre + 1);
+    check("0xC000_0000: BadVAddr", LOG(8), 0xC0000000u);
+    pte(0xDFFFE000u, LO(0x11C000, LV | LD | LG), LO(0x11D000, LV | LD | LG));
+    check("0xDFFF_F000: a load", *(volatile uint32_t *)0xDFFFF000u, 0x1D000000u);
 
     /* 11. code from cacheable mapped pages (the fetch page registers), with the game's own refill handler: a function run
      * twice, then its pair replaced by a tlbwi (the new frame's code, none of the old), an ASID switch (the other ASID's entry
@@ -518,6 +542,21 @@ int main(void)
         MTC0(10, 4); check("ASID 4's code, not ASID 3's", ((fn_t)0x04900000u)(), 0x2222);
         MTC0(10, 3); check("ASID 3's code again", ((fn_t)0x04900000u)(), 0x1234);
         MTC0(10, 0);
+        /* pages that differ only in the address's top bits (0x6 and 0xE, 0x1 and 0x5, 0x0 and 0xC): each its own frame's code,
+         * in turn, never what the fetch page registers hold for the other */
+        pte(0x64800000u, LO(0x122000, LV | LD | LG), LO(0x123000, LV | LD | LG));
+        pte(0xE4800000u, LO(0x120000, LV | LD | LG), LO(0x121000, LV | LD | LG));
+        pte(0x14800000u, LO(0x120000, LV | LD | LG), LO(0x121000, LV | LD | LG));
+        pte(0x54800000u, LO(0x122000, LV | LD | LG), LO(0x123000, LV | LD | LG));
+        pte(0xC4800000u, LO(0x122000, LV | LD | LG), LO(0x123000, LV | LD | LG));
+        for (int k = 0; k < 2; k++) {
+            check("0x6480_0000's code", ((fn_t)0x64800000u)(), 0x2222);
+            check("0xE480_0000's code, not 0x6480_0000's", ((fn_t)0xE4800000u)(), 0x1234);
+            check("0x1480_0000's code", ((fn_t)0x14800000u)(), 0x1234);
+            check("0x5480_0000's code, not 0x1480_0000's", ((fn_t)0x54800000u)(), 0x2222);
+            check("0x0480_0000's code", ((fn_t)0x04800000u)(), 0x1234);
+            check("0xC480_0000's code, not 0x0480_0000's", ((fn_t)0xC4800000u)(), 0x2222);
+        }
         /* an entry made invalid and repaired (by the general handler, tlbp / tlbwi): the repaired frame's code */
         pte(0x04A00000u, LO(0x120000, LV | LD | LG), LO(0x121000, LV | LD | LG));
         check("code, valid", ((fn_t)0x04A00000u)(), 0x1234);

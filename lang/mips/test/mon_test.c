@@ -174,7 +174,7 @@ static void copy_to_rdram(uint32_t phys, const uint32_t *a, const uint32_t *b)
 int main(void)
 {
     puts_("mon_test\n");
-    if ((monitor_id_read() & 0xFFFFFF81u) != 0x4D4F0001u) { puts_("no monitor in this SoC\nmon_test: FAILED\n"); putc_(4); for (;;) ; }
+    if ((monitor_id_read() & 0xFFFF0001u) != 0x4D4F0001u) { puts_("no monitor in this SoC\nmon_test: FAILED\n"); putc_(4); for (;;) ; }
     copy_to_rdram(0x1000u, game_start, game_end);
     copy_to_rdram(0x0180u, ghandler_start, ghandler_end);
     for (int i = 0; i < 12; i++) RES[i] = 0;
