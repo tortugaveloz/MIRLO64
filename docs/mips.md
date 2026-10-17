@@ -347,7 +347,7 @@ The loader then:
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
 | 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
-| 6105 | the header's | the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
+| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
 | 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
