@@ -349,11 +349,21 @@ The loader then:
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
 | 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
-| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
+| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0; DMEM's first `0x40` bytes the ROM's header, and the RSP's r4, r5, r6, r11 and v13 as the PIF's RSP program leaves them (below) | `0x17D9` |
 | 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
 know. Software checks these leftovers, so they are part of a valid console.
+
+The boot microcode of a CIC-6105 game's RSP tasks checks, at its first run, what the PIF's program on the RSP left: r4 (IPL3's
+first word, ROM `0x40`), r5 (an address in `0x4_C000` - `0x4_FFFF`), r6 (a word of IPL3, `addiu t1, t1, 4`), r11 (`0x3D8`), the sum
+of v13's eight lanes (`-7510`) and DMEM's first halfword (not 0 or `0xFFFF`: the ROM's header is there). On a console it sets
+signal 7 and writes two of its own words over its first two in the game's copy -- a jump past the check for every later task. On
+an RSP left otherwise it clears signal 7 and the jump it writes leads to code that at every task's start writes DPC_END with
+what it read of DPC_CLOCK (0 for the RSP here: always): a list the RDP is still taking is cut short, and a game that yields its
+graphics task to an audio task never sees the resumed one end. The runtime leaves the registers as the console does
+(`rsp_ipl_state` in `lang/n64rt/n64rt_rsp.c`: a program of its own, run once on the RSP before the game starts) and DMEM's
+first `0x40` bytes as the ROM has them; with another boot code those bytes are 0 and the registers 0.
 
 The words at `0x8000_0300`: `osTvType` (below), `osRomType` 0, `osRomBase` `0xB000_0000`, `osResetType` 0 (cold),
 `osCicId` as above, `osVersion` 0 and `osMemSize` (8 MiB, or 4 MiB without the Expansion Pak).
