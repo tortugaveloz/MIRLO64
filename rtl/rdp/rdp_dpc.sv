@@ -6,7 +6,13 @@
 // As the N64's: a write of START is held (start_valid) until the next write
 // of END, which makes CURRENT = START and sets END; while commands are still
 // being fetched that pair waits (end_valid) for them. A write of END alone
-// extends the run. CURRENT moves as commands are fetched.
+// extends the run. CURRENT moves as commands are fetched. An END written in
+// the cycle a waiting pair would start (the list before it just fetched)
+// starts the pair with that END, and clears end_valid: left set, the pair
+// started a second time when that list ended, CURRENT back at START and the
+// ring's first commands, which a microcode writing a ring in DMEM may have
+// overwritten by then, fetched again. Reads still under way (an END moved
+// back behind them) keep a pair waiting until they are in.
 //
 // With XBUS set (DPC_STATUS) the commands are in the RSP's DMEM instead, and
 // START, END and CURRENT are addresses in it: they are read from the RSP's
@@ -87,8 +93,8 @@ always_ff @(posedge clk) begin
         if (start_we) begin start <= {wdata[23:3], 3'd0}; start_valid <= 1; end
         if (end_we) begin
             if (!start_valid) end_ <= {wdata[23:3], 3'd0};
-            else if (busy) begin end_pend <= {wdata[23:3], 3'd0}; end_valid <= 1; end
-            else begin current <= start; fp <= start[23:2]; end_ <= {wdata[23:3], 3'd0}; start_valid <= 0; end
+            else if (busy || out != 0) begin end_pend <= {wdata[23:3], 3'd0}; end_valid <= 1; end
+            else begin current <= start; fp <= start[23:2]; end_ <= {wdata[23:3], 3'd0}; start_valid <= 0; end_valid <= 0; end
         end else if (end_valid && !busy && out == 0) begin
             current <= start; fp <= start[23:2]; end_ <= end_pend; start_valid <= 0; end_valid <= 0;
         end

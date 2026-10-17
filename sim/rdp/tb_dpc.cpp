@@ -21,13 +21,15 @@ static void wbe32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2]
 static std::vector<uint32_t> model_rdp, rtl_rdp;
 static void on_rdp(void *, const uint32_t *w, int n) { for (int i = 0; i < 2 * n; i++) model_rdp.push_back(w[i]); }
 
+// TB_CREADY=<percent>: how often the RDP takes a word (75); a slow RDP keeps a list under way while the next is written
+static const int c_pct = getenv("TB_CREADY") ? atoi(getenv("TB_CREADY")) : 75;
 struct Tb {
     Vrsp_dpc_wrap *t;
     std::vector<uint8_t> ram;
     long cyc = 0;
     std::deque<std::pair<long, uint32_t>> rq, mq;   // reads under way: the RSP's DMA, the fetch
     void tick() {
-        t->r_ready = rand() % 100 >= 20; t->m_ready = rand() % 100 >= 30; t->c_ready = rand() % 100 >= 25;
+        t->r_ready = rand() % 100 >= 20; t->m_ready = rand() % 100 >= 30; t->c_ready = rand() % 100 < c_pct;
         t->r_rvalid = 0; t->m_rvalid = 0;
         if (!rq.empty() && rq.front().first <= cyc) { t->r_rvalid = 1; t->r_rdata = be32(&ram[rq.front().second]); rq.pop_front(); }
         if (!mq.empty() && mq.front().first <= cyc) { t->m_rvalid = 1; t->m_rdata = be32(&ram[mq.front().second]); mq.pop_front(); }
