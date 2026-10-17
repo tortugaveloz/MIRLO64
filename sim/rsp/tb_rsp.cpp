@@ -167,6 +167,9 @@ int main(int argc, char **argv)
             // the cycle's events are sampled before its edge
             t->eval();
             bool e = t->tr_e, we = t->tr_we; int vdone = t->tr_v;
+            // the microcode's DMA runs behind it, as the console's: what it reads of SP_DMA_FULL / SP_DMA_BUSY is the RTL's,
+            // and DMEM is compared only with no DMA under way or queued (the model's was done at its length's write)
+            const bool dma_full = R.rsp_top__DOT__p_full, dma_on = dma_full || R.rsp_top__DOT__ds != 0;
             // (the vector unit, two passes: a computation whose register write
             // was put off behind a load's is complete while the next one's
             // first pass has already been through the accumulator and the
@@ -196,7 +199,10 @@ int main(int argc, char **argv)
                     }
             }
             if (e) {
+                m.dma_full = dma_full; m.dma_busy = dma_on;
+                const uint64_t dmas = m.dmas;
                 int brk = rsp_step(&m);
+                const bool dma_now = dma_on || m.dmas != dmas;          // (or this instruction starts one)
                 ins++;
                 {
                     int k = kind_of(m.last_ins); kcyc[k] += tb.cyc - last_e; kins[k]++;
@@ -216,7 +222,7 @@ int main(int argc, char **argv)
                 // (a store's second half may be going behind the next instruction,
                 // one that leaves DMEM alone: DMEM is compared a cycle on)
                 if (!bad && !brk && ins % deep == 0 && R.rsp_top__DOT__vu__DOT__st == 4) dmem_late = 1;
-                else if (!bad && (brk || ins % deep == 0))
+                else if (!bad && !dma_now && (brk || ins % deep == 0))
                     for (uint32_t a = 0; a < 4096; a += 4)
                         if (tb.dmem_word(a) != be32(m.dmem + a)) {
                             printf("  !! instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
@@ -259,6 +265,15 @@ int main(int argc, char **argv)
         }
         long cycles = tb.cyc - c0;
         for (int i = 0; i < 8 && !t->halted; i++) tb.tick();
+        // (a DMA the microcode left running at its BREAK: to its end; DMEM compared then)
+        if (ended && !bad) {
+            for (int n = 0; (R.rsp_top__DOT__p_full || R.rsp_top__DOT__ds != 0) && n < 100000; n++) tb.tick();
+            for (uint32_t a = 0; a < 4096; a += 4)
+                if (tb.dmem_word(a) != be32(m.dmem + a)) {
+                    printf("  !! at the end: DMEM[%03x] = %08x, the model %08x\n", a, tb.dmem_word(a), be32(m.dmem + a));
+                    bad = 1; break;
+                }
+        }
         if (ended && !bad && !vexp.empty()) { printf("  !! %zu vector-unit instructions never finished\n", vexp.size()); bad = 1; }
         if (ended && !bad) {
             if (!t->halted) { printf("  !! the RTL did not halt at the BREAK\n"); bad = 1; }

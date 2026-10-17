@@ -20,8 +20,10 @@
 // The DMA registers are double: a write while a DMA runs goes to the next
 // one's (SP_MEM_ADDR, SP_DRAM_ADDR; RD_LEN / WR_LEN queue it: SP_DMA_FULL is
 // set, it starts when the running one is done, and a write while FULL replaces it),
-// the reads give the running one's, as on the console.
-// A host DMA into or out of DMEM while the microcode runs shares DMEM's port
+// the reads give the running one's, as on the console. The microcode's own
+// DMA is queued the same way and runs while the microcode goes on, as the
+// console's: it waits on SP_DMA_BUSY / SP_DMA_FULL itself.
+// A DMA into or out of DMEM while the microcode runs shares DMEM's port
 // with it: the DMA has it (a beat of a transfer in; the whole transfer out) and the
 // scalar and vector units' loads and stores wait (m_stall) instead of being lost.
 // SP_SEMAPHORE is taken by a read of the host's too (h_rd), as the microcode's.
@@ -225,10 +227,10 @@ wire  [3:0]  c0r  = c_ins[14:11];
 wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 
 // ------------------------------------------------------------------ DMA --
-// rows of (len + 1) bytes, in words; `skip` bytes between rows in RDRAM. The
-// microcode's MTC0 to SP_RD_LEN / SP_WR_LEN stays in E until its transfer is
-// done (so it never sees the DMA busy), the host's returns at once and it
-// polls SP_STATUS / SP_DMA_BUSY.
+// rows of (len + 1) bytes, in words; `skip` bytes between rows in RDRAM. A
+// write of SP_RD_LEN / SP_WR_LEN, the microcode's MTC0 or the host's, returns
+// at once: the transfer runs behind it, and the writer polls SP_DMA_BUSY /
+// SP_DMA_FULL (SP_STATUS) for its end.
 //   in (RDRAM -> SP): a read request a cycle, each word written to DMEM /
 //       IMEM as it comes back
 //   out (DMEM -> RDRAM): DMEM is read 8 bytes at a time, a pair of words
@@ -241,7 +243,6 @@ wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 //       check of the console does it (a CIC-6105 game's: eight bytes).
 typedef enum logic [2:0] { D_IDLE, D_IN, D_OUT, D_END } dst_t;
 dst_t        ds;
-logic        d_mine;                  // the microcode's (else the host's)
 logic        d_half, q_half;          // the second word of the 8 bytes: in SP memory, in RDRAM
 logic [9:0]  d_words;                 // requests left in the row, less one
 logic [9:0]  d_row;                   // a row's words, less one
@@ -261,16 +262,14 @@ logic [1:0]  iq;                      // (out of IMEM) the pair's words read: 2,
 logic [31:0] ih_q;                    // ... the first
 wire         d_im    = sp_addr[12];   // the transfer is IMEM's
 wire         p_ok    = d_im ? iq == 2'd2 : q_ok;
-// the host's RD_LEN / WR_LEN is taken into the pending registers (p_*: the length, count and skip, which transfer);
-// the DMA starts from them when the running one is done -- the next cycle on an idle engine -- and the microcode's
-// own (its MTC0 waits in E for its transfer) when none is pending
+// RD_LEN / WR_LEN (the microcode's or the host's) is taken into the pending registers (p_*: the length, count and
+// skip, which transfer); the DMA starts from them when the running one is done -- the next cycle on an idle engine
 logic [31:0] p_len;                   // the pending DMA's length word
 logic        p_rd0;                   // ... and it is a read (RDRAM -> SP)
-wire         h_dma_w   = h_we && !mtc0 && (h_addr == 4'd2 || h_addr == 4'd3);
+wire         len_w     = mt_dma || (h_we && !mtc0 && (h_addr == 4'd2 || h_addr == 4'd3));
 wire         d_start_p = p_full && ds == D_IDLE;
-wire         d_start_c = mt_dma && ds == D_IDLE && !p_full;
-wire  [31:0] d_len   = d_start_p ? p_len : c_b;
-wire         d_rd0   = d_start_p ? p_rd0 : c0r == 4'd2;
+wire  [31:0] d_len   = p_len;
+wire         d_rd0   = p_rd0;
 wire  [9:0]  sp_word = {sp_addr[11:3], d_half};
 assign dma_busy = ds != D_IDLE;
 
@@ -301,7 +300,7 @@ assign iw_addr  = ds == D_OUT ? {np, iq != 2'd0} : sp_word;
 assign iw_data  = wq_d;
 
 assign c_res  = is_cop0 ? cop0_rd(c0r) : v_res;
-assign c_done = !is_cop0 ? v_done : mt_dma ? (ds == D_END && d_mine) : 1'b1;
+assign c_done = !is_cop0 ? v_done : 1'b1;
 
 // one writer of the SP registers a cycle: the microcode (MTC0) first, the
 // host when it is not there (h_ready)
@@ -321,7 +320,7 @@ always_ff @(posedge clk) begin
         st_halt <= 1'b1; st_broke <= 1'b0; st_sstep <= 1'b0; st_intbrk <= 1'b0; st_sig <= 8'd0;
         p_full <= 1'b0; p_len <= '0; p_rd0 <= 1'b0;
         sem <= 1'b0; irq <= 1'b0; sp_addr <= '0; ram_addr <= '0; sp_addr_w <= '0; ram_addr_w <= '0; d_skip <= '0;
-        ds <= D_IDLE; d_mine <= 1'b0; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
+        ds <= D_IDLE; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
     end else begin
         // ---- register writes
         if (w_en) unique case (w_reg)
@@ -370,12 +369,11 @@ always_ff @(posedge clk) begin
             if (g_words == 10'd0) begin g_words <= d_row; g_rows <= g_rows - 8'd1; end
             else g_words <= g_words - 10'd1;
         end
-        // the host's LEN write: pending (a second one before the first starts replaces it); it leaves with its start
+        // a LEN write: pending (a second one before the first starts replaces it); it leaves with its start
         if (d_start_p) p_full <= 1'b0;
-        if (h_dma_w) begin p_len <= h_wdata; p_rd0 <= h_addr == 4'd2; p_full <= 1'b1; end
+        if (len_w) begin p_len <= w_data; p_rd0 <= w_reg == 4'd2; p_full <= 1'b1; end
         unique case (ds)
-        D_IDLE: if (d_start_c || d_start_p) begin
-            d_mine  <= d_start_c;
+        D_IDLE: if (d_start_p) begin
             d_row   <= {d_len[11:3], 1'b1};
             d_words <= {d_len[11:3], 1'b1};
             d_rows  <= d_len[19:12];

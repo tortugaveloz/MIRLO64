@@ -89,16 +89,15 @@ The engine moves one 32-bit word per request on the RDRAM port (`r_valid`,
 In the SoC the RDRAM port is port 3 of the SDRAM arbiter, and the 8 MiB of
 RDRAM is SDRAM at `0x4380_0000`.
 
-Who starts the transfer decides how it is sequenced:
-
-* The microcode's MTC0 to SP_RD_LEN / SP_WR_LEN stays in E until its transfer
-  is complete, so the microcode never observes its own DMA as busy.
-* The host's write returns at once. Its length word goes into pending
-  registers and SP_DMA_FULL is set; the transfer starts when the engine is idle
-  (the next cycle, if it already is). The address registers are double: a
-  write to SP_MEM_ADDR or SP_DRAM_ADDR while a DMA is running or queued belongs
-  to the next transfer, and reads give the running transfer's pointers. A
-  further length write while SP_DMA_FULL is set replaces the queued command.
+The microcode's MTC0 to SP_RD_LEN / SP_WR_LEN and the host's write are taken
+the same way, as on the console: the write returns at once, its length word
+goes into pending registers and SP_DMA_FULL is set; the transfer starts when
+the engine is idle (the next cycle, if it already is). The address registers
+are double: a write to SP_MEM_ADDR or SP_DRAM_ADDR while a DMA is running or
+queued belongs to the next transfer, and reads give the running transfer's
+pointers. A further length write while SP_DMA_FULL is set replaces the queued
+command. The microcode goes on while its transfer runs and waits for it
+itself, on SP_DMA_BUSY or SP_DMA_FULL, as the console's microcode does.
 
 A DMA into or out of DMEM shares DMEM's port with the program, and the DMA
 has priority. A transfer in takes the port in each cycle it writes a word; a
@@ -412,7 +411,10 @@ It compares:
   put off lands under the next computation's first pass, the registers are
   compared at once and the accumulator and flags with the following
   instruction (`tr_vp`);
-* DMEM, every 64 instructions (`DEEP`) and at the BREAK;
+* DMEM, every 64 instructions (`DEEP`) and at the BREAK, with no DMA running
+  or queued (the model does a transfer whole at its length's write; the RTL's
+  runs behind the microcode, which reads SP_DMA_BUSY and SP_DMA_FULL as the
+  RTL has them);
 * at the end, the whole RDRAM, the RDP's command words, and that the RTL has
   halted.
 
