@@ -349,11 +349,21 @@ The loader then:
 |---|---|---|---|
 | 6101, 6102 | the header's | | 0 |
 | 6103 | the header's less `0x10_0000` | ROM `0x4C0` - `0x8BF` at RDRAM 0; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D7` | `0x17D7` |
-| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's word at `0x750` at RDRAM `0x2F_E1C0`; DPC_CLOCK reads 0 | `0x17D9` |
+| 6105 | the header's | ROM `0x554` - `0x887` at RDRAM 4 (IPL3's second stage, which it runs from there); the ROM's words at `0x750` and `0x73C` at RDRAM `0x2F_E1C0` and `0x2F_B1F4`; DPC_CLOCK reads 0; DMEM's first `0x40` bytes the ROM's header, and the RSP's r4, r5, r6, r11 and v13 as the PIF's RSP program leaves them (below) | `0x17D9` |
 | 6106 | the header's less `0x20_0000` | IPL3's second stage at RDRAM 0: ROM `0x4F0` - `0x7AB`, deciphered as IPL3 does it; DMEM and IMEM all `0xFFFF_FFFF` but IMEM's first word, `0x17D8` | `0x17D8` |
 
 One PAL boot code has an entry of its own in the table and is handled as a 6102, as is a boot code the table does not
 know. Software checks these leftovers, so they are part of a valid console.
+
+The boot microcode of a CIC-6105 game's RSP tasks checks, at its first run, what the PIF's program on the RSP left: r4 (IPL3's
+first word, ROM `0x40`), r5 (an address in `0x4_C000` - `0x4_FFFF`), r6 (a word of IPL3, `addiu t1, t1, 4`), r11 (`0x3D8`), the sum
+of v13's eight lanes (`-7510`) and DMEM's first halfword (not 0 or `0xFFFF`: the ROM's header is there). On a console it sets
+signal 7 and writes two of its own words over its first two in the game's copy -- a jump past the check for every later task. On
+an RSP left otherwise it clears signal 7 and the jump it writes leads to code that at every task's start writes DPC_END with
+what it read of DPC_CLOCK (0 for the RSP here: always): a list the RDP is still taking is cut short, and a game that yields its
+graphics task to an audio task never sees the resumed one end. The runtime leaves the registers as the console does
+(`rsp_ipl_state` in `lang/n64rt/n64rt_rsp.c`: a program of its own, run once on the RSP before the game starts) and DMEM's
+first `0x40` bytes as the ROM has them; with another boot code those bytes are 0 and the registers 0.
 
 The words at `0x8000_0300`: `osTvType` (below), `osRomType` 0, `osRomBase` `0xB000_0000`, `osResetType` 0 (cold),
 `osCicId` as above, `osVersion` 0 and `osMemSize` (8 MiB, or 4 MiB without the Expansion Pak).
@@ -616,18 +626,24 @@ SI_DRAM_ADDR (`0x00`), SI_PIF_ADDR_RD64B (`0x04`: PIF RAM to RDRAM), SI_PIF_ADDR
 SI_STATUS (`0x18`: interrupt bit 12, DMA error bit 3, IO busy bit 1, DMA busy bit 0) are in hardware. The DMA moves 16
 words through the bridge's port and ends in the SI interrupt; a start while one runs sets the error bit. PIF RAM is a
 block RAM of 16 words that the CPU also reads and writes a word at a time. Its last byte is the PIF's status byte: a
-write leaves it 0, and its bit 0 written as 1 marks the block as holding joybus commands.
+write leaves it 0 but for bit 1 (the challenge, below), and its bit 0 written as 1 marks the block as holding joybus
+commands.
 
 The PIF itself is the runtime. The hardware raises PEND bit 4 and sets IO busy at the end of a WR64B that carried the
-run flag, and at an RD64B of a block that holds commands; that read is deferred until the PIF is done, as the console's
-SI waits for the PIF. The runtime (`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`), writes back
-the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those commands. The read
-moves nothing until that time is out, counted from the runtime's write (DMA busy meanwhile), so a read takes about what
-it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one controller read, 1.55 ms for four with one
-controller there (`pif_run`'s figures, fitted to the console's) -- a game whose controller thread polls in a loop, above
-the thread that loads the game, leaves that thread the time the console does. A run that a WR64B started is counted from
-there, the console's time for libultra's write and then read; a WR64B itself moves its words some 4,000 cycles (the
-console's 65 us) after the start. The commands:
+run flag or the challenge's bit, at a CPU write of the status byte with the challenge's bit, and at an RD64B of a block
+that holds commands; that read is deferred until the PIF is done, as the console's SI waits for the PIF. The runtime
+(`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`) or answers the challenge (`pif_challenge`),
+writes back the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those
+commands (0 for a challenge). The read moves nothing until that time is out, counted from the runtime's write (DMA busy
+meanwhile), so a read takes about what it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one
+controller read, 1.55 ms for four with one controller there (`pif_run`'s figures, fitted to the console's) -- a game
+whose controller thread polls in a loop, above the thread that loads the game, leaves that thread the time the console
+does. A run that a WR64B started is counted from there, the console's time for libultra's write and then read; a WR64B
+itself moves its words some 4,000 cycles (the console's 65 us) after the start.
+
+The challenge is the CIC-6105's: the 30 nibbles in bytes 48-62 go to the cartridge's CIC, and its answer, a nibble
+for each, takes their place; bytes 46, 47 and 63 are left 0. A game with that CIC sends one and checks the answer
+itself. With another CIC the block is left as it was. The commands:
 
 | Channel | Command | Answer |
 |---|---|---|

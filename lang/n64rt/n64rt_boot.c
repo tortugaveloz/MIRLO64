@@ -249,10 +249,16 @@ void n64rt_run(const n64rt_game_t *g)
     if (g->cic == 6105u && g->rom_size >= 0x888u && g->mem_size <= 0x7F0000u - 0x1000u)
 #endif
         for (u32 i = 0; i < (0x888u - 0x554u) / 4u; i++) *rd32(4u + 4u * i) = n64rt_rom_word(0x554u + 4u * i);
-    /* What a CIC-6105 IPL3 leaves at 0x2FE1C0: a word of its own code, ROM 0x750 (0xAD170014, the `sw s7, 20(t0)` that stores the
-     * boot parameters). Donkey Kong 64 (a 6105 game) checks it right after osInitialize and, finding anything else, spins on it
-     * for ever: a black screen. Every 6105 ROM has the same IPL3, so this is the CIC's, whatever the game. */
-    if (g->cic == 6105u && g->rom_size >= 0x1000u) *rd32(0x2FE1C0u) = n64rt_rom_word(0x750u);
+    /* What a CIC-6105 boot leaves at 0x2FE1C0 and 0x2FB1F4: words of IPL3's own code, ROM 0x750 (0xAD170014, the `sw s7, 20(t0)`
+     * that stores the boot parameters) and ROM 0x73C (0xAD090010, the `sw t1, 16(t0)` that stores osCicId). One 6105 game
+     * checks the first right after osInitialize and, finding anything else, spins on it for ever: a black screen.
+     * Another 6105 game checks both in a thread of its own at its start and, when either differs, marks itself as not on a
+     * console: its first scene is drawn and never goes on (no logo, no title, the buttons do nothing). Every 6105 ROM has the
+     * same IPL3, so these are the CIC's, whatever the game. */
+    if (g->cic == 6105u && g->rom_size >= 0x1000u) {
+        *rd32(0x2FE1C0u) = n64rt_rom_word(0x750u);
+        *rd32(0x2FB1F4u) = n64rt_rom_word(0x73Cu);
+    }
     /* The boot information words, as the real IPL3 leaves them (osTvType from the console's PIF -- see below --, osRomType 0 cartridge, osRomBase, osResetType 0 cold, osVersion 0). osCicId is written by
      * the 6103's IPL3 (`addiu t1, 0x17d7; sw t1, 16(t0)`), the 6105's (0x17d9) and the 6106's (0x17d8, in its enciphered second
      * stage) and by no other we have read (6101, 6102, the PAL 7102: nothing, the word stays 0): n64rt_cic_id. It was the

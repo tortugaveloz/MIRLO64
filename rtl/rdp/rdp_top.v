@@ -377,6 +377,7 @@ module rdp_top (
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
+    reg [1:0]  rxf;                // XH's quarter pixels (outside copy mode: the column-stepped attribute's origin)
     reg [31:0] exh;                 // the major edge's x at the row's top (the attributes' reference)
     // S_VSET: attribute vi (R G B A, S T W, Z) out of the staging RAM. The
     // N64 sends a group's four (shade, texture) as 16 words -- value, DaDx,
@@ -712,22 +713,28 @@ module rdp_top (
                         p_shade <= 1'b0; p_tex <= op != 6'h36; p_zbuf <= 1'b0; p_direct <= 1'b1;
                         p_tile <= w1[26:24];
                         rx0 <= w1[23:14];
+                        rxf <= (cyc != 2'd2) ? w1[13:12] : 2'd0;
                         ry0 <= {2'b00, w1[11:2]};
                         begin : rect_bounds
-                            reg [10:0] x1c, y1c;
-                            reg [9:0]  xa_c, ya_c;
+                            // copy mode (texrect), fill mode (fill rectangle): the corners' whole pixels, the lower
+                            // right included. Otherwise the pixels whose top-left sample is inside, 4x in [XH, XL)
+                            // and 4y in [YH, YL): each corner rounded up to a whole pixel
+                            reg [10:0] x0c, y0c, x1c, y1c;
+                            reg [10:0] xa_c, ya_c;
                             reg incl;
                             incl = (op == 6'h36) ? (cyc == 2'd3) : (cyc == 2'd2);
-                            x1c = {1'b0, w0[23:14]} + (incl ? 11'd1 : 11'd0);
-                            y1c = {1'b0, w0[11:2]}  + (incl ? 11'd1 : 11'd0);
-                            xa_c = w1[23:14] > sc_x0 ? w1[23:14] : sc_x0;
-                            ya_c = w1[11:2]  > sc_y0 ? w1[11:2]  : sc_y0;
-                            xa <= xa_c;
+                            x0c = incl ? {1'b0, w1[23:14]} : ({1'b0, w1[23:12]} + 13'd3) >> 2;
+                            y0c = incl ? {1'b0, w1[11:2]}  : ({1'b0, w1[11:0]}  + 13'd3) >> 2;
+                            x1c = incl ? {1'b0, w0[23:14]} + 11'd1 : ({1'b0, w0[23:12]} + 13'd3) >> 2;
+                            y1c = incl ? {1'b0, w0[11:2]}  + 11'd1 : ({1'b0, w0[11:0]}  + 13'd3) >> 2;
+                            xa_c = x0c > {1'b0, sc_x0} ? x0c : {1'b0, sc_x0};
+                            ya_c = y0c > {1'b0, sc_y0} ? y0c : {1'b0, sc_y0};
+                            xa <= xa_c[9:0];
                             xb <= (x1c < {1'b0, sc_x1}) ? x1c[9:0] : sc_x1;
-                            y <= {2'b00, ya_c};
+                            y <= {1'b0, ya_c};
                             yb <= (y1c < {1'b0, sc_y1}) ? {1'b0, y1c} : {2'b00, sc_y1};
-                            if (((x1c < {1'b0, sc_x1}) ? x1c : {1'b0, sc_x1}) <= {1'b0, xa_c})
-                                yb <= {2'b00, ya_c};   // empty
+                            if (((x1c < {1'b0, sc_x1}) ? x1c : {1'b0, sc_x1}) <= xa_c)
+                                yb <= {1'b0, ya_c};   // empty
                         end
                         mi <= 5'd0;
                         st <= S_RECT_INIT;
@@ -931,15 +938,18 @@ module rdp_top (
                         sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
                         dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}; dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
                         dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
-                        dcol = {{21{dc11[10]}}, dc11};
-                        drow = rdiff(y, ry0);
+                        // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns
+                        // from XH itself (4 (xs - XH's column) - XH's fraction; none in copy mode) -- the
+                        // column-stepped attribute is the plane at XH
+                        dcol = {{19{dc11[10]}}, dc11, 2'b00} - {30'd0, rxf};
+                        drow = {rdiff(y, ry0), 2'b00};
                         case (mi)
                             5'd0: begin mul_a <= dsdx; mul_b <= (op == 6'h25) ? drow : dcol; end
                             5'd1: begin mul_a <= dtdy; mul_b <= (op == 6'h25) ? dcol : drow; end
                             default: ;
                         endcase
-                        if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[31:0];
-                        if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[31:0];
+                        if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[33:2];
+                        if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[33:2];
                         shS <= ds;
                         adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : dsdx;
                         adx[5] <= (op == 6'h25) ? dtdy : 32'd0;

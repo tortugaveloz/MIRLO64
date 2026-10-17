@@ -32,7 +32,13 @@ and fetches the 64-bit commands between CURRENT and END, handing them on as
 
 * A write of START is held until the next write of END, which makes
   CURRENT = START and sets END. While commands are still being fetched that
-  pair waits for them. A write of END alone extends the run.
+  pair waits for them. A write of END alone extends the run. An END written
+  in the very cycle a waiting pair would start starts the pair itself, with
+  that END, and nothing is left waiting: a microcode that writes its output
+  in a ring in DMEM writes END after each command, so one of its ENDs meets
+  the end of the list before the wrap now and then, and a pair left waiting
+  then would have run the ring's first commands a second time, CURRENT
+  going back behind what the microcode had already written over.
 * There is work while CURRENT is below END. An END behind CURRENT is nothing
   to do, not a run round the address space.
 * CURRENT moves by 8 as each command's second word comes back. Up to four
@@ -190,15 +196,22 @@ texture stages run all the same: TEXEL0 is the tile's texel (0, 0).
 
 ### Rectangles
 
-A rectangle's pixels are whole: all eight samples. The corners' integer parts
-are taken; the lower-right corner is inclusive for a texture rectangle in
-copy mode and for a fill rectangle in fill mode, exclusive otherwise. Its
-depth is the primitive depth.
+A rectangle's pixels are whole: all eight samples. A texture rectangle in
+copy mode and a fill rectangle in fill mode take the corners' integer parts,
+the lower-right corner inclusive. Otherwise the corners' quarter pixels
+count, as for a triangle without AA_EN: a pixel is drawn where its top-left
+sample is inside, `XH <= 4x < XL` and `YH <= 4y < YL`, so a corner with a
+fraction leaves out the pixel it falls in at the upper left and takes it in
+at the lower right (a run of rectangles placed at fractions of a pixel then
+meets without a gap). Its depth is the primitive depth.
 
 A texture rectangle steps S by DsDx along the row and T by DtDy down the
-rows; the flipped one swaps the two. In copy mode DsDx counts a quarter of
-its value. A fill rectangle outside fill mode goes through the pixel pipeline
-like any untextured primitive.
+rows; the flipped one swaps the two. The attribute stepped down the rows
+starts at YH's whole row. The one stepped along the row is the plane at XH
+itself: at column x, its value plus DsDx (or DtDy) times `(4x - XH) / 4` --
+copy mode has no fraction there, and its DsDx counts a quarter of its value.
+A fill rectangle outside fill mode goes through the pixel pipeline like any
+untextured primitive.
 
 ## Textures
 
@@ -511,7 +524,7 @@ A picture 512 wide or more is shown with the filters off.
 | RTL against the model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind from any alignment, triangles and rectangles in every cycle type |
 | the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
 | the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
-| the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks and on `gen_xbus_task.py`'s XBUS ones |
+| the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks, on `gen_xbus_task.py`'s XBUS ones and on `gen_xbus_ring.py`'s (a ring in DMEM, START and END pairs that wait; `TB_CREADY=15`, a slow RDP, keeps lists under way) |
 | the scan-out's filters | `sim/vi_filter` | the pads against a model of the filters, pixel for pixel |
 | in the SoC | `sim/mips_soc` (`FB_N64=1` for frame dumps) | a program on the whole SoC: RSP, command fetch, RDP, scan-out |
 
