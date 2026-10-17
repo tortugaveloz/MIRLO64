@@ -619,7 +619,13 @@ write leaves it 0, and its bit 0 written as 1 marks the block as holding joybus 
 The PIF itself is the runtime. The hardware raises PEND bit 4 and sets IO busy at the end of a WR64B that carried the
 run flag, and at an RD64B of a block that holds commands; that read is deferred until the PIF is done, as the console's
 SI waits for the PIF. The runtime (`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`), writes back
-the words that changed and writes `MONITOR.SIDONE`. The commands:
+the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those commands. The read
+moves nothing until that time is out, counted from the runtime's write (DMA busy meanwhile), so a read takes about what
+it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one controller read, 1.55 ms for four with one
+controller there (`pif_run`'s figures, fitted to the console's) -- a game whose controller thread polls in a loop, above
+the thread that loads the game, leaves that thread the time the console does. A run that a WR64B started is counted from
+there, the console's time for libultra's write and then read; a WR64B itself moves its words some 4,000 cycles (the
+console's 65 us) after the start. The commands:
 
 | Channel | Command | Answer |
 |---|---|---|

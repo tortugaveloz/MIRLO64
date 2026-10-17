@@ -703,14 +703,24 @@ static void eep_use(u32 bytes)
 static u32 s_pif_w[16];                 /* (as words: the SI moves it so, and a store is a write to the SDRAM) */
 static u8 *const s_pif = (u8 *)s_pif_w;
 static u8 s_pif_joy;                    /* the block holds commands */
-static void pif_run(void)
+/* How long the console's PIF takes over the block, from the SI's read of it to its interrupt, in RCP cycles (62.5 MHz;
+ * pif_run's value, which the SI in hardware waits out): measured on the console, 15,030 for a block that is only its end
+ * mark, 37,987 for one controller read, 97,890 for four with one controller there -- 13,600, then 1,420 for each byte that
+ * is no command (0x00, 0xFD, 0xFF, the end), 22,000 for a command a device answers, 18,000 for one nothing answers (the
+ * timeout), 20,000 for the cartridge's; a command longer than a controller read's 5 bytes (a pak's block, 36) adds the
+ * joybus's 32 us (2,000) for each byte more. */
+#define PIF_T0    13600u
+#define PIF_TSKIP 1420u
+#define PIF_TCMD(ok, ch, n) (((ch) == 4 ? 20000u : (ok) ? 22000u : 18000u) + ((n) > 5u ? ((n) - 5u) * 2000u : 0u))
+static u32 pif_run(void)
 {
     int ch = 0;
+    u32 t = PIF_T0;
     for (int i = 0; i < 63 && ch < 6; ) {
         u8 tx = s_pif[i];
-        if (tx == 0xFEu) break;
-        if (tx == 0xFFu) { i++; continue; }
-        if (tx == 0x00u || tx == 0xFDu) { ch++; i++; continue; }
+        if (tx == 0xFEu) { t += PIF_TSKIP; break; }
+        if (tx == 0xFFu) { t += PIF_TSKIP; i++; continue; }
+        if (tx == 0x00u || tx == 0xFDu) { t += PIF_TSKIP; ch++; i++; continue; }
         tx &= 0x3Fu;
         s_pif[i + 1] &= 0x3Fu;                       /* (the run before: nothing had answered) */
         u8 rx = s_pif[i + 1];
@@ -762,9 +772,11 @@ static void pif_run(void)
 #endif
         }
         if (!ok) s_pif[i + 1] |= 0x80u;              /* nothing answered */
+        t += PIF_TCMD(ok, ch, (u32)tx + rx);
         i += 2 + tx + rx;
         ch++;
     }
+    return t;
 }
 /* the SI's two transfers of the block: into the PIF, and out of it */
 static void pif_put(const void *b)
@@ -775,7 +787,7 @@ static void pif_put(const void *b)
 }
 static void pif_get(void *b)
 {
-    if (s_pif_joy) pif_run();
+    if (s_pif_joy) (void)pif_run();
     copy_words(b, s_pif_w, 64);
 }
 
@@ -1249,14 +1261,15 @@ u32 n64rt_ai_hw(void) { return s_ai_hw; }
 u32 n64rt_si_hw(void) { return s_si_hw; }
 /* The PIF has commands to run (MONITOR.PEND bit 4: an RD64B of a block that holds them, or the end of a WR64B that carried the run
  * flag): the block is in the PIF RAM -- read it, run the joybus commands on the copy (pif_run, as the software SI's), write back the
- * words they changed, and say the PIF is done: IO busy clears and an RD64B that waited goes on. */
+ * words they changed, and say the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those
+ * commands is over (SIDONE's value: a game whose controller thread polls in a loop must leave its other threads that time). */
 void n64rt_si_hw_event(void)
 {
     u32 orig[16];
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
-    pif_run();
+    const u32 t = pif_run();
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
-    monitor_sidone_write(1);
+    monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }
 static void vi_hw_note_origin(void) { if (s_vi_hw) fb_note(hw_rd(0x04400004u)); }
 /* The VI's registers the window and the size come from changed (MONITOR.PEND bit 1, which is no longer a field): read
