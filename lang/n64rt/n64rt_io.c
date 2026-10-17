@@ -778,11 +778,39 @@ static u32 pif_run(void)
     }
     return t;
 }
+/* The challenge of a CIC-6105 game (bit 1 of the status byte): the PIF sends the 30 nibbles of bytes 48-62 to the cartridge's
+ * CIC and puts the CIC's answer in their place, a nibble for each, the first nibble the high one; bytes 46 and 47 and the
+ * status byte are left 0. The CIC answers each nibble c with r = key + 5 c (mod 16); the next key is r's entry in one of two
+ * tables, and which table follows depends on r. The game sends the challenge when it chooses and checks the answer itself
+ * (one that gets its own challenge back, unanswered, goes on to fail later). Another CIC answers nothing: the block is left
+ * as it is. */
+static void pif_challenge(void)
+{
+    static const u8 lut[2][16] = {
+        { 0x4, 0x7, 0xA, 0x7, 0xE, 0x5, 0xE, 0x1, 0xC, 0xF, 0x8, 0xF, 0x6, 0x3, 0x6, 0x9 },
+        { 0x4, 0x1, 0xA, 0x7, 0xE, 0x5, 0xE, 0x1, 0xC, 0x9, 0x8, 0x5, 0x6, 0x3, 0xC, 0x9 } };
+    s_pif[63] = 0;
+    if (!n64rt_game || n64rt_game->cic != 6105u) return;
+    u32 key = 0xBu, t = 0;
+    for (u32 i = 0; i < 30u; i++) {
+        u8 *b = &s_pif[48u + i / 2u];
+        const u32 sh = i & 1u ? 0u : 4u, r = (key + 5u * ((*b >> sh) & 0xFu)) & 0xFu;
+        *b = (u8)((*b & ~(0xFu << sh)) | r << sh);
+        key = lut[t][r];
+        const u32 neg = r >> 3, mag = (neg ? ~r : r) & 7u;
+        u32 nt = mag % 3u == 1u ? neg : 1u - neg;
+        if (t && (r == 0x1u || r == 0x9u)) nt = 1;
+        if (t && (r == 0xBu || r == 0xEu)) nt = 0;
+        t = nt;
+    }
+    s_pif[46] = s_pif[47] = 0;
+}
 /* the SI's two transfers of the block: into the PIF, and out of it */
 static void pif_put(const void *b)
 {
     copy_words(s_pif_w, b, 64);
     if (s_pif[63] & 1u) s_pif_joy = 1;
+    if (s_pif[63] & 2u) pif_challenge();
     s_pif[63] = 0;                                   /* (taken: a game that looks finds nothing pending) */
 }
 static void pif_get(void *b)
@@ -866,7 +894,7 @@ static int si_write(u32 pa, u32 v)
     if (s_si_hw && SI_HW_PA(pa)) { hw_wr(pa, v); return 1; }
     if (pa >= PIF_RAM && pa < PIF_RAM + 64u) {
         s_pif_w[(pa - PIF_RAM) >> 2] = v;
-        if (pa == PIF_RAM + 60u) { if (v & 1u) s_pif_joy = 1; s_pif[63] = 0; }
+        if (pa == PIF_RAM + 60u) { if (v & 1u) s_pif_joy = 1; if (v & 2u) pif_challenge(); s_pif[63] = 0; }
         return 1;
     }
     switch (pa) {
@@ -1260,14 +1288,17 @@ u32 n64rt_vi_hw(void) { return s_vi_hw; }
 u32 n64rt_ai_hw(void) { return s_ai_hw; }
 u32 n64rt_si_hw(void) { return s_si_hw; }
 /* The PIF has commands to run (MONITOR.PEND bit 4: an RD64B of a block that holds them, or the end of a WR64B that carried the run
- * flag): the block is in the PIF RAM -- read it, run the joybus commands on the copy (pif_run, as the software SI's), write back the
- * words they changed, and say the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those
- * commands is over (SIDONE's value: a game whose controller thread polls in a loop must leave its other threads that time). */
+ * flag or the challenge's bit, or a word write of the status byte with that bit): the block is in the PIF RAM -- read it, run the
+ * joybus commands on the copy (pif_run, as the software SI's) or answer the challenge, write back the words that changed, and say
+ * the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those commands is over (SIDONE's
+ * value: a game whose controller thread polls in a loop must leave its other threads that time; a challenge, 0). */
 void n64rt_si_hw_event(void)
 {
     u32 orig[16];
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
-    const u32 t = pif_run();
+    u32 t = 0;
+    if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
+    else t = pif_run();
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }

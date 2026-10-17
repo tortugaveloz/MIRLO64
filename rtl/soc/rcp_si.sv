@@ -14,13 +14,16 @@
 // PIF RAM, 0x1FC0_07C0 .. 0x1FC0_07FF (KSEG0 or KSEG1): 16 words, the CPU's lw / sw (mips_core's SIW window: no address error),
 // a block RAM, one word a read (c_q the cycle after the address). The CPU stalls (c_busy) while the DMA owns the RAM. Byte 63 (the
 // low byte of word 15) is the PIF's status byte: a write leaves it 0, as the software PIF did ("taken": a game that looks
-// finds nothing pending); the run flag that was in it (bit 0) is what the PIF acts on:
+// finds nothing pending), but for bit 1, which the runtime clears when it has answered; the run flag that was in it (bit 0)
+// and the challenge (bit 1) are what the PIF acts on:
 //   `joy`  a block with the run flag has been written (by the DMA or by the CPU): the block holds joybus commands. Once set, it
 //          stays: the PIF repeats the commands at every read of the block (libultra writes the request once and then only
 //          reads, a frame after the other -- the replies it finds are of that read).
 //   IO busy (STATUS bit 1) is the PIF working: the runtime is told (`ev`, a pulse: MONITOR.PEND's bit 4) and clears it when it
 //          has written the replies into the PIF RAM (`done_we`, MONITOR.SIDONE). It is set at the end of a WR64B that carried
-//          the run flag, and by an RD64B when `joy` is set and the PIF is not busy already (the commands run again before the
+//          the run flag or the challenge, at a CPU write of word 15 with the challenge (a CIC-6105 cartridge's: the runtime
+//          answers it in bytes 46-63 and clears the bit; the read that follows finds the answer, as after a WR64B's run of the
+//          commands), and by an RD64B when `joy` is set and the PIF is not busy already (the commands run again before the
 //          block is read: that read is deferred -- DMA busy, nothing moved -- until the PIF is done, as the console's SI waits
 //          for the PIF; one that finds the PIF busy waits for that run, and the first read after the run a WR64B made does not
 //          run them again: its replies are there). A start of either DMA waits for the PIF to be done.
@@ -89,7 +92,7 @@ wire  [3:0]  m_wa   = busy ? idx : ca;
 wire  [31:0] m_wd   = busy ? rdata : c_wd;
 wire         w15    = m_wa == 4'd15;
 always @(posedge clk) begin
-    if (m_we) m[m_wa] <= w15 ? {m_wd[31:8], 8'h00} : m_wd;
+    if (m_we) m[m_wa] <= w15 ? {m_wd[31:8], 6'd0, m_wd[1], 1'b0} : m_wd;
     q <= m[busy ? idx : ca];
 end
 assign c_q   = q;
@@ -118,6 +121,8 @@ always_ff @(posedge clk) begin
         if (wr_s && a == 3'd0 && st == S_IDLE) dram <= {wd[23:3], 1'b0};       // (the DMA owns it while it is under way)
         // the CPU's word 15 with the run flag: the block holds commands
         if (c_wr_s && !busy && ca == 4'd15 && c_wd[0]) begin joy <= 1'b1; fresh <= 1'b0; end
+        // ... or with the challenge's bit: the PIF answers it at once
+        if (c_wr_s && !busy && ca == 4'd15 && c_wd[1]) begin io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b1; end
         if (start_rd || start_wr) begin
             if (st != S_IDLE) err <= 1'b1;
             else begin
@@ -133,7 +138,8 @@ always_ff @(posedge clk) begin
         S_A: st <= S_REQ;
         S_REQ: if (ack) begin
             dram <= dram + 22'd1;
-            if (!dir_rd && idx == 4'd15 && rdata[0]) begin joy <= 1'b1; io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b1; end
+            if (!dir_rd && idx == 4'd15 && rdata[0]) joy <= 1'b1;
+            if (!dir_rd && idx == 4'd15 && rdata[1:0] != 2'd0) begin io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b1; end
             if (idx == 4'd15) begin st <= S_IDLE; irq <= 1'b1; irq_f <= 1'b1; end
             else begin idx <= idx + 4'd1; st <= S_A; end
         end

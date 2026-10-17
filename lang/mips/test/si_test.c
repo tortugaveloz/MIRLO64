@@ -10,7 +10,7 @@
  *   1  PIF RAM is where the boot ROM's last 64 bytes of its first 2 KiB are: with the pass-through off (MCTL bit 8) the boot
  *      ROM is there, with it on the PIF RAM; the rest of the boot ROM is untouched
  *   2  the registers: reset values, DRAM_ADDR's 8-byte alignment and read-back, the others read 0, the registers repeat
- *      every 0x20 bytes; PIF RAM's 16 words by KSEG1 and KSEG0, word 15's low byte (the PIF's status byte) written 0
+ *      every 0x20 bytes; PIF RAM's 16 words by KSEG1 and KSEG0, word 15's low byte (the PIF's status byte) written 0 but for bit 1
  *   3  WR64B (RDRAM -> PIF RAM), no run flag: STATUS busy while it runs, the PIF RAM right, the interrupt (STATUS bit 12,
  *      MI_INTR's SI bit) at its end, cleared by a write to STATUS; no wake-up of the monitor (PEND bit 4)
  *   4  RD64B (PIF RAM -> RDRAM) at an address that is 8 bytes aligned only: the 64 bytes and not a byte more
@@ -18,7 +18,8 @@
  *   6  the PIF: a WR64B with the run flag sets IO busy and PEND bit 4 at its end (the flag is taken: byte 63 reads 0);
  *      an RD64B then is deferred (DMA busy, nothing moved) until SIDONE; the next RD64B runs the commands again (the
  *      run flag stays: PEND bit 4 at the request), except the first after the run a WR64B made (its replies are there);
- *      a WR64B waits for the PIF too
+ *      a WR64B waits for the PIF too; the challenge's bit (bit 1 of byte 63) is kept and has the PIF answer at once, at the
+ *      end of a WR64B or at a CPU write of the status byte
  *   7  the CPU's access to the PIF RAM while the DMA runs stalls until it is done and reads the data (the old word before)
  *   8  the game's own loads and stores to the registers and PIF RAM (no entry into the monitor), and the interrupt
  *      reaching its handler (Cause.IP2, MI_INTR, SI_STATUS, cleared by a write to SI_STATUS at once)
@@ -397,6 +398,35 @@ int main(void)
     check("... after SIDONE it went through", cmp_blk(A2, 1u), 0u);
     check("... IO busy clear, the interrupt", SI[6], ST_IRQ);
     SI[6] = 0;
+    /* the challenge's bit (bit 1 of byte 63): the status byte keeps it, and the PIF answers at the end of the WR64B (IO busy,
+     * PEND bit 4); the read after the answer does not run the commands; a CPU write of the status byte with it does the same */
+    monitor_pend_write(0x1F);
+    fill_blk(A1, 2u);
+    SI[0] = A1; SI[4] = 0;
+    si_idle(1000000u);
+    check("WR64B with the challenge's bit: DMA idle, IO busy, the interrupt", SI[6], ST_IO | ST_IRQ);
+    check("... PEND bit 4", monitor_pend_read() & 0x10u, 0x10u);
+    check("... byte 63 keeps the bit", PIF[15] & 0xFFu, 2u);
+    SI[6] = 0;
+    monitor_pend_write(0x10u);
+    PIF[12] = 0x136AF74Cu; PIF[15] = RD(A1)[15] & ~0xFFu;          /* the answer, the bit cleared */
+    monitor_sidone_write(1);
+    sentinel(A4, 16, 0x22000000u);
+    SI[0] = A4; SI[1] = 0;
+    si_idle(1000000u);
+    check("the read after the answer: done at once (the interrupt), IO busy clear", SI[6], ST_IRQ);
+    check("... no run: PEND bit 4 stays down", monitor_pend_read() & 0x10u, 0u);
+    check("... the block has the answer and a status byte of 0", RD(A4)[12] == 0x136AF74Cu && (RD(A4)[15] & 0xFFu) == 0u, 1u);
+    SI[6] = 0;
+    PIF[15] = 0x12345602u;
+    check("a CPU write of the status byte with the challenge's bit: IO busy", SI[6] & ST_IO, ST_IO);
+    check("... PEND bit 4", monitor_pend_read() & 0x10u, 0x10u);
+    check("... the bit kept", PIF[15], 0x12345602u);
+    monitor_pend_write(0x10u);
+    PIF[15] = 0x12345600u;
+    monitor_sidone_write(1);
+    check("... SIDONE: IO busy clear", SI[6] & ST_IO, 0u);
+    check("... no interrupt (no DMA)", SI[6] & ST_IRQ, 0u);
 
     /* 7: the CPU's read of the PIF RAM while the DMA runs */
     fill_blk(A1, 0u);

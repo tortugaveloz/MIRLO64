@@ -626,18 +626,24 @@ SI_DRAM_ADDR (`0x00`), SI_PIF_ADDR_RD64B (`0x04`: PIF RAM to RDRAM), SI_PIF_ADDR
 SI_STATUS (`0x18`: interrupt bit 12, DMA error bit 3, IO busy bit 1, DMA busy bit 0) are in hardware. The DMA moves 16
 words through the bridge's port and ends in the SI interrupt; a start while one runs sets the error bit. PIF RAM is a
 block RAM of 16 words that the CPU also reads and writes a word at a time. Its last byte is the PIF's status byte: a
-write leaves it 0, and its bit 0 written as 1 marks the block as holding joybus commands.
+write leaves it 0 but for bit 1 (the challenge, below), and its bit 0 written as 1 marks the block as holding joybus
+commands.
 
 The PIF itself is the runtime. The hardware raises PEND bit 4 and sets IO busy at the end of a WR64B that carried the
-run flag, and at an RD64B of a block that holds commands; that read is deferred until the PIF is done, as the console's
-SI waits for the PIF. The runtime (`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`), writes back
-the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those commands. The read
-moves nothing until that time is out, counted from the runtime's write (DMA busy meanwhile), so a read takes about what
-it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one controller read, 1.55 ms for four with one
-controller there (`pif_run`'s figures, fitted to the console's) -- a game whose controller thread polls in a loop, above
-the thread that loads the game, leaves that thread the time the console does. A run that a WR64B started is counted from
-there, the console's time for libultra's write and then read; a WR64B itself moves its words some 4,000 cycles (the
-console's 65 us) after the start. The commands:
+run flag or the challenge's bit, at a CPU write of the status byte with the challenge's bit, and at an RD64B of a block
+that holds commands; that read is deferred until the PIF is done, as the console's SI waits for the PIF. The runtime
+(`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`) or answers the challenge (`pif_challenge`),
+writes back the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those
+commands (0 for a challenge). The read moves nothing until that time is out, counted from the runtime's write (DMA busy
+meanwhile), so a read takes about what it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one
+controller read, 1.55 ms for four with one controller there (`pif_run`'s figures, fitted to the console's) -- a game
+whose controller thread polls in a loop, above the thread that loads the game, leaves that thread the time the console
+does. A run that a WR64B started is counted from there, the console's time for libultra's write and then read; a WR64B
+itself moves its words some 4,000 cycles (the console's 65 us) after the start.
+
+The challenge is the CIC-6105's: the 30 nibbles in bytes 48-62 go to the cartridge's CIC, and its answer, a nibble
+for each, takes their place; bytes 46, 47 and 63 are left 0. A game with that CIC sends one and checks the answer
+itself. With another CIC the block is left as it was. The commands:
 
 | Channel | Command | Answer |
 |---|---|---|
