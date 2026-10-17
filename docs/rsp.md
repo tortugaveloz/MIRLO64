@@ -81,8 +81,9 @@ The engine moves one 32-bit word per request on the RDRAM port (`r_valid`,
 
 * into SP memory: a read request each cycle the memory accepts one; each word
   that comes back is written to DMEM or IMEM the cycle after it arrives;
-* out of DMEM: DMEM is read 8 bytes at a time, one pair of words ahead, so a
-  write request goes out each cycle the memory accepts one;
+* out of DMEM: DMEM is read 8 bytes at a time into a FIFO of two pairs, ahead
+  of the pair being sent, so a write request goes out each cycle the memory
+  accepts one;
 * out of IMEM: the two words of a pair are read one after the other on IMEM's
   second port, a pair every three cycles.
 
@@ -101,7 +102,9 @@ itself, on SP_DMA_BUSY or SP_DMA_FULL, as the console's microcode does.
 
 A DMA into or out of DMEM shares DMEM's port with the program, and the DMA
 has priority. A transfer in takes the port in each cycle it writes a word; a
-transfer out takes it for the whole transfer. While the DMA has the port,
+transfer out in each cycle it reads a pair of words, into a FIFO of two pairs
+ahead of the one being sent -- one cycle in two at most, so the microcode's
+loads and stores go on between them. While the DMA has the port,
 `m_stall` makes a scalar or vector load or store wait in E (each beat of LTV /
 STV likewise). The stall comes from a register, known one cycle ahead, which
 is why an arriving word is written a cycle after it arrives.

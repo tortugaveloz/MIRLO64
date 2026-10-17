@@ -243,11 +243,11 @@ wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 // SP_DMA_FULL (SP_STATUS) for its end.
 //   in (RDRAM -> SP): a read request a cycle, each word written to DMEM /
 //       IMEM as it comes back
-//   out (DMEM -> RDRAM): DMEM is read 8 bytes at a time, a pair of words
-//       ahead of the one being written, so a write request goes out every
-//       cycle the memory takes one. (DMEM's address never waits on the
-//       memory's ready: the pair read ahead stays on DMEM's outputs until
-//       the one before it is all sent.)
+//   out (DMEM -> RDRAM): DMEM is read 8 bytes at a time into a FIFO of two
+//       pairs (pf), ahead of the pair being written, so a write request goes
+//       out every cycle the memory takes one; DMEM's port is the DMA's only
+//       in the cycles of those reads (one in two at most), and the
+//       microcode's loads and stores go on in the others
 //   out of IMEM: the pair's two words one after the other on IMEM's second
 //       port (iq), so a pair every three cycles. Only a boot microcode's
 //       check of the console does it (a CIC-6105 game's: eight bytes).
@@ -266,13 +266,15 @@ wire         d_last = g_words == 10'd0 && g_rows == 8'd0;   // the word being mo
 // longest path)
 logic [63:0] ob;                      // out: the pair being sent
 logic [1:0]  ob_n;                    // its words still to send
-logic [8:0]  np;                      // the pair DMEM is being asked for (the next one)
-logic        q_ok;                    // ... and has on its outputs
+logic [8:0]  np;                      // the pair SP memory is asked for next
+logic [63:0] pf [2];                  // out of DMEM: the pairs read ahead, a FIFO (pf_h its head, pf_n how many)
+logic        pf_h, pf_rd;             // ... and a read went out last cycle (its pair on m_rdata16 now)
+logic [1:0]  pf_n;
 logic [1:0]  iq;                      // (out of IMEM) the pair's words read: 2, both
 logic [31:0] ih_q;                    // ... the first
 wire         d_im    = sp_addr[12];   // the transfer is IMEM's
 assign im_dma = ds != D_IDLE && d_im;
-wire         p_ok    = d_im ? iq == 2'd2 : q_ok;
+wire         p_ok    = d_im ? iq == 2'd2 : pf_n != 2'd0;
 // RD_LEN / WR_LEN (the microcode's or the host's) is taken into the pending registers (p_*: the length, count and
 // skip, which transfer); the DMA starts from them when the running one is done -- the next cycle on an idle engine
 logic [31:0] p_len;                   // the pending DMA's length word
@@ -302,7 +304,8 @@ end
 wire         sp_wr   = wq_v;                               // a word is written into SP memory
 // SP memory: DMEM through the access above, IMEM through its second port
 // (IMEM is only ever written by a DMA)
-assign dm_valid = (sp_wr && !d_im) || (ds == D_OUT && !d_im);
+wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
+assign dm_valid = (sp_wr && !d_im) || dm_rd;
 assign dm_we    = sp_wr;
 assign dm_addr  = ds == D_OUT ? {np, 3'b000} : {sp_word, 2'b00};
 assign dm_wdata = wq_d;
@@ -393,15 +396,20 @@ always_ff @(posedge clk) begin
             g_rows  <= d_len[19:12];
             d_half  <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
             sp_addr <= sp_addr_w; ram_addr <= ram_addr_w;      // from the addresses last written
-            np <= sp_addr_w[11:3]; ob_n <= 2'd0; q_ok <= 1'b0; iq <= 2'd0;
+            np <= sp_addr_w[11:3]; ob_n <= 2'd0; iq <= 2'd0; pf_h <= 1'b0; pf_n <= 2'd0; pf_rd <= 1'b0;
             ds <= d_rd0 ? D_IN : D_OUT;
         end
         D_IN:    if (sp_wr && d_last) ds <= D_END;
         D_OUT: begin
-            q_ok <= !o_load;                         // (a new address: its pair a cycle later)
             iq <= o_load ? 2'd0 : iq == 2'd2 ? 2'd2 : iq + 2'd1;
+            // (DMEM: a read's pair into the FIFO the cycle after; the head to ob as it empties)
+            pf_rd <= dm_rd;
+            if (pf_rd) pf[pf_h ^ pf_n[0]] <= m_rdata16[127:64];
+            pf_n <= pf_n + 2'(pf_rd) - 2'(o_load && !d_im);
+            if (o_load && !d_im) pf_h <= !pf_h;
+            if (d_im ? o_load : dm_rd) np <= np + 9'd1;
             if (iq == 2'd1) ih_q <= ia_q;
-            if (o_load) begin ob <= d_im ? {ih_q, ia_q} : m_rdata16[127:64]; ob_n <= 2'd2; np <= np + 9'd1; end
+            if (o_load) begin ob <= d_im ? {ih_q, ia_q} : pf[pf_h]; ob_n <= 2'd2; end
             else if (r_go) ob_n <= ob_n - 2'd1;
             if (r_go && d_last) ds <= D_END;
         end
