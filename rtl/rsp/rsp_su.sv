@@ -13,9 +13,20 @@
 //   W  register write
 // A load followed by a user stalls one cycle. BREAK, as it leaves E, stops
 // the unit (brk): what follows it is not executed and pc_next names it.
+// Pairs, as the console's RSP issues them: a vector computation and the
+// scalar instruction next to it (either first) -- one that is neither a
+// coprocessor's nor a branch, jump or BREAK, and not in a delay slot -- enter
+// E together (IMEM's second port gives the word after D's) and leave it in
+// the same cycle, the scalar one through E as ever and the computation to the
+// vector unit on c_*. The two touch nothing of each other's: their order does
+// not matter. The fetch then goes on two words on. With LPAIR (a vector unit of eight lanes) the
+// scalar one may also be a vector load (LBV .. LUV) of a register the computation neither reads
+// nor writes: it goes to the vector unit with it (c_lv, c_lins; its base on c_a).
 `default_nettype none
 
-module rsp_su (
+module rsp_su #(
+    parameter bit LPAIR = 0
+) (
     input  wire         clk,
     input  wire         rst,
     // run: execute. While it is low nothing enters E; pc_load sets the PC.
@@ -28,6 +39,8 @@ module rsp_su (
 
     output logic [9:0]  i_addr,         // IMEM word address
     input  wire  [31:0] i_data,
+    input  wire  [31:0] i_data2,        // the word after i_data's (IMEM's second port) ...
+    input  wire         i2_ok,          // ... when that port read it (not the DMA's)
 
     // DMEM: bytes m_addr .. m_addr + m_n, first byte in [31:24]; the read
     // data the next cycle
@@ -44,6 +57,8 @@ module rsp_su (
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
     output logic [31:0] c_b,            // rt
+    output logic        c_lv,           // (LPAIR) a pair's vector load goes with the computation on c_ins: it is c_lins
+    output logic [31:0] c_lins,         // E's own instruction (c_ins but for a pair's computation)
     input  wire         c_done,
     input  wire  [31:0] c_res,          // MFC0, MFC2, CFC2
     // the vector registers' read addresses (their memories register them): of the instruction E holds in the cycle
@@ -55,7 +70,8 @@ module rsp_su (
 
     // (simulation) each instruction as it leaves E, and each register write
     output logic        tr_e,
-    output logic [11:0] tr_e_pc,
+    output logic [11:0] tr_e_pc,        // (of a pair: the first)
+    output logic        tr_e2,          // a pair: the next instruction (tr_e_pc + 4) leaves with it
     output logic        tr_e_we,        // ... and it writes register tr_e_wr
     output logic [4:0]  tr_e_wr,
     output logic        tr_we,
@@ -148,19 +164,43 @@ endfunction
 logic [11:0] pc_f;
 logic        d_valid;  logic [11:0] d_pc;
 logic        e_valid;  logic [11:0] e_pc;  logic [31:0] e_ins;  ctl_t e_c;
+logic        v_e;      logic [31:0] v_ins;                  // E holds a pair: its vector computation
 logic        m_valid_r; logic [31:0] m_res; ctl_t m_c;
 logic        m_we_r;
 logic        w_we;     logic [4:0] w_wr;   logic [31:0] w_res;
 logic        x_we;     logic [4:0] x_wr;   logic [31:0] x_res;
 
+// ---- a pair in D: D's instruction and the next (i_data2), a vector computation and a plain scalar one
+function automatic logic is_vc(input logic [31:0] i);
+    return i[31:26] == 6'h12 && i[25];
+endfunction
+function automatic logic is_plain(input logic [31:0] i);     // neither a coprocessor's nor a branch, jump or BREAK
+    logic [5:0] op; op = i[31:26];
+    return !(op[5:3] == 3'd0 && op[2:0] != 3'd0) && !(op == 6'h00 && (i[5:0] == 6'h08 || i[5:0] == 6'h09 || i[5:0] == 6'h0D))
+        && op != 6'h10 && op != 6'h12 && op != 6'h32 && op != 6'h3A;
+endfunction
+// (LPAIR) a vector load, LBV .. LUV, of a register the computation v neither reads nor writes (nor a VNOP / VNULL)
+function automatic logic is_vl(input logic [31:0] i, input logic [31:0] v);
+    return LPAIR && i[31:26] == 6'h32 && i[15:11] <= 5'd7 && v[5:0] != 6'h37 && v[5:0] != 6'h3F
+        && i[20:16] != v[10:6] && i[20:16] != v[15:11] && i[20:16] != v[20:16];
+endfunction
+wire  [31:0] ins_d = i_data;
+logic        stall_e;
+wire         v_first = is_vc(ins_d);
+// (not behind a branch or jump in E: D's instruction is its delay slot)
+wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr))
+                   && (v_first ? is_plain(i_data2) || is_vl(i_data2, ins_d) : (is_plain(ins_d) || is_vl(ins_d, i_data2)) && is_vc(i_data2));
+wire  [31:0] s_ins_d = (pair_d && v_first) ? i_data2 : ins_d;   // the scalar unit's instruction entering E
+wire  [31:0] v_ins_d = v_first ? ins_d : i_data2;               // a pair's computation
+wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocessors' instruction entering E
+wire         pair_go = pair_d && !stall_e;
+
 // ---- the register file: two copies, read with the instruction arriving in D
 logic [31:0] rf_a [0:31];
 logic [31:0] rf_b [0:31];
 logic [31:0] rf_qa, rf_qb;
-wire  [31:0] ins_d = i_data;
-logic        stall_e;
-wire  [4:0]  ra_d = stall_e ? e_ins[25:21] : ins_d[25:21];
-wire  [4:0]  rb_d = stall_e ? e_ins[20:16] : ins_d[20:16];
+wire  [4:0]  ra_d = stall_e ? e_ins[25:21] : s_ins_d[25:21];
+wire  [4:0]  rb_d = stall_e ? e_ins[20:16] : s_ins_d[20:16];
 always_ff @(posedge clk) begin
     if (w_we) begin rf_a[w_wr] <= w_res; rf_b[w_wr] <= w_res; end
     rf_qa <= rf_a[ra_d]; rf_qb <= rf_b[rb_d];
@@ -245,19 +285,22 @@ assign m_addr = addr_v[11:0];
 assign m_n = e_c.size;
 assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
 
-// the coprocessors
-assign c_valid = e_valid && e_c.cop && !hazard;
-assign c_ins = e_ins;
+// the coprocessors (a pair's computation goes when its scalar instruction can: neither waits on a load nor on DMEM)
+wire        s_mwait = m_stall && (e_c.load || e_c.store);
+assign c_valid = e_valid && !hazard && (e_c.cop || (v_e && !s_mwait));
+assign c_ins = v_e ? v_ins : e_ins;
+assign c_lv = v_e && e_c.cop;                    // (a pair's scalar side is a coprocessor's only as a vector load)
+assign c_lins = e_ins;
 assign c_a = ea;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
     return (i[31:26] == 6'h12 && i[25:24] == 2'b00 && i[22:21] == 2'b00) ? i[15:11] : i[20:16];
 endfunction
-assign c_ra_n = stall_e ? e_ins[15:11] : ins_d[15:11];
-assign c_rb_n = stall_e ? c_rb : vrb(ins_d);
+assign c_ra_n = stall_e ? c_ins[15:11] : c_ins_d[15:11];
+assign c_rb_n = stall_e ? c_rb : vrb(c_ins_d);
 
 wire [31:0] e_res = e_c.link ? {20'h0, e_pc + 12'd8} : e_c.cop ? c_res : alu;
-assign stall_e = e_valid && (hazard || (e_c.cop && !c_done) || (m_stall && (e_c.load || e_c.store)));
+assign stall_e = e_valid && (hazard || ((e_c.cop || v_e) && !c_done) || s_mwait);
 assign brk = e_go && e_c.brk;
 
 // ---- M
@@ -272,14 +315,14 @@ end
 wire [31:0] m_out = m_c.load ? ld : m_res;
 
 // ---- sequencing
-assign i_addr = stall_e ? d_pc[11:2] : pc_f[11:2];
+assign i_addr = stall_e ? d_pc[11:2] : pair_go ? pc_f[11:2] + 10'd1 : pc_f[11:2];
 assign pc_next = d_valid ? d_pc : pc_f;
 assign idle = !e_valid && !m_valid_r;
 
 always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0;
-        d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0;
+        d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0; v_e <= 1'b0;
         m_we_r <= 1'b0; w_we <= 1'b0; x_we <= 1'b0;
     end else begin
         x_we <= w_we; x_wr <= w_wr; x_res <= w_res;
@@ -289,9 +332,10 @@ always_ff @(posedge clk) begin
         m_we_r <= e_go && e_c.we;
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
-            e_pc <= d_pc; e_ins <= ins_d; e_c <= decode(ins_d);
+            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= decode(s_ins_d);
+            v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
-        if (!stall_e) c_rb <= vrb(ins_d);
+        if (!stall_e) c_rb <= vrb(c_ins_d);
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
         end else if (brk) begin
@@ -305,14 +349,16 @@ always_ff @(posedge clk) begin
                 d_valid <= 1'b0;
             end
         end else if (!stall_e) begin
+            // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
-            d_pc <= pc_f;
-            pc_f <= redirect ? redirect_pc : pc_f + 12'd4;
+            d_pc <= pair_go ? pc_f + 12'd4 : pc_f;
+            pc_f <= redirect ? redirect_pc : pair_go ? pc_f + 12'd8 : pc_f + 12'd4;
         end
     end
 end
 
 assign tr_e = e_go;
+assign tr_e2 = e_go && v_e;
 assign tr_e_pc = e_pc;
 assign tr_e_we = e_c.we;
 assign tr_e_wr = e_c.wr;

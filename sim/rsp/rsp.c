@@ -127,9 +127,9 @@ static uint32_t mfc0(rsp_t *s, unsigned rd)
     case 1: return s->ram_addr;
     case 2: return s->rd_len;
     case 3: return s->wr_len;
-    case 4: return s->status;
-    case 5: return 0;                               /* DMA full */
-    case 6: return 0;                               /* DMA busy */
+    case 4: return s->status | (s->dma_full ? 8u : 0u) | (s->dma_busy ? 4u : 0u);
+    case 5: return s->dma_full;                     /* DMA full */
+    case 6: return s->dma_busy;                     /* DMA busy */
     case 7: { uint32_t v = s->semaphore; s->semaphore = 1; return v; }
     case 8: return s->dpc_start;
     case 9: return s->dpc_end;

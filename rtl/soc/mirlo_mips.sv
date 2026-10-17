@@ -222,7 +222,8 @@ cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .p_ready(p_ready[1]), .p_rdata, .rd_next, .rd_next_tag,
     .x_req, .x_we, .x_addr, .x_wdata, .x_strb, .x_ack, .x_rdata, .irq(irq_s), .irq_mon(irq_mon_s));
 assign s_busy = 1'b0;
-assign p_urgent[1] = 0;
+// (the CPU's reads go first, with the RSP's DMA: it waits for each line it misses)
+assign p_urgent[1] = 1;
 
 // the CPU's device port: one access at a time, acknowledged for a cycle (a
 // request still up in the cycle after its ack is the same one: ignored)
@@ -446,9 +447,9 @@ logic        rsp_dpc_start_we, rsp_dpc_end_we, rsp_dpc_status_we;
 logic [31:0] dpc_wdata, rsp_dpc_wdata, dpc_status, dpc_st_raw;
 logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current;
 logic        dpc_start_ok;
-// (MIRLO_RSP_LANES: 4 or 8 -- rsp.md)
+// (MIRLO_RSP_LANES: 8, or 4 -- rsp.md)
 `ifndef MIRLO_RSP_LANES
-`define MIRLO_RSP_LANES 4
+`define MIRLO_RSP_LANES 8
 `endif
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
@@ -461,7 +462,7 @@ rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV
     .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
     .halted(rsp_halted), .unimpl(rsp_unimpl),
-    .tr_e(), .tr_e_pc(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp());
+    .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp());
 assign cpu_irq     = mon_own ? (mon_mi ? mi_line : mon_rcp) : (game_irq | rsp_irq);       // (the monitor's: the game's own IP2 is the monitor's line)
 assign mon_sp      = rsp_irq;
 assign p_valid[3]  = rsp_r_valid;
@@ -469,7 +470,9 @@ assign p_we[3]     = rsp_r_we;
 assign p_addr[3]   = 24'hE0_0000 + {3'd0, rsp_r_addr[22:2]};  // 8 MiB of RDRAM at 0x4380_0000
 assign p_wdata[3]  = rsp_r_wdata;
 assign p_be[3]     = 4'hF;
-assign p_urgent[3] = 0;
+// (the RSP's DMA goes first, with the CPU: the microcode waits for each transfer it starts -- a display list's next
+// commands, the vertices, the RDP's commands out -- while the RDP and the scan-out ride out a wait in their buffers)
+assign p_urgent[3] = 1;
 // the RDP's registers and its command fetch: the commands the microcode
 // leaves in RDRAM, into the RDP's command FIFO (the port the geom core pushed its own through)
 logic [20:0] dpc_m_addr;

@@ -81,28 +81,30 @@ The engine moves one 32-bit word per request on the RDRAM port (`r_valid`,
 
 * into SP memory: a read request each cycle the memory accepts one; each word
   that comes back is written to DMEM or IMEM the cycle after it arrives;
-* out of DMEM: DMEM is read 8 bytes at a time, one pair of words ahead, so a
-  write request goes out each cycle the memory accepts one;
+* out of DMEM: DMEM is read 8 bytes at a time into a FIFO of two pairs, ahead
+  of the pair being sent, so a write request goes out each cycle the memory
+  accepts one;
 * out of IMEM: the two words of a pair are read one after the other on IMEM's
   second port, a pair every three cycles.
 
 In the SoC the RDRAM port is port 3 of the SDRAM arbiter, and the 8 MiB of
 RDRAM is SDRAM at `0x4380_0000`.
 
-Who starts the transfer decides how it is sequenced:
-
-* The microcode's MTC0 to SP_RD_LEN / SP_WR_LEN stays in E until its transfer
-  is complete, so the microcode never observes its own DMA as busy.
-* The host's write returns at once. Its length word goes into pending
-  registers and SP_DMA_FULL is set; the transfer starts when the engine is idle
-  (the next cycle, if it already is). The address registers are double: a
-  write to SP_MEM_ADDR or SP_DRAM_ADDR while a DMA is running or queued belongs
-  to the next transfer, and reads give the running transfer's pointers. A
-  further length write while SP_DMA_FULL is set replaces the queued command.
+The microcode's MTC0 to SP_RD_LEN / SP_WR_LEN and the host's write are taken
+the same way, as on the console: the write returns at once, its length word
+goes into pending registers and SP_DMA_FULL is set; the transfer starts when
+the engine is idle (the next cycle, if it already is). The address registers
+are double: a write to SP_MEM_ADDR or SP_DRAM_ADDR while a DMA is running or
+queued belongs to the next transfer, and reads give the running transfer's
+pointers. A further length write while SP_DMA_FULL is set replaces the queued
+command. The microcode goes on while its transfer runs and waits for it
+itself, on SP_DMA_BUSY or SP_DMA_FULL, as the console's microcode does.
 
 A DMA into or out of DMEM shares DMEM's port with the program, and the DMA
 has priority. A transfer in takes the port in each cycle it writes a word; a
-transfer out takes it for the whole transfer. While the DMA has the port,
+transfer out in each cycle it reads a pair of words, into a FIFO of two pairs
+ahead of the one being sent -- one cycle in two at most, so the microcode's
+loads and stores go on between them. While the DMA has the port,
 `m_stall` makes a scalar or vector load or store wait in E (each beat of LTV /
 STV likewise). The stall comes from a register, known one cycle ahead, which
 is why an arriving word is written a cycle after it arrives.
@@ -194,6 +196,28 @@ A coprocessor instruction goes out on `c_valid` / `c_ins` with the values of
 rs and rt and holds E until `c_done`. `rsp_top` answers MFC0 / MTC0 itself and
 passes the rest to the vector unit.
 
+Two instructions issue together, as on the console, when one is a vector
+computation and the other, next to it in either order, a scalar instruction
+that is neither a coprocessor's nor a branch, jump or BREAK -- and D's
+instruction is not a delay slot. IMEM's second port gives D the word after
+its own; the pair enters E together, the scalar instruction takes E's path
+as any other and the computation goes to the vector unit on `c_*` in the same
+cycle, and the fetch goes on two words further. The two share no register
+and no state, so nothing orders them; either waits for the other (a load's
+result, DMEM, the vector unit's lanes). A pair is a cycle instead of two:
+some 7 % of a graphics task's cycles and 9 % of an audio task's.
+
+With eight lanes the scalar instruction of a pair may also be a vector load
+(LBV to LUV) of a register the computation neither reads nor writes (and the
+computation no VNOP or VNULL). The load goes to the vector unit with the
+computation (`c_lv`, `c_lins`, its base on `c_a`); the vector unit starts both
+in the same cycle or neither. The load writes its register the cycle after,
+which is the computation's EX: the computation's write goes a cycle late, from
+`hold` (`wp`), as a computation's behind a load does with four lanes; a
+one-lane write (a reciprocal, VMOV) is not kept and its EX waits instead, and
+no one-lane computation reaches EX under a late write. Another 2.6 % of a
+graphics task.
+
 BREAK stops the unit as it leaves E: the instruction after it is not executed,
 and `pc_next` names it. While halt is set nothing enters E.
 
@@ -220,11 +244,15 @@ cycle; SFV only with an element that is a multiple of 4. Not implemented:
 LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ, VMACQ and
 the reserved COP2 functions. They change nothing and set `unimpl`.
 
-### Four lanes
+### Lanes
 
 The original hardware operates on all eight 16-bit elements of a vector
-register in one step (eight lanes); MIRLO 64 covers the same eight elements
-with 4 lanes, as follows.
+register in one step (eight lanes), and so does the SoC's vector unit
+(`MIRLO_RSP_LANES=8`, `tools/area2/fit.sh`): eight of the lanes below, every
+computation one pass, SEL then EX; a reciprocal's EX takes a cycle more (the
+ROM). Independent computations start every cycle. With `MIRLO_RSP_LANES=4`
+(some 220 ALMs fewer, and about 8 % more of a graphics or audio task's
+cycles) it covers the same eight elements with 4 lanes, as follows.
 
 A lane is one signed 17 x 17 multiplier, one 16-bit adder / subtractor that
 serves every add, subtract, compare and clip, the 48-bit accumulator adder,
@@ -316,7 +344,8 @@ MFC2, MTC2, CFC2 and CTC2 take one cycle.
 ## Memories
 
 IMEM is 1024 words with two ports: the fetch, and the DMA (its writes on a
-transfer in, its reads on a transfer out). Only a DMA writes IMEM.
+transfer in, its reads on a transfer out) -- or, with no DMA of IMEM's, the
+word after the fetch's, for a pair. Only a DMA writes IMEM.
 
 DMEM is 4 KiB in `rsp_dpram.sv`: four banks of 256 words, each an `altsyncram`
 in M10K, true dual port with byte enables. Bank k holds bytes 4k to 4k + 3 of
@@ -328,7 +357,7 @@ word. In simulation the same module is one array of 1024 words, which the
 testbenches read.
 
 Port A carries one access per cycle, in this order of priority: the DMA
-engine, the vector unit (when the instruction in E is its own), the scalar
+engine, the vector unit (when the instruction in E is its load or store), the scalar
 unit. Port B is the RDP's XBUS read.
 
 The vector registers are LUT RAM (MLAB), as described above. The scalar
@@ -398,21 +427,25 @@ and gives the reserved functions a result).
 
 ### Lockstep bench
 
-`MULW=1 sim/rsp/build_rtl.sh` builds `sim/rsp/obj_rsp/tb_rsp` with the vector
-unit as the SoC instantiates it (the reciprocal ROM must have been generated
-first). `tb_rsp task.bin ...` loads each task as the
+`LANES=8 sim/rsp/build_rtl.sh` builds `sim/rsp/obj_rsp_8/tb_rsp` with the vector
+unit as the SoC instantiates it (`MULW=1`: the 4-lane one; the reciprocal ROM
+must have been generated first). `tb_rsp task.bin ...` loads each task as the
 console does, the header and the boot microcode by DMA through the host
 registers, and then steps the model once for every instruction that leaves E.
 It compares:
 
-* the PC of every instruction;
+* the PC of every instruction (a pair leaving E together: the model runs
+  the two, in order);
 * each scalar register write, when it reaches W;
 * the vector registers, the accumulator and the flags, as each vector
   instruction's effects are complete (`tr_v`). Where a register write that was
   put off lands under the next computation's first pass, the registers are
   compared at once and the accumulator and flags with the following
   instruction (`tr_vp`);
-* DMEM, every 64 instructions (`DEEP`) and at the BREAK;
+* DMEM, every 64 instructions (`DEEP`) and at the BREAK, with no DMA running
+  or queued (the model does a transfer whole at its length's write; the RTL's
+  runs behind the microcode, which reads SP_DMA_BUSY and SP_DMA_FULL as the
+  RTL has them);
 * at the end, the whole RDRAM, the RDP's command words, and that the RTL has
   halted.
 

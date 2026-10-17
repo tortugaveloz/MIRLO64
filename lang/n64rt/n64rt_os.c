@@ -781,7 +781,9 @@ struct n64rt_tlbs_e { u32 va, span, pa[2]; s32 asid; };           /* (20 bytes: 
 struct n64rt_tlbs_e n64rt_tlbs[TLB_N];                           /* a pair of pages of `span` bytes; span 0: free */
 #define s_tlb n64rt_tlbs
 _Static_assert(sizeof(struct n64rt_tlbs_e) == 20 && __builtin_offsetof(struct n64rt_tlbs_e, span) == 4, "n64rt_exc.S's tlbwi");
-static u32 s_tlb_n, s_tlb_hits, s_tlb_fills, s_tlb_delivered;
+static u32 s_tlb_hits, s_tlb_fills, s_tlb_delivered;
+u32 n64rt_tlb_n;                        /* the entries that map something (n64rt_exc.S's tlbwi reads it) */
+#define s_tlb_n n64rt_tlb_n
 u32 n64rt_tlbram;                       /* the CPU has the translation tables */
 /* The bits of COP0 23's write value (bit 4 is the page of the pair; the physical page is bits 28:12): valid, dirty (writable), global,
  * the fetch table, and TR_C = the page is CACHEABLE (the entry's C field, EntryLo bits 5:3, is not 2 = uncached). mips_core's fetch
@@ -921,7 +923,8 @@ _Static_assert(sizeof(struct n64rt_tlbr_e) == 16, "n64rt_exc.S's tlbr, tlbp and 
 #define VIC_N 128
 static struct n64rt_tlbr_e s_vic[VIC_N];                        /* (as n64rt_tlbr: hi ^ 0x80000000; 0: free) */
 u32 n64rt_vic_n;                                                /* how many (n64rt_exc.S: with any, a tlbp and a tlbwi are done here) */
-static u32 s_tlb_unmaps;                                        /* the game's last TLB instructions were this many tlbwi that map nothing */
+u32 n64rt_tlb_unmaps;                                           /* the game's last TLB instructions were this many tlbwi that map nothing */
+#define s_tlb_unmaps n64rt_tlb_unmaps                             /* (n64rt_exc.S's tlbwi clears it) */
 static inline u32 vic_slot(u32 hi) { return (hi >> 13) & (VIC_N - 1u); }
 /* the kept entry of EntryHi `hi`'s page pair (its ASID unless the entry is global), or -1 */
 static int vic_find(u32 hi)

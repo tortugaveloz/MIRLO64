@@ -16,6 +16,11 @@
 //   loads, stores   one cycle (DMEM is 16 bytes wide, as the N64's: what one
 //                   moves lies in the 16 bytes from its address's word on);
 //                   a load's data comes the cycle after its address
+//   a pair          (LPAIR: eight lanes) a computation on valid / ins and a
+//                   load (LBV .. LUV) of another register on l_valid / l_ins
+//                   (its base on a), the scalar unit's pair: both start in the same cycle
+//                   (done for the two), the load's write first and the
+//                   computation's a cycle late (wp), as behind any load
 // The registers are LUT RAM (two copies, read in the cycle, written a byte at
 // a time); a load writes its bytes over the register's the cycle after its
 // address.
@@ -42,6 +47,8 @@ module rsp_vu #(
     input  wire         valid,
     input  wire  [31:0] ins,
     input  wire  [31:0] a,              // rs: the base of a load / store
+    input  wire         l_valid,        // (LPAIR) a load paired with the computation on ins
+    input  wire  [31:0] l_ins,          // the scalar unit's E instruction: a load, store or move (ins as well), or a pair's load
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     // the registers' read addresses, from the scalar unit: of the instruction E holds next cycle -- its rd field (vs),
     // and rd for MFC2 / MTC2 or rt for the rest (rb_n) -- and that last of the one in E now (rb)
@@ -76,19 +83,28 @@ module rsp_vu #(
 
 localparam int NP = 8 / LANES;          // passes
 localparam bit MW = NP == 2 && MULW;    // the multiplies' other four lanes are there
+localparam bit LPAIR = NP == 1;         // a computation and a load may come together (rsp_su's pairs)
 
 // ---------------------------------------------------------------- decode --
 wire [5:0] op   = ins[31:26];
 wire       cop2 = op == 6'h12;
 wire       vec  = cop2 && ins[25];
-wire       mfc2 = cop2 && !ins[25] && ins[24:21] == 4'd0;
-wire       cfc2 = cop2 && !ins[25] && ins[24:21] == 4'd2;
-wire       mtc2 = cop2 && !ins[25] && ins[24:21] == 4'd4;
-wire       ctc2 = cop2 && !ins[25] && ins[24:21] == 4'd6;
-wire       lwc2 = op == 6'h32;
-wire       swc2 = op == 6'h3A;
-wire [4:0] lsop = ins[15:11];
-wire [3:0] el   = ins[10:7];            // LWC2/SWC2/MFC2/MTC2: the element (a byte of the register)
+// (the moves, loads and stores are never a pair's computation: from l_ins, the scalar unit's E instruction, which ins
+// only adds a select to)
+wire       cop2_l = l_ins[31:26] == 6'h12 && !l_ins[25];
+wire       mfc2 = cop2_l && l_ins[24:21] == 4'd0;
+wire       cfc2 = cop2_l && l_ins[24:21] == 4'd2;
+wire       mtc2 = cop2_l && l_ins[24:21] == 4'd4;
+wire       ctc2 = cop2_l && l_ins[24:21] == 4'd6;
+// (the load or store: l_ins, alone or a pair's load)
+wire       lp   = LPAIR && l_valid;
+wire [31:0] li  = l_ins;
+wire [31:0] la  = a;
+wire       lwc2 = li[31:26] == 6'h32;
+wire       swc2 = li[31:26] == 6'h3A;
+wire [4:0] lsop = li[15:11];
+wire [3:0] el   = li[10:7];             // LWC2/SWC2/MFC2/MTC2: the element (a byte of the register)
+wire [4:0] ltn  = li[20:16];            // LWC2/SWC2: the register
 wire [3:0] ve   = ins[24:21];           // computational: vt's element
 wire [4:0] vtn  = ins[20:16];
 wire [4:0] vsn  = ins[15:11];
@@ -488,7 +504,7 @@ wire  [31:0] r_res  = r_zero ? 32'h7FFF_FFFF : r_min ? 32'hFFFF_0000 : (r_val >>
 //                   runs them often)
 typedef enum logic { V_IDLE, V_TV } vst_t;
 vst_t st;
-wire  [11:0] off  = {{5{ins[6]}}, ins[6:0]};
+wire  [11:0] off  = {{5{li[6]}}, li[6:0]};
 // (the offset scaled first, so that the address is one adder after rs: the
 // store's rotation hangs off its low bits)
 logic [11:0] off_sh;
@@ -501,7 +517,7 @@ always_comb begin
     default:          off_sh = {off[7:0], 4'b0};
     endcase
 end
-wire  [11:0] ls_addr = a[11:0] + off_sh;
+wire  [11:0] ls_addr = la[11:0] + off_sh;
 wire  ls_packed = lsop == 5'd6 || lsop == 5'd7;
 wire  ls_tv     = (lwc2 || swc2) && lsop == 5'd11;                 // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
@@ -552,7 +568,7 @@ always_comb
 logic [3:0]  tv_n, tv_off;
 logic [11:0] tv_base;
 wire  [3:0]  tv_idx  = tv_n - {el[3:1], 1'b0};                        // STV: the register's byte
-wire  [4:0]  tv_reg  = {vtn[4:3], swc2 ? tv_n[3:1] : el[3:1] + tv_n[3:1]};
+wire  [4:0]  tv_reg  = {ltn[4:3], swc2 ? tv_n[3:1] : el[3:1] + tv_n[3:1]};
 wire  [11:0] tv_addr = tv_base + {8'd0, tv_off + tv_n};
 wire         in_tv   = st == V_TV;
 
@@ -606,7 +622,8 @@ logic        lw_merge;
 logic [4:0]  lw_reg;
 logic [15:0] lw_be;                   // the register's bytes written
 // (or under another's late write: a multiply of one pass, MULW, right behind it)
-assign x_defer = NP == 2 && x_fin && (lw_v || wp) && !x_one;
+// (one pass: only a pair's computation, whose load writes in its EX's cycle)
+assign x_defer = (NP == 2 || LPAIR) && x_fin && (lw_v || wp) && !x_one;
 assign x_wr    = x_fin && !x_defer;
 wire         idle    = st == V_IDLE && !x_v && !lw_v && !wp;  // nothing under way: the registers and flags are final
 wire         mt_now  = valid && mtc2 && idle;
@@ -638,7 +655,9 @@ wire dep      = (x_v && x_last && (x_vdn == vsn || x_vdn == vtn)) || (wp && (w_v
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
 wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
-wire sel0     = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(dep || (fn_rcp && x_v));
+// (one pass: a one-lane write, which is not kept, does not reach EX under a computation's late write -- x_defer now is wp then)
+wire sel0r    = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(dep || (fn_rcp && x_v)) && !(NP == 1 && fn_one && x_defer);
+wire none_ok  = valid && vec && (fn_none || !fn_known) && !x_v && !lw_v;      // (one that does nothing: done at once)
 wire sel1     = NP == 2 && b1;                // (nothing holds it: the first pass's EX never waits)
 wire sel_fire = sel0 || sel1;
 // the others: a load's first cycle reads no register, so it starts under
@@ -654,18 +673,21 @@ wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // cycle on -- a load into another register goes ahead, and vd is written the
 // cycle after it; LTV waits for the SEL. And none starts under that late
 // write's EX: the next cycle's port is taken.)
-wire ld_ok    = !x_wait && !x_defer && (!b1 || (ls_known && !ls_tv && vtn != x_vdn));
+wire ld_ok    = !x_wait && !x_defer && (!b1 || (ls_known && !ls_tv && ltn != x_vdn));
 wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
-wire start_nc = valid && !vec && st == V_IDLE
+wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : lwc2 ? ld_ok : (swc2 || mfc2) ? (l_free && x_free) : idle)
               && !(m_stall && ls_go);                       // (a load or store waits for the port)
+// a pair goes as one: its computation's SEL and its load's start in the same cycle, or neither
+wire sel0     = sel0r && (!lp || start_r);
+wire start_nc = start_r && (!lp || sel0r || none_ok);
 // a load's read goes out this cycle (its write is the next)
 wire lw_nx    = lwc2 && m_valid;
 // C's address next cycle: the register STV is at then (two beats each), else the one E's instruction reads
 wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv && !(tv_n == 4'd15 && !m_stall)));
 wire  [4:0]  tv_nn   = {1'b0, tv_n} + 5'd1;
 wire  [2:0]  tvr_n   = !in_tv ? 3'd0 : m_stall ? tv_n[3:1] : tv_nn[3:1];
-assign rc_n = stv_n ? {vtn[4:3], tvr_n} : rb_n;
+assign rc_n = stv_n ? {ltn[4:3], tvr_n} : rb_n;
 
 always_comb begin
     // DMEM
@@ -678,15 +700,16 @@ always_comb begin
     // done, and the value MFC2 / CFC2 give
     done = 1'b0;
     if (sel0) done = 1'b1;                                      // the rest runs behind the next instruction
-    if (valid && vec && (fn_none || !fn_known) && !x_v && !lw_v) done = 1'b1;
+    if (none_ok && (!lp || start_r)) done = 1'b1;
     if (start_nc) begin
         if (mfc2 || cfc2 || mtc2 || ctc2) done = 1'b1;
         if ((lwc2 || swc2) && !ls_known) done = 1'b1;
         if (ls_go) done = 1'b1;                                 // (a load's write comes behind)
+        if (lp && !(sel0r || none_ok)) done = 1'b0;             // (a pair: not without its computation)
     end
     if (in_tv && tv_n == 4'd15 && !m_stall) done = 1'b1;
     res = {{16{sb[0][7]}}, sb[0], sb[1]};
-    if (cfc2) res = ins[12:11] == 2'd0 ? {{16{vco[15]}}, vco} : ins[12:11] == 2'd1 ? {{16{vcc[15]}}, vcc} : {24'd0, vce};
+    if (cfc2) res = li[12:11] == 2'd0 ? {{16{vco[15]}}, vco} : ins[12:11] == 2'd1 ? {{16{vcc[15]}}, vcc} : {24'd0, vce};
     // the register write: EX's last pass, a load's bytes, MTC2
     wr_reg = x_vdn; wr_be = 16'd0;
     for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
@@ -708,8 +731,8 @@ always_comb begin
     // in order: what finishes under a computation not yet written (a load, a
     // store, MFC2 behind its second pass) is counted with it
     c_now  = 2'(lw_v && lw_last)
-           + 2'((valid && vec && (fn_none || !fn_known) && !x_v && !lw_v)
-                || (start_nc && (mfc2 || cfc2 || mtc2 || ctc2 || ((lwc2 || swc2) && !ls_known) || (swc2 && ls_go)))
+           + 2'((none_ok && (!lp || start_r))
+                || (start_nc && !lp && (mfc2 || cfc2 || mtc2 || ctc2 || ((lwc2 || swc2) && !ls_known) || (swc2 && ls_go)))
                 || (in_tv && swc2 && tv_n == 4'd15 && !m_stall));
     // (the computation whose write is late: it and what was kept behind it;
     // then the one in EX, if it is written now, with what is behind it)
@@ -775,7 +798,7 @@ always_ff @(posedge clk) begin
             // next (eight lanes' select into the registers does not fit one).
             // And the pass that writes the register waits under a load's
             // write: that is the cycle its own would be.
-            x_wait <= NP == 1 ? ((fn_rcp && fn[1:0] != 2'd2) || fn_ch)
+            x_wait <= NP == 1 ? ((fn_rcp && fn[1:0] != 2'd2) || fn_ch || (lp && fn_one))   // (a pair's one-lane write: not kept, it waits)
                               : (sel1 && lw_nx && x_one);       // (a write of one lane is not kept: it waits)
             if (sel0) begin
                 x_fn <= fn; x_am <= amode(fn); x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
@@ -793,8 +816,8 @@ always_ff @(posedge clk) begin
         unique case (st)
         V_IDLE: if (start_nc) begin
             if (ctc2) begin
-                if (ins[12:11] == 2'd0) vco <= b[15:0];
-                else if (ins[12:11] == 2'd1) vcc <= b[15:0];
+                if (li[12:11] == 2'd0) vco <= b[15:0];
+                else if (li[12:11] == 2'd1) vcc <= b[15:0];
                 else vce <= b[7:0];
             end else if (ls_tv && ls_known) begin
                 tv_n <= 4'd0; tv_base <= {ls_addr[11:3], 3'd0};
@@ -810,7 +833,7 @@ always_ff @(posedge clk) begin
         endcase
         // a load's bytes: on m_rdata the next cycle
         if (lwc2 && m_valid) begin
-            lw_v <= 1'b1; lw_reg <= vtn; lw_be <= ld_mask;
+            lw_v <= 1'b1; lw_reg <= ltn; lw_be <= ld_mask;
             lw_packed <= ls_packed; lw_p6 <= lsop == 5'd6; lw_last <= 1'b1;
             lw_merge <= !ls_packed && |((ld_mask ^ (ld_mask >> 1)) & 16'h5555);   // (a packed load writes whole lanes)
             if (in_tv) begin

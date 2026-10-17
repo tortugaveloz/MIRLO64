@@ -41,6 +41,8 @@ typedef struct rsp {
     uint32_t status;                    /* SP_STATUS: [0] halt [1] broke [5] sstep [6] intr_break [7..14] sig0..7 */
     uint32_t sp_addr, ram_addr, rd_len, wr_len, semaphore;
     uint32_t sp_addr_w, ram_addr_w;     /* SP_MEM_ADDR / SP_DRAM_ADDR as last written (a DMA starts there) */
+    uint32_t dma_full, dma_busy;        /* what SP_DMA_FULL and SP_DMA_BUSY read (and SP_STATUS's bits 3, 2): 0 here, where a
+                                           DMA is done at its length's write; a bench gives the RTL's, whose DMA runs behind it */
     uint32_t dpc_start, dpc_end, dpc_current, dpc_status;
     uint8_t *rdram;
     uint32_t rdram_size;

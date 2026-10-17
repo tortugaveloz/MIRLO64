@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         tb.dma_in(0x1000, boot, boot_size);
         tb.hw(8, 0);
         tb.hw(4, 0x1 | 0x4);                          // clear halt, clear broke
-        long c0 = tb.cyc, ins = 0, last_e = tb.cyc;
+        long c0 = tb.cyc, ins = 0, last_e = tb.cyc, pairs = 0;
         int bad = 0, ended = 0;
         std::deque<std::pair<int, uint32_t>> expect;  // register writes the RTL owes
         struct Vs { long ins; uint32_t pc, in; uint16_t vr[32][8], ah[8], am[8], al[8], vco, vcc; uint8_t vce; };
@@ -166,7 +166,10 @@ int main(int argc, char **argv)
         for (long n = 0; n < 2000000000L && !bad; n++) {
             // the cycle's events are sampled before its edge
             t->eval();
-            bool e = t->tr_e, we = t->tr_we; int vdone = t->tr_v;
+            bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we; int vdone = t->tr_v;
+            // the microcode's DMA runs behind it, as the console's: what it reads of SP_DMA_FULL / SP_DMA_BUSY is the RTL's,
+            // and DMEM is compared only with no DMA under way or queued (the model's was done at its length's write)
+            const bool dma_full = R.rsp_top__DOT__p_full, dma_on = dma_full || R.rsp_top__DOT__ds != 0;
             // (the vector unit, two passes: a computation whose register write
             // was put off behind a load's is complete while the next one's
             // first pass has already been through the accumulator and the
@@ -196,16 +199,23 @@ int main(int argc, char **argv)
                     }
             }
             if (e) {
-                int brk = rsp_step(&m);
-                ins++;
-                {
-                    int k = kind_of(m.last_ins); kcyc[k] += tb.cyc - last_e; kins[k]++;
-                    if (perf) fprintf(perf, "%ld %08x\n", tb.cyc - last_e, m.last_ins);
-                    last_e = tb.cyc;
-                }
-                if (m.last_pc != epc) { printf("  !! instruction %ld: pc %03x, the model %03x\n", ins, epc, m.last_pc); bad = 1; }
-                if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
-                {   unsigned op = m.last_ins >> 26;
+                m.dma_full = dma_full; m.dma_busy = dma_on;
+                const uint64_t dmas = m.dmas;
+                const long ins0 = ins;
+                int brk = 0;
+                // (a pair -- a vector computation and a scalar instruction leaving E together: the model runs both, in order;
+                // the cycles are the first's)
+                for (int k2 = 0; k2 < (e2 ? 2 : 1); k2++) {
+                    brk |= rsp_step(&m);
+                    ins++;
+                    {
+                        int k = kind_of(m.last_ins); kcyc[k] += tb.cyc - last_e; kins[k]++;
+                        if (perf) fprintf(perf, "%ld %08x\n", tb.cyc - last_e, m.last_ins);
+                        last_e = tb.cyc;
+                    }
+                    const uint32_t pc_k = (epc + 4u * k2) & 0xFFFu;
+                    if (m.last_pc != pc_k) { printf("  !! instruction %ld: pc %03x, the model %03x\n", ins, pc_k, m.last_pc); bad = 1; }
+                    unsigned op = m.last_ins >> 26;
                     if (op == 0x12 || op == 0x32 || op == 0x3A) {
                         Vs v; v.ins = ins; v.pc = m.last_pc; v.in = m.last_ins;
                         memcpy(v.vr, m.vr, sizeof v.vr); memcpy(v.ah, m.acc_h, 16); memcpy(v.am, m.acc_m, 16); memcpy(v.al, m.acc_l, 16);
@@ -213,10 +223,14 @@ int main(int argc, char **argv)
                         vexp.push_back(v);
                     }
                 }
+                if (e2) pairs++;
+                const bool dma_now = dma_on || m.dmas != dmas;          // (or this instruction starts one)
+                const bool deep_now = ins0 / deep != ins / deep;
+                if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
                 // (a store's second half may be going behind the next instruction,
                 // one that leaves DMEM alone: DMEM is compared a cycle on)
-                if (!bad && !brk && ins % deep == 0 && R.rsp_top__DOT__vu__DOT__st == 4) dmem_late = 1;
-                else if (!bad && (brk || ins % deep == 0))
+                if (!bad && !brk && deep_now && R.rsp_top__DOT__vu__DOT__st == 4) dmem_late = 1;
+                else if (!bad && !dma_now && (brk || deep_now))
                     for (uint32_t a = 0; a < 4096; a += 4)
                         if (tb.dmem_word(a) != be32(m.dmem + a)) {
                             printf("  !! instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
@@ -259,6 +273,15 @@ int main(int argc, char **argv)
         }
         long cycles = tb.cyc - c0;
         for (int i = 0; i < 8 && !t->halted; i++) tb.tick();
+        // (a DMA the microcode left running at its BREAK: to its end; DMEM compared then)
+        if (ended && !bad) {
+            for (int n = 0; (R.rsp_top__DOT__p_full || R.rsp_top__DOT__ds != 0) && n < 100000; n++) tb.tick();
+            for (uint32_t a = 0; a < 4096; a += 4)
+                if (tb.dmem_word(a) != be32(m.dmem + a)) {
+                    printf("  !! at the end: DMEM[%03x] = %08x, the model %08x\n", a, tb.dmem_word(a), be32(m.dmem + a));
+                    bad = 1; break;
+                }
+        }
         if (ended && !bad && !vexp.empty()) { printf("  !! %zu vector-unit instructions never finished\n", vexp.size()); bad = 1; }
         if (ended && !bad) {
             if (!t->halted) { printf("  !! the RTL did not halt at the BREAK\n"); bad = 1; }
@@ -269,8 +292,8 @@ int main(int argc, char **argv)
             if (rtl_rdp != model_rdp) { printf("  !! the RDP's commands differ (%zu words, the model %zu)\n", rtl_rdp.size(), model_rdp.size()); bad = 1; }
             if (t->unimpl) printf("  (an instruction the vector unit does not implement ran)\n");
         }
-        printf("%s: %s -- %ld instructions, %ld cycles (%.2f a instruction, %.2f ms at 62.8 MHz), %zu RDP words\n", argv[ai],
-               bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62832.0, rtl_rdp.size());
+        printf("%s: %s -- %ld instructions (%ld pairs), %ld cycles (%.2f a instruction, %.2f ms at 62.8 MHz), %zu RDP words\n", argv[ai],
+               bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, pairs, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62832.0, rtl_rdp.size());
         tot_cyc += cycles; tot_ins += ins;
         bad_tasks += bad || !ended;
         t->final(); delete t;
