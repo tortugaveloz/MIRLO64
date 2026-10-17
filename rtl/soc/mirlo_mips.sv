@@ -447,9 +447,9 @@ logic        rsp_dpc_start_we, rsp_dpc_end_we, rsp_dpc_status_we;
 logic [31:0] dpc_wdata, rsp_dpc_wdata, dpc_status, dpc_st_raw;
 logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current;
 logic        dpc_start_ok;
-// (MIRLO_RSP_LANES: 4 or 8 -- rsp.md)
+// (MIRLO_RSP_LANES: 8, or 4 -- rsp.md)
 `ifndef MIRLO_RSP_LANES
-`define MIRLO_RSP_LANES 4
+`define MIRLO_RSP_LANES 8
 `endif
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;

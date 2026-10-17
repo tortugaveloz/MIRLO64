@@ -230,11 +230,15 @@ cycle; SFV only with an element that is a multiple of 4. Not implemented:
 LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ, VMACQ and
 the reserved COP2 functions. They change nothing and set `unimpl`.
 
-### Four lanes
+### Lanes
 
 The original hardware operates on all eight 16-bit elements of a vector
-register in one step (eight lanes); MIRLO 64 covers the same eight elements
-with 4 lanes, as follows.
+register in one step (eight lanes), and so does the SoC's vector unit
+(`MIRLO_RSP_LANES=8`, `tools/area2/fit.sh`): eight of the lanes below, every
+computation one pass, SEL then EX; a reciprocal's EX takes a cycle more (the
+ROM). Independent computations start every cycle. With `MIRLO_RSP_LANES=4`
+(some 220 ALMs fewer, and about 8 % more of a graphics or audio task's
+cycles) it covers the same eight elements with 4 lanes, as follows.
 
 A lane is one signed 17 x 17 multiplier, one 16-bit adder / subtractor that
 serves every add, subtract, compare and clip, the 48-bit accumulator adder,
@@ -409,9 +413,9 @@ and gives the reserved functions a result).
 
 ### Lockstep bench
 
-`MULW=1 sim/rsp/build_rtl.sh` builds `sim/rsp/obj_rsp/tb_rsp` with the vector
-unit as the SoC instantiates it (the reciprocal ROM must have been generated
-first). `tb_rsp task.bin ...` loads each task as the
+`LANES=8 sim/rsp/build_rtl.sh` builds `sim/rsp/obj_rsp_8/tb_rsp` with the vector
+unit as the SoC instantiates it (`MULW=1`: the 4-lane one; the reciprocal ROM
+must have been generated first). `tb_rsp task.bin ...` loads each task as the
 console does, the header and the boot microcode by DMA through the host
 registers, and then steps the model once for every instruction that leaves E.
 It compares:
