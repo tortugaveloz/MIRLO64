@@ -24,6 +24,12 @@
 //          block is read: that read is deferred -- DMA busy, nothing moved -- until the PIF is done, as the console's SI waits
 //          for the PIF; one that finds the PIF busy waits for that run, and the first read after the run a WR64B made does not
 //          run them again: its replies are there). A start of either DMA waits for the PIF to be done.
+//   `pif_n` the console's time: SIDONE's write carries how long the console's PIF takes over those commands (RCP cycles, the
+//          runtime's estimate from what answered), counted down from then; an RD64B moves nothing until it is out (DMA busy,
+//          as the console's read is held while the PIF talks to the joybus: ~0.6 ms for one controller read, ~1.55 ms for four), so
+//          a game's thread that polls the controllers in a loop leaves the others the time it would on the console. The run
+//          a WR64B made is counted from there, which is the console's time for libultra's write-then-read. A WR64B moves its
+//          16 words WR_WAIT cycles after the start, the console's 4,065 to the interrupt less the move's own.
 // The SI interrupt (`irq`, a pulse: MI_INTR's SI bit; the flag in STATUS bit 12) rises at the end of each DMA.
 //
 // The DMA is a master of the Pocket bridge's port (mirlo_mips.sv), a word at a time, ~20 cycles each: `req` is held until `ack`
@@ -48,6 +54,7 @@ module rcp_si (
     output wire         c_busy,
     // the runtime's
     input  wire         done_we,            // the PIF is done: IO busy clears
+    input  wire  [17:0] done_wd,            // with it: the console's time for the commands (RCP cycles)
     output logic        ev,                 // a pulse: the PIF has commands to run
     // the SDRAM, a word at a time (the bridge's port)
     output wire         req, we,
@@ -57,6 +64,7 @@ module rcp_si (
     input  wire  [31:0] rdata
 );
 
+localparam logic [17:0] WR_WAIT = 18'd3830;   // (a WR64B's 4,065 to the interrupt, less the ~235 the move takes here)
 typedef enum logic [1:0] { S_IDLE, S_WAIT, S_A, S_REQ } st_t;
 st_t         st;
 logic        dir_rd;                    // the DMA under way is PIF RAM -> RDRAM
@@ -65,6 +73,7 @@ logic [21:0] dram;                      // DRAM_ADDR [23:2]: the RDRAM's word th
 logic        polled;                    // the PIF has run its commands for this RD64B
 logic        io_busy, err, irq_f, joy;
 logic        wr_org, fresh;             // the PIF's run in progress began at the end of a WR64B; its replies are there for the next RD64B, not yet read
+logic [17:0] pif_n;                     // the console's PIF (or WR64B) time still to go
 wire         busy = st == S_A || st == S_REQ;       // the DMA owns the PIF RAM
 assign c_busy = busy;
 assign clr = wr_s && a == 3'd6;
@@ -101,20 +110,25 @@ always_ff @(posedge clk) begin
     irq <= 1'b0; ev <= 1'b0;
     if (rst) begin
         st <= S_IDLE; io_busy <= 1'b0; err <= 1'b0; irq_f <= 1'b0; joy <= 1'b0; polled <= 1'b0; wr_org <= 1'b0; fresh <= 1'b0; dram <= '0; dir_rd <= 1'b0; idx <= '0;
+        pif_n <= '0;
     end else begin
-        if (done_we) begin io_busy <= 1'b0; if (wr_org && st == S_IDLE) fresh <= 1'b1; end
+        if (pif_n != 18'd0) pif_n <= pif_n - 18'd1;
+        if (done_we) begin io_busy <= 1'b0; pif_n <= done_wd; if (wr_org && st == S_IDLE) fresh <= 1'b1; end
         if (clr) begin irq_f <= 1'b0; err <= 1'b0; end
         if (wr_s && a == 3'd0 && st == S_IDLE) dram <= {wd[23:3], 1'b0};       // (the DMA owns it while it is under way)
         // the CPU's word 15 with the run flag: the block holds commands
         if (c_wr_s && !busy && ca == 4'd15 && c_wd[0]) begin joy <= 1'b1; fresh <= 1'b0; end
         if (start_rd || start_wr) begin
             if (st != S_IDLE) err <= 1'b1;
-            else begin dir_rd <= start_rd; polled <= io_busy || (start_rd && fresh); fresh <= 1'b0; st <= S_WAIT; end      // (the PIF is running its commands, or has just run them: that run is the read's)
+            else begin
+                dir_rd <= start_rd; polled <= io_busy || (start_rd && fresh); fresh <= 1'b0; st <= S_WAIT;    // (the PIF is running its commands, or has just run them: that run is the read's)
+                if (start_wr && !io_busy) pif_n <= WR_WAIT;
+            end
         end
         case (st)
         S_WAIT: if (!io_busy) begin
             if (dir_rd && joy && !polled) begin polled <= 1'b1; io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b0; end   // the commands run again, then the read
-            else begin idx <= 4'd0; st <= S_A; end
+            else if (pif_n == 18'd0) begin idx <= 4'd0; st <= S_A; end
         end
         S_A: st <= S_REQ;
         S_REQ: if (ack) begin

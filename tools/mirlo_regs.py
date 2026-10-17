@@ -143,7 +143,8 @@ BLOCKS = [
         ("AIRATE",  0x34, RW, 1, []),
         # the SI and the PIF RAM in hardware (MIRLO_SI; ID bit 5), rtl/soc/rcp_si.sv. PEND's bit 4 is the PIF having commands to
         # run (its block is in the PIF RAM: the runtime reads it through the window at 0x1FC0_07C0, writes the replies, and says it
-        # is done here). Write 1: the PIF is done (SI_STATUS's IO busy clears)
+        # is done here). Write: the PIF is done (SI_STATUS's IO busy clears); [17:0] the console's time for the commands (RCP cycles),
+        # which an RD64B waits out before it moves the block
         ("SIDONE",  0x38, W, 1, []),
         # the PI's domain 2 and the cartridge's reads (MIRLO_PI2; ID bit 6), rtl/soc/rcp_mi.sv: the engine copies any SDRAM to any
         # SDRAM (PIDST [23:21] not 0: the SDRAM's word, else the RDRAM's), from a word's second half (PISRC bit 24), any bytes

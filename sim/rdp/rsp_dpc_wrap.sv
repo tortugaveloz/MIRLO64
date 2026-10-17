@@ -24,17 +24,17 @@ module rsp_dpc_wrap #(parameter DIV_ROM = "rsp_div_rom.hex") (
 );
 logic        dpc_start_we, dpc_end_we, dpc_status_we, h_ready, irq;
 logic [31:0] dpc_wdata, dpc_status, dx_data;
-logic [23:0] dpc_start, dpc_end, dpc_current;
+logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current;
 logic [9:0]  dx_addr;
 rsp_top #(.LANES(4), .DIV_ROM(DIV_ROM)) rsp (.clk, .rst,
     .h_we, .h_rd(1'b0), .h_addr, .h_wdata, .h_rdata, .h_ready, .irq,
     .r_valid, .r_we, .r_addr, .r_wdata, .r_ready, .r_rvalid, .r_rdata,
     .dpc_start_we, .dpc_end_we, .dpc_status_we, .dpc_wdata,
-    .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end}), .dpc_current({8'd0, dpc_current}), .dpc_status,
+    .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
     .dx_addr, .dx_data, .halted, .unimpl,
     .tr_e(), .tr_e_pc(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp());
 rdp_dpc dpc (.clk, .rst, .start_we(dpc_start_we), .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata),
-    .start(dpc_start), .end_(dpc_end), .current(dpc_current), .status(dpc_status), .rdp_busy(c_valid),
+    .start(dpc_start), .end_(dpc_end), .end_rd(dpc_end_rd), .current(dpc_current), .status(dpc_status), .rdp_busy(c_valid),
     .m_valid, .m_addr, .m_ready, .m_rvalid, .m_rdata, .dx_addr, .dx_data, .c_valid, .c_data, .c_ready);
 assign dpc_busy = dpc_current != dpc_end || c_valid || dpc_status[10];
 endmodule

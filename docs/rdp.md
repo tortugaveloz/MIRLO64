@@ -72,6 +72,15 @@ from `rcp_dpc_view.sv`, which gives the console's layout:
 After a list without a SYNC FULL the register reads `0xA8`. A write of START
 while START is valid is ignored.
 
+A read of DPC_START or DPC_END gives the last value written, as the console's:
+a pair written while a list is under way waits (bits 9 and 10), and its START
+and END are what the reads show, while DPC_CURRENT is the list under way's.
+This is the value a microcode takes to begin its output where the RDP's list
+ends (a task, or a microcode loaded in the middle of one, that starts while the
+RDP is busy): with the END of the list under way instead it would write over
+what the waiting pair is still to run, and the RDP would take stale commands
+for them.
+
 ### The command FIFO
 
 The fetched words go into a 4096-word FIFO in `rtl/soc/mirlo_regs.sv`, and

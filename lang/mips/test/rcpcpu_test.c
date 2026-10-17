@@ -7,7 +7,10 @@
  *   3  DPC_START / DPC_END / DPC_STATUS written by the CPU: START is kept while START is valid (a second one is ignored), the
  *      set / clear pairs of XBUS, FREEZE and FLUSH, a list is fetched when unfrozen (CURRENT runs to END), the status is the
  *      console's (0xA8 after a list without SYNC FULL: CBUF_READY | PIPE_BUSY | START_GCLK), SYNC FULL raises the DP interrupt
- *      and clears PIPE_BUSY / START_GCLK */
+ *      and clears PIPE_BUSY / START_GCLK
+ *   3b a START and END written while a list is under way wait (START_VALID, END_VALID), and a read of START or END is the last
+ *      value written -- the waiting pair's -- while CURRENT is the list under way's: a microcode that begins its output at
+ *      DPC_END takes the end of what the RDP will run, not of what it runs now */
 #include <stdint.h>
 #include <generated/csr.h>
 #include <generated/soc.h>
@@ -103,6 +106,30 @@ int main(void)
     check("... CURRENT", DPC[2], A + 16u);
     MI[0] = 0x800u;
     check("DP interrupt cleared", MI[2] & 0x20u, 0u);
+
+    /* 3b: a pair written while a list is under way waits; the reads are the last values written */
+    volatile uint32_t *l2 = RAM(0x351000);
+    for (int i = 0; i < 16; i++) l2[i] = 0;              /* eight NO-OPs */
+    const uint32_t B = 0x351000u;
+    DPC[3] = 0x8u;                                       /* frozen: the first list stays under way */
+    DPC[0] = B; DPC[1] = B + 16u;
+    wait_cycles(2000);
+    check("3b: a list under way (frozen): CURRENT is its START", DPC[2], B);
+    DPC[0] = B + 32u; DPC[1] = B + 48u;                  /* a second pair: it waits */
+    wait_cycles(2000);
+    check("3b: a pair waiting: START_VALID and END_VALID", DPC[3] & 0x600u, 0x600u);
+    check("... DPC_START is its START", DPC[0], B + 32u);
+    check("... DPC_END is its END, the last written (not the list under way's)", DPC[1], B + 48u);
+    check("... DPC_CURRENT is the list under way's", DPC[2], B);
+    DPC[1] = B + 56u;                                    /* END again: the pair's END moves */
+    wait_cycles(2000);
+    check("... another END: DPC_END reads it", DPC[1], B + 56u);
+    check("... and the list under way is where it was", DPC[2], B);
+    DPC[3] = 0x4u;                                       /* unfreeze: the first list, then the pair */
+    for (uint32_t n = 0; n < 400000u && DPC[2] != B + 56u; n++) { }
+    check("unfrozen: the pair runs after the list, CURRENT runs to its END", DPC[2], B + 56u);
+    check("... DPC_END, no pair waiting", DPC[1], B + 56u);
+    check("... START_VALID and END_VALID clear", DPC[3] & 0x600u, 0u);
 
     puts_(fails ? "rcpcpu_test: FAILED\n" : "rcpcpu_test: PASS\n");
     putc_(4);

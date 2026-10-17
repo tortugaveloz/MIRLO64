@@ -65,7 +65,7 @@ level**, a privilege level of the CPU in which the runtime does the access on th
 | `0x2000_0000` | The RSP's host port: SP_MEM_ADDR `+00`, SP_DRAM_ADDR `+04`, SP_RD_LEN `+08`, SP_WR_LEN `+0C`, SP_STATUS `+10`, SP_DMA_FULL `+14`, SP_DMA_BUSY `+18`, SP_SEMAPHORE `+1C`, SP_PC `+20`; DPC_START `+40`, DPC_END `+44`, DPC_CURRENT `+48`, DPC_STATUS `+4C` |
 | `0xF000_0000` | The registers ([control.md](control.md)) |
 | `0xFFFF_8000`, 2 KiB | The monitor RAM: a store with `$zero` as its base reaches it |
-| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
+| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
 
 The caches are physically tagged, so the runtime at `0x438x_xxxx` and the game through KSEG0 see one copy of the RDRAM.
 
@@ -468,8 +468,9 @@ What is left is software that reuses a frame by copying into it with the CPU whi
 page it was. A runtime built with `NO_TLBKEEP=1` keeps nothing; `lang/n64rt/test/tlbkeep_test.c` is a game with a
 refill handler of its own that checks each rule.
 
-A game can map `0x0000_0000` - `0x1FFF_FFFF` and `0x5000_0000` - `0x7FFF_FFFF` onto the RDRAM. `0x2000_0000` -
-`0x4FFF_FFFF` holds the SoC's own devices and the SDRAM, where the runtime is, and is not mapped.
+A game can map `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF` and `0xC000_0000` - `0xEFFF_FFFF` (the VR4300's
+KSSEG and most of KSEG3) onto the RDRAM, and run code from them. `0x2000_0000` - `0x4FFF_FFFF` holds the SoC's own devices and
+the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers and the monitor's RAM: those are not mapped.
 
 ### 64-bit instructions and the helpers
 
@@ -618,7 +619,13 @@ write leaves it 0, and its bit 0 written as 1 marks the block as holding joybus 
 The PIF itself is the runtime. The hardware raises PEND bit 4 and sets IO busy at the end of a WR64B that carried the
 run flag, and at an RD64B of a block that holds commands; that read is deferred until the PIF is done, as the console's
 SI waits for the PIF. The runtime (`n64rt_si_hw_event`) reads the 16 words, runs the commands (`pif_run`), writes back
-the words that changed and writes `MONITOR.SIDONE`. The commands:
+the words that changed and writes `MONITOR.SIDONE` with how long the console's PIF takes over those commands. The read
+moves nothing until that time is out, counted from the runtime's write (DMA busy meanwhile), so a read takes about what
+it takes on the console: 0.24 ms for a block of no commands, 0.62 ms for one controller read, 1.55 ms for four with one
+controller there (`pif_run`'s figures, fitted to the console's) -- a game whose controller thread polls in a loop, above
+the thread that loads the game, leaves that thread the time the console does. A run that a WR64B started is counted from
+there, the console's time for libultra's write and then read; a WR64B itself moves its words some 4,000 cycles (the
+console's 65 us) after the start. The commands:
 
 | Channel | Command | Answer |
 |---|---|---|

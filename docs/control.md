@@ -239,5 +239,5 @@ The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's 
 | `PILEN` | `0x2C` | RW | The words to copy (bits 23:22: the bytes of the last one, 0 for all four): the write starts the copy. Read: the words left, and bit 31 while it runs |
 | `VITHR` | `0x30` | W | The last origin (in units of 64 bytes) at which a picture of the mode's size fits in the RDRAM: beyond it the scan-out shows black |
 | `AIRATE` | `0x34` | RW | Write: the resampler's step (source frames for each 48 kHz sample, 16 fraction bits). Read: the AI's rate register as the game wrote it |
-| `SIDONE` | `0x38` | W | A write of 1: the runtime has run the PIF's commands (the SI's busy flag clears) |
+| `SIDONE` | `0x38` | W | A write: the runtime has run the PIF's commands (the SI's busy flag clears); [17:0] the console's time for them in RCP cycles, which an RD64B waits out |
 | `PI2` | `0x3C` | RW | Bit 0: the cartridge's domain 2 is a FlashRAM (the game's reads of it are the status word, its writes go nowhere) |

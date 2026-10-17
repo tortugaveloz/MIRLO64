@@ -11,6 +11,10 @@
 // With XBUS set (DPC_STATUS) the commands are in the RSP's DMEM instead, and
 // START, END and CURRENT are addresses in it: they are read from the RSP's
 // copy of DMEM for the RDP (rsp_top's dx port), a word a cycle.
+//
+// A read of START or END is the last value written, a pair waiting included (end_rd; START is that already); CURRENT is the
+// transfer under way. A microcode that begins its output where the RDP's list ends (a task or a microcode that starts while the
+// RDP still has a list) takes DPC_END, and with the END of the list under way it would write over what the waiting pair is to run.
 `default_nettype none
 
 module rdp_dpc (
@@ -19,6 +23,7 @@ module rdp_dpc (
     input  wire         start_we, end_we, status_we,
     input  wire  [31:0] wdata,
     output logic [23:0] start, end_, current,
+    output wire  [23:0] end_rd,             // what a read of DPC_END gives: the last value written (a pair waiting has its END here)
     output logic [31:0] status,
     input  wire         rdp_busy,           // the RDP has commands to do
     // the N64's memory: 32-bit words, in order
@@ -54,6 +59,7 @@ logic        x_rv;
 wire         rv = xbus ? x_rv : m_rvalid;
 wire  [31:0] rd = xbus ? dx_data : m_rdata;
 
+assign end_rd  = end_valid ? end_pend : end_;
 assign c_valid = qn != 0;
 assign c_data  = q[qr[1:0]];
 assign m_valid = want && !xbus;
