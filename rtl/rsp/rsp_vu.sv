@@ -17,8 +17,8 @@
 //                   moves lies in the 16 bytes from its address's word on);
 //                   a load's data comes the cycle after its address
 //   a pair          (LPAIR: eight lanes) a computation on valid / ins and a
-//                   load (LBV .. LUV) of another register on l_valid / l_ins /
-//                   l_a, the scalar unit's pair: both start in the same cycle
+//                   load (LBV .. LUV) of another register on l_valid / l_ins
+//                   (its base on a), the scalar unit's pair: both start in the same cycle
 //                   (done for the two), the load's write first and the
 //                   computation's a cycle late (wp), as behind any load
 // The registers are LUT RAM (two copies, read in the cycle, written a byte at
@@ -47,9 +47,8 @@ module rsp_vu #(
     input  wire         valid,
     input  wire  [31:0] ins,
     input  wire  [31:0] a,              // rs: the base of a load / store
-    input  wire         l_valid,        // (LPAIR) a load paired with the computation on ins: the load, its base
-    input  wire  [31:0] l_ins,
-    input  wire  [31:0] l_a,
+    input  wire         l_valid,        // (LPAIR) a load paired with the computation on ins
+    input  wire  [31:0] l_ins,          // the scalar unit's E instruction: a load, store or move (ins as well), or a pair's load
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     // the registers' read addresses, from the scalar unit: of the instruction E holds next cycle -- its rd field (vs),
     // and rd for MFC2 / MTC2 or rt for the rest (rb_n) -- and that last of the one in E now (rb)
@@ -90,14 +89,17 @@ localparam bit LPAIR = NP == 1;         // a computation and a load may come tog
 wire [5:0] op   = ins[31:26];
 wire       cop2 = op == 6'h12;
 wire       vec  = cop2 && ins[25];
-wire       mfc2 = cop2 && !ins[25] && ins[24:21] == 4'd0;
-wire       cfc2 = cop2 && !ins[25] && ins[24:21] == 4'd2;
-wire       mtc2 = cop2 && !ins[25] && ins[24:21] == 4'd4;
-wire       ctc2 = cop2 && !ins[25] && ins[24:21] == 4'd6;
-// (the load or store: ins's, or a pair's load)
+// (the moves, loads and stores are never a pair's computation: from l_ins, the scalar unit's E instruction, which ins
+// only adds a select to)
+wire       cop2_l = l_ins[31:26] == 6'h12 && !l_ins[25];
+wire       mfc2 = cop2_l && l_ins[24:21] == 4'd0;
+wire       cfc2 = cop2_l && l_ins[24:21] == 4'd2;
+wire       mtc2 = cop2_l && l_ins[24:21] == 4'd4;
+wire       ctc2 = cop2_l && l_ins[24:21] == 4'd6;
+// (the load or store: l_ins, alone or a pair's load)
 wire       lp   = LPAIR && l_valid;
-wire [31:0] li  = lp ? l_ins : ins;
-wire [31:0] la  = lp ? l_a : a;
+wire [31:0] li  = l_ins;
+wire [31:0] la  = a;
 wire       lwc2 = li[31:26] == 6'h32;
 wire       swc2 = li[31:26] == 6'h3A;
 wire [4:0] lsop = li[15:11];
@@ -707,7 +709,7 @@ always_comb begin
     end
     if (in_tv && tv_n == 4'd15 && !m_stall) done = 1'b1;
     res = {{16{sb[0][7]}}, sb[0], sb[1]};
-    if (cfc2) res = ins[12:11] == 2'd0 ? {{16{vco[15]}}, vco} : ins[12:11] == 2'd1 ? {{16{vcc[15]}}, vcc} : {24'd0, vce};
+    if (cfc2) res = li[12:11] == 2'd0 ? {{16{vco[15]}}, vco} : ins[12:11] == 2'd1 ? {{16{vcc[15]}}, vcc} : {24'd0, vce};
     // the register write: EX's last pass, a load's bytes, MTC2
     wr_reg = x_vdn; wr_be = 16'd0;
     for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
@@ -814,8 +816,8 @@ always_ff @(posedge clk) begin
         unique case (st)
         V_IDLE: if (start_nc) begin
             if (ctc2) begin
-                if (ins[12:11] == 2'd0) vco <= b[15:0];
-                else if (ins[12:11] == 2'd1) vcc <= b[15:0];
+                if (li[12:11] == 2'd0) vco <= b[15:0];
+                else if (li[12:11] == 2'd1) vcc <= b[15:0];
                 else vce <= b[7:0];
             end else if (ls_tv && ls_known) begin
                 tv_n <= 4'd0; tv_base <= {ls_addr[11:3], 3'd0};

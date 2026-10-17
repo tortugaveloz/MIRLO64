@@ -58,7 +58,7 @@ module rsp_su #(
     output logic [31:0] c_a,            // rs
     output logic [31:0] c_b,            // rt
     output logic        c_lv,           // (LPAIR) a pair's vector load goes with the computation on c_ins: it is c_lins
-    output logic [31:0] c_lins,
+    output logic [31:0] c_lins,         // E's own instruction (c_ins but for a pair's computation)
     input  wire         c_done,
     input  wire  [31:0] c_res,          // MFC0, MFC2, CFC2
     // the vector registers' read addresses (their memories register them): of the instruction E holds in the cycle

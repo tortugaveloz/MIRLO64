@@ -112,13 +112,15 @@ rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wd
     .c_valid, .c_ins, .c_a, .c_b, .c_lv, .c_lins, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
-wire         is_cop0 = c_ins[31:26] == 6'h10;
+// (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
+// c_lins, which c_ins only adds a select to)
+wire         is_cop0 = c_lins[31:26] == 6'h10;
 logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
 rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && !is_cop0), .ins(c_ins), .a(c_a), .b(c_b),
-    .l_valid(c_valid && c_lv), .l_ins(c_lins), .l_a(c_a), .ra_n(c_ra_n), .rb_n(c_rb_n), .rb(c_rb), .done(v_done), .res(v_res),
+    .l_valid(c_valid && c_lv), .l_ins(c_lins), .ra_n(c_ra_n), .rb_n(c_rb_n), .rb(c_rb), .done(v_done), .res(v_res),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_be(vm_be), .m_wdata(vm_wdata), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
 
@@ -156,7 +158,7 @@ assign i_data2 = ia_q;
 // bytes in the top word; writes go by the byte's address mod 16 (x_be16,
 // x_wd: byte b in [127 - 8b -: 8]).
 // the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
-wire         vu_own = c_valid && (c_ins[31:26] == 6'h32 || c_ins[31:26] == 6'h3A || c_lv);
+wire         vu_own = c_valid && (c_lins[31:26] == 6'h32 || c_lins[31:26] == 6'h3A);
 logic        x_valid, x_we;
 logic [11:0] x_addr;
 logic [15:0] x_be16;
@@ -231,9 +233,9 @@ function automatic logic [31:0] cop0_rd(input logic [3:0] r);
 endfunction
 
 // COP0, from the scalar unit's E stage
-wire         mfc0 = c_valid && is_cop0 && c_ins[25:21] == 5'd0;
-wire         mtc0 = c_valid && is_cop0 && c_ins[25:21] == 5'd4;
-wire  [3:0]  c0r  = c_ins[14:11];
+wire         mfc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd0;
+wire         mtc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd4;
+wire  [3:0]  c0r  = c_lins[14:11];
 wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 
 // ------------------------------------------------------------------ DMA --
