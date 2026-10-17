@@ -43,8 +43,10 @@ controllers, the clocks and the fit, and the simulations. The RSP and the RDP ha
 The SDRAM holds the runtime, the saves, the N64's RDRAM and what a ROM has past its first 32 MiB; the Pocket's two PSRAMs
 hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its ROM take nothing of the SDRAM's time (see
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
-the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The
-Pocket's SRAM is not used: its pads are tied off in `core_top.sv`.
+the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
+and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
+where the RDP and the scan-out ride out a wait in their buffers. The Pocket's SRAM is not used: its pads are tied off in
+`core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the
@@ -850,6 +852,10 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `PAD`, `PAD2`, `PAD3`, `PAD4` `=from-to:keys[/joy],...` | a controller's keys over a span of fields |
 | `VGA=1` | every frame the pads send, as PPM |
 | `CPUSTAT=1`, `CPUTRACE=from,count` | where the CPU's cycles go; the instructions it retires |
+| `RCPSTAT=n`, `RCPSTAT_IDLE=lo,hi` | every n fields: the RSP's and the RDP's time, the CPU's outside the game's idle loop, and each SDRAM port's words and cycles waiting |
+| `RSPLOG=<file>`, `RSPPROF=<file>` | the RSP's tasks, a line each; its cycles by the microcode's pc |
+| `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
+| `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
 
