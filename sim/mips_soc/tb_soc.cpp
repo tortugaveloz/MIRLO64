@@ -840,6 +840,24 @@ int main(int argc, char **argv)
                 if (t->tr_exc && f0 >= 0 && sys - f0 < 40000) printf("[vi %ld: exception %u at %08x (+%ld after the field pulse)]\n", sys, t->tr_exc_code, t->tr_exc_pc, sys - f0);
                 pf = fpl; pl = lat; pb = t->fb_base;
             }
+            // STARVE=1: the scan-out's FIFO empty where a line of the window starts its pixels (the row's words not there yet:
+            // the line is black and the rows after it come a line late) -- per scan frame, the lines it happened on and the first
+            {
+                static const bool starve = getenv("STARVE") != nullptr;
+                if (starve) {
+                    static long nst, first = -1, nfr; static uint32_t lastv = ~0u;
+                    uint32_t vc = t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__vcount;
+                    uint32_t hc = t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__hcount;
+                    if (t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__fb_sys) {
+                        if (nst) printf("[starve scan frame %ld (field %ld): %ld lines started with the FIFO empty, the first at line %ld]\n", nfr, frames, nst, first);
+                        nst = 0; first = -1; nfr++;
+                    }
+                    if (hc == 740 && vc != lastv) {
+                        lastv = vc;
+                        if (t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__nv && t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__f_empty) { if (!nst++) first = vc; }
+                    }
+                }
+            }
             // TEAR=1: a tear detector -- the displayed buffer's rows at the scan-out's latch, and, as the scan-out's reads pass each
             // row, whether it still has what it had (a row that changed between the latch and its being read is a mix of two frames
             // on the screen). One line per scan frame: its base, the rows changed, the first, and when the first was

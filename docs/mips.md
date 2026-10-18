@@ -45,8 +45,10 @@ hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its 
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
 the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
 and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
-where the RDP and the scan-out ride out a wait in their buffers. The Pocket's SRAM is not used: its pads are tied off in
-`core_top.sv`.
+where the RDP and the scan-out ride out a wait in their buffers -- the scan-out goes first too, with them, while its FIFO
+is below a quarter full (at every frame's start, and when a long run of the CPU's or the RSP's requests has left it
+behind: else a frame's first lines found it empty and the picture came a few dozen lines lower). The Pocket's SRAM is
+not used: its pads are tied off in `core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the

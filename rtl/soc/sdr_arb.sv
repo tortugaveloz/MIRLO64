@@ -1,7 +1,8 @@
 // N requesters onto one sdr_ctrl. Round-robin; a grant is kept while its
 // port goes on asking, up to MAXB words (a line read, a burst: row hits), and
 // an `urgent` port (the SoC's: the CPU and the RSP's DMA, which wait for each
-// word they ask for) goes first, round-robin among the urgent ones -- bounded
+// word they ask for, and the scan-out while its FIFO is low) goes first,
+// round-robin among the urgent ones -- bounded
 // by what it asks for, so it cannot starve anyone for long. The chosen request
 // is registered before it reaches the controller.
 //

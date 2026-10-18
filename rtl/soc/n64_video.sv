@@ -19,8 +19,8 @@
 //    make; the Pocket's scaler shows interlaced fields torn.
 //  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new
 //    origin never tears the frame being sent) and the frame's rows are read in
-//    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter gives
-//    the scan-out no priority (a priority scheme was tried on the Pocket and went badly). A row is
+//    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter puts
+//    the scan-out first only while that FIFO is below a quarter full (`m_urgent`, below). A row is
 //    `vi_nw` words from the row's first, the next row the one Y_SCALE's accumulator reaches (0, 1 or 2 pitches on;
 //    a hi-res picture reads 320 words a row: 18.4 MB/s as a 320-wide one did; a woven frame twice the rows: 36.8 MB/s).
 //  - the FIFO crosses sys -> vid; each word carries the frame's epoch bit (what is left of a frame is dropped by
@@ -83,7 +83,7 @@ module n64_video #(
     // the DMA's SDRAM port (sys): word addresses
     output logic        m_valid,
     output logic [23:0] m_addr,
-    output logic        m_urgent,       // (always 0: no priority)
+    output logic        m_urgent,       // the FIFO is low: the arbiter's priority, with the CPU's and the RSP's
     input  wire         m_ready,
     input  wire         m_rvalid,
     input  wire  [31:0] m_rdata,
@@ -339,9 +339,14 @@ always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3]; f_wd <= {tq_h[4
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
 // the margin to 512 covers)
 wire [15:0] inflight = 16'(issued - got);                // (below 1024)
-logic       room;
+logic       room, low;
 always_ff @(posedge clk) room <= (16'(wlevel) + inflight) < 16'((1 << FAW) - 64);
-assign m_urgent = 1'b0;
+// urgent below a quarter of the FIFO -- at every frame's start, and wherever the other ports have left it behind: the CPU's and the
+// RSP's requests go first (mirlo_mips.sv), and a stream of them (a loop of uncached stores, a long DMA) kept the scan-out from the
+// memory while a frame's first rows were due: the lines found the FIFO empty and were black, the picture a few dozen lines lower
+// for a frame. Now it goes round with them while it is low; above the mark, as the others.
+always_ff @(posedge clk) low <= (16'(wlevel) + inflight) < 16'(1 << (FAW - 2));
+assign m_urgent = low;
 assign m_valid  = running && !fb_sys && drop == 0 && room
                   && !all && tq_n < 6'd30;
 assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : raddr;   // (the plane: SDRAM 0x0370_0000)
