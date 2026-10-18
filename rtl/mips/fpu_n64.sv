@@ -29,12 +29,7 @@
 // operands are taken from the registers as they are and unpacked from there,
 // one a cycle; add and sub leave the operands in place (the larger is chosen
 // where they are added) and align in a cycle of their own; the conversions
-// to an integer round a cycle after they shift. A single's (or a word's)
-// operands are unpacked together, with the operands' kinds and order, in
-// one cycle (a float's unpacking is its flush to zero; a double's halves go
-// through d2f one operand a cycle), and a product, whose top bit is 47 or
-// 46, and a sum of two of the same sign, top bit 31 or 30, are normalised in one cycle: an add.s or sub.s is 8 or
-// 9 cycles of M, a mul.s 7.
+// to an integer round a cycle after they shift.
 `default_nettype none
 
 module fpu_n64 #(
@@ -172,9 +167,6 @@ logic        sw;                                         // (FAST) add: ay is th
 logic        fg;                                         // (FAST) to int: the guard bit
 
 // the unpacker: fs in S_IDLE, ft in S_UNPY (W: the integer as it is)
-fbits_t fx1, fy1;                                       // (FAST, S_UNPX of a single: the two operands flushed)
-assign fx1 = ftz(ax);
-assign fy1 = ftz(ay);
 wire         upy = st == S_UNPY;
 // (FAST: from the operands as S_IDLE took them -- fs in ax, a double's upper
 // half in zmag; ft in ay, its upper half in ir)
@@ -272,14 +264,7 @@ always_ff @(posedge clk) begin
                  ((is_s || is_w) && fn == 6'h21);
         rmode <= fn == 6'h24 ? fcr31[1:0] : fn[1:0];      // to int: 0C round, 0D trunc, 0E ceil, 0F floor
     end
-    // (FAST, a single or a word: both operands at once -- a float's unpacking is its flush to zero -- and S_PRE's flags with
-    // them; a double's halves go through d2f one operand a cycle)
-    S_UNPX: if (FAST && !sel_d) begin
-        if (!sel_w && !sel_l) begin ax <= ftz(ax); ay <= ftz(ay); end
-        fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
-        fmlt <= {fx1.e, fx1.f} < {fy1.e, fy1.f}; fmeq <= {fx1.e, fx1.f} == {fy1.e, fy1.f};
-        st <= S_DECIDE;
-    end else begin ax <= up; st <= S_UNPY; end
+    S_UNPX: begin ax <= up; st <= S_UNPY; end
     S_UNPY: begin ay <= up; st <= FAST ? S_PRE : S_DECIDE; end
     // (FAST) what S_DECIDE asks of the two operands, as registers
     S_PRE: begin
@@ -404,17 +389,7 @@ always_ff @(posedge clk) begin
         if (kind == K_MUL) begin m = mp[47:16]; sti = mp[15:0] != 0; end
         else if (kind == K_DIV || kind == K_SQRT) begin m = zmag; sti = ir != 0; end
         else begin m = zmag; sti = zst; end
-        if (FAST) begin
-            zmag <= m; nzc <= lzc32(m); zst <= sti; st <= S_NORM2;                       // (the count, then the shift)
-            // (a product of two normal significands has its top bit at 47 or 46, a sum of two of the same sign at 31 or
-            // 30: the one-place shift at once)
-            if (kind == K_MUL) begin
-                zmag <= mp[47] ? mp[47:16] : {mp[46:16], 1'b0}; zexp <= zexp - 12'(!mp[47]); st <= S_ROUND;
-            end
-            if (kind == K_ADD && !sub_eff) begin
-                zmag <= zmag[31] ? zmag : {zmag[30:0], 1'b0}; zexp <= zexp - 12'(!zmag[31]); st <= S_ROUND;
-            end
-        end
+        if (FAST) begin zmag <= m; nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)
         else begin zmag <= m << lzc32(m); zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
     end
