@@ -49,7 +49,8 @@ module fpu_n64 #(
     input  wire         live,               // it is a COP1 instruction (or l/s wc1/dc1), live in M
     input  wire         valid,              // it completes this cycle: write its results
     input  wire         cancel,             // (FAST) the register write of the one that completed last cycle is taken back
-    input  wire  [31:0] gpr_in,             // mtc1, ctc1
+    input  wire  [31:0] gpr_in,             // mtc1, ctc1; dmtc1's lower half
+    input  wire  [31:0] gpr_in_hi,          // dmtc1's upper half
     input  wire  [63:0] mem_in,             // lwc1: [31:0]; ldc1: {lower address, higher}
     output logic [31:0] gpr_out,            // mfc1, cfc1
     output logic [63:0] mem_out,            // swc1: [31:0]; sdc1: {lower address, higher}
@@ -118,10 +119,11 @@ wire [5:0] op = insn[31:26], fn = insn[5:0];
 wire [4:0] fmt = insn[25:21];
 wire is_cop1 = op == 6'h11;
 wire is_mfc1 = is_cop1 && fmt == 5'h00, is_cfc1 = is_cop1 && fmt == 5'h02;
-wire is_mtc1 = is_cop1 && fmt == 5'h04, is_ctc1 = is_cop1 && fmt == 5'h06;
+wire is_mtc1 = is_cop1 && fmt == 5'h04, is_ctc1 = is_cop1 && fmt == 5'h06, is_dmtc1 = is_cop1 && fmt == 5'h05;
 wire is_s = is_cop1 && fmt == 5'h10, is_d = is_cop1 && fmt == 5'h11, is_w = is_cop1 && fmt == 5'h14;
+wire is_l = is_cop1 && fmt == 5'h15 && fn == 6'h20;     // cvt.s.l (the only .l one here)
 wire is_mov = (is_s || is_d) && fn == 6'h06;
-wire is_arith = (is_s || is_d || is_w) && !is_mov;      // through the datapath
+wire is_arith = ((is_s || is_d || is_w) && !is_mov) || is_l;      // through the datapath
 wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc1 = op == 6'h3D;
 
 // ============================================================ unpack
@@ -143,8 +145,8 @@ endfunction
 // ============================================================ state
 // S_IDLE unpacks fs, S_UNPY ft (one unpacker, a register between the RAM and
 // everything else); S_DECIDE takes the special cases and dispatches
-typedef enum logic [3:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
-                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2 } st_t;        // (FAST's)
+typedef enum logic [4:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
+                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2, S_LNEG, S_LCNT, S_LSH } st_t;        // (FAST's)
 typedef enum logic [2:0] { K_ADD, K_MUL, K_DIV, K_SQRT, K_CVT, K_F2W, K_CMP, K_MOVE } kind_t;
 st_t   st;
 logic fnx, fny, fix, fiy, fzx, fzy, fmlt, fmeq;   // (FAST) S_PRE's: the operands' kinds, their magnitudes' order
@@ -181,7 +183,7 @@ assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
 wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
 wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
 fbits_t up;
-assign up = sel_w ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
+assign up = (sel_w || sel_l) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
 
 // (FAST: without `live` -- the core asks only for an instruction in M, and
 // one that is not live is flushed)
@@ -191,16 +193,17 @@ function automatic logic arith_of(input logic [31:0] i);
     logic cop1, s_, d_, w_;
     cop1 = i[31:26] == 6'h11;
     s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
-    return (s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06);
+    return ((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && i[5:0] == 6'h20);
 endfunction
 logic ar_q;
 always_ff @(posedge clk) if (adv) ar_q <= arith_of(insn_e);
-logic isd_q, isw_q;                                     // (FAST) is_d and is_w, likewise
+logic isd_q, isw_q, isl_q;                              // (FAST) is_d, is_w and is_l, likewise
 always_ff @(posedge clk) if (adv) begin
     isd_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h11;
     isw_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h14;
+    isl_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h15;
 end
-wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w;
+wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w, sel_l = FAST ? isl_q : is_l;
 assign busy = FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE;
 
 // ------------------------------------------------------------ shared pieces
@@ -260,8 +263,9 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
+        if (!FAST) zmag <= xo;                            // (cvt.s.l: the integer's upper half)
         if (FAST) begin
-            ax <= isd_q ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
+            ax <= (isd_q || isl_q) ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
             st <= S_UNPX;
         end
         dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h0C && fn <= 6'h0F) && fn != 6'h24 && fn < 6'h30) ||
@@ -271,7 +275,7 @@ always_ff @(posedge clk) begin
     // (FAST, a single or a word: both operands at once -- a float's unpacking is its flush to zero -- and S_PRE's flags with
     // them; a double's halves go through d2f one operand a cycle)
     S_UNPX: if (FAST && !sel_d) begin
-        if (!sel_w) begin ax <= ftz(ax); ay <= ftz(ay); end
+        if (!sel_w && !sel_l) begin ax <= ftz(ax); ay <= ftz(ay); end
         fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
         fmlt <= {fx1.e, fx1.f} < {fy1.e, fy1.f}; fmeq <= {fx1.e, fx1.f} == {fy1.e, fy1.f};
         st <= S_DECIDE;
@@ -288,7 +292,10 @@ always_ff @(posedge clk) begin
         nx = FAST ? fnx : isnan(ax); ny = FAST ? fny : isnan(ay); ix = FAST ? fix : isinf(ax); iy = FAST ? fiy : isinf(ay);
         zx = FAST ? fzx : iszero(ax); zy = FAST ? fzy : iszero(ay);
         st <= S_DONE;                                     // (the special cases: done now)
-        if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
+        if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}, its magnitude next
+            kind <= K_CVT; zs <= zmag[31]; zst <= 0; ir <= ax;
+            if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0; else st <= S_LNEG;
+        end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zmag <= ax.s ? -ax : ax; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
         end else if (fn >= 6'h30) begin                   // c.cond
@@ -411,6 +418,20 @@ always_ff @(posedge clk) begin
         else begin zmag <= m << lzc32(m); zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
     end
+    // cvt.s.l: the magnitude {zmag, ir}; one with an upper half of 0 is a word's (S_NORM), another is normalised by the
+    // upper half's leading zeros (a count, then the 64-bit shift), the bits below the 32 kept as the sticky
+    S_LNEG: begin
+        logic [63:0] m;
+        m = zs ? 64'(-{zmag, ir}) : {zmag, ir};
+        if (m[63:32] == 32'd0) begin zmag <= m[31:0]; zexp <= 12'sd158; st <= S_NORM; end
+        else begin zmag <= m[63:32]; ir <= m[31:0]; st <= S_LCNT; end
+    end
+    S_LCNT: begin nzc <= {1'b0, lzc32(zmag)}; st <= S_LSH; end
+    S_LSH: begin
+        logic [63:0] t;
+        t = {zmag, ir} << nzc[4:0];
+        zmag <= t[63:32]; zst <= t[31:0] != 32'd0; zexp <= 12'sd190 - 12'(nzc[4:0]); st <= S_ROUND;
+    end
     S_NORM2: begin zmag <= zmag << nzc; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
     S_F2W: if (FAST) begin zmag <= sh_o[34:3]; fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
@@ -462,6 +483,7 @@ always_comb begin
     we_e = 0; we_o = 0; widx = 0; wd_e = 0; wd_o = 0;
     if (valid) begin
         if (is_mtc1) begin widx = insn[15:12]; if (insn[11]) begin we_o = 1; wd_o = gpr_in; end else begin we_e = 1; wd_e = gpr_in; end end
+        if (is_dmtc1) begin widx = insn[15:12]; we_e = 1; we_o = 1; wd_e = gpr_in; wd_o = gpr_in_hi; end   // (FR=0: the pair)
         if (is_lwc1) begin widx = insn[20:17]; if (insn[16]) begin we_o = 1; wd_o = mem_in[31:0]; end else begin we_e = 1; wd_e = mem_in[31:0]; end end
         if (is_ldc1) begin widx = insn[20:17]; we_e = 1; we_o = 1; wd_e = mem_in[31:0]; wd_o = mem_in[63:32]; end
         if (is_mov) begin

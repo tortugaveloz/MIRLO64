@@ -304,10 +304,11 @@ function automatic logic fpu_implements(input logic [31:0] i);
     logic [4:0] rs; logic [5:0] fn;
     rs = i[25:21]; fn = i[5:0];
     case (rs)
-    5'h00, 5'h02, 5'h04, 5'h06: return 1'b1;                          // mfc1 cfc1 mtc1 ctc1
+    5'h00, 5'h02, 5'h04, 5'h05, 5'h06: return 1'b1;                   // mfc1 cfc1 mtc1 dmtc1 ctc1
     5'h10, 5'h11: return fn <= 6'h07 || (fn >= 6'h0C && fn <= 6'h0F) || fn == 6'h24 || fn >= 6'h30 ||
                          (fn == 6'h20 && rs == 5'h11) || (fn == 6'h21 && rs == 5'h10);
     5'h14: return fn == 6'h20 || fn == 6'h21;                         // cvt.s.w cvt.d.w
+    5'h15: return fn == 6'h20;                                        // cvt.s.l
     default: return 1'b0;
     endcase
 endfunction
@@ -418,7 +419,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         else begin
             c.cop1 = 1;
             if (rs == 5'h00 || rs == 5'h02) begin c.cop1_gpr = 1; c.wr = 1; c.rd = rt; c.late = 1; end
-            if (rs == 5'h04 || rs == 5'h06) c.use_rt = 1;
+            if (rs == 5'h04 || rs == 5'h05 || rs == 5'h06) c.use_rt = 1;   // (dmtc1: its upper half too, m_st_hx)
             if (rs == 5'h06 || rs >= 5'h10) c.cop1_cond = 1;
         end
     end
@@ -1635,7 +1636,7 @@ fpu_n64 #(.FAST(FAST)) fpu (
     .clk, .rst,
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live(m_live && m_fpu), .valid(fpu_valid),
-    .cancel(FAST && w_lm), .gpr_in(m_st_lo), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
+    .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
     .gpr_out(fpu_gpr_out), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
     .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
     .tr_weven(tr_fweven), .tr_wodd(tr_fwodd), .tr_fcr31(tr_fcr31)
