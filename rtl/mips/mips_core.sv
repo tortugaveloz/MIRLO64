@@ -294,7 +294,7 @@ typedef struct packed {
     logic        trap_imm;
     logic        sys, brk, ri;
     logic        mfc0, mtc0, eret, tlbr, tlbwi, tlbwr, tlbp, cache;
-    logic        cop1, cop1_gpr, cop1_cond;
+    logic        cop1, cop1_gpr, cop1_cond, cop1_64;   // (cop1_64: dmfc1, a 64-bit result)
     logic        late;           // its result comes out of M
 } ctl_t;
 
@@ -304,11 +304,11 @@ function automatic logic fpu_implements(input logic [31:0] i);
     logic [4:0] rs; logic [5:0] fn;
     rs = i[25:21]; fn = i[5:0];
     case (rs)
-    5'h00, 5'h02, 5'h04, 5'h05, 5'h06: return 1'b1;                   // mfc1 cfc1 mtc1 dmtc1 ctc1
-    5'h10, 5'h11: return fn <= 6'h07 || (fn >= 6'h0C && fn <= 6'h0F) || fn == 6'h24 || fn >= 6'h30 ||
+    5'h00, 5'h01, 5'h02, 5'h04, 5'h05, 5'h06: return 1'b1;            // mfc1 dmfc1 cfc1 mtc1 dmtc1 ctc1
+    5'h10, 5'h11: return fn <= 6'h0F || fn == 6'h24 || fn == 6'h25 || fn >= 6'h30 ||            // (.l: to a word, sign-extended)
                          (fn == 6'h20 && rs == 5'h11) || (fn == 6'h21 && rs == 5'h10);
     5'h14: return fn == 6'h20 || fn == 6'h21;                         // cvt.s.w cvt.d.w
-    5'h15: return fn == 6'h20;                                        // cvt.s.l
+    5'h15: return fn == 6'h20 || fn == 6'h21;                         // cvt.s.l cvt.d.l
     default: return 1'b0;
     endcase
 endfunction
@@ -418,7 +418,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         else if (!fpu_implements(i)) c.ri = 1;                            // dmfc1, dmtc1, .l, ...
         else begin
             c.cop1 = 1;
-            if (rs == 5'h00 || rs == 5'h02) begin c.cop1_gpr = 1; c.wr = 1; c.rd = rt; c.late = 1; end
+            if (rs == 5'h00 || rs == 5'h01 || rs == 5'h02) begin c.cop1_gpr = 1; c.wr = 1; c.rd = rt; c.late = 1; c.cop1_64 = rs == 5'h01; end
             if (rs == 5'h04 || rs == 5'h05 || rs == 5'h06) c.use_rt = 1;   // (dmtc1: its upper half too, m_st_hx)
             if (rs == 5'h06 || rs >= 5'h10) c.cop1_cond = 1;
         end
@@ -752,7 +752,7 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 // hx: the register file's, or zero for a value still in the pipeline (what
 // can have one makes its readers wait: haz_wide)
 function automatic logic wideprod(input ctl_t c);
-    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU;   // (a compare's result is 0 or 1)
+    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
 wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
 wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
@@ -1093,7 +1093,7 @@ logic [31:0]     md_ah, md_bh, md_bl;        // the operands' words that are no 
 
 // =============================================================== M
 logic        fpu_valid, fpu_busy;
-logic [31:0] fpu_gpr_out;
+logic [31:0] fpu_gpr_out, fpu_gpr_out_hi;
 logic [63:0] fpu_mem_out;
 // (FAST: what kind of instruction it is, registered with it)
 logic m_k_ld, m_k_st, m_k_wide, m_k_fwide, m_k_cach, m_k_mapped, m_k_md, m_k_fpu, m_k_sbeq;
@@ -1641,7 +1641,7 @@ fpu_n64 #(.FAST(FAST)) fpu (
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live(m_live && m_fpu), .valid(fpu_valid),
     .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
-    .gpr_out(fpu_gpr_out), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
+    .gpr_out(fpu_gpr_out), .gpr_out_hi(fpu_gpr_out_hi), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
     .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
     .tr_weven(tr_fweven), .tr_wodd(tr_fwodd), .tr_fcr31(tr_fcr31)
 );
@@ -1712,6 +1712,7 @@ always_ff @(posedge clk) begin
             w_hx <= 32'd0;
             if (W64) begin
                 if (m_ld) w_hx <= m_ld_hx;
+                else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
             end

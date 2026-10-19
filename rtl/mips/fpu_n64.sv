@@ -47,7 +47,8 @@ module fpu_n64 #(
     input  wire  [31:0] gpr_in,             // mtc1, ctc1; dmtc1's lower half
     input  wire  [31:0] gpr_in_hi,          // dmtc1's upper half
     input  wire  [63:0] mem_in,             // lwc1: [31:0]; ldc1: {lower address, higher}
-    output logic [31:0] gpr_out,            // mfc1, cfc1
+    output logic [31:0] gpr_out,            // mfc1, cfc1; dmfc1's lower half
+    output logic [31:0] gpr_out_hi,         // dmfc1's upper half
     output logic [63:0] mem_out,            // swc1: [31:0]; sdc1: {lower address, higher}
     output logic        cond,               // FCR31.C after the instruction
     output logic        busy,
@@ -115,8 +116,11 @@ wire [4:0] fmt = insn[25:21];
 wire is_cop1 = op == 6'h11;
 wire is_mfc1 = is_cop1 && fmt == 5'h00, is_cfc1 = is_cop1 && fmt == 5'h02;
 wire is_mtc1 = is_cop1 && fmt == 5'h04, is_ctc1 = is_cop1 && fmt == 5'h06, is_dmtc1 = is_cop1 && fmt == 5'h05;
+wire is_dmfc1 = is_cop1 && fmt == 5'h01;
 wire is_s = is_cop1 && fmt == 5'h10, is_d = is_cop1 && fmt == 5'h11, is_w = is_cop1 && fmt == 5'h14;
-wire is_l = is_cop1 && fmt == 5'h15 && fn == 6'h20;     // cvt.s.l (the only .l one here)
+wire is_l = is_cop1 && fmt == 5'h15 && (fn == 6'h20 || fn == 6'h21);   // cvt.s.l, cvt.d.l
+// to a 64-bit integer (cvt.l, round.l, trunc.l, ceil.l, floor.l): done as to a word, the word sign-extended into the pair
+wire to_l = (is_s || is_d) && ((fn >= 6'h08 && fn <= 6'h0B) || fn == 6'h25);
 wire is_mov = (is_s || is_d) && fn == 6'h06;
 wire is_arith = ((is_s || is_d || is_w) && !is_mov) || is_l;      // through the datapath
 wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc1 = op == 6'h3D;
@@ -149,6 +153,7 @@ logic [5:0] nzc;                                   // (FAST) the leading zeros S
 kind_t kind;
 fbits_t ax, ay;                                          // the operands (add: ax the larger)
 logic   dst_d;                                           // the result is a double (a pair)
+logic   dst_l;                                           // the result is a 64-bit integer (a word, sign-extended into the pair)
 logic [31:0] res;                                        // the result (float bits, or an integer)
 logic   rcond;
 // the unnormalised result: value = zmag * 2^(zexp - 158); div/sqrt build their
@@ -186,7 +191,7 @@ function automatic logic arith_of(input logic [31:0] i);
     logic cop1, s_, d_, w_;
     cop1 = i[31:26] == 6'h11;
     s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
-    return ((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && i[5:0] == 6'h20);
+    return ((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21));
 endfunction
 logic ar_q;
 always_ff @(posedge clk) if (adv) ar_q <= arith_of(insn_e);
@@ -261,9 +266,10 @@ always_ff @(posedge clk) begin
             ax <= (isd_q || isl_q) ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
             st <= S_UNPX;
         end
-        dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h0C && fn <= 6'h0F) && fn != 6'h24 && fn < 6'h30) ||
-                 ((is_s || is_w) && fn == 6'h21);
-        rmode <= fn == 6'h24 ? fcr31[1:0] : fn[1:0];      // to int: 0C round, 0D trunc, 0E ceil, 0F floor
+        dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
+                 ((is_s || is_w || is_l) && fn == 6'h21);
+        dst_l <= to_l;
+        rmode <= (fn == 6'h24 || fn == 6'h25) ? fcr31[1:0] : fn[1:0];      // to int: 0C/08 round, 0D/09 trunc, 0E/0A ceil, 0F/0B floor
     end
     S_UNPX: begin ax <= up; st <= S_UNPY; end
     S_UNPY: begin ay <= up; st <= FAST ? S_PRE : S_DECIDE; end
@@ -293,7 +299,7 @@ always_ff @(posedge clk) begin
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
-        end else if ((fn >= 6'h0C && fn <= 6'h0F) || fn == 6'h24) begin   // to int
+        end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
             if (nx) res <= 32'h7FFFFFFF;
             else if (ax.e >= 8'd158) res <= ax.s ? 32'h80000000 : 32'h7FFFFFFF;
@@ -456,7 +462,8 @@ end
 logic [63:0] res_d;
 always_comb res_d = f2d(res);
 always_comb begin
-    gpr_out = is_mfc1 ? rfs : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    gpr_out_hi = xo;
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];
 
@@ -473,7 +480,8 @@ always_comb begin
         end
         if (is_arith && kind != K_CMP) begin
             widx = insn[10:7];
-            if (dst_d) begin we_e = 1; we_o = 1; wd_e = res_d[63:32]; wd_o = res_d[31:0]; end
+            if (dst_l) begin we_e = 1; we_o = 1; wd_e = res; wd_o = {32{res[31]}}; end
+            else if (dst_d) begin we_e = 1; we_o = 1; wd_e = res_d[63:32]; wd_o = res_d[31:0]; end
             else if (insn[6]) begin we_o = 1; wd_o = res; end else begin we_e = 1; wd_e = res; end
         end
     end
