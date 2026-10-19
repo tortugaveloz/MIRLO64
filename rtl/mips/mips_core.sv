@@ -369,7 +369,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         if (fn == 6'h10 || fn == 6'h12) begin c.use_rs = 0; c.use_rt = 0; end
         if (fn == 6'h08 || fn == 6'h09 || fn == 6'h11 || fn == 6'h13) c.use_rt = 0;
         if (c.x64 != X_NONE && (!XALU || (!XSH && (c.x64 == X_SLL || c.x64 == X_SRL || c.x64 == X_SRA)))) begin c = '0; c.ri = 1; end
-        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && (fn == 6'h1E || fn == 6'h1F))) begin c = '0; c.ri = 1; end
+        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && fn == 6'h1F)) begin c = '0; c.ri = 1; end   // (ddiv without XDIV: d_cx)
     end
     6'h01: begin
         c.use_rs = 1;
@@ -824,6 +824,9 @@ always_comb begin
         // (... and while the runtime keeps them, either of the two: the other stays its)
         if ((d_c.md == MD_MTHI || d_c.md == MD_MTLO) && !XMD && (aw || hilo_soft)) d_cx.ri = 1'b1;
         if (d_c.trap != 3'd0 && (aw || bw)) begin d_cx.trap = 3'd0; d_cx.ri = 1'b1; end
+        // (ddiv without XDIV: two words' (32-bit operands) on the 32-bit divider, the quotient and the remainder as they
+        // are; a 64-bit operand is the runtime's)
+        if (!XDIV && d_c.md == MD_DDIV && (aw || bw)) d_cx.ri = 1'b1;
     end
     // TLB_RAM with the monitor: the game's own TLB instructions (tlbwi, tlbwr, tlbr, tlbp) are a Reserved Instruction for the
     // monitor level, which does them on the entries it keeps (the translation tables hold no VR4300 entries to write, read or
@@ -1064,6 +1067,7 @@ logic [2*MW-1:0] md_acc;                     // divide: {remainder, quotient}
 logic [MW-1:0]   md_dv;
 logic            md_nq, md_nr;
 logic            md_w;                       // the quotient and remainder are 64 bits
+logic            md_dd;                      // (no XDIV) a ddiv of two words: its quotient may be 2^31
 logic            md_m32, md_m32b;            // FAST: mult(u)'s product, from its operands kept, and kept itself
 // The multiplier: one 33 x 33 signed product (the DSP's), its operands and its result
 // in registers, a product two cycles behind M's operands. mult(u) is one of it (FAST);
@@ -2130,7 +2134,7 @@ always_ff @(posedge clk) begin
             b = w ? MW'(m_b64) : MW'({{32{sgn && m_st_lo[31]}}, m_st_lo});
             sa = sgn && a[MW-1]; sb = sgn && b[MW-1];
             ma = sa ? -a : a;
-            md_w <= w;
+            md_w <= w; md_dd <= !XDIV && m_c.md == MD_DDIV;
             if (FAST && (m_c.md == MD_MULT || m_c.md == MD_MULTU)) begin
                 md_sa <= m_c.md == MD_MULT; md_sb <= m_c.md == MD_MULT; md_m32 <= 1'b1; md_busy <= 1'b1;
             end else if (m_c.md == MD_MULT || m_c.md == MD_MULTU) begin
@@ -2199,6 +2203,8 @@ always_ff @(posedge clk) begin
                 lo_r <= q[31:0]; hi_r <= r[31:0];
                 lo_hx <= md_w ? hx32(64'(q)) : 32'd0; hi_hx <= md_w ? hx32(64'(r)) : 32'd0;
                 lo_wide <= md_w; hi_wide <= md_w;
+                // (ddiv of two words: only -2^31 / -1 leaves the 32 bits, a positive 2^31 -- its upper half 0)
+                if (!md_w && md_dd && !md_nq && q[31]) begin lo_hx <= 32'hFFFFFFFF; lo_wide <= 1'b1; end
             end
         end
     end
