@@ -141,7 +141,7 @@ endfunction
 // S_IDLE unpacks fs, S_UNPY ft (one unpacker, a register between the RAM and
 // everything else); S_DECIDE takes the special cases and dispatches
 typedef enum logic [4:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
-                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2, S_LNEG, S_LCNT, S_LSH } st_t;        // (FAST's)
+                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2, S_LNEG, S_LNEG2, S_LSH1 } st_t;        // (FAST's)
 typedef enum logic [2:0] { K_ADD, K_MUL, K_DIV, K_SQRT, K_CVT, K_F2W, K_CMP, K_MOVE } kind_t;
 st_t   st;
 logic fnx, fny, fix, fiy, fzx, fzy, fmlt, fmeq;   // (FAST) S_PRE's: the operands' kinds, their magnitudes' order
@@ -165,6 +165,7 @@ logic [55:0] mp;                                         // mul: the product; sq
 logic [1:0]  rmode;                                      // to int: the rounding
 logic        sw;                                         // (FAST) add: ay is the larger
 logic        fg;                                         // (FAST) to int: the guard bit
+logic        lcar;                                       // cvt.s.l: the lower word's negation carries
 
 // the unpacker: fs in S_IDLE, ft in S_UNPY (W: the integer as it is)
 wire         upy = st == S_UNPY;
@@ -277,9 +278,12 @@ always_ff @(posedge clk) begin
         nx = FAST ? fnx : isnan(ax); ny = FAST ? fny : isnan(ay); ix = FAST ? fix : isinf(ax); iy = FAST ? fiy : isinf(ay);
         zx = FAST ? fzx : iszero(ax); zy = FAST ? fzy : iszero(ay);
         st <= S_DONE;                                     // (the special cases: done now)
-        if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}, its magnitude next
-            kind <= K_CVT; zs <= zmag[31]; zst <= 0; ir <= ax;
-            if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0; else st <= S_LNEG;
+        if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
+            kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
+            if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
+            else if (zmag == 32'd0) begin zs <= 0; zmag <= ax; st <= S_NORM; end                    // an unsigned word
+            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; zmag <= ax[31] ? -ax : ax; st <= S_NORM; end   // a word
+            else begin zs <= zmag[31]; ir <= ax; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zmag <= ax.s ? -ax : ax; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
@@ -393,20 +397,21 @@ always_ff @(posedge clk) begin
         else begin zmag <= m << lzc32(m); zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
     end
-    // cvt.s.l: the magnitude {zmag, ir}; one with an upper half of 0 is a word's (S_NORM), another is normalised by the
-    // upper half's leading zeros (a count, then the 64-bit shift), the bits below the 32 kept as the sticky
+    // cvt.s.l of one that is not a word: the magnitude {zmag, ir} a word at a time (the lower word, then the upper one with
+    // its carry), then shifted left a bit a cycle until its top bit is set (at most 32 cycles), the bits below the upper
+    // word kept as the sticky
     S_LNEG: begin
-        logic [63:0] m;
-        m = zs ? 64'(-{zmag, ir}) : {zmag, ir};
-        if (m[63:32] == 32'd0) begin zmag <= m[31:0]; zexp <= 12'sd158; st <= S_NORM; end
-        else begin zmag <= m[63:32]; ir <= m[31:0]; st <= S_LCNT; end
+        if (zs) begin ir <= -ir; lcar <= ir == 32'd0; end
+        st <= S_LNEG2;
     end
-    S_LCNT: begin nzc <= {1'b0, lzc32(zmag)}; st <= S_LSH; end
-    S_LSH: begin
-        logic [63:0] t;
-        t = {zmag, ir} << nzc[4:0];
-        zmag <= t[63:32]; zst <= t[31:0] != 32'd0; zexp <= 12'sd190 - 12'(nzc[4:0]); st <= S_ROUND;
+    S_LNEG2: begin
+        logic [31:0] h;
+        h = zs ? ~zmag + 32'(lcar) : zmag;
+        if (h == 32'd0) begin zmag <= ir; st <= S_NORM; end
+        else begin zmag <= h; zexp <= 12'sd190; st <= S_LSH1; end
     end
+    S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
+            else begin zmag <= {zmag[30:0], ir[31]}; ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
     S_NORM2: begin zmag <= zmag << nzc; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
     S_F2W: if (FAST) begin zmag <= sh_o[34:3]; fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
