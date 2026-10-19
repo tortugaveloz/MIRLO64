@@ -1416,7 +1416,13 @@ static u32 l2f(s64 v)
     u32 s = v < 0;
     u64 m = s ? (u64)0 - (u64)v : (u64)v;
     int e = 63;
-    while (!(m >> 63)) { m <<= 1; e--; }
+    /* (normalised by halves: a bit a step was some 400 instructions of this 32-bit code a conversion) */
+    if (!(m >> 32)) { m <<= 32; e -= 32; }
+    if (!(m >> 48)) { m <<= 16; e -= 16; }
+    if (!(m >> 56)) { m <<= 8; e -= 8; }
+    if (!(m >> 60)) { m <<= 4; e -= 4; }
+    if (!(m >> 62)) { m <<= 2; e -= 2; }
+    if (!(m >> 63)) { m <<= 1; e -= 1; }
     u32 mant = (u32)(m >> 40);
     u64 rest = m & 0xFFFFFFFFFFull;
     if (rest > 0x8000000000ull || (rest == 0x8000000000ull && (mant & 1u))) { mant++; if (mant >> 24) { mant >>= 1; e++; } }
@@ -1521,14 +1527,18 @@ static int emulate_64(n64rt_ctx_t *x, u32 cause)
         if (!emulate_fpu64(x, insn)) return 0;
         /* The compiler's conversions between a 64-bit integer and a float (libultra's __ll_to_d, __f_to_ll ...) are two of
          * these in a row -- dmtc1 / jr ra / cvt.d.l in its delay slot, or trunc.l.s / dmfc1 -- and some games call them
-         * a hundred times a field: the one behind this one, or the one in the delay slot of the `jr ra` behind it, is done
-         * on the same entry. */
+         * a hundred times a field: the ones behind this one -- a nop or two between them, as hand-written code has them
+         * (dmtc1 / nop / cvt.s.l) -- or the one in the delay slot of the `jr ra` behind it, are done on the same entry. */
         if (!bd) {
             u32 n1, n2;
             const u32 ra = g32(x, 31);
-            if (insn_at(next, &n1)) {
-                if ((n1 >> 26) == 0x11u && emulate_fpu64(x, n1)) next += 4u;
-                else if (n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
+            for (int k = 0; k < 4; k++) {
+                u32 p = next;
+                if (!insn_at(p, &n1)) break;
+                for (int z = 0; z < 2 && n1 == 0u; z++) { p += 4u; if (!insn_at(p, &n1)) { n1 = 0u; break; } }
+                if ((n1 >> 26) == 0x11u && emulate_fpu64(x, n1)) { next = p + 4u; continue; }
+                if (p == next && n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
+                break;
             }
         }
         break;

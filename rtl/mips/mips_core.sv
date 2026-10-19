@@ -19,8 +19,10 @@
 //               HI and LO of 64 bits
 //      W64_DIV  (with W64_MD) ddiv(u), a bit a cycle on a divider twice as
 //               wide: left out (a Reserved Instruction), the runtime divides
-//    Never in the core: ldl, ldr, sdl, sdr, lld, scd, dmfc1, dmtc1, the
-//    FPU's .l formats, a trap on a 64-bit operand. COP0 register 7 (MCTL)
+//    Without W64_DIV, a ddiv of two words and a ddivu of two unsigned words
+//    are done on the 32-bit divider; another is a Reserved Instruction.
+//    Never in the core: ldl, ldr, sdl, sdr, lld, scd, a trap on a 64-bit
+//    operand. COP0 register 7 (MCTL)
 //    reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV), 0 on
 //    a core before them. Without W64_MD HI and LO
 //    are 32 bits and the runtime keeps a 64-bit product or quotient itself:
@@ -85,10 +87,10 @@
 //    tagged; KSEG0 RDRAM only. The D-cache writes through an 8-entry write
 //    buffer: memory is always current for the engines that read it (the RSP
 //    firmware, MRDP, the audio core). A read goes out only with the buffer
-//    empty. ld and sd to cached memory are two words in two cycles, through
-//    the cache and the write buffer as any other. Uncached, device and
-//    TLB-mapped accesses (but a fetch from a cacheable mapped page, FPG) and
-//    ldc1/sdc1 take the slow path (one single-word access; two for a 64-bit one).
+//    empty. ld, sd, ldc1 and sdc1 to cached memory are two words in two
+//    cycles, through the cache and the write buffer as any other. Uncached,
+//    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,
+//    FPG) take the slow path (one single-word access; two for a 64-bit one).
 //  - Memory is word-native (sim/n64/n64.h): big-endian byte k of a word is
 //    lane 3 - k (BIG; little-endian: lane k).
 //  - COP1 instructions run at M in fpu_n64 (single precision, doubles
@@ -294,7 +296,7 @@ typedef struct packed {
     logic        trap_imm;
     logic        sys, brk, ri;
     logic        mfc0, mtc0, eret, tlbr, tlbwi, tlbwr, tlbp, cache;
-    logic        cop1, cop1_gpr, cop1_cond;
+    logic        cop1, cop1_gpr, cop1_cond, cop1_64;   // (cop1_64: dmfc1, a 64-bit result)
     logic        late;           // its result comes out of M
 } ctl_t;
 
@@ -304,10 +306,11 @@ function automatic logic fpu_implements(input logic [31:0] i);
     logic [4:0] rs; logic [5:0] fn;
     rs = i[25:21]; fn = i[5:0];
     case (rs)
-    5'h00, 5'h02, 5'h04, 5'h06: return 1'b1;                          // mfc1 cfc1 mtc1 ctc1
-    5'h10, 5'h11: return fn <= 6'h07 || (fn >= 6'h0C && fn <= 6'h0F) || fn == 6'h24 || fn >= 6'h30 ||
+    5'h00, 5'h01, 5'h02, 5'h04, 5'h05, 5'h06: return 1'b1;            // mfc1 dmfc1 cfc1 mtc1 dmtc1 ctc1
+    5'h10, 5'h11: return fn <= 6'h0F || fn == 6'h24 || fn == 6'h25 || fn >= 6'h30 ||            // (.l: to a word, sign-extended)
                          (fn == 6'h20 && rs == 5'h11) || (fn == 6'h21 && rs == 5'h10);
     5'h14: return fn == 6'h20 || fn == 6'h21;                         // cvt.s.w cvt.d.w
+    5'h15: return fn == 6'h20 || fn == 6'h21;                         // cvt.s.l cvt.d.l
     default: return 1'b0;
     endcase
 endfunction
@@ -368,7 +371,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         if (fn == 6'h10 || fn == 6'h12) begin c.use_rs = 0; c.use_rt = 0; end
         if (fn == 6'h08 || fn == 6'h09 || fn == 6'h11 || fn == 6'h13) c.use_rt = 0;
         if (c.x64 != X_NONE && (!XALU || (!XSH && (c.x64 == X_SLL || c.x64 == X_SRL || c.x64 == X_SRA)))) begin c = '0; c.ri = 1; end
-        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && (fn == 6'h1E || fn == 6'h1F))) begin c = '0; c.ri = 1; end
+        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && fn == 6'h1F)) begin c = '0; c.ri = 1; end   // (ddiv without XDIV: d_cx)
     end
     6'h01: begin
         c.use_rs = 1;
@@ -417,8 +420,8 @@ function automatic ctl_t decode(input logic [31:0] i);
         else if (!fpu_implements(i)) c.ri = 1;                            // dmfc1, dmtc1, .l, ...
         else begin
             c.cop1 = 1;
-            if (rs == 5'h00 || rs == 5'h02) begin c.cop1_gpr = 1; c.wr = 1; c.rd = rt; c.late = 1; end
-            if (rs == 5'h04 || rs == 5'h06) c.use_rt = 1;
+            if (rs == 5'h00 || rs == 5'h01 || rs == 5'h02) begin c.cop1_gpr = 1; c.wr = 1; c.rd = rt; c.late = 1; c.cop1_64 = rs == 5'h01; end
+            if (rs == 5'h04 || rs == 5'h05 || rs == 5'h06) c.use_rt = 1;   // (dmtc1: its upper half too, m_st_hx)
             if (rs == 5'h06 || rs >= 5'h10) c.cop1_cond = 1;
         end
     end
@@ -751,7 +754,7 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 // hx: the register file's, or zero for a value still in the pipeline (what
 // can have one makes its readers wait: haz_wide)
 function automatic logic wideprod(input ctl_t c);
-    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU;   // (a compare's result is 0 or 1)
+    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
 wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
 wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
@@ -823,6 +826,9 @@ always_comb begin
         // (... and while the runtime keeps them, either of the two: the other stays its)
         if ((d_c.md == MD_MTHI || d_c.md == MD_MTLO) && !XMD && (aw || hilo_soft)) d_cx.ri = 1'b1;
         if (d_c.trap != 3'd0 && (aw || bw)) begin d_cx.trap = 3'd0; d_cx.ri = 1'b1; end
+        // (ddiv without XDIV: two words' (32-bit operands) on the 32-bit divider, the quotient and the remainder as they
+        // are; a 64-bit operand is the runtime's)
+        if (!XDIV && d_c.md == MD_DDIV && (aw || bw)) d_cx.ri = 1'b1;
     end
     // TLB_RAM with the monitor: the game's own TLB instructions (tlbwi, tlbwr, tlbr, tlbp) are a Reserved Instruction for the
     // monitor level, which does them on the entries it keeps (the translation tables hold no VR4300 entries to write, read or
@@ -1063,6 +1069,7 @@ logic [2*MW-1:0] md_acc;                     // divide: {remainder, quotient}
 logic [MW-1:0]   md_dv;
 logic            md_nq, md_nr;
 logic            md_w;                       // the quotient and remainder are 64 bits
+logic            md_dd;                      // (no XDIV) a ddiv of two words: its quotient may be 2^31
 logic            md_m32, md_m32b;            // FAST: mult(u)'s product, from its operands kept, and kept itself
 // The multiplier: one 33 x 33 signed product (the DSP's), its operands and its result
 // in registers, a product two cycles behind M's operands. mult(u) is one of it (FAST);
@@ -1088,7 +1095,7 @@ logic [31:0]     md_ah, md_bh, md_bl;        // the operands' words that are no 
 
 // =============================================================== M
 logic        fpu_valid, fpu_busy;
-logic [31:0] fpu_gpr_out;
+logic [31:0] fpu_gpr_out, fpu_gpr_out_hi;
 logic [63:0] fpu_mem_out;
 // (FAST: what kind of instruction it is, registered with it)
 logic m_k_ld, m_k_st, m_k_wide, m_k_fwide, m_k_cach, m_k_mapped, m_k_md, m_k_fpu, m_k_sbeq;
@@ -1115,7 +1122,7 @@ wire m_wide = FAST ? m_k_wide :
 logic        sb_valid; logic [DW-1:0] sb_waddr; logic [31:0] sb_data; logic [3:0] sb_strb;
 wire         sb_hit = sb_valid && (FAST ? m_k_sbeq : sb_waddr == m_addr[DW+1:2]);
 wire m_fwide = FAST ? m_k_fwide : (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D);
-wire m_cached = FAST ? m_k_cach : cacheable(m_addr) && !m_fwide;     // (ldc1, sdc1: the slow path, as ever)
+wire m_cached = FAST ? m_k_cach : cacheable(m_addr);
 // the line dropped last cycle (an uncached store into cached memory, sdc1,
 // a cache instruction): an access right behind it read the tag in the edge
 // that cleared it
@@ -1235,12 +1242,13 @@ always_comb begin
     S_SW, S_SC: begin m_st_data = m_st_lo; m_st_strb = 4'b1111; end
     S_SWL: begin m_st_data = m_st_lo >> (8 * k); m_st_strb = 4'b1111 >> k; end
     S_SWR: begin m_st_data = m_st_lo << (8 * (3 - k)); m_st_strb = 4'b1111 << (3 - k); end
-    S_FS:  begin m_st_data = fpu_mem_out[31:0]; m_st_strb = 4'b1111; end
+    S_FS:  begin m_st_data = (m_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]; m_st_strb = 4'b1111; end
     S_SD:  begin m_st_data = (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; m_st_strb = 4'b1111; end
     default: ;
     endcase
     if (FAST && !m_k_sfs && !m_k_ssd) begin m_st_data = m_st_lo; m_st_strb = m_k_sstrb; end
-    else if (FAST) begin m_st_strb = 4'b1111; m_st_data = m_k_sfs ? fpu_mem_out[31:0] : (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
+    else if (FAST) begin m_st_strb = 4'b1111; m_st_data = m_k_sfs ? ((m_k_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]) :
+                                                      (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
 end
 
 wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
@@ -1323,7 +1331,7 @@ wire m_sw_push = m_sw && !sw_wait && !st_full;
 assign st_valid = XWB && (m_wb_push || m_sw_push);
 assign st_dev   = m_devst;
 assign st_addr  = {m_pa[31:3], m_cw ? m_ph : m_sw ? (ms == MS_SLOW_B || (!m_wide && m_pa[2])) : m_pa[2], 2'b00};
-assign st_data  = m_fwide ? ((ms == MS_SLOW_B) == BIG ? fpu_mem_out[31:0] : fpu_mem_out[63:32]) : m_st_data;
+assign st_data  = m_st_data;
 assign st_strb  = m_st_strb;
 // an index cache op's lines when a cache has more than the VR4300's (see the cache RAMs' writes)
 // (PG: a hit-type op on the I-cache, once a mapped page may have its lines under another colour than the physical
@@ -1634,8 +1642,8 @@ fpu_n64 #(.FAST(FAST)) fpu (
     .clk, .rst,
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live(m_live && m_fpu), .valid(fpu_valid),
-    .cancel(FAST && w_lm), .gpr_in(m_st_lo), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
-    .gpr_out(fpu_gpr_out), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
+    .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
+    .gpr_out(fpu_gpr_out), .gpr_out_hi(fpu_gpr_out_hi), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
     .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
     .tr_weven(tr_fweven), .tr_wodd(tr_fwodd), .tr_fcr31(tr_fcr31)
 );
@@ -1706,6 +1714,7 @@ always_ff @(posedge clk) begin
             w_hx <= 32'd0;
             if (W64) begin
                 if (m_ld) w_hx <= m_ld_hx;
+                else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
             end
@@ -1845,7 +1854,7 @@ always_ff @(posedge clk) begin
                 m_f_kseg <= kseg01(e_ea); m_f_devk <= pa_dev(kphys(e_ea));
                 m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_k_sc <= e_c.st == S_SC;
                 m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD));
-                m_k_cach <= cacheable(e_ea) && !e_fwide; m_k_mapped <= e_mem && !kseg01(e_ea);
+                m_k_cach <= cacheable(e_ea); m_k_mapped <= e_mem && !kseg01(e_ea);
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == e_ea[DW+1:2];            // (it is behind the store that is at M now)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
@@ -2128,7 +2137,7 @@ always_ff @(posedge clk) begin
             b = w ? MW'(m_b64) : MW'({{32{sgn && m_st_lo[31]}}, m_st_lo});
             sa = sgn && a[MW-1]; sb = sgn && b[MW-1];
             ma = sa ? -a : a;
-            md_w <= w;
+            md_w <= w; md_dd <= !XDIV && m_c.md == MD_DDIV;
             if (FAST && (m_c.md == MD_MULT || m_c.md == MD_MULTU)) begin
                 md_sa <= m_c.md == MD_MULT; md_sb <= m_c.md == MD_MULT; md_m32 <= 1'b1; md_busy <= 1'b1;
             end else if (m_c.md == MD_MULT || m_c.md == MD_MULTU) begin
@@ -2197,6 +2206,8 @@ always_ff @(posedge clk) begin
                 lo_r <= q[31:0]; hi_r <= r[31:0];
                 lo_hx <= md_w ? hx32(64'(q)) : 32'd0; hi_hx <= md_w ? hx32(64'(r)) : 32'd0;
                 lo_wide <= md_w; hi_wide <= md_w;
+                // (ddiv of two words: only -2^31 / -1 leaves the 32 bits, a positive 2^31 -- its upper half 0)
+                if (!md_w && md_dd && !md_nq && q[31]) begin lo_hx <= 32'hFFFFFFFF; lo_wide <= 1'b1; end
             end
         end
     end
