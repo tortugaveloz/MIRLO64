@@ -9,8 +9,11 @@
 //    as libultra sets it); a NaN result is 0x7FBFFFFF; arithmetic rounds to
 //    nearest even with an unbounded exponent, then flushes.
 //  - cvt.w / round / trunc / ceil / floor .w saturate (NaN: INT32_MAX).
-//  - No .l formats, dmfc1 / dmtc1 (the core decodes them as Reserved
-//    Instructions), no exceptions, no FCR31 cause / flag bits.
+//  - dmfc1 / dmtc1 move a 64-bit register through an even/odd pair; cvt.s.l /
+//    cvt.d.l convert the pair's 64-bit integer exactly (a word's by cvt.s.w's
+//    path, another by a shift of a bit a cycle); the conversions to .l are the
+//    ones to .w, the word sign-extended into the pair (a value past a word's
+//    range saturates as a word's). No exceptions, no FCR31 cause / flag bits.
 //
 // One datapath, several cycles per operation (the core's M stage waits on
 // `busy`): an operation's operands are unpacked as it enters M, then
@@ -44,9 +47,11 @@ module fpu_n64 #(
     input  wire         live,               // it is a COP1 instruction (or l/s wc1/dc1), live in M
     input  wire         valid,              // it completes this cycle: write its results
     input  wire         cancel,             // (FAST) the register write of the one that completed last cycle is taken back
-    input  wire  [31:0] gpr_in,             // mtc1, ctc1
+    input  wire  [31:0] gpr_in,             // mtc1, ctc1; dmtc1's lower half
+    input  wire  [31:0] gpr_in_hi,          // dmtc1's upper half
     input  wire  [63:0] mem_in,             // lwc1: [31:0]; ldc1: {lower address, higher}
-    output logic [31:0] gpr_out,            // mfc1, cfc1
+    output logic [31:0] gpr_out,            // mfc1, cfc1; dmfc1's lower half
+    output logic [31:0] gpr_out_hi,         // dmfc1's upper half
     output logic [63:0] mem_out,            // swc1: [31:0]; sdc1: {lower address, higher}
     output logic        cond,               // FCR31.C after the instruction
     output logic        busy,
@@ -113,10 +118,14 @@ wire [5:0] op = insn[31:26], fn = insn[5:0];
 wire [4:0] fmt = insn[25:21];
 wire is_cop1 = op == 6'h11;
 wire is_mfc1 = is_cop1 && fmt == 5'h00, is_cfc1 = is_cop1 && fmt == 5'h02;
-wire is_mtc1 = is_cop1 && fmt == 5'h04, is_ctc1 = is_cop1 && fmt == 5'h06;
+wire is_mtc1 = is_cop1 && fmt == 5'h04, is_ctc1 = is_cop1 && fmt == 5'h06, is_dmtc1 = is_cop1 && fmt == 5'h05;
+wire is_dmfc1 = is_cop1 && fmt == 5'h01;
 wire is_s = is_cop1 && fmt == 5'h10, is_d = is_cop1 && fmt == 5'h11, is_w = is_cop1 && fmt == 5'h14;
+wire is_l = is_cop1 && fmt == 5'h15 && (fn == 6'h20 || fn == 6'h21);   // cvt.s.l, cvt.d.l
+// to a 64-bit integer (cvt.l, round.l, trunc.l, ceil.l, floor.l): done as to a word, the word sign-extended into the pair
+wire to_l = (is_s || is_d) && ((fn >= 6'h08 && fn <= 6'h0B) || fn == 6'h25);
 wire is_mov = (is_s || is_d) && fn == 6'h06;
-wire is_arith = (is_s || is_d || is_w) && !is_mov;      // through the datapath
+wire is_arith = ((is_s || is_d || is_w) && !is_mov) || is_l;      // through the datapath
 wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc1 = op == 6'h3D;
 
 // ============================================================ unpack
@@ -138,8 +147,8 @@ endfunction
 // ============================================================ state
 // S_IDLE unpacks fs, S_UNPY ft (one unpacker, a register between the RAM and
 // everything else); S_DECIDE takes the special cases and dispatches
-typedef enum logic [3:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
-                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2 } st_t;        // (FAST's)
+typedef enum logic [4:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
+                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2, S_LNEG, S_LNEG2, S_LSH1 } st_t;        // (FAST's)
 typedef enum logic [2:0] { K_ADD, K_MUL, K_DIV, K_SQRT, K_CVT, K_F2W, K_CMP, K_MOVE } kind_t;
 st_t   st;
 logic fnx, fny, fix, fiy, fzx, fzy, fmlt, fmeq;   // (FAST) S_PRE's: the operands' kinds, their magnitudes' order
@@ -147,6 +156,7 @@ logic [5:0] nzc;                                   // (FAST) the leading zeros S
 kind_t kind;
 fbits_t ax, ay;                                          // the operands (add: ax the larger)
 logic   dst_d;                                           // the result is a double (a pair)
+logic   dst_l;                                           // the result is a 64-bit integer (a word, sign-extended into the pair)
 logic [31:0] res;                                        // the result (float bits, or an integer)
 logic   rcond;
 // the unnormalised result: value = zmag * 2^(zexp - 158); div/sqrt build their
@@ -163,6 +173,7 @@ logic [55:0] mp;                                         // mul: the product; sq
 logic [1:0]  rmode;                                      // to int: the rounding
 logic        sw;                                         // (FAST) add: ay is the larger
 logic        fg;                                         // (FAST) to int: the guard bit
+logic        lcar;                                       // cvt.s.l: the lower word's negation carries
 
 // the unpacker: fs in S_IDLE, ft in S_UNPY (W: the integer as it is)
 wire         upy = st == S_UNPY;
@@ -173,7 +184,7 @@ assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
 wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
 wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
 fbits_t up;
-assign up = sel_w ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
+assign up = (sel_w || sel_l) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
 
 // (FAST: without `live` -- the core asks only for an instruction in M, and
 // one that is not live is flushed)
@@ -183,16 +194,17 @@ function automatic logic arith_of(input logic [31:0] i);
     logic cop1, s_, d_, w_;
     cop1 = i[31:26] == 6'h11;
     s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
-    return (s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06);
+    return ((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21));
 endfunction
 logic ar_q;
 always_ff @(posedge clk) if (adv) ar_q <= arith_of(insn_e);
-logic isd_q, isw_q;                                     // (FAST) is_d and is_w, likewise
+logic isd_q, isw_q, isl_q;                              // (FAST) is_d, is_w and is_l, likewise
 always_ff @(posedge clk) if (adv) begin
     isd_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h11;
     isw_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h14;
+    isl_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h15;
 end
-wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w;
+wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w, sel_l = FAST ? isl_q : is_l;
 assign busy = FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE;
 
 // ------------------------------------------------------------ shared pieces
@@ -252,13 +264,15 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
+        if (!FAST) zmag <= xo;                            // (cvt.s.l: the integer's upper half)
         if (FAST) begin
-            ax <= isd_q ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
+            ax <= (isd_q || isl_q) ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
             st <= S_UNPX;
         end
-        dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h0C && fn <= 6'h0F) && fn != 6'h24 && fn < 6'h30) ||
-                 ((is_s || is_w) && fn == 6'h21);
-        rmode <= fn == 6'h24 ? fcr31[1:0] : fn[1:0];      // to int: 0C round, 0D trunc, 0E ceil, 0F floor
+        dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
+                 ((is_s || is_w || is_l) && fn == 6'h21);
+        dst_l <= to_l;
+        rmode <= (fn == 6'h24 || fn == 6'h25) ? fcr31[1:0] : fn[1:0];      // to int: 0C/08 round, 0D/09 trunc, 0E/0A ceil, 0F/0B floor
     end
     S_UNPX: begin ax <= up; st <= S_UNPY; end
     S_UNPY: begin ay <= up; st <= FAST ? S_PRE : S_DECIDE; end
@@ -273,7 +287,13 @@ always_ff @(posedge clk) begin
         nx = FAST ? fnx : isnan(ax); ny = FAST ? fny : isnan(ay); ix = FAST ? fix : isinf(ax); iy = FAST ? fiy : isinf(ay);
         zx = FAST ? fzx : iszero(ax); zy = FAST ? fzy : iszero(ay);
         st <= S_DONE;                                     // (the special cases: done now)
-        if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
+        if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
+            kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
+            if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
+            else if (zmag == 32'd0) begin zs <= 0; zmag <= ax; st <= S_NORM; end                    // an unsigned word
+            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; zmag <= ax[31] ? -ax : ax; st <= S_NORM; end   // a word
+            else begin zs <= zmag[31]; ir <= ax; st <= S_LNEG; end                                  // 64 bits
+        end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zmag <= ax.s ? -ax : ax; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
         end else if (fn >= 6'h30) begin                   // c.cond
@@ -282,7 +302,7 @@ always_ff @(posedge clk) begin
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
-        end else if ((fn >= 6'h0C && fn <= 6'h0F) || fn == 6'h24) begin   // to int
+        end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
             if (nx) res <= 32'h7FFFFFFF;
             else if (ax.e >= 8'd158) res <= ax.s ? 32'h80000000 : 32'h7FFFFFFF;
@@ -386,6 +406,21 @@ always_ff @(posedge clk) begin
         else begin zmag <= m << lzc32(m); zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
     end
+    // cvt.s.l of one that is not a word: the magnitude {zmag, ir} a word at a time (the lower word, then the upper one with
+    // its carry), then shifted left a bit a cycle until its top bit is set (at most 32 cycles), the bits below the upper
+    // word kept as the sticky
+    S_LNEG: begin
+        if (zs) begin ir <= -ir; lcar <= ir == 32'd0; end
+        st <= S_LNEG2;
+    end
+    S_LNEG2: begin
+        logic [31:0] h;
+        h = zs ? ~zmag + 32'(lcar) : zmag;
+        if (h == 32'd0) begin zmag <= ir; st <= S_NORM; end
+        else begin zmag <= h; zexp <= 12'sd190; st <= S_LSH1; end
+    end
+    S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
+            else begin zmag <= {zmag[30:0], ir[31]}; ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
     S_NORM2: begin zmag <= zmag << nzc; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
     S_F2W: if (FAST) begin zmag <= sh_o[34:3]; fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
@@ -430,13 +465,15 @@ end
 logic [63:0] res_d;
 always_comb res_d = f2d(res);
 always_comb begin
-    gpr_out = is_mfc1 ? rfs : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    gpr_out_hi = xo;
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];
 
     we_e = 0; we_o = 0; widx = 0; wd_e = 0; wd_o = 0;
     if (valid) begin
         if (is_mtc1) begin widx = insn[15:12]; if (insn[11]) begin we_o = 1; wd_o = gpr_in; end else begin we_e = 1; wd_e = gpr_in; end end
+        if (is_dmtc1) begin widx = insn[15:12]; we_e = 1; we_o = 1; wd_e = gpr_in; wd_o = gpr_in_hi; end   // (FR=0: the pair)
         if (is_lwc1) begin widx = insn[20:17]; if (insn[16]) begin we_o = 1; wd_o = mem_in[31:0]; end else begin we_e = 1; wd_e = mem_in[31:0]; end end
         if (is_ldc1) begin widx = insn[20:17]; we_e = 1; we_o = 1; wd_e = mem_in[31:0]; wd_o = mem_in[63:32]; end
         if (is_mov) begin
@@ -446,7 +483,8 @@ always_comb begin
         end
         if (is_arith && kind != K_CMP) begin
             widx = insn[10:7];
-            if (dst_d) begin we_e = 1; we_o = 1; wd_e = res_d[63:32]; wd_o = res_d[31:0]; end
+            if (dst_l) begin we_e = 1; we_o = 1; wd_e = res; wd_o = {32{res[31]}}; end
+            else if (dst_d) begin we_e = 1; we_o = 1; wd_e = res_d[63:32]; wd_o = res_d[31:0]; end
             else if (insn[6]) begin we_o = 1; wd_o = res; end else begin we_e = 1; wd_e = res; end
         end
     end
