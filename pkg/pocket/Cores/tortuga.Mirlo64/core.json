@@ -9,8 +9,8 @@
       "description": "MIRLO 64: A Nintendo 64 core for the Analogue Pocket",
       "author": "tortuga",
       "url": "https://github.com/tortugaveloz/MIRLO64",
-      "version": "0.2",
-      "date_release": "2026-10-16"
+      "version": "0.3",
+      "date_release": "2026-10-20"
     },
     "framework": {
       "target_product": "Analogue Pocket",
