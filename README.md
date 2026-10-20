@@ -64,13 +64,13 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak | The accessory in controller 1 |
-| Stick | **D-pad**, L stick, R stick | What moves the N64's analog stick |
+| Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
-| Z button | None, **L**, R, ZL, ZR | The Pocket's button for Z |
-| L button | **None**, L, R, ZL, ZR | The Pocket's button for the N64's L |
-| R button | None, L, **R**, ZL, ZR | The Pocket's button for the N64's R |
-| C buttons | **None**, Right stick | The right stick as the C buttons, besides the face buttons |
-| Start button | None, **Start**, Select+Start | The Pocket's button for Start |
+| Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
+| L button | **None**, L, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's L |
+| R button | None, L, **R**, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's R |
+| C buttons | **None**, L stick, R stick | A stick as the C buttons, besides the face buttons |
+| Start button | None, **Start**, Select+Start | The Pocket's button for Start; the Start key it leaves (alone with Select+Start, or with None) is C-up |
 | Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
 
 ### Saves
