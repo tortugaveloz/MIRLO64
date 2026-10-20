@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.2** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.3** and it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
@@ -20,7 +20,7 @@ A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. T
 
 ## Status
 
-MIRLO 64 is experimental and not every game works. What is known of v0.2:
+MIRLO 64 is experimental and not every game works. What is known of v0.3:
 
 * ROMs of up to 64 MiB (the first 32 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
@@ -99,7 +99,7 @@ python3 tools/mips_inits.py                                 # the images the bit
 python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
 
 make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.2.zip
+python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.3.zip
 ```
 
 **The fitter's seed matters.** The design fills about 90 % of the FPGA and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
