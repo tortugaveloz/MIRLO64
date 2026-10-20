@@ -1,0 +1,42 @@
+{
+  "input": {
+    "magic": "APF_VER_1",
+    "controllers": [
+      {
+        "type": "default",
+        "mappings": [
+          {
+            "id": 0,
+            "name": "A",
+            "key": "pad_btn_a"
+          },
+          {
+            "id": 1,
+            "name": "B",
+            "key": "pad_btn_b"
+          },
+          {
+            "id": 4,
+            "name": "C-Down",
+            "key": "pad_btn_select"
+          },
+          {
+            "id": 5,
+            "name": "C-Left",
+            "key": "pad_btn_y"
+          },
+          {
+            "id": 6,
+            "name": "C-Right",
+            "key": "pad_btn_x"
+          },
+          {
+            "id": 7,
+            "name": "C-Up",
+            "key": "pad_btn_start"
+          }
+        ]
+      }
+    ]
+  }
+}
