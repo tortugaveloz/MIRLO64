@@ -16,23 +16,25 @@
  *          [29:25]  n=7  "R button": which Pocket key is the N64's R
  *   word 1 [4:0]    n=8  free (was "EEPROM size": the save-type database decides now)
  *          [9:5]    n=9  "Z button": which Pocket key is the N64's Z
- *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick
- *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick; any other
- *                        value is the D-pad
+ *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick
+ *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
+ *                        (the stick stays centred); any other value is the D-pad
  *          [21:20]  n=12 "Start": 0 the Pocket's Start, 1 Select and Start together (neither counts for anything else then),
  *                        2 (or 3) none
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")
  *
- * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the default
- * layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none (anything else is none too).
+ * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
+ * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
+ * 9 Y, 10 Select, 11 Start (anything else is none too).
  *   Z button: 0 = L      L button: 0 = ZL      R button: 0 = R      Modifier: 0 = none
  * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
  *
- * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up through the Modifier (its key held
- * turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right analog stick as another
- * source (ORed): past +-64 of 127 it is C-left / C-right / C-up / C-down.
+ * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on the Start key when "Start"
+ * does not take it (Select+Start: Start alone; none: Start) -- the Controls menu's C-Up is on Start -- and through the Modifier (its
+ * key held turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right analog stick, 2 the
+ * left one, as another source (ORed): past +-64 of 127 it is C-left / C-right / C-up / C-down.
  *
  * Analog sticks. The dock says a pad has them with KEY_TYPE 3; the Pocket's own controls (type 1) have none. The pad of a type
  * the docs call "without analog" (2) is believed, for its stick bytes, when they are not 0x00000000 or 0xFFFFFFFF (a pad with
@@ -96,6 +98,12 @@ static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
     case 2:  return KEY_R1;
     case 3:  return KEY_L2;
     case 4:  return KEY_R2;
+    case 6:  return KEY_A;
+    case 7:  return KEY_B;
+    case 8:  return KEY_X;
+    case 9:  return KEY_Y;
+    case 10: return KEY_SELECT;
+    case 11: return KEY_START;
     default: return 0;
     }
 }
@@ -116,16 +124,19 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (k & KEY_A) b |= CONT_F;
         k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
     }
-    switch ((set1 >> 20) & 3u) {                                      /* Start */
+    switch ((set1 >> 20) & 3u) {                                      /* Start (and C-up on the Start key it leaves) */
     case 0:
         if (k & KEY_START) b |= CONT_START;
         break;
     case 1: {
         const uint32_t chord = KEY_SELECT | KEY_START;
         if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
+        else if (k & KEY_START) b |= CONT_E;
         break;
     }
-    default: break;
+    default:
+        if (k & KEY_START) b |= CONT_E;
+        break;
     }
     if (k & KEY_A) b |= CONT_A;
     if (k & KEY_B) b |= CONT_B;
@@ -136,8 +147,10 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     if (k & KEY_SELECT) b |= CONT_D;                     /* C buttons: the face buttons, always */
     if (k & KEY_Y) b |= CONT_C;
     if (k & KEY_X) b |= CONT_F;
-    if (((set1 >> 10) & 31u) == 1u && analog) {          /* and with "C buttons" = right stick, that too */
-        const int rx = (int)((j >> 16) & 0xFFu) - 128, ry = (int)((j >> 24) & 0xFFu) - 128;
+    const uint32_t cm = (set1 >> 10) & 31u;                          /* and with "C buttons" a stick, that too */
+    if ((cm == 1u || cm == 2u) && analog) {
+        const int csh = cm == 1u ? 16 : 0;
+        const int rx = (int)((j >> csh) & 0xFFu) - 128, ry = (int)((j >> (csh + 8)) & 0xFFu) - 128;
         if (rx < -64) b |= CONT_C;
         if (rx > 64) b |= CONT_F;
         if (ry < -64) b |= CONT_E;
@@ -146,8 +159,8 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
 
     const uint32_t mode = (set1 >> 15) & 31u;                       /* Stick */
     int8_t sx = 0, sy = 0;
-    int from_dpad = mode != 1u && mode != 2u;
-    if (!from_dpad) {
+    int from_dpad = mode != 1u && mode != 2u && mode != 3u;     /* (3: none -- the stick stays centred) */
+    if (!from_dpad && mode != 3u) {
         int8_t x = 0, y = 0;
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;

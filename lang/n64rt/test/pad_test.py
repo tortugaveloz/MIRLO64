@@ -9,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 K = dict(up=0, down=1, left=2, right=3, A=4, B=5, X=6, Y=7, L1=8, R1=9, L2=10, R2=11, select=14, start=15)
 N = dict(A=0x8000, B=0x4000, Z=0x2000, START=0x1000, DUP=0x0800, DDOWN=0x0400, DLEFT=0x0200, DRIGHT=0x0100,
          L=0x0020, R=0x0010, CUP=0x0008, CDOWN=0x0004, CLEFT=0x0002, CRIGHT=0x0001)
-CODE = {1: 'L1', 2: 'R1', 3: 'L2', 4: 'R2'}      # a button setting's code -> the Pocket key; 5 and others: none
+CODE = {1: 'L1', 2: 'R1', 3: 'L2', 4: 'R2', 6: 'A', 7: 'B', 8: 'X', 9: 'Y', 10: 'select', 11: 'start'}   # a button setting's code -> the Pocket key; 5 and others: none
 
 
 def spec(keys, joy, s0, s1):
@@ -32,8 +32,12 @@ def spec(keys, joy, s0, s1):
         if {'select', 'start'} <= held:
             out.add('START')
             held -= {'select', 'start'}
+        elif 'start' in held:
+            out.add('CUP')                        # the Start key the chord leaves: C-up
     elif start_mode == 0 and 'start' in held:
         out.add('START')
+    elif 'start' in held:
+        out.add('CUP')                            # Start none: the Start key is C-up
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
     # Z, L, R: (setting, its own default for code 0)
@@ -46,13 +50,15 @@ def spec(keys, joy, s0, s1):
     # the C buttons are on the face buttons always (Y left, X right, Select down; up only through the R modifier) ...
     for key, c in (('Y', 'CLEFT'), ('X', 'CRIGHT'), ('select', 'CDOWN')):
         if key in held: out.add(c)
-    # ... and "C buttons" 1 adds the right stick
-    if (s1 >> 10) & 31 == 1 and analog:
-        if rx - 128 < -64: out.add('CLEFT')
-        if rx - 128 > 64: out.add('CRIGHT')
-        if ry - 128 < -64: out.add('CUP')
-        if ry - 128 > 64: out.add('CDOWN')
-    # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick; other: D-pad)
+    # ... and "C buttons" 1 adds the right stick, 2 the left one
+    cm = (s1 >> 10) & 31
+    if cm in (1, 2) and analog:
+        cx, cy = (rx, ry) if cm == 1 else (lx, ly)
+        if cx - 128 < -64: out.add('CLEFT')
+        if cx - 128 > 64: out.add('CRIGHT')
+        if cy - 128 < -64: out.add('CUP')
+        if cy - 128 > 64: out.add('CDOWN')
+    # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
     def ax(v, flip):
         a = v - 128
         if flip: a = -a
@@ -75,6 +81,8 @@ def spec(keys, joy, s0, s1):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
         else:
             sx, sy = use
+    elif smode == 3:
+        sx, sy = 0, 0                             # none: centred
     else:
         sx, sy = dpad_stick()                     # D-pad, or an unknown value
     dmode = (s1 >> 22) & 3                        # the N64's D-pad: 0 none, 1 the D-pad, 2 L stick, 3 R stick
@@ -93,8 +101,8 @@ def spec(keys, joy, s0, s1):
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
     for mod, z, l, r, c, stick, dpad, start in itertools.product(
-            (0, 1, 2, 3, 4, 5, 9), (0, 1, 2, 3, 4, 5, 31), (0, 1, 2, 3, 4, 5, 9), (0, 1, 2, 3, 4, 5, 7),
-            (0, 1, 2), (0, 1, 2, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
+            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 2, 3, 7, 9, 13), (0, 1, 2, 8, 11),
+            (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
         s1 = 1 | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (the free fields: EEPROM size, the old FPS and chord bits)
         yield s0, s1

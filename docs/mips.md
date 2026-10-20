@@ -762,18 +762,20 @@ scan-out instead.
 | Start button | `0x1000_0130` | `interact1[21:20]` | None (2), **Start** (0), Select+Start (1) |
 | Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y) and C-Right (X); it remaps what
+The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X) and C-Up (Start); it remaps what
 each button sends, and the runtime sees only the resulting key bits.
 
-- **Button codes** (Z, L, R, Modifier): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 or any other value none; 0 is the
+- **Button codes** (Z, L, R, Modifier): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
+  10 Select, 11 Start, any other value none; 0 is the
   setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
   key may serve two N64 buttons.
-- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select. With "C buttons" set to Right stick
-  the right stick adds all four, beyond half its range.
+- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select. With
+  "C buttons" set to L stick or R stick, that stick adds all four, beyond half its range.
 - **Modifier**: while its key is held, X, B, Y and A are C-up, C-down, C-left and C-right, and the D-pad gives half the
   stick's deflection. The key itself never reaches the game.
-- **Start**: the Pocket's Start; or Select and Start together, which then count for nothing else; or none.
-- **Stick**: with D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
+- **Start**: the Pocket's Start; or Select and Start together, which then count for nothing else (Start alone is C-up); or
+  none (Start is C-up). The Controls menu's C-Up is on the Start key.
+- **Stick**: with None, the stick stays centred. With D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
   stick's two bytes (`0x80` the centre, a dead zone of 12, scaled to 80 at the end of the range). A pad the dock
   reports with analog sticks (type 3) gives the stick alone. A pad reported without (type 2) is believed when its stick
   bytes are not all `0x00` or all `0xFF`, and gives the D-pad keys while its stick is centred. The Pocket's own
