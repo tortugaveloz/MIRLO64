@@ -157,8 +157,10 @@ word.
 
 The colour span is read only when it is needed: with FORCE_BL, when a blender
 cycle in use selects memory; without it, when the last cycle's P is memory
-or, in 2-cycle mode, the first cycle's blend of it; and whenever the memory's
-coverage is read (IM_RD with AA_EN or CVG_X_ALPHA).
+or, in 2-cycle mode, the first cycle's blend of it; whenever the memory's
+coverage is read (IM_RD with AA_EN or CVG_X_ALPHA); and with CLR_ON_CVG and
+CVG_X_ALPHA without AA_EN, where a pixel with no scaled coverage is written
+as M.
 
 ### Triangles
 
@@ -352,8 +354,12 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 * **Alpha compare**: against the blend colour's alpha, or with
   DITHER_ALPHA_EN against 8 bits of the LFSR. In 2-cycle mode the alpha
   compared is the first cycle's.
-* A pixel with no coverage left (AA_EN, or CVG_X_ALPHA's cut-outs) is not
-  drawn.
+* **Write rule.** With AA_EN a pixel is written when coverage is left after
+  CVG_X_ALPHA. Without AA_EN the pixel's own coverage decides: a CVG_X_ALPHA
+  pixel whose scaled coverage is 0 is still written. Without IM_RD the
+  console's blender takes its memory colour from a register holding the last
+  pixel read with IM_RD, so a CLR_ON_CVG pixel written in this mode gets that
+  colour on the console and the memory's own colour here.
 * **The memory's coverage** is the three stored bits where the colour span
   is read with IM_RD, and 7 otherwise.
 * **CVG_DST**: clamp, wrap, zap (7) or save (the memory's).
