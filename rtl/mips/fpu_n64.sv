@@ -169,7 +169,12 @@ logic        sub_eff;                                    // add: the signs diffe
 logic [7:0]  ad;                                         // add: the exponent difference
 logic [31:0] ir;                                         // div / sqrt: the remainder
 logic [4:0]  icnt;
-logic [55:0] mp;                                         // mul: the product; sqrt: the radicand's bits to come
+logic [55:0] mp;                                         // sqrt: the radicand's bits to come
+// mul's product, taken every clock and read in S_NORM, the state after S_MUL
+// (which took it into mp before): a register with nothing but the multiplier
+// in front of it, which the fitter can make the DSP block's output register
+logic [47:0] mprod;
+always_ff @(posedge clk) mprod <= {1'b1, ax.f} * {1'b1, ay.f};
 logic [1:0]  rmode;                                      // to int: the rounding
 logic        sw;                                         // (FAST) add: ay is the larger
 logic        fg;                                         // (FAST) to int: the guard bit
@@ -386,7 +391,7 @@ always_ff @(posedge clk) begin
         else st <= S_NORM;
     end
     S_MUL: begin
-        mp[47:0] <= {1'b1, ax.f} * {1'b1, ay.f};
+        // (the product: mprod, above)
         zs <= ax.s ^ ay.s; zexp <= 12'(ax.e) + 12'(ay.e) - 12'sd126;
         st <= S_NORM;
     end
@@ -399,7 +404,7 @@ always_ff @(posedge clk) begin
     end
     S_NORM: begin
         logic [31:0] m; logic sti;
-        if (kind == K_MUL) begin m = mp[47:16]; sti = mp[15:0] != 0; end
+        if (kind == K_MUL) begin m = mprod[47:16]; sti = mprod[15:0] != 0; end
         else if (kind == K_DIV || kind == K_SQRT) begin m = zmag; sti = ir != 0; end
         else begin m = zmag; sti = zst; end
         if (FAST) begin zmag <= m; nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)

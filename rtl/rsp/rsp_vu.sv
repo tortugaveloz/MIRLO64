@@ -740,6 +740,16 @@ always_comb begin
     commit_part = wp && x_exec;
 end
 
+// The products' registers in a block of their own, with nothing but an
+// enable between them and the multipliers (taken at SEL, out of reset, as in
+// the block below). In that block synthesis gave each bit a flip-flop behind a
+// hold select, which the fitter cannot pack: here the fitter makes them the
+// DSP blocks' output registers (272 flip-flops and their selects out of the
+// logic with 8 lanes)
+always_ff @(posedge clk)
+    if (!rst && sel_fire)
+        for (int l = 0; l < LANES; l++) begin p_r[l] <= p_n[l]; pm_r[l] <= pm_n[l]; end
+
 always_ff @(posedge clk) begin
     if (rst) begin
         st <= V_IDLE; lw_v <= 1'b0; unimpl <= 1'b0; x_v <= 1'b0; x_wait <= 1'b0; b1 <= 1'b0; c_def <= 3'd0;
@@ -789,10 +799,9 @@ always_ff @(posedge clk) begin
         if (x_defer) w_vdn <= x_vdn;
         b1 <= NP == 2 && sel0 && !(MW && fn_mul);
         if (sel_fire) begin
-            for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; p_r[l] <= p_n[l]; end
+            for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
             x_v <= 1'b1; x_pass <= sel1; x_last <= NP == 1 || sel1 || (MW && fn_mul);
             x_mw <= MW && sel0 && fn_mul;
-            for (int l = 0; l < LANES; l++) pm_r[l] <= pm_n[l];
             // one pass: a reciprocal waits a cycle for the ROM; VCL, VCH and VCR
             // take their adder's flags in one cycle and select by them in the
             // next (eight lanes' select into the registers does not fit one).

@@ -126,7 +126,10 @@ module rdp_top (
     // read muxes, write muxes and eight row-step adders cost ~ALMs
     reg [31:0] adx [0:7];
     (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] e_ram [0:7];
-    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] ade_ram [0:7];
+    // ade_ram's rows 8..15 hold a copy of adx[] (DaDx), for the span setup's
+    // products: read there, they keep an 8-way choice of adx out of the shared
+    // multiplier's operand select. The MLAB is 32 rows deep: they cost nothing
+    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] ade_ram [0:15];
     // (a texrect's second 64-bit word, S T / DsDx DtDy, lands in t_xl, t_dxl)
 
     function automatic [5:0] cmd_len;        // in 32-bit words, from the first word
@@ -464,7 +467,11 @@ module rdp_top (
     reg  [2:0]  aa_j;
     wire [31:0] aq_h = asr(t_dxh, 5'd2) & ~32'd1, aq_m = asr(t_dxm, 5'd2) & ~32'd1, aq_l = asr(t_dxl, 5'd2) & ~32'd1;
     // S_AAINIT: an edge's start, X & ~1 (XL as S_XL left it) plus the product (one adder for the three)
-    wire [31:0] aa_init = ((mi == 5'd2) ? (t_xh & ~32'd1) : (mi == 5'd3) ? (t_xm & ~32'd1) : t_xl) + mul_p[31:0];
+    // (and S_XL's XL - product, TRI_INIT's XH + product: one adder for the five)
+    wire        aa_sub = st == S_XL;
+    wire [31:0] aa_x = (st == S_TRI_INIT) ? t_xh : aa_sub ? (t_xl & ~32'd1)
+                     : (mi == 5'd2) ? (t_xh & ~32'd1) : (mi == 5'd3) ? (t_xm & ~32'd1) : t_xl;
+    wire [31:0] aa_init = aa_x + (mul_p[31:0] ^ {32{aa_sub}}) + {31'd0, aa_sub};
     wire signed [13:0] aa_yq = {y, aa_j[1:0]};
     // (the minor edge -- M above YM, L from it -- chosen a subscanline ahead, aa_lo)
     reg         aa_lo;
@@ -531,10 +538,6 @@ module rdp_top (
         asr = $signed(v) >>> n;
     endfunction
 
-    function automatic [31:0] sx12;   // sign-extend a 12-bit row / column index
-        input [11:0] v;
-        sx12 = {{20{v[11]}}, v};
-    endfunction
     // a - b of two 12-bit rows, sign-extended: 13 bits (a row above -2048
     // + 1023 is 3071 rows away; 12 bits wrapped it, seed 3140)
     function automatic [31:0] rdiff;
@@ -559,18 +562,62 @@ module rdp_top (
     end
     wire vset_w = st == S_VSET && (vs == 4'd15 || (vs == 4'd0 && !attr_on(tflags, vi)));
     wire vset_on = vs == 4'd15;
+    wire vgx_w = st == S_VSET && vs == (vz ? 4'd5 : 4'd7);
     wire tinit_w = st == S_TRI_INIT && mi >= 5'd5 && mi <= 5'd12;
     wire step_w = !es[3];
     wire [2:0]  e_wa = vset_w ? vi : tinit_w ? mi[2:0] - 3'd5 : es[2:0];
     // (TRI_INIT's write of e + k DaDe reads e where it writes it, as the product comes -- two clocks after DaDe was
     // read at ea for it; one adder for that and for the row step's e + DaDe)
-    wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ea];
+    // (the span setup reads DaDx at mi, its rows; the rest DaDe at ea)
+    wire [3:0]  ada = (st == S_SETUP) ? {1'b1, mi[2:0]} : {1'b0, ea};
+    wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ada];
     wire [31:0] e_add = e_q + (tinit_w ? mul_p[31:0] : ade_q);
     wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0) : e_add;
     always @(posedge clk) begin
         if (vset_w || tinit_w || step_w) e_ram[e_wa] <= e_wd;
-        if (vset_w) ade_ram[vi] <= vset_on ? vde : 32'd0;
+        // DaDx goes in at a step of S_VSET after vgx is complete and before
+        // the step that writes DaDe (Z: 5, the others: 7); an attribute that
+        // is off is not written, and its product is 0 (S_SETUP)
+        if (vset_w) ade_ram[{1'b0, vi}] <= vset_on ? vde : 32'd0;
+        else if (vgx_w) ade_ram[{1'b1, vi}] <= vgx;
     end
+
+    // ---- the shared multiplier's operands, by state and step. A product is
+    // read exactly two clocks after its operands were chosen and never later,
+    // so the operands need no hold: at the steps whose product nobody reads
+    // they are don't-care, and the select is left with the sources alone. The
+    // row differences y - YH, y - YM and y - 0 (the image row) are one
+    // subtractor; AA_EN's start slopes are TRI_INIT's with bits 2..0 cleared;
+    // a texrect's DsDx / DtDy and its row / column distances are one choice each
+    wire [31:0] dxs = {xs, 16'd0} - exh;                 // the span's start from the H edge, 16.16
+    wire [31:0] r_dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}, r_dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
+    wire signed [10:0] r_dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
+    // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns from XH itself
+    // (4 (xs - XH's column) - XH's fraction; none in copy mode): the column-stepped attribute is the plane at XH
+    wire [31:0] r_dcol = {{19{r_dc11[10]}}, r_dc11, 2'b00} - {30'd0, rxf};
+    wire [31:0] r_drow = {rdiff(y, ry0), 2'b00};
+    wire [11:0] md_b = (mi == 5'd2) ? ymr : ((st == S_TRI_INIT && mi == 5'd11) || st == S_RECT_INIT) ? 12'd0 : y0r;
+    wire [31:0] md_k = rdiff(y, md_b);
+    wire [31:0] md_dx = ((mi == 5'd0) ? t_dxh : (mi == 5'd1) ? t_dxm : t_dxl) & {29'h1FFFFFFF, {3{st != S_AAINIT}}};
+    reg  [31:0] mul_ad, mul_bd;
+    always @* begin
+        mul_ad = 32'bx; mul_bd = 32'bx;
+        case (st)
+        // XL - (YM's quarter rows) x the subscanline step (that in mul_a, as the other wide operands)
+        S_XL:        begin mul_ad = aq_l; mul_bd = {30'd0, t_ym[1:0]}; end
+        // the edges (0..2), e + k DaDe (3..10, ea = mi - 3), the first row's offset (11)
+        S_TRI_INIT:  begin mul_ad = md_k; mul_bd = (mi < 5'd3) ? md_dx : (mi == 5'd11) ? {21'd0, cimg_width} : ade_q; end
+        S_AAINIT:    begin mul_ad = md_k; mul_bd = md_dx; end
+        // DaDx (its rows of ade_ram) x the span's offset; an attribute that is off: 0 (the offset forced to it)
+        S_SETUP: if (kind_tri) begin mul_ad = attr_on(tflags, mi[2:0]) ? dxs : 32'd0; mul_bd = ade_q; end
+                 else begin mul_ad = mi[0] ? r_dtdy : r_dsdx; mul_bd = (mi[0] ^ (op == 6'h25)) ? r_drow : r_dcol; end
+        S_RECT_INIT: begin mul_ad = md_k; mul_bd = {21'd0, cimg_width}; end
+        // LOAD BLOCK's whole texels, the others' 10.2
+        S_LOAD_INIT: begin mul_ad = (l_kind == 2'd0) ? {20'd0, w0[11:0]} : {22'd0, w0[11:2]}; mul_bd = {21'd0, timg_width}; end
+        default: ;
+        endcase
+    end
+    always @(posedge clk) begin mul_a <= mul_ad; mul_b <= mul_bd; end
 
     // AA_EN: the subscanline stages
     always @(posedge clk) begin
@@ -596,7 +643,6 @@ module rdp_top (
     end
 
     integer i;
-    reg [31:0] dxs;          // span start offset from the H edge, 16.16
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
         pix_valid <= 1'b0;
@@ -783,8 +829,7 @@ module rdp_top (
             // scanline as XH and XM are at YH's: back by the quarter rows between
             // (AA_EN: XL & ~1, back by the subscanline step (DxLDy >> 2) & ~1)
             S_XL: begin
-                if (mi == 5'd0) begin mul_a <= {30'd0, t_ym[1:0]}; mul_b <= aq_l; end
-                if (mi == 5'd2) begin t_xl <= (t_xl & ~32'd1) - mul_p[31:0]; st <= S_VSET; end
+                if (mi == 5'd2) begin t_xl <= aa_init; st <= S_VSET; end
                 mi <= (mi == 5'd2) ? 5'd0 : mi + 5'd1;
             end
 
@@ -829,20 +874,10 @@ module rdp_top (
             // that row's offset into the images (y * width * 2; an 8-bit image's y * width)
             S_TRI_INIT: begin
                 begin : tri_init
-                    reg [31:0] k;
-                    k = rdiff(y, y0r);
-                    case (mi)
-                        5'd0: begin mul_a <= k; mul_b <= t_dxh; end
-                        5'd1: begin mul_a <= k; mul_b <= t_dxm; end
-                        5'd2: begin mul_a <= rdiff(y, ymr); mul_b <= t_dxl; end
-                        5'd3, 5'd4, 5'd5, 5'd6, 5'd7, 5'd8, 5'd9, 5'd10:
-                              begin mul_a <= k; mul_b <= ade_q; end       // ea = mi - 3
-                        5'd11: begin mul_a <= sx12(y); mul_b <= {21'd0, cimg_width}; end
-                        default: ;
-                    endcase
+                    // (the operands: mul_ad / mul_bd)
                     // products come back two cycles later
                     case (mi)
-                        5'd2:  exh <= t_xh + mul_p[31:0];
+                        5'd2:  exh <= aa_init;
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
                         5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
@@ -859,9 +894,8 @@ module rdp_top (
             // rows down times four subscanline steps (DxDy & ~7)
             S_AAINIT: begin
                 case (mi)
-                    5'd0: begin mul_a <= rdiff(y, y0r); mul_b <= t_dxh & ~32'd7; end
-                    5'd1: begin mul_a <= rdiff(y, y0r); mul_b <= t_dxm & ~32'd7; end
-                    5'd2: begin mul_a <= rdiff(y, ymr); mul_b <= t_dxl & ~32'd7; ax_h <= aa_init; end
+                    5'd0, 5'd1: ;
+                    5'd2: ax_h <= aa_init;
                     5'd3: ax_m <= aa_init;
                     default: begin ax_l <= aa_init; st <= S_ROW; end
                 endcase
@@ -919,8 +953,6 @@ module rdp_top (
             // the S/T accumulators (texrects)
             S_SETUP: begin
                 if (kind_tri) begin
-                    dxs = {xs, 16'd0} - exh;
-                    if (mi < 5'd8) begin mul_a <= adx[mi[2:0]]; mul_b <= dxs; end
                     if (mi >= 5'd2 && mi < 5'd10)
                         cur[mi - 5'd2] <= e_q + mul_p[47:16];                // ea = mi - 2
                     mi <= mi + 5'd1;
@@ -932,27 +964,14 @@ module rdp_top (
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
                         reg [2:0] ds;
-                        reg signed [31:0] dsdx, dtdy, sv, tv, dcol, drow;
-                        reg signed [10:0] dc11;
+                        reg signed [31:0] sv, tv;
                         ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
                         sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
-                        dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}; dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
-                        dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
-                        // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns
-                        // from XH itself (4 (xs - XH's column) - XH's fraction; none in copy mode) -- the
-                        // column-stepped attribute is the plane at XH
-                        dcol = {{19{dc11[10]}}, dc11, 2'b00} - {30'd0, rxf};
-                        drow = {rdiff(y, ry0), 2'b00};
-                        case (mi)
-                            5'd0: begin mul_a <= dsdx; mul_b <= (op == 6'h25) ? drow : dcol; end
-                            5'd1: begin mul_a <= dtdy; mul_b <= (op == 6'h25) ? dcol : drow; end
-                            default: ;
-                        endcase
                         if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[33:2];
                         if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[33:2];
                         shS <= ds;
-                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : dsdx;
-                        adx[5] <= (op == 6'h25) ? dtdy : 32'd0;
+                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
+                        adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
                         if (mi == 5'd3) st <= S_PIX;
                     end
@@ -1021,7 +1040,6 @@ module rdp_top (
 
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
-                if (mi == 5'd0) begin mul_a <= sx12(y); mul_b <= {21'd0, cimg_width}; end
                 if (mi == 5'd2) begin row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0}; st <= S_ROW; end
                 mi <= mi + 5'd1;
             end
@@ -1034,10 +1052,6 @@ module rdp_top (
                     reg [12:0] nt;
                     // LOAD BLOCK's coordinates are whole texels, the others' 10.2
                     s0 = w0[23:14]; t0 = w0[11:2]; s1 = w1[23:14]; t1 = w1[11:2];
-                    if (mi == 5'd0) begin
-                        mul_a <= (l_kind == 2'd0) ? {20'd0, w0[11:0]} : {22'd0, t0};
-                        mul_b <= {21'd0, timg_width};
-                    end
                     if (mi == 5'd2) begin
                         l_ti <= mul_p[22:0] + ((l_kind == 2'd0) ? {11'd0, w0[23:12]} : {13'd0, s0});
                         l_dst <= {ts_tmem, 2'b00};

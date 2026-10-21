@@ -4,6 +4,8 @@
 # of this worktree (the unit of another tree: its path as the third argument). A minute or two, and steady: the
 # whole design's synthesis moves a unit that was not touched by tens of ALUTs (rsp_vu by a hundred) from one run to
 # the next; a unit alone gives the same count for the same source. Prints its ALUTs, registers, memory ALUTs, DSPs.
+# The RSP and the video are instantiated as rtl/soc/mirlo_mips.sv does (MIRLO_RSP_LANES lanes with MULW; the
+# video's 24-bit origin mask). In the Quartus container: QUARTUS=/opt/intelFPGA_lite/23.1/quartus/bin.
 set -e
 W=$(cd "$(dirname "$0")/../.." && pwd)
 tag=$1; unit=$2; T=${3:-$W}
@@ -30,17 +32,17 @@ module ooc_rsp (input wire clk, rst, h_we, input wire [3:0] h_addr, input wire [
     output wire r_valid, r_we, output wire [23:2] r_addr, output wire [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
     output wire dpc_start_we, dpc_end_we, dpc_status_we, output wire [31:0] dpc_wdata, input wire [31:0] dpc_start, dpc_end, dpc_current, dpc_status,
     input wire [9:0] dx_addr, output wire [31:0] dx_data, output wire halted, unimpl);
-    rsp_top #(.LANES(4), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp(), .*);
+    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp(), .*);
 endmodule
 SV
 ;;
 video) cat > top.sv <<SV
-module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:0] vi_origin, input wire vi_avg, output wire vblank, input wire [11:0] vi_width,
+module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:0] vi_origin, input wire vi_il, output wire vblank, input wire [11:0] vi_width,
     input wire vi_black, vi_pal, output wire tv_pal, input wire gamma, vi_aa, vi_divot, vi_dedither, input wire [4:0] crop_v, input wire [1:0] crop_r,
-    input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, vi_ys, vi_nw,
+    input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, input wire [11:0] vi_ys, input wire [10:0] vi_nw,
     output wire m_valid, output wire [23:0] m_addr, output wire m_urgent, input wire m_ready, m_rvalid, input wire [31:0] m_rdata, output wire vi_line, vi_frame, vi_latch,
     output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip);
-    n64_video #(.N64FB(1'b1)) video (.osd_en(1'b0), .fps_en(1'b0), .osd_val('0), .*);
+    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .fps_en(1'b0), .osd_val('0), .*);
 endmodule
 SV
 ;;

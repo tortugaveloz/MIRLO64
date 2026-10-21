@@ -573,7 +573,8 @@ Where the area goes, without figures:
   staging RAM.
 * **RAM in place of registers.** The eight tiles are two 8-entry RAMs, read
   into registers for the drawing tile and the next one. The attributes'
-  row-start values and their DaDe are LUT RAM, stepped one attribute a clock.
+  row-start values and their DaDe are LUT RAM, stepped one attribute a clock;
+  a copy of their DaDx sits in that RAM's free rows, for the span setup.
 * **Multipliers.** One shared 32 x 32 multiplier does all the setup
   arithmetic of the sequencer: edge and attribute start values, row offsets,
   load addresses. The pixel pipeline has its own for the perspective divide,
