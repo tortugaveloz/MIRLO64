@@ -182,6 +182,7 @@ instantiates it with the boot ROM and these parameters:
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 10 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `SNOOP` | 1 | The D-cache drops a line the RDP, the RSP's DMA or the bridge writes into ("Caches and memory") |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -210,6 +211,21 @@ current for the other masters (the RSP's DMA, the RDP, the PI's engine, the scan
 overwritten is dropped with a cache instruction, which invalidates its line whatever the operation. Software that
 empties a cache walks the VR4300's 16 KiB and 8 KiB with index operations: an index operation drops every line that
 the VR4300's index stands for, one a cycle, so such code needs no change.
+
+The D-cache also drops by itself a line that another master writes into (`SNOOP`). Its lines are twice the VR4300's
+16 bytes, so a buffer that is 16-byte aligned shares a line with the 16 bytes beside it. Software drops a buffer's
+lines before a transfer into it, as on the console; but a load of the bytes beside it while the transfer is under way
+brings the whole line back from memory that does not have the transfer's words yet, and the line would stay. Ocarina
+of Time reads its controllers that way: its buffer is at 0x8012c4f0, and the message queue it reads at 0x8012c4e0
+while the SI's RD64B waits for the PIF refills the line with the request it sent, so every button reads held. The
+same can happen with the PI's engine and the RSP's DMA. `mirlo_mips.sv` takes from the arbiter the line of every
+write it grants the RDP, the RSP's DMA and the bridge (the PI's engine, the SI's DMA), across to the CPU's clock as
+`cpu_port.sv`'s read words go. The core looks each up in a copy of the tags (a valid bit and the nine tag bits above
+the index: one M10K, whose read port is the snoop's alone, so a lookup never waits), queues a hit and drops the line
+through the tags' write port in a cycle where the core writes no tag; a refill that such a write overtakes brings its
+line in invalid. While two or more lines wait, those masters' writes are held at the arbiter. A drop costs the CPU a
+refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
+apart) drops it too, which is rare and costs the same.
 
 Uncached, device and mapped data accesses, and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
@@ -896,6 +912,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
 | `rcpcpu_test` | The CPU's side of the SP and DPC registers: the semaphore, the DMA queue, DPC writes |
+| `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer whose edge shares a 32-byte line with data loaded during the transfer |
 | `ram8_test` | Every block above the RDRAM's first 4 MiB; `sim/mips_soc/ram8_check.sh` runs it and checks the audio and the picture |
 | `hires_test`, `vwin_test`, `viaa_test` | The scan-out's sizes and windows, and the VI's filters (`sim/vi_filter/viaa_check.py` compares the frame) |
 | `rsp_replay` | One recorded RSP task on the whole SoC, timed |

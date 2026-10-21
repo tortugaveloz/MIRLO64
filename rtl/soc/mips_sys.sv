@@ -47,6 +47,10 @@ module mips_sys #(
     input  wire         st_full, st_done,
     input  wire         irq,                // Cause.IP2
     input  wire         irq_mon,            // MIRLO_MON: the monitor level's interrupt
+    // the other masters' writes into the SDRAM, for the D-cache to drop the lines they write (mips_core's SNOOP)
+    input  wire         sn_t,
+    input  wire  [20:0] sn_line,
+    output wire         sn_hold,
     output logic [31:0] dbg_pc, dbg_cause, dbg_epc
 );
 
@@ -97,6 +101,9 @@ localparam bit CPU_SIW = 1'b1;
 localparam bit CPU_PI2W = CPU_PIW;
 // and the ROM's last 16 MiB (0x1300_0000..: a ROM of up to 64 MiB, mirlo_mips.sv)
 localparam bit CPU_ROM64W = CPU_PI2W;
+// mips_core's SNOOP: the D-cache drops a line the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA)
+// writes into: its 32-byte lines are two of the VR4300's (mirlo_mips.sv takes those writes from the arbiter)
+localparam bit CPU_SNOOP = 1'b1;
 `ifndef MIRLO_CPU_IC_LOG2
 `define MIRLO_CPU_IC_LOG2 10
 `endif
@@ -104,12 +111,12 @@ localparam bit CPU_ROM64W = CPU_PI2W;
 `define MIRLO_CPU_DC_LOG2 10
 `endif
 mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .FAST(CPU_FAST), .FPG(CPU_FPG),
-            .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB)) cpu (
+            .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
     .clk, .rst, .reset_pc(32'hBFC0_0000),
     .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_wrun(s_wrun),
     .mem_ack(c_ack), .mem_rvalid(c_rvalid), .mem_rdata(c_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .irq_rcp(irq), .irq_mon(irq_mon),
+    .irq_rcp(irq), .irq_mon(irq_mon), .sn_t, .sn_line, .sn_hold,
     .tr_retire(), .tr_pc(), .tr_insn(), .tr_wr(), .tr_rd(), .tr_val(), .tr_exc(), .tr_exc_int(), .tr_exc_pc(),
     .tr_exc_code(), .tr_fwe_even(), .tr_fwe_odd(), .tr_fwidx(), .tr_fweven(), .tr_fwodd(), .tr_fcr31(),
     .dbg_pc, .dbg_cause, .dbg_status, .dbg_epc, .hwx_on

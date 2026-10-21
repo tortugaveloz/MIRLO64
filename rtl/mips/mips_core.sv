@@ -205,6 +205,9 @@ module mips_core #(
     // table that were cacheable (the entry's C bit, COP0 23's bit 5) -- and a fetch from such a page runs through
     // the I-cache like KSEG0's (see "The page registers" above F). 0: a mapped fetch is always the slow path.
     parameter bit FPG = 0,
+    // the D-cache drops a line another master writes into (FLAT, the SDRAM's 64 MiB): sn_t turns over for each of
+    // those writes, sn_line is its line (pa[25:5]); see "The snoop" below the cache RAM writes
+    parameter bit SNOOP = 0,
     parameter bit SIM_COUNT_RETIRE = 0      // Count/Random advance per executed instruction (co-simulation)
 ) (
     input  wire         clk,
@@ -231,6 +234,11 @@ module mips_core #(
     input  wire  [31:0] mem_rdata,
     input  wire         irq_rcp,            // Cause.IP2 (the MI)
     input  wire         irq_mon,            // MON: the monitor level's interrupt
+    // SNOOP: another master's write (sampled here: from another clock, each value lasts a cycle of this one at least),
+    // and the hold on those writes while the lines to drop pile up
+    input  wire         sn_t,
+    input  wire  [20:0] sn_line,
+    output logic        sn_hold,
     // retire trace (co-simulation)
     output logic        tr_retire,
     output logic [31:0] tr_pc,
@@ -648,6 +656,8 @@ logic        ic_we;  logic [IW-1:0] ic_waddr;  logic [31:0] ic_wdata;
 logic        ict_we; logic [IW-4:0]  ict_waddr; logic [ITW:0] ict_wdata;
 logic        dc_we;  logic [DW-1:0] dc_waddr;  logic [31:0] dc_wdata; logic [3:0] dc_wbe;
 logic        dct_we; logic [DW-4:0] dct_waddr; logic [16:0] dct_wdata;
+logic        sn_go; logic [DW-4:0] sn_idx;  // (SNOOP) a line to drop, by the tags' write port when the core leaves it
+logic        sn_kill;                        // (SNOOP) the line being read in was written meanwhile: it comes in invalid
 logic        slow_is_d;
 logic        slow_d_own;                     // P_SLOW was granted to M's slow path (else to F's)
 
@@ -1591,14 +1601,16 @@ end
 // =============================================================== cache RAM writes
 always_comb begin
     ic_we = 0; ic_waddr = 0; ic_wdata = 0; ict_we = 0; ict_waddr = 0; ict_wdata = 0;
-    dc_we = 0; dc_waddr = 0; dc_wdata = 0; dc_wbe = 0; dct_we = 0; dct_waddr = 0; dct_wdata = 0;
+    dc_we = 0; dc_waddr = 0; dc_wdata = 0; dc_wbe = 0;
+    // (SNOOP: a line another master wrote is dropped in a cycle the core writes no tag, sn_go says)
+    dct_we = sn_go; dct_waddr = sn_idx; dct_wdata = 0;
     if (port == P_ILINE && mem_rvalid) begin
         ic_we = 1; ic_waddr = {PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5], f_cnt}; ic_wdata = mem_rdata;
         if (f_cnt == 3'd7) begin ict_we = 1; ict_waddr = PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5]; ict_wdata = {1'b1, f_fill_pa[28:TLO]}; end
     end
     if (port == P_DLINE && mem_rvalid) begin
         dc_we = 1; dc_wbe = 4'hF;
-        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:5]; dct_wdata = {1'b1, m_fpa[28:13]}; end
+        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:5]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
     if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
@@ -1624,6 +1636,62 @@ end
 // the D-cache read: the next M's address, or M's own while it waits
 // (a cached 64-bit load: its second word once the first is taken)
 always_comb dc_raddr = m_stall ? {m_addr[DW+1:3], (m_cw && (m_w0 || m_ph)) ? 1'b1 : m_addr[2]} : e_ea[DW+1:2];
+
+// =============================================================== the snoop (SNOOP)
+// The D-cache's lines are 32 bytes, the VR4300's 16. Software drops a buffer's lines before another master writes
+// into it, but a buffer that is 16-byte aligned shares a line with the 16 bytes beside it, and a load of those while
+// the transfer is under way reads the line back from memory without the transfer's words: on the console the two are
+// different lines. So the line of every write of another master is looked up, and dropped when the cache holds it.
+//   S  sn_t and sn_line sampled; a new write when sn_t has turned over
+//   R  its index read from a copy of the tags (sn_dup: the valid bit and the nine tag bits above the index, written
+//      with the tags: its read port is the snoop's alone, so a lookup never waits); the line M's refill reads, if it
+//      is this one, comes in invalid (sn_kill: it may hold words from before the write)
+//   C  the copy compared; a hit is registered
+//   Q  the hit's index queued (sn_q), and dropped from the queue's head through the tags' write port in a cycle where
+//      the core writes no tag (a refill's last word, an uncached store into cached memory and a cache instruction
+//      may write one: sn_core). With two or more waiting, sn_hold holds the other masters' writes.
+// A drop of a line the core has written since (nine tag bits are not all of them) only costs a refill. The core's own
+// accesses take the cycles they took without it, but where a drop or sn_kill changes what a tag says.
+generate if (SNOOP) begin : g_sn
+    logic          sn_ts, sn_seen, r_kill, c_v, h_v;
+    logic [20:0]   sn_ls;
+    logic [DC_LOG2+8:0] c_line;                          // (the index and the nine bits the copy has)
+    logic [9:0]    c_q;                                  // the copy's entry at R's index
+    logic [9:0]    sn_dup [DC_LINES];
+    logic [DW-4:0] h_idx;
+    (* ramstyle = "MLAB" *) logic [DW-4:0] sn_q [8];      // (not an M10K of its own)
+    logic [2:0]    q_r, q_w;
+    logic [3:0]    q_n;
+    wire           r_v = sn_ts != sn_seen;
+    wire           r_fill = r_v && ms == MS_REFILL && sn_ls == m_fpa[25:5];
+    wire           sn_core = (port == P_DLINE && ms_cnt == 3'd7) || (m_valid && m_c.cache) ||
+                             (m_valid && m_st && !m_cached && pa_cached(m_pa));
+    wire  [3:0]    q_nn = q_n + {3'd0, h_v} - {3'd0, sn_go};
+    assign sn_go   = q_n != 4'd0 && !sn_core;
+    assign sn_idx  = sn_q[q_r];
+    assign sn_kill = r_kill || r_fill;
+    always_ff @(posedge clk) begin
+        sn_ts <= sn_t; sn_ls <= sn_line; sn_seen <= sn_ts;
+        c_line <= sn_ls[DC_LOG2+8:0];
+        c_q <= sn_dup[sn_ls[DC_LOG2-1:0]];
+        if (dct_we) sn_dup[dct_waddr] <= {dct_wdata[16], dct_wdata[DC_LOG2:DC_LOG2-8]};
+        h_idx <= c_line[DC_LOG2-1:0];
+        if (h_v) sn_q[q_w] <= h_idx;
+        if (rst) begin c_v <= 1'b0; h_v <= 1'b0; r_kill <= 1'b0; q_r <= '0; q_w <= '0; q_n <= '0; sn_hold <= 1'b0; end
+        else begin
+            c_v <= r_v;
+            h_v <= c_v && c_q[9] && c_q[8:0] == c_line[DC_LOG2+8:DC_LOG2];
+            if (ms != MS_REFILL) r_kill <= 1'b0; else if (r_fill) r_kill <= 1'b1;
+            if (h_v) q_w <= q_w + 3'd1;
+            if (sn_go) q_r <= q_r + 3'd1;
+            q_n <= q_nn;
+            sn_hold <= q_nn >= 4'd2;
+        end
+    end
+end else begin : g_nosn
+    assign sn_go = 1'b0; assign sn_idx = '0; assign sn_kill = 1'b0;
+    always_comb sn_hold = 1'b0;
+end endgenerate
 
 // =============================================================== retire trace
 always_comb begin

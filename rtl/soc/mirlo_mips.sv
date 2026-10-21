@@ -163,7 +163,17 @@ logic [3:0]  rq_be;
 logic [2:0]  rq_tag, rd_tag;
 logic        la_valid;
 logic [23:0] la_addr;
-sdr_arb #(.N(NP)) arb (.clk, .rst, .p_valid, .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
+// The other masters' writes, for the game CPU's D-cache (mips_core's SNOOP: it drops the line of each): sn_t turns over
+// when the arbiter grants the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA) a write, whose word is
+// then in its register stage (rq_addr). Both are taken across to the CPU's clock as cpu_port's read words are, a value
+// lasting one cycle of clk. While lines to drop wait in the CPU, sn_hold holds those ports' writes.
+localparam logic [NP-1:0] SN_PORTS = 6'b01_1100;
+logic        sn_t, sn_hold, sn_hold_s;
+always_ff @(posedge clk) begin
+    sn_hold_s <= !rst && sn_hold;
+    if (rst) sn_t <= 1'b0; else if (|(p_ready & p_we & SN_PORTS)) sn_t <= !sn_t;
+end
+sdr_arb #(.N(NP)) arb (.clk, .rst, .p_valid(p_valid & ~(p_we & SN_PORTS & {NP{sn_hold_s}})), .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
     .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag);
 logic [1:0]  dfi_ras_n, dfi_cas_n, dfi_we_n;
@@ -212,7 +222,7 @@ mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(
     .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
     .x_req(c_x_req), .x_we(), .x_addr(c_x_addr), .x_wdata(), .x_strb(), .x_ack(c_x_ack), .x_rdata(c_x_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .irq(c_irq), .irq_mon(c_irq_mon), .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
+    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:3]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
 cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .s_req, .s_line, .s_addr, .s_rvalid, .s_rdata,

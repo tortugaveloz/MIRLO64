@@ -211,7 +211,7 @@ logic [2:0] s_line, s_frame, s_fb;
 always_ff @(posedge clk)
     if (rst) begin s_line <= 0; s_frame <= 0; s_fb <= 0; end
     else begin s_line <= {s_line[1:0], t_line}; s_frame <= {s_frame[1:0], t_frame}; s_fb <= {s_fb[1:0], t_fb}; end
-wire fb_sys = s_fb[2] ^ s_fb[1];
+wire fb_sys /*verilator public_flat_rd*/ = s_fb[2] ^ s_fb[1];   // (the bench's VITRACE)
 // vblank (sys): the frame's blank
 logic [2:0] s_vb;
 always_ff @(posedge clk) s_vb <= {s_vb[1:0], !vactive};

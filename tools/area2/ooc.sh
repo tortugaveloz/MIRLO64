@@ -18,11 +18,12 @@ cpu) cat > top.sv <<SV
 \`include "mirlo_mips_init.svh"
 module ooc_cpu (input wire clk, input wire rst, output wire s_req, s_line, output wire [31:0] s_addr, input wire s_rvalid, input wire [31:0] s_rdata,
     output wire x_req, output wire [31:0] x_addr, input wire x_ack, input wire [31:0] x_rdata,
-    output wire st_valid, st_dev, output wire [31:0] st_addr, st_data, output wire [3:0] st_strb, input wire st_full, st_done, input wire irq, irq_mon);
+    output wire st_valid, st_dev, output wire [31:0] st_addr, st_data, output wire [3:0] st_strb, input wire st_full, st_done, input wire irq, irq_mon,
+    input wire sn_t, input wire [20:0] sn_line, output wire sn_hold);
     wire s_we, s_wrun, x_we; wire [31:0] s_wdata, x_wdata, dbg_pc, dbg_cause, dbg_epc; wire [3:0] s_strb, x_strb;
     mips_sys #(.BOOTROM(\`MIPS_INIT_BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk, .rst, .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0),
         .s_rvalid, .s_rdata, .s_busy(1'b0), .x_req, .x_we, .x_addr, .x_wdata, .x_strb, .x_ack, .x_rdata, .st_valid, .st_dev, .st_addr, .st_data, .st_strb,
-        .st_full, .st_done, .irq, .irq_mon, .dbg_pc, .dbg_cause, .dbg_epc);
+        .st_full, .st_done, .irq, .irq_mon, .sn_t, .sn_line, .sn_hold, .dbg_pc, .dbg_cause, .dbg_epc);
 endmodule
 SV
 ;;
