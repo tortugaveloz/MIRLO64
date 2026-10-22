@@ -9,8 +9,8 @@ Mirlo draws 3D with two cores and a rasterizer:
   no vertex maths itself.
 - **Geometry core** (`VexRiscvGeom`, `rv32im`, no FPU, firmware in
   `../geom/`): walks the GDL, transforms, lights and clips the vertices with its
-  vector unit (a CFU) and sets up each triangle for MRDP.
-- **MRDP** (`../../../rtl/mrdp/`): an N64-style
+  vector unit (a CFU) and sets up each triangle for RDP.
+- **RDP** (`../../../rtl/rdp/`): an N64-style
   rasterizer. It draws into RGB565 framebuffers in SDRAM with a 16-bit depth
   buffer.
 
@@ -40,7 +40,7 @@ for (;;) {
     gdl_viewport(&c, scale, translate);
     gdl_vtx(&c, 0, vertices, 3);
     gdl_tri1(&c, 0, 1, 2);
-    frame_submit(&c);                // geometry core + MRDP, flip on vblank
+    frame_submit(&c);                // geometry core + RDP, flip on vblank
 }
 ```
 

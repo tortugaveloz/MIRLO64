@@ -25,7 +25,7 @@ soc)
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
         "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" \
         "$R/rtl/rsp/rsp_lutram.v" "$R/rtl/rsp/rsp_su.sv" "$R/rtl/rsp/rsp_vu.sv" "$R/rtl/rsp/rsp_dpram.sv" "$R/rtl/rsp/rsp_top.sv" \
-        "$R/rtl/mrdp/mrdp_sdpram.v" "$R/rtl/mrdp/mrdp_rcp_rom.v" "$R"/rtl/rdp/rdp_*.v "$R/rtl/rdp/rdp_dpc.sv" \
+        "$R/rtl/rdp/rdp_sdpram.v" "$R/rtl/rdp/rdp_rcp_rom.v" "$R"/rtl/rdp/rdp_*.v "$R/rtl/rdp/rdp_dpc.sv" \
         "$HERE/soc_sim_top.sv" "$HERE/tb_soc.cpp" -o tb_soc > "${OBJ:-$HERE/obj_soc}.log" 2>&1 || { grep -E "%Error" "${OBJ:-$HERE/obj_soc}.log" | head -30; tail -5 "${OBJ:-$HERE/obj_soc}.log"; exit 1; }
     echo "OK -> ${OBJ:-$HERE/obj_soc}/tb_soc" ;;
 esac

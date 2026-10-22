@@ -6,11 +6,11 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 R="${RDP_DIR:-$HERE/../../rtl/rdp}"
-M="$HERE/../../rtl/mrdp"
-MD="${MODEL_DIR:-$HERE/../../lang/c/mrdp}"     # (the model: MODEL_DIR=<dir> for another copy of it)
+M="$HERE/../../rtl/rdp"
+MD="${MODEL_DIR:-$HERE/../../lang/c/rdp}"     # (the model: MODEL_DIR=<dir> for another copy of it)
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
 V="${VERILATOR:-$HOME/local/usr/bin/verilator}"
-OBJ=${OBJ:-obj_rdp}; CD="-DMRDP_N64"
+OBJ=${OBJ:-obj_rdp}; CD="-DRDP_N64"
 cd "$HERE"
 # (make does not see the model's flags change: a build with other ones starts from an empty directory, or the model's
 # object of the last build stays, with another layout of its state)
@@ -31,7 +31,7 @@ fi
 "$V" --cc --exe --build -j 8 -O3 --x-assign fast --x-initial fast \
     -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-BLKSEQ -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL \
     --top-module rdp_top ${VDEFS:-} --Mdir "$OBJ" \
-    "$R/rdp_top.v" "$R/rdp_pix.v" "$R/rdp_mem.v" "$R/rdp_tmem.v" "$M/mrdp_sdpram.v" "$M/mrdp_rcp_rom.v" \
-    tb_rdp.cpp "$HERE/../rsp/rsp.c" "$MD/mrdp.c" \
+    "$R/rdp_top.v" "$R/rdp_pix.v" "$R/rdp_mem.v" "$R/rdp_tmem.v" "$M/rdp_sdpram.v" "$M/rdp_rcp_rom.v" \
+    tb_rdp.cpp "$HERE/../rsp/rsp.c" "$MD/rdp.c" \
     -CFLAGS "-O2 -I$HERE -I$HERE/../rsp -I$MD $CD ${TB_CFLAGS:-}" -o tb_rdp > "$OBJ.log" 2>&1 || { grep -E "%Error|error" "$OBJ.log" | head -30; tail -5 "$OBJ.log"; exit 1; }
 echo "OK -> $HERE/$OBJ/tb_rdp"

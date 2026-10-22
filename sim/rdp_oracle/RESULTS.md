@@ -1,6 +1,6 @@
 # The model's LOD against the oracle: results
 
-The model: `lang/c/mrdp/mrdp.c` without `RDP_EXACT`, built with `MRDP_N64`,
+The model: `lang/c/rdp/rdp.c` without `RDP_EXACT`, built with `RDP_N64`,
 as it was when these were measured: with its own perspective divide, which
 the console's (disagreement 2 below) has since replaced. `run.sh`'s `rdpo`
 now has the console's, and its figures are column 1 of docs/rdp_exact.md's
@@ -17,7 +17,7 @@ the RTL must change.
 
 ## In short
 
-* **The LOD logic agrees everywhere.** `mrdp_lod` (the distance, its ones'
+* **The LOD logic agrees everywhere.** `rdp_lod` (the distance, its ones'
   complement, the 15-bit LOD and its sticky bit, level, far, magnified, the
   fraction with detail, sharpen and the minimum level, the tiles with and
   without TEX_LOD) gives the oracle's result for each of the 4.77 million
@@ -114,7 +114,7 @@ triangle, 2-cycle, PERSP, TEX_LOD, six levels, the fraction as the colour.
 by up to 69 subtexels (`-v` lists them), most by 1 to 15. The LOD logic agrees
 on every pixel: only its inputs differ.
 
-**Fix**: the console's perspective divide (`mrdp_n64_div` in `mrdp.c`, the
+**Fix**: the console's perspective divide (`rdp_n64_div` in `rdp.c`, the
 model's own since; docs/rdp_exact.md rule 1), for the texel and the LOD's
 three points. With it: test_lod's floor 169,020 of 183,660 LOD pixels agree (21 before; what is left are the
 attribute interpolation's few subtexels, pre-existing), `persp_divide` goes
@@ -156,7 +156,7 @@ the major edge, `j` = 0 to `length`, `length` the span's pixels less one;
 * both through the perspective divide (out of range: the far level); the LOD
   is the larger of `|dS|`, `|dT|` between `N` and `F` alone (no next-line
   point, ones' complement and sticky bit as in 2-cycle mode);
-* level, far, magnified and the fraction as `mrdp_lod`; with TEX_LOD TEXEL0's
+* level, far, magnified and the fraction as `rdp_lod`; with TEX_LOD TEXEL0's
   tile is the tile plus the level (far: the level count), plus 1 with DETAIL
   when not magnified; TEXEL1 is not moved. A combiner that reads
   LOD_FRACTION gets the fraction (and the LOD is computed for it without

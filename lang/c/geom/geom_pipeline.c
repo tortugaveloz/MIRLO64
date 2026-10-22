@@ -20,7 +20,7 @@
 #include "geom_cfg.h"
 #endif
 #include "geom_texfmt.h"
-#include "geom_mrdp.h"
+#include "geom_rdp.h"
 
 #define MTX_STACK_DEPTH 24
 #define DL_STACK_DEPTH  16
@@ -223,11 +223,11 @@ static void update_screen_guard(void);
 /* 8 words spread over a texture's bytes, 2 of its palette, hashed */
 static uint32_t tex_sample(uintptr_t src, uint32_t bytes, uintptr_t tlut)
 {
-    const uint32_t *t = (const uint32_t *)mrdp_src_ptr(src & ~(uintptr_t)3);
+    const uint32_t *t = (const uint32_t *)rdp_src_ptr(src & ~(uintptr_t)3);
     uint32_t words = bytes >> 2, h = 0x9E3779B9u;
     for (uint32_t i = 0; i < 8u && words; i++) h = (h ^ t[(i * words) >> 3]) * 0x01000193u;
     if (tlut) {
-        const uint32_t *p = (const uint32_t *)mrdp_src_ptr(tlut & ~(uintptr_t)3);
+        const uint32_t *p = (const uint32_t *)rdp_src_ptr(tlut & ~(uintptr_t)3);
         h = ((h ^ p[0]) * 0x01000193u ^ p[1]) * 0x01000193u;
     }
     return h;
@@ -1235,41 +1235,41 @@ uint32_t geom_tris_emitted __attribute__((section(".shared")));
  * host 1/16 px closes every one in WF's demo (23 -> 0 uncovered pixels) with
  * Mario unchanged. The game CPU can override the level through geom_cfg()'s
  * GEOM_CFG_CRACK field, read once per display list. */
-#define GEOM_CRACK_LEVEL 3u      /* (MRDP: on / off only; its amount is fixed at 1/8 px) */
+#define GEOM_CRACK_LEVEL 3u      /* (RDP: on / off only; its amount is fixed at 1/8 px) */
 static unsigned s_crack_level = GEOM_CRACK_LEVEL;
 
-static int s_mrdp_point;   /* the bound texture is point sampled (GDL_TEXBIND_POINT) */
+static int s_rdp_point;   /* the bound texture is point sampled (GDL_TEXBIND_POINT) */
 
 extern int g_geom_cull;    /* geom_triangle.c: GDL_GEOMODE; front faces have edge_fn area > 0 */
-#define MRDP_GUARD (23170 << 11)   /* geom_triangle.c EDGE_FIXED_GUARD, in S15.16 */
+#define RDP_GUARD (23170 << 11)   /* geom_triangle.c EDGE_FIXED_GUARD, in S15.16 */
 /* back face (or degenerate) by the sign of edge_fn(v0, v1, v2) =
  * (x2 - x0)(y1 - y0) - (y2 - y0)(x1 - x0) */
-static inline int mrdp_cull(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2)
+static inline int rdp_cull(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2)
 {
     int64_t a = (int64_t)(x2 - x0) * (y1 - y0) - (int64_t)(y2 - y0) * (x1 - x0);
     return g_geom_cull ? a <= 0 : a == 0;
 }
-static inline int mrdp_rejects(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
+static inline int rdp_rejects(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
                                const geom_vertex_fx_t *v2)
 {
     const geom_vertex_fx_t *vv[3] = { v0, v1, v2 };
     for (int k = 0; k < 3; k++) {
         int32_t x = vv[k]->x, y = vv[k]->y;
-        if (x > MRDP_GUARD || x < -MRDP_GUARD || y > MRDP_GUARD || y < -MRDP_GUARD) return 1;
+        if (x > RDP_GUARD || x < -RDP_GUARD || y > RDP_GUARD || y < -RDP_GUARD) return 1;
     }
-    return mrdp_cull(v0->x, v0->y, v1->x, v1->y, v2->x, v2->y);
+    return rdp_cull(v0->x, v0->y, v1->x, v1->y, v2->x, v2->y);
 }
 
-/* MRDP: cull, then state + an N64 triangle command. */
-static void mrdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
+/* RDP: cull, then state + an N64 triangle command. */
+static void rdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
                          const geom_vertex_fx_t *v2, int ortho_like, const geom_edges_t *e)
 {
     /* The cull verdict of geom_triangle_rejects_e() -- the off-screen guard
      * (edge_fn's int32 range, ~724 px), then back faces by the sign of
      * edge_fn's area, or only degenerate ones when culling is off -- on the
      * S15.16 coordinates directly: its conversion to edge space and a second
-     * area were ~200 cycles a triangle on top of MRDP's setup. */
-    if (!e && mrdp_rejects(v0, v1, v2)) {
+     * area were ~200 cycles a triangle on top of RDP's setup. */
+    if (!e && rdp_rejects(v0, v1, v2)) {
 #ifndef GEOM_HOST_TEST
         DIAG_INC(3);
 #else
@@ -1288,11 +1288,11 @@ static void mrdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
      * written; else inferred from the GDL_TEXENV mode, as SM64 needs */
     const int raw = s_rawcc_on && (tex || !s_rawcc_tex);
     int want_alpha = raw ? (int)s_rawcc_ac : tex && (s_texenv & (1u << 2)) == 0 && !want_blend;
-    mrdp_set_state(want_depth, want_zupd, want_decal, want_blend, want_alpha, tex, s_mrdp_point, s_texenv, s_crack_level,
+    rdp_set_state(want_depth, want_zupd, want_decal, want_blend, want_alpha, tex, s_rdp_point, s_texenv, s_crack_level,
                    raw ? s_rawcc : 0);
 
-    /* The common case, TRI_R straight into the command (mrdp_setup.h's
-     * mrdp_setup_triangle_r() for these flags, without its arrays and loops):
+    /* The common case, TRI_R straight into the command (rdp_setup.h's
+     * rdp_setup_triangle_r() for these flags, without its arrays and loops):
      * snap, sort, area, the exponent check, then the raw fields. */
     if (!want_decal) {
         const int32_t ya = (int32_t)(((uint32_t)v0->y + 0x2000u) & ~0x3FFFu);
@@ -1309,32 +1309,32 @@ static void mrdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
         uint32_t dor = (uint32_t)dy2 | (uint32_t)dy1                       /* dy >= 0 */
                      | (dx1 < 0 ? 0u - (uint32_t)dx1 : (uint32_t)dx1)
                      | (dx2 < 0 ? 0u - (uint32_t)dx2 : (uint32_t)dx2);
-        if (15 + (63 - mrdp_clz64(area < 0 ? (uint64_t)-area : (uint64_t)area)) >= 33 - mrdp_clz32(dor)) {
+        if (15 + (63 - rdp_clz64(area < 0 ? (uint64_t)-area : (uint64_t)area)) >= 33 - rdp_clz32(dor)) {
             const int z = want_depth || want_zupd;
-            const unsigned flags = MRDP_SETUP_SHADE | (tex ? MRDP_SETUP_TEX : 0u) | (z ? MRDP_SETUP_Z : 0u);
-            mrdp_w2((MRDP_OP_TRI_R << 24) | (flags << 19), (uint32_t)p0->x);
-            mrdp_w2((uint32_t)y0, (uint32_t)p1->x);
-            mrdp_w2((uint32_t)y1, (uint32_t)p2->x);
-            mrdp_w2((uint32_t)y2, (uint32_t)p0->r);
-            mrdp_w2((uint32_t)p1->r, (uint32_t)p2->r);
-            mrdp_w2((uint32_t)p0->g, (uint32_t)p1->g);
-            mrdp_w2((uint32_t)p2->g, (uint32_t)p0->b);
-            mrdp_w2((uint32_t)p1->b, (uint32_t)p2->b);
-            mrdp_w2((uint32_t)p0->a, (uint32_t)p1->a);
+            const unsigned flags = RDP_SETUP_SHADE | (tex ? RDP_SETUP_TEX : 0u) | (z ? RDP_SETUP_Z : 0u);
+            rdp_w2((RDP_OP_TRI_R << 24) | (flags << 19), (uint32_t)p0->x);
+            rdp_w2((uint32_t)y0, (uint32_t)p1->x);
+            rdp_w2((uint32_t)y1, (uint32_t)p2->x);
+            rdp_w2((uint32_t)y2, (uint32_t)p0->r);
+            rdp_w2((uint32_t)p1->r, (uint32_t)p2->r);
+            rdp_w2((uint32_t)p0->g, (uint32_t)p1->g);
+            rdp_w2((uint32_t)p2->g, (uint32_t)p0->b);
+            rdp_w2((uint32_t)p1->b, (uint32_t)p2->b);
+            rdp_w2((uint32_t)p0->a, (uint32_t)p1->a);
             if (tex) {
-                mrdp_w2((uint32_t)p2->a, (uint32_t)p0->s);
-                mrdp_w2((uint32_t)p1->s, (uint32_t)p2->s);
-                mrdp_w2((uint32_t)p0->t, (uint32_t)p1->t);
-                mrdp_w2((uint32_t)p2->t, (uint32_t)p0->w);
-                mrdp_w2((uint32_t)p1->w, (uint32_t)p2->w);
-                if (z) { mrdp_w2((uint32_t)p0->z, (uint32_t)p1->z); mrdp_w2((uint32_t)p2->z, 0u); }
+                rdp_w2((uint32_t)p2->a, (uint32_t)p0->s);
+                rdp_w2((uint32_t)p1->s, (uint32_t)p2->s);
+                rdp_w2((uint32_t)p0->t, (uint32_t)p1->t);
+                rdp_w2((uint32_t)p2->t, (uint32_t)p0->w);
+                rdp_w2((uint32_t)p1->w, (uint32_t)p2->w);
+                if (z) { rdp_w2((uint32_t)p0->z, (uint32_t)p1->z); rdp_w2((uint32_t)p2->z, 0u); }
             } else if (z) {
-                mrdp_w2((uint32_t)p2->a, (uint32_t)p0->z);
-                mrdp_w2((uint32_t)p1->z, (uint32_t)p2->z);
+                rdp_w2((uint32_t)p2->a, (uint32_t)p0->z);
+                rdp_w2((uint32_t)p1->z, (uint32_t)p2->z);
             } else {
-                mrdp_w2((uint32_t)p2->a, 0u);
+                rdp_w2((uint32_t)p2->a, 0u);
             }
-            mrdp_go();
+            rdp_go();
 #ifndef GEOM_HOST_TEST
             DIAG_INC(4);
             geom_tris_emitted++;
@@ -1344,19 +1344,19 @@ static void mrdp_emit_fx(const geom_vertex_fx_t *v0, const geom_vertex_fx_t *v1,
             return;
         }
     }
-    /* the raw fields: MRDP converts them (TRI_R, mrdp_tri_r_fields()) --
+    /* the raw fields: RDP converts them (TRI_R, rdp_tri_r_fields()) --
      * colour x 255, W normalised to w_min / w, S and T by it, Z x 65535/2 */
     const geom_vertex_fx_t *vv[3] = { v0, v1, v2 };
-    mrdp_vtx_t mv[3];
+    rdp_vtx_t mv[3];
     for (int k = 0; k < 3; k++) {
         const geom_vertex_fx_t *v = vv[k];
-        mrdp_vtx_t *m = &mv[k];
+        rdp_vtx_t *m = &mv[k];
         m->x = v->x; m->y = v->y;
         m->a[0] = v->r; m->a[1] = v->g; m->a[2] = v->b; m->a[3] = v->a;
         m->a[4] = v->s; m->a[5] = v->t; m->a[6] = v->w;
         m->a[7] = v->z;
     }
-    if (mrdp_emit_triangle(mv, tex, want_depth || want_zupd, want_decal)) {
+    if (rdp_emit_triangle(mv, tex, want_depth || want_zupd, want_decal)) {
 #ifndef GEOM_HOST_TEST
         DIAG_INC(4);
         geom_tris_emitted++;
@@ -1370,7 +1370,7 @@ static void emit_setup_and_stream(const geom_vertex_fx_t *v0, const geom_vertex_
                                   const geom_vertex_fx_t *v2, int ortho_like,
                                   const geom_edges_t *e)   /* NULL: compute them */
 {
-    mrdp_emit_fx(v0, v1, v2, ortho_like, e);
+    rdp_emit_fx(v0, v1, v2, ortho_like, e);
 }
 
 /* emit_triangle()'s general case: clip against up to 6 planes, then fan.
@@ -1570,8 +1570,8 @@ static void emit_triangle(int i0, int i1, int i2)
              * make_screen_vertex() copies unchanged, so this is the verdict
              * geom_triangle_setup_fx() would reach -- counted the same way. */
             geom_edges_t edges;
-            /* (the guard is VF_NOGUARD's; MRDP's setup needs no edge space) */
-            if (mrdp_cull(a->x, a->y, b->x, b->y, c->x, c->y)) {
+            /* (the guard is VF_NOGUARD's; RDP's setup needs no edge space) */
+            if (rdp_cull(a->x, a->y, b->x, b->y, c->x, c->y)) {
 #ifndef GEOM_HOST_TEST
                 DIAG_INC(3);
 #else
@@ -1608,15 +1608,15 @@ void geom_walk_chunk(const uint32_t *pc) { gdl_walk(pc, 0); }
 void geom_run_display_list(const uint32_t *dl)
 {
     /* the frame's clears (GDL_RAW, or the host simulator's) switched
-     * MRDP to fill mode: forget the modes this core last set -- on the host
+     * RDP to fill mode: forget the modes this core last set -- on the host
      * too, or it and the geom core would emit different streams */
-    mrdp_state_invalidate();
+    rdp_state_invalidate();
     /* The texture cache's table is cleared here, at the first display list,
      * not at reset: this core leaves reset before the BIOS initialises SDRAM
      * (a clear then was lost), and SDRAM survives
      * an FPGA reload, so a table a previous run left names stale pages. */
     { static uint8_t s_texc_ready;
-      if (!s_texc_ready) { mrdp_texc_reset(); s_texc_ready = 1; } }
+      if (!s_texc_ready) { rdp_texc_reset(); s_texc_ready = 1; } }
 #ifndef GEOM_HOST_TEST
     {   uint32_t f = (geom_cfg() & GEOM_CFG_CRACK_MASK) >> GEOM_CFG_CRACK_POS;
         s_crack_level = f ? (f - 1u > 3u ? 3u : f - 1u) : GEOM_CRACK_LEVEL; }
@@ -1834,13 +1834,13 @@ static void gdl_walk(const uint32_t *pc, int top)
 #ifdef GEOM_N64_ORDER                          /* (SM64's all fit) */
                 while (w0 && h0 && sx + sy < 8u) {
                     uint32_t w_ = w0 >> sx, h_ = h0 >> sy;
-                    if (w_ <= 1024u && ((h_ + 1u) >> 1) * ((w_ + 3u) >> 2) * 2u <= 1024u && w_ * h_ <= MRDP_TEX_SLOT_TEXELS) break;
+                    if (w_ <= 1024u && ((h_ + 1u) >> 1) * ((w_ + 3u) >> 2) * 2u <= 1024u && w_ * h_ <= RDP_TEX_SLOT_TEXELS) break;
                     if (w_ >= h_) sx++; else sy++;
                 }
 #endif
                 uint32_t w = w0 >> sx, h = h0 >> sy;
-                s_mrdp_point = (int)((p0 >> 20) & 1u);
-                /* the GDL normalises coordinates by 1/w; MRDP samples in texels */
+                s_rdp_point = (int)((p0 >> 20) & 1u);
+                /* the GDL normalises coordinates by 1/w; RDP samples in texels */
                 if (arg & GDL_TEXBIND_SCALE) {     /* scale / w0 * (w0 >> sx) */
                     s_texnorm_s_fx = invw >> sx;
                     s_texnorm_t_fx = invh >> sy;
@@ -1853,15 +1853,15 @@ static void gdl_walk(const uint32_t *pc, int top)
                 /* the origin in the decoded texels' u10.2 */
                 uint32_t uls = (org & 0xFFFFu) >> sx, ult = (org >> 16) >> sy;
                 uint32_t ext = k0 ^ pw << 20 ^ org * 0x9E3779B1u;   /* part of the texture's identity */
-                if (src != 0 && src == s_mrdp_tex_src && wh == s_mrdp_tex_wh && p0 == s_mrdp_tex_p0 && tlut == s_mrdp_tex_tlut
-                    && ext == s_mrdp_tex_ext) {
+                if (src != 0 && src == s_rdp_tex_src && wh == s_rdp_tex_wh && p0 == s_rdp_tex_p0 && tlut == s_rdp_tex_tlut
+                    && ext == s_rdp_tex_ext) {
                     s_rs.tmu_enable[0] = 1;       /* TMEM still holds it */
                     PROF_ADD(PR_TEX, t_tb);
                     break;
                 }
                 uint32_t line = (w + 3u) >> 2;
                 int ok = w && h && w <= 1024u && ((h + 1u) >> 1) * line * 2u <= 1024u
-                      && w * h <= MRDP_TEX_SLOT_TEXELS;
+                      && w * h <= RDP_TEX_SLOT_TEXELS;
                 uint32_t addr = 0;
                 if (ok) {
                     /* resident: only the LOAD. Else decode into a cache entry,
@@ -1875,33 +1875,33 @@ static void gdl_walk(const uint32_t *pc, int top)
                      * the texels (and the palette) is part of the key */
                     ktl ^= tex_sample(src + ((k0 << siz) >> 1), (pw * h0 << siz) >> 1, tlut);
 #endif
-                    ksrc ^= k0 * 0x01000193u;       /* the origin is not: MRDP's tile, set at every bind */
+                    ksrc ^= k0 * 0x01000193u;       /* the origin is not: RDP's tile, set at every bind */
                     ktl ^= pw << 16;
                     int hit;
-                    uint32_t *ce = mrdp_texc_find(ksrc, wh, key, ktl, &hit, &addr);
+                    uint32_t *ce = rdp_texc_find(ksrc, wh, key, ktl, &hit, &addr);
                     if (!hit) {
 #ifdef GEOM_HOST_TEST
                         { extern char *getenv(const char *); extern int printf(const char *, ...); static int dbg = -1; if (dbg < 0) dbg = getenv("TEXC_DBG") != 0;
-                          if (dbg) printf("TEXMISS ce=%d used=%u fmt=%u siz=%u %ux%u src=%lx\n", ce != 0, s_mrdp_texc_used, fmt, siz, w, h, (unsigned long)src); }
+                          if (dbg) printf("TEXMISS ce=%d used=%u fmt=%u siz=%u %ux%u src=%lx\n", ce != 0, s_rdp_texc_used, fmt, siz, w, h, (unsigned long)src); }
 #endif
-                        if (!ce) addr = mrdp_tex_slot();
-                        ok = geom_texfmt_decode(fmt, siz, (const uint8_t *)mrdp_src_ptr(src), w0, h0, sx, sy,
-                                                (uint16_t *)mrdp_sdram_ptr(addr),
-                                                tlut ? (const uint8_t *)mrdp_src_ptr(tlut) : 0, tlut_ia, pw, k0);
-                        if (ok && ce) mrdp_texc_fill(ce, ksrc, wh, key, ktl);
-                        mrdp_store_barrier();           /* the texels before their LOAD */
+                        if (!ce) addr = rdp_tex_slot();
+                        ok = geom_texfmt_decode(fmt, siz, (const uint8_t *)rdp_src_ptr(src), w0, h0, sx, sy,
+                                                (uint16_t *)rdp_sdram_ptr(addr),
+                                                tlut ? (const uint8_t *)rdp_src_ptr(tlut) : 0, tlut_ia, pw, k0);
+                        if (ok && ce) rdp_texc_fill(ce, ksrc, wh, key, ktl);
+                        rdp_store_barrier();           /* the texels before their LOAD */
                     }
                 }
                 if (ok) {
 #ifdef GEOM_HOST_TEST
-                    geom_test_mrdp_mem(addr, w * h * 2u);   /* hits too: a captured frame stands alone */
+                    geom_test_rdp_mem(addr, w * h * 2u);   /* hits too: a captured frame stands alone */
 #endif
-                    mrdp_texture_bind(addr, w, h, geom_texfmt_is_ia(fmt, tlut_ia) ? 2u : 0u, (p0 >> 8) & 0xFu, (p0 >> 12) & 0xFu, uls, ult);
+                    rdp_texture_bind(addr, w, h, geom_texfmt_is_ia(fmt, tlut_ia) ? 2u : 0u, (p0 >> 8) & 0xFu, (p0 >> 12) & 0xFu, uls, ult);
                     s_rs.tmu_enable[0] = 1;
-                    s_mrdp_tex_src = src; s_mrdp_tex_wh = wh; s_mrdp_tex_p0 = p0; s_mrdp_tex_tlut = tlut; s_mrdp_tex_ext = ext;
+                    s_rdp_tex_src = src; s_rdp_tex_wh = wh; s_rdp_tex_p0 = p0; s_rdp_tex_tlut = tlut; s_rdp_tex_ext = ext;
                 } else {
                     s_rs.tmu_enable[0] = 0;
-                    s_mrdp_tex_src = 0;
+                    s_rdp_tex_src = 0;
 #ifdef GEOM_HOST_TEST
                     {   /* N64_TEXREJ=1 (sim/n64): each texture shape that falls back to untextured, once */
                         extern char *getenv(const char *); extern int printf(const char *, ...);
@@ -1964,19 +1964,19 @@ static void gdl_walk(const uint32_t *pc, int top)
              * geom_gdl.h). The host has no rasterizer FIFO: sw_raster does its
              * own clears, so there it is only skipped. */
             if (arg > GDL_RAW_MAX) return;
-            mrdp_out(pc, arg);                    /* frame.c's clears and SYNC FULL */
+            rdp_out(pc, arg);                    /* frame.c's clears and SYNC FULL */
             /* a mode set here (a game's fill rectangle: fill mode) is not the
-             * one mrdp_set_state() remembers sending: the next draw sends its
+             * one rdp_set_state() remembers sending: the next draw sends its
              * own again (MM's title logo drew as fills after its letterbox) */
             for (uint32_t i_ = 0; i_ < arg; i_ += 2)
-                if (((pc[i_] >> 24) & 0x3Fu) == MRDP_OP_SET_OTHER) s_mrdp_st.valid = 0;
+                if (((pc[i_] >> 24) & 0x3Fu) == RDP_OP_SET_OTHER) s_rdp_st.valid = 0;
             pc += arg;
             break;
 
         case GDL_DL:
             if (s_dl_sp < DL_STACK_DEPTH) s_dl_stack[s_dl_sp++] = pc + 1;
 #ifdef GEOM_HOST_TEST
-            pc = (const uint32_t *)mrdp_src_ptr(*pc);   /* (a GDL the N64's CPU built: SoC addresses) */
+            pc = (const uint32_t *)rdp_src_ptr(*pc);   /* (a GDL the N64's CPU built: SoC addresses) */
 #else
             pc = (const uint32_t *)(uintptr_t)(*pc);
 #endif

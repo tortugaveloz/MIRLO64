@@ -1,6 +1,6 @@
 // The geometry core: mips_geom (MIPS, rtl/mips/mips_geom.sv). It has no
 // I-cache (it fetches from its ROM through a port of its own) and has the
-// Vpu4DFixed CFU, whose PUSH port feeds MRDP's command FIFO.
+// Vpu4DFixed CFU, whose PUSH port feeds RDP's command FIFO.
 //   ROM A  0x2000_0000  16 KiB  iBus + dBus (.text.start, .rodata, .data's image)
 //   RAM    0x2000_8000  16 KiB  the core's TCM (GeomTcmRam port A)
 //   ROM B  0x2001_0000  64 KiB  iBus only (code)
@@ -31,7 +31,7 @@ module n64_geom (
     output logic [2:0]  o_cti,
     input  wire         o_ack,
     input  wire  [31:0] o_dat_r,
-    // the CFU's PUSH stream (to MRDP's command FIFO)
+    // the CFU's PUSH stream (to RDP's command FIFO)
     output logic        su_valid,
     input  wire         su_ready,
     output logic [31:0] su_data,

@@ -26,7 +26,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path)
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/mirlo_mips.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/fpu_n64.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/mips_core.sv"]
-set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "mrdp.qip"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "rsp.qip"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "rdp.qip"]
 set_global_assignment -name SEARCH_PATH          [file join $::quartus(qip_path) "soc"]

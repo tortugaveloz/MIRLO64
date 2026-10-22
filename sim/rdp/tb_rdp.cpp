@@ -1,4 +1,4 @@
-// rtl/rdp against the C model (lang/c/mrdp/mrdp.c built with MRDP_N64, the
+// rtl/rdp against the C model (lang/c/rdp/rdp.c built with RDP_N64, the
 // contract), on real graphics tasks.
 //   tb_rdp [-o out_prefix] task_gfx_*.bin ...
 // A task dump (sim/rsp) is run on the RSP's reference model; the RDP commands
@@ -25,10 +25,10 @@
 extern "C" {
 #include "rsp.h"
 }
-#include "mrdp.h"   // mrdp.c is built as C++ here too
+#include "rdp.h"   // rdp.c is built as C++ here too
 
 static const uint32_t SIZE = 8u << 20;                     // the RDRAM (the RSP's)
-static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (mrdp.h)
+static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (rdp.h)
 static uint8_t *rsp_mem, *rtl_mem, *mdl_mem;
 static uint16_t mdl_rd(void *, uint32_t a) { a &= MSIZE - 2; return (uint16_t)(mdl_mem[a] << 8 | mdl_mem[a + 1]); }
 static void mdl_wr(void *, uint32_t a, uint16_t v) { a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v; }
@@ -450,7 +450,7 @@ int main(int argc, char **argv)
     if (getenv("TB_STALL")) mem_stall = (unsigned)atoi(getenv("TB_STALL"));
     rsp_mem = (uint8_t *)malloc(SIZE); rtl_mem = (uint8_t *)malloc(MSIZE); mdl_mem = (uint8_t *)malloc(MSIZE);
     static rsp_t s;
-    static mrdp_t mdl;
+    static rdp_t mdl;
     int bad = 0;
     const bool rnd_mode = !strcmp(argv[ai], "-r");
     char rname[64];
@@ -487,7 +487,7 @@ int main(int argc, char **argv)
         memset(rtl_mem + SIZE, 0xFF, MSIZE - SIZE);         // (the hidden plane: all ones, as the runtime sets it)
         memset(mdl_mem + SIZE, 0xFF, MSIZE - SIZE);
 
-        mrdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
+        rdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
         if (top) delete top;
         top = new Vrdp_top;
         cmdq.clear(); reads.clear(); wr_addrs.clear();
@@ -501,7 +501,7 @@ int main(int argc, char **argv)
             if (FILE *df = fopen(dp, "wb")) { for (uint32_t x : cmds) { uint8_t b4[4]; wbe32(b4, x); fwrite(b4, 1, 4, df); } fclose(df); }
         }
         for (uint32_t x : cmds) {
-            cmdq.push_back(x); mrdp_push(&mdl, x);
+            cmdq.push_back(x); rdp_push(&mdl, x);
             cur.push_back(x);
             if (mdl.ncmd != 0) continue;                    // command not complete yet
             ncmd++;
@@ -514,11 +514,11 @@ int main(int argc, char **argv)
             {
                 unsigned o = (cur[0] >> 24) & 63;
                 if (((o & 0x3A) == 0x0A) || o == 0x24 || o == 0x25) {       // a textured primitive: its texel's kind
-                    const mrdp_tile_t &t = mdl.tile[o < 0x10 ? (cur[0] >> 16) & 7 : (cur[1] >> 24) & 7];
+                    const rdp_tile_t &t = mdl.tile[o < 0x10 ? (cur[0] >> 16) & 7 : (cur[1] >> 24) & 7];
                     kinds.insert(((mdl.other_h >> 20) & 3) << 12 | ((mdl.other_h >> 14) & 3) << 8 | t.fmt << 4 | t.size);
                 }
             }
-            if (((cur[0] >> 24) & 63) == MRDP_OP_SET_CIMG && mdl.cimg != mdl.zimg) { cimg = mdl.cimg; width = mdl.cimg_width; csize = mdl.cimg_size; }
+            if (((cur[0] >> 24) & 63) == RDP_OP_SET_CIMG && mdl.cimg != mdl.zimg) { cimg = mdl.cimg; width = mdl.cimg_width; csize = mdl.cimg_size; }
             if (step) {
                 while (!rtl_idle()) tick();
                 for (int i = 0; i < 16; i++) tick();

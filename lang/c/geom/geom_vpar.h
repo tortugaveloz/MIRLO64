@@ -151,8 +151,8 @@ static inline int32_t geom_vpar_read_out(int idx) {
  *   0x52  rd = fx_mul(rs1, rs2)       0x53  rd = fx_div_norm(rs1, last 0x50)
  *   0x54  rd = len2 ? (1<<24) / isqrt_u32(len2 << 8) : 0  (light_vertices) */
 #define GEOM_SETUP_HW 1
-/* The unit's edge-setup ops (0x62, 0x64..0x67) are not used: MRDP takes N64
- * edge slopes (mrdp_setup.h), computed in C -- the cull verdict then comes
+/* The unit's edge-setup ops (0x62, 0x64..0x67) are not used: RDP takes N64
+ * edge slopes (rdp_setup.h), computed in C -- the cull verdict then comes
  * from the same code the host runs -- and the gateware is built SU_NO_EDGE
  * (~540 ALMs). */
 /* 0x5A: out[idx] of the output buffer -- a blend's X/Y deposits, PROJECT's
@@ -177,7 +177,7 @@ static inline uint32_t geom_setup_blend_go(int32_t a0, int sh) {   /* sh: 8 colo
 }
 /* 0x46 / 0x47: the blends above that also write V, X, Y into the CFU's
  * output buffer at iv, ix, iy (GeomSetupUnit.v); 0x60 writes one word there,
- * 0x61 streams out[0 .. n-1] into MRDP's command FIFO. */
+ * 0x61 streams out[0 .. n-1] into RDP's command FIFO. */
 static inline uint32_t geom_setup_blend_out(int32_t a0, int sh, unsigned iv, unsigned ix, unsigned iy) {
     uint32_t rd;
     GEOM_VPAR_INSN(0x46, rd, a0, (uint32_t)sh | iv << 8 | ix << 16 | iy << 24);

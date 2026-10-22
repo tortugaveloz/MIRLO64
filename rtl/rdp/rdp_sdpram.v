@@ -5,8 +5,8 @@
 // Each lane is its own memory. M10K byte enables only exist for 8/9/10-bit
 // lanes: written as one array with 16-bit (or 1-bit) lanes, Quartus built
 // the line buffers from registers -- 16k flip-flops each, 243 % of the
-// device (2026-09-27, first MRDP fit).
-module mrdp_sdpram #(
+// device (2026-09-27, first RDP fit).
+module rdp_sdpram #(
     parameter AW = 10,
     parameter DW = 16,
     parameter NB = 1          // lanes (DW must be a multiple of NB)

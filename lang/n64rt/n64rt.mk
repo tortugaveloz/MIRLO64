@@ -6,7 +6,7 @@
 # in the tree.
 #
 # Needs MIRLO, BUILD. RAWCC=0: the combiners approximated rather than written
-# to MRDP as the game sets them. RSPDUMP=1: each RSP task marked for
+# to RDP as the game sets them. RSPDUMP=1: each RSP task marked for
 # sim/mips_soc's RSPDUMP (the RSP reference model's inputs).
 RT        ?= $(MIRLO)/lang/n64rt
 RAWCC     ?= 1

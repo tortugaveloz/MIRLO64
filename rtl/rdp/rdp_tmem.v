@@ -7,8 +7,8 @@
 // 2 by port B, its port A only writes (RA 0: no address choice in front of
 // it). Three copies of simple dual port memories took 15 M10K, these 10.
 //
-// TMEM is the N64's 4 KiB as 2048 16-bit words (lang/c/mrdp/mrdp.c,
-// MRDP_N64): four memories of 512, {half, lane} -- the lower and upper 2 KiB,
+// TMEM is the N64's 4 KiB as 2048 16-bit words (lang/c/rdp/rdp.c,
+// RDP_N64): four memories of 512, {half, lane} -- the lower and upper 2 KiB,
 // the even and odd 16-bit words. A read at 16-bit word `ra` gives that word,
 // and with it the same word of the upper half (a 32-bit texel's B and A).
 // The TLUT's entries -- the 16-bit words 4 * index of the upper half -- are

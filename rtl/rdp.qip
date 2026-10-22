@@ -1,7 +1,10 @@
-# The RDP for the N64's own command stream (rtl/rdp). (Two of its memories,
-# mrdp_sdpram.v and mrdp_rcp_rom.v, are in rtl/mrdp/: rtl/mrdp.qip.)
+# The RDP for the N64's own command stream (rtl/rdp).
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_top.v"]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_pix.v"]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_mem.v"]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_tmem.v"]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rdp/rdp_dpc.sv"]
+# the dual-port RAM with lane enables of its TMEM and line buffers (rdp_tmem,
+# rdp_top) and the reciprocal table of its 1/w (rdp_pix)
+set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_sdpram.v"]
+set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rdp/rdp_rcp_rom.v"]

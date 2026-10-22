@@ -229,7 +229,7 @@ void *n64rt_osViGetNextFramebuffer(void) { return (void *)(uintptr_t)s_fb_next; 
 /* A stretch of the game's code, compared every VI field with the copy taken
  * at boot (n64rt_watch_arm): Pokemon Stadium's func_800060E0 at 0x8000_6170
  * came back overwritten twice, with what looked like audio samples. Read
- * uncached (KSEG1): the audio core and MRDP write SDRAM behind the D-cache. */
+ * uncached (KSEG1): the audio core and RDP write SDRAM behind the D-cache. */
 #define WATCH_PA    0x00006000u
 #define WATCH_WORDS 256u
 static u32 s_watch[WATCH_WORDS];

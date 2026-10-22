@@ -148,14 +148,14 @@ static int rdp_run(uint32_t words)
     u[6] = 0x40814000u;                 u[7] = 0x40824800u;                         /* mtc0 $1, START; mtc0 $2, END */
     u[8] = 0x0000000Du;                 u[9] = 0u;                                  /* break */
     for (int i = 10; i < 16; i++) u[i] = 0u;
-    uint32_t sync0 = mrdp_sync_count_read();
+    uint32_t sync0 = rdp_sync_count_read();
     SP_STATUS = 0x2u;
     SP_MEM_ADDR = 0x1000u; SP_DRAM_ADDR = UCODE; SP_RD_LEN = 63u;
     sp_wait();
     SP_PC = 0;
     SP_STATUS = 0x100u | 0x20u | 0x4u | 0x1u | 0x8u;     /* clear single step, broke, halt, interrupt */
     for (uint32_t i = 0; i < 6000000u; i++)
-        if ((SP_STATUS & 1u) && mrdp_sync_count_read() != sync0) { wait_cycles(2000); return 1; }
+        if ((SP_STATUS & 1u) && rdp_sync_count_read() != sync0) { wait_cycles(2000); return 1; }
     return 0;
 }
 static uint32_t *cmd_base(void) { return (uint32_t *)(uintptr_t)(0xA0000000u + CMDS); }

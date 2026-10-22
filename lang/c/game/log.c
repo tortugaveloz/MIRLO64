@@ -213,10 +213,10 @@ void trap_handler(void)
         m[64] = 0;
         printf("\n!! WATCHDOG mepc=%08lx bus_errors=%lu marks(oldest->newest)=%s\n",
                (unsigned long)epc, (unsigned long)ctrl_bus_errors_read(), m);
-        printf("!! mrdp status=%08lx cmd_status=%08lx sync=%lu loads=%lu dropped=%lu mailbox_status=%08lx\n",
-               (unsigned long)mrdp_status_read(), (unsigned long)mrdp_cmd_status_read(),
-               (unsigned long)mrdp_sync_count_read(), (unsigned long)mrdp_load_count_read(),
-               (unsigned long)mrdp_cmd_dropped_read(), (unsigned long)mailbox_status_read());
+        printf("!! rdp status=%08lx cmd_status=%08lx sync=%lu loads=%lu dropped=%lu mailbox_status=%08lx\n",
+               (unsigned long)rdp_status_read(), (unsigned long)rdp_cmd_status_read(),
+               (unsigned long)rdp_sync_count_read(), (unsigned long)rdp_load_count_read(),
+               (unsigned long)rdp_cmd_dropped_read(), (unsigned long)mailbox_status_read());
         for (;;) { }
     }
     if (trap_is_irq(cause)) {

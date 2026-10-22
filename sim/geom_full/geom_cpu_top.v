@@ -35,7 +35,7 @@ module geom_cpu_top (
     output wire [2:0]   dBusWishbone_CTI,
     output wire [1:0]   dBusWishbone_BTE,
 
-    // the CFU's PUSH port (GeomSetupUnit 0x61) toward MRDP's command FIFO
+    // the CFU's PUSH port (GeomSetupUnit 0x61) toward RDP's command FIFO
     output wire         su_out_valid,
     input  wire         su_out_ready,
     output wire [31:0]  su_out_data

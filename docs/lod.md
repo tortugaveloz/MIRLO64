@@ -11,21 +11,21 @@ put in the model first, and the RTL was made to match it.
 
 | what | where |
 |---|---|
-| where | the N64's pixel pipeline of the model (`MRDP_N64`) |
-| the computation | `lang/c/mrdp/mrdp.c`, the LOD section: `mrdp_lod` (declared in `mrdp.h`), `lod_pixel`, `lod_dist`, `lod_tri` |
-| the console's perspective divide | `mrdp_n64_div`, for the pixel and the LOD's points, as the RTL has it |
+| where | the N64's pixel pipeline of the model (`RDP_N64`) |
+| the computation | `lang/c/rdp/rdp.c`, the LOD section: `rdp_lod` (declared in `rdp.h`), `lod_pixel`, `lod_dist`, `lod_tri` |
+| the console's perspective divide | `rdp_n64_div`, for the pixel and the LOD's points, as the RTL has it |
 | the console's rules | with `RDP_EXACT` ([rdp_exact.md](rdp_exact.md)): the console's attributes, and the LOD in 1-cycle and copy mode (`lod1_pixel`); not in the RTL |
 | where it is used | `draw_pixel_cvg`: the tiles of TEXEL0 and TEXEL1, and LOD_FRACTION into the combiner |
-| a test | `lang/c/mrdp/test_lod.c` (its header has the build line) |
+| a test | `lang/c/rdp/test_lod.c` (its header has the build line) |
 | a frame | `make` in `sim/rdp`: `rdp_task` counts the pixels that took the LOD, by level |
 | the RTL bench | `./build_rtl.sh` in `sim/rdp`, and `TB_LOD=1` for `tb_rdp`'s LOD streams |
 
 The perspective divide on this page is the RDP's per-pixel divide of the
 texture coordinates S and T by W, not the CPU's integer division. "The
 console's perspective divide" is that divide as the N64's RDP computes it (its
-reciprocal tables, `mrdp_n64_div`); "the model's own" was the model's
-reciprocal and product (`mrdp_rcp`, `mrdp_persp`), which the N64's pixel
-pipeline used before the LOD and which only MRDP's own triangles still take.
+reciprocal tables, `rdp_n64_div`); "the model's own" was the model's
+reciprocal and product (`rdp_rcp`, `rdp_persp`), which the N64's pixel
+pipeline used before the LOD and which only RDP's own triangles still take.
 
 ## When it applies
 
@@ -66,7 +66,7 @@ too ([rdp_exact.md](rdp_exact.md), rule 4).
 
 Each point's S and T go through the same perspective divide as the pixel's own:
 
-* **Perspective** (PERSP): the console's perspective divide, `mrdp_n64_div`
+* **Perspective** (PERSP): the console's perspective divide, `rdp_n64_div`
   (the 16-bit integer halves of S and W, the console's two 64-entry tables;
   [rdp.md](rdp.md), "Coordinates"), but not saturated to 16 bits: the result
   is kept as s11.5 in 17 bits, and a value outside that range, or a W whose
@@ -127,7 +127,7 @@ the second TEXEL1's, and the second cycle's TEXEL0 is that second sample.
 
 ### Worked steps
 
-`test_lod.c` checks `mrdp_lod` on these (primitive tile 2, level count 5
+`test_lod.c` checks `rdp_lod` on these (primitive tile 2, level count 5
 unless said):
 
 | step | LOD | level | tiles | fraction |
@@ -151,7 +151,7 @@ Where the public descriptions of the RDP leave something open, the model makes
 one choice, in one place, so that it can be changed when the RTL is compared
 with captured frames.
 
-1. **DaDy's precision** (`LOD_DY_MASK` in `mrdp.c`): the top 17 bits of DaDy
+1. **DaDy's precision** (`LOD_DY_MASK` in `rdp.c`): the top 17 bits of DaDy
    of S, T and W. The N64 keeps no more of them (they serve nothing else), and
    the RTL then needs 17-bit adders for the next line.
 2. **A negative step** (`LOD_ONES_ABS`): its ones' complement, one less than
@@ -160,7 +160,7 @@ with captured frames.
 3. **LOD_FRACTION without TEX_LOD** (`LOD_FRAC_USED`): computed whenever the
    combiner reads it; TEX_LOD only moves the tiles. Set to 0 to compute it
    only with TEX_LOD (LOD_FRACTION then reads 0 otherwise, as without the LOD).
-4. **The perspective divide** (`lod_pixel`): the console's (`mrdp_n64_div`),
+4. **The perspective divide** (`lod_pixel`): the console's (`rdp_n64_div`),
    for the pixel and the three points alike, as the RTL has it; the range
    check is the 17 bits the console keeps there, and a W with a zero or
    negative integer half is out of range whatever S is, as the console's
@@ -251,7 +251,7 @@ not drawn). DaDy is not read, except Z's. The tiles are two 8-entry M10K RAMs,
 | stage | what | resources |
 |---|---|---|
 | P0 | S, T, W registered; a two-pass pixel is held a second clock (`dup0`) | |
-| P1 | W normalised (31-bit priority encoder and shift), the reciprocal table read | `mrdp_rcp_rom`, an M10K |
+| P1 | W normalised (31-bit priority encoder and shift), the reciprocal table read | `rdp_rcp_rom`, an M10K |
 | P2 | `r = P - (D * frac >> 9)`; S, T clamped to 27 bits | an 11 x 9 product (a DSP half) |
 | P3 | `S * r`, `T * r` | two 27 x 27 DSP blocks |
 | P4 | s10.5, saturated to 16 bits; the first tile fields (shift, origin) by pass | |
@@ -413,7 +413,7 @@ through `tb_rdp` as a task, would be a directed one.
 ## Implementation
 
 The RTL has the LOD as the model has it, with the console's perspective
-divide (`mrdp_n64_div`: with it the texel coordinates match the console's to
+divide (`rdp_n64_div`: with it the texel coordinates match the console's to
 the subtexel) for every pixel, LOD or not. It is variant (c), the neighbour's
 perspective divide, with two changes to the design above: a missing neighbour
 is a ghost pixel rather than a look-ahead in the issue, and the LOD
@@ -545,7 +545,7 @@ The RTL against the model (`build_rtl.sh`):
   the first cycle's signed alpha, D, the two ghosts, the far flags, T's
   range, W's range) fails some of these runs (the 17-bit rectangle step one
   run in 150); a fault in the perspective divide's range direction (the
-  product's bit 29) fails none: that decomposition of `mrdp_n64_div` was
+  product's bit 29) fails none: that decomposition of `rdp_n64_div` was
   checked against it in Python instead, on 2 million random S, W.
 * The 79 captured task dumps under `build/triage`, each with the fast memory
   and with `TB_SDRAM=1 TB_CPU=30`: all `RTL == model`, and every

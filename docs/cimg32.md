@@ -5,7 +5,7 @@ A game that renders into a 32-bit colour image (`SET_COLOR_IMAGE` size 3, RGBA88
 
 | Part | Where | State |
 |---|---|---|
-| The model | `lang/c/mrdp/mrdp.c`, the N64's pixel pipeline (`MRDP_N64`) | done; `lang/c/mrdp/test_cimg32.c` |
+| The model | `lang/c/rdp/rdp.c`, the N64's pixel pipeline (`RDP_N64`) | done; `lang/c/rdp/test_cimg32.c` |
 | The scan-out | `rtl/soc/n64_video.sv`, `rtl/soc/rcp_vi.sv`, `rtl/soc/mirlo_mips.sv`, the runtime's `lang/n64rt/n64rt_io.c` | done |
 | The RDP | `rtl/rdp/rdp_top.v`, `rdp_pix.v`, `rdp_mem.v` | done ("Implementation" below) |
 
@@ -21,7 +21,7 @@ The public description is the N64 programming manual's blender section (15.5). W
   off in 32-bit mode "so the 3 LSBs do not get stepped on".
 - "You cannot copy the 32-bit RGBA color image type."
 
-The model (`MRDP_N64`, with the blender) follows them:
+The model (`RDP_N64`, with the blender) follows them:
 
 | What | Rule |
 |---|---|
@@ -39,7 +39,7 @@ The model (`MRDP_N64`, with the blender) follows them:
 
 - **The RGB dither applies to 32-bit images.** The manual says so (above), so the model runs the same `dither_n64` as
   for a 16-bit image: each channel either keeps its eight bits or goes up to the next multiple of 8 (255 at most),
-  and the result is written whole, as the RTL does. One define, `CIMG32_DITHER` in `mrdp.c`, turns it off in the model. The captured title
+  and the result is written whole, as the RTL does. One define, `CIMG32_DITHER` in `rdp.c`, turns it off in the model. The captured title
   screens have the dither off (`RGB_DITHER_SEL` 3), so their pixels do not depend on this choice.
 - **The alpha byte's low five bits are written 0.** The manual puts the coverage in the top three and says nothing of
   the rest; the pixel's own alpha is not stored, as it is not in a 16-bit image.
@@ -53,7 +53,7 @@ The model (`MRDP_N64`, with the blender) follows them:
 
 ### Verification
 
-`lang/c/mrdp/test_cimg32.c` (its header has the build line): fill (the whole word at each pixel, no hidden plane
+`lang/c/rdp/test_cimg32.c` (its header has the build line): fill (the whole word at each pixel, no hidden plane
 write, the rectangle's corners, against the 16-bit fill's two halves), a blended triangle over a background at both
 sizes, the memory colour's low bits and the memory coverage from the alpha byte (clamp and wrap), the blender's
 memory alpha as the coverage through the divide, a textured rectangle of an RGBA 32 texture (the texel's eight bits,

@@ -26,7 +26,7 @@
  * reading them out of memory that holds whole words (GEOM_N64_ORDER): byte k
  * of the image is at address ^ 3. The big-endian one reads them as they are.
  *
- * GEOM_TEXOUT: decoded texel i goes where MRDP reads it -- the low half of
+ * GEOM_TEXOUT: decoded texel i goes where RDP reads it -- the low half of
  * word i / 2 for an even i (its LOADs take a 16-bit texel from a word's
  * little-endian lane, as the host's C model does), which on a big-endian core
  * is halfword i ^ 1. */

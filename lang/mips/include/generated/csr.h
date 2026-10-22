@@ -183,34 +183,34 @@
 #define CSR_MAILBOX_GEOM_RUN_ADDR (CSR_BASE + 0x61c)
 #define CSR_MAILBOX_GEOM_RUN_SIZE 1
 
-/* MRDP */
-#define CSR_MRDP_BASE (CSR_BASE + 0x700)
-#define CSR_MRDP_CMD_DATA_OFS 0x700
-#define CSR_MRDP_CMD_DATA_ADDR (CSR_BASE + 0x700)
-#define CSR_MRDP_CMD_DATA_SIZE 1
-#define CSR_MRDP_CMD_STATUS_OFS 0x704
-#define CSR_MRDP_CMD_STATUS_ADDR (CSR_BASE + 0x704)
-#define CSR_MRDP_CMD_STATUS_SIZE 1
-#define CSR_MRDP_CMD_STATUS_LEVEL_OFFSET 0
-#define CSR_MRDP_CMD_STATUS_LEVEL_SIZE 12
-#define CSR_MRDP_CMD_STATUS_FULL_OFFSET 12
-#define CSR_MRDP_CMD_STATUS_FULL_SIZE 1
-#define CSR_MRDP_CMD_DROPPED_OFS 0x708
-#define CSR_MRDP_CMD_DROPPED_ADDR (CSR_BASE + 0x708)
-#define CSR_MRDP_CMD_DROPPED_SIZE 1
-#define CSR_MRDP_SYNC_COUNT_OFS 0x70c
-#define CSR_MRDP_SYNC_COUNT_ADDR (CSR_BASE + 0x70c)
-#define CSR_MRDP_SYNC_COUNT_SIZE 1
-#define CSR_MRDP_LOAD_COUNT_OFS 0x710
-#define CSR_MRDP_LOAD_COUNT_ADDR (CSR_BASE + 0x710)
-#define CSR_MRDP_LOAD_COUNT_SIZE 1
-#define CSR_MRDP_STATUS_OFS 0x714
-#define CSR_MRDP_STATUS_ADDR (CSR_BASE + 0x714)
-#define CSR_MRDP_STATUS_SIZE 1
-#define CSR_MRDP_STATUS_IDLE_OFFSET 0
-#define CSR_MRDP_STATUS_IDLE_SIZE 1
-#define CSR_MRDP_STATUS_UNKNOWN_OPS_OFFSET 16
-#define CSR_MRDP_STATUS_UNKNOWN_OPS_SIZE 16
+/* RDP */
+#define CSR_RDP_BASE (CSR_BASE + 0x700)
+#define CSR_RDP_CMD_DATA_OFS 0x700
+#define CSR_RDP_CMD_DATA_ADDR (CSR_BASE + 0x700)
+#define CSR_RDP_CMD_DATA_SIZE 1
+#define CSR_RDP_CMD_STATUS_OFS 0x704
+#define CSR_RDP_CMD_STATUS_ADDR (CSR_BASE + 0x704)
+#define CSR_RDP_CMD_STATUS_SIZE 1
+#define CSR_RDP_CMD_STATUS_LEVEL_OFFSET 0
+#define CSR_RDP_CMD_STATUS_LEVEL_SIZE 12
+#define CSR_RDP_CMD_STATUS_FULL_OFFSET 12
+#define CSR_RDP_CMD_STATUS_FULL_SIZE 1
+#define CSR_RDP_CMD_DROPPED_OFS 0x708
+#define CSR_RDP_CMD_DROPPED_ADDR (CSR_BASE + 0x708)
+#define CSR_RDP_CMD_DROPPED_SIZE 1
+#define CSR_RDP_SYNC_COUNT_OFS 0x70c
+#define CSR_RDP_SYNC_COUNT_ADDR (CSR_BASE + 0x70c)
+#define CSR_RDP_SYNC_COUNT_SIZE 1
+#define CSR_RDP_LOAD_COUNT_OFS 0x710
+#define CSR_RDP_LOAD_COUNT_ADDR (CSR_BASE + 0x710)
+#define CSR_RDP_LOAD_COUNT_SIZE 1
+#define CSR_RDP_STATUS_OFS 0x714
+#define CSR_RDP_STATUS_ADDR (CSR_BASE + 0x714)
+#define CSR_RDP_STATUS_SIZE 1
+#define CSR_RDP_STATUS_IDLE_OFFSET 0
+#define CSR_RDP_STATUS_IDLE_SIZE 1
+#define CSR_RDP_STATUS_UNKNOWN_OPS_OFFSET 16
+#define CSR_RDP_STATUS_UNKNOWN_OPS_SIZE 16
 
 /* TIMER0 */
 #define CSR_TIMER0_BASE (CSR_BASE + 0x800)
@@ -467,22 +467,22 @@ static inline uint32_t mailbox_status_game_pending_read(void) { return mailbox_s
 static inline uint32_t mailbox_geom_run_read(void) { return csr_read_simple(CSR_MAILBOX_GEOM_RUN_ADDR); }
 static inline void mailbox_geom_run_write(uint32_t v) { csr_write_simple(v, CSR_MAILBOX_GEOM_RUN_ADDR); }
 
-/* MRDP */
-static inline uint32_t mrdp_cmd_data_read(void) { return csr_read_simple(CSR_MRDP_CMD_DATA_ADDR); }
-static inline void mrdp_cmd_data_write(uint32_t v) { csr_write_simple(v, CSR_MRDP_CMD_DATA_ADDR); }
-static inline uint32_t mrdp_cmd_status_read(void) { return csr_read_simple(CSR_MRDP_CMD_STATUS_ADDR); }
-static inline uint32_t mrdp_cmd_status_level_extract(uint32_t r) { return (r >> 0) & 0xfffu; }
-static inline uint32_t mrdp_cmd_status_level_read(void) { return mrdp_cmd_status_level_extract(mrdp_cmd_status_read()); }
-static inline uint32_t mrdp_cmd_status_full_extract(uint32_t r) { return (r >> 12) & 0x1u; }
-static inline uint32_t mrdp_cmd_status_full_read(void) { return mrdp_cmd_status_full_extract(mrdp_cmd_status_read()); }
-static inline uint32_t mrdp_cmd_dropped_read(void) { return csr_read_simple(CSR_MRDP_CMD_DROPPED_ADDR); }
-static inline uint32_t mrdp_sync_count_read(void) { return csr_read_simple(CSR_MRDP_SYNC_COUNT_ADDR); }
-static inline uint32_t mrdp_load_count_read(void) { return csr_read_simple(CSR_MRDP_LOAD_COUNT_ADDR); }
-static inline uint32_t mrdp_status_read(void) { return csr_read_simple(CSR_MRDP_STATUS_ADDR); }
-static inline uint32_t mrdp_status_idle_extract(uint32_t r) { return (r >> 0) & 0x1u; }
-static inline uint32_t mrdp_status_idle_read(void) { return mrdp_status_idle_extract(mrdp_status_read()); }
-static inline uint32_t mrdp_status_unknown_ops_extract(uint32_t r) { return (r >> 16) & 0xffffu; }
-static inline uint32_t mrdp_status_unknown_ops_read(void) { return mrdp_status_unknown_ops_extract(mrdp_status_read()); }
+/* RDP */
+static inline uint32_t rdp_cmd_data_read(void) { return csr_read_simple(CSR_RDP_CMD_DATA_ADDR); }
+static inline void rdp_cmd_data_write(uint32_t v) { csr_write_simple(v, CSR_RDP_CMD_DATA_ADDR); }
+static inline uint32_t rdp_cmd_status_read(void) { return csr_read_simple(CSR_RDP_CMD_STATUS_ADDR); }
+static inline uint32_t rdp_cmd_status_level_extract(uint32_t r) { return (r >> 0) & 0xfffu; }
+static inline uint32_t rdp_cmd_status_level_read(void) { return rdp_cmd_status_level_extract(rdp_cmd_status_read()); }
+static inline uint32_t rdp_cmd_status_full_extract(uint32_t r) { return (r >> 12) & 0x1u; }
+static inline uint32_t rdp_cmd_status_full_read(void) { return rdp_cmd_status_full_extract(rdp_cmd_status_read()); }
+static inline uint32_t rdp_cmd_dropped_read(void) { return csr_read_simple(CSR_RDP_CMD_DROPPED_ADDR); }
+static inline uint32_t rdp_sync_count_read(void) { return csr_read_simple(CSR_RDP_SYNC_COUNT_ADDR); }
+static inline uint32_t rdp_load_count_read(void) { return csr_read_simple(CSR_RDP_LOAD_COUNT_ADDR); }
+static inline uint32_t rdp_status_read(void) { return csr_read_simple(CSR_RDP_STATUS_ADDR); }
+static inline uint32_t rdp_status_idle_extract(uint32_t r) { return (r >> 0) & 0x1u; }
+static inline uint32_t rdp_status_idle_read(void) { return rdp_status_idle_extract(rdp_status_read()); }
+static inline uint32_t rdp_status_unknown_ops_extract(uint32_t r) { return (r >> 16) & 0xffffu; }
+static inline uint32_t rdp_status_unknown_ops_read(void) { return rdp_status_unknown_ops_extract(rdp_status_read()); }
 
 /* TIMER0 */
 static inline uint32_t timer0_uptime_latch_read(void) { return csr_read_simple(CSR_TIMER0_UPTIME_LATCH_ADDR); }

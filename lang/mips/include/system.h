@@ -1,7 +1,7 @@
 /* System interface for MIRLO's MIPS game CPU (rtl/mips/mips_core.sv).
  * Its caches: 16 KiB I, 8 KiB D, direct mapped, 32-byte lines; the D-cache
  * writes through, so a "flush" only has to drop lines -- memory is always
- * current, but lines may be stale after another master (MRDP, the geom or
+ * current, but lines may be stale after another master (RDP, the geom or
  * audio core, the Pocket's bridge) wrote SDRAM. A core built with larger
  * caches (MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2) needs nothing else here: an
  * index op drops every line its 16 KiB / 8 KiB index stands for. */

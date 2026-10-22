@@ -86,7 +86,7 @@
 //  - Caches: 16 KiB I, 8 KiB D, direct mapped, 32-byte lines, physically
 //    tagged; KSEG0 RDRAM only. The D-cache writes through an 8-entry write
 //    buffer: memory is always current for the engines that read it (the RSP
-//    firmware, MRDP, the audio core). A read goes out only with the buffer
+//    firmware, RDP, the audio core). A read goes out only with the buffer
 //    empty. ld, sd, ldc1 and sdc1 to cached memory are two words in two
 //    cycles, through the cache and the write buffer as any other. Uncached,
 //    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,

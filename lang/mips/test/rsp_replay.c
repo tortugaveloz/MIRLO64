@@ -53,7 +53,7 @@ static void run(uint32_t task, int gap)
     volatile uint32_t *h = (volatile uint32_t *)(uintptr_t)(RDRAM + task);
     static const uint8_t ptrs[] = { 2, 4, 6, 8, 10, 11, 12, 14 };
     for (unsigned i = 0; i < sizeof ptrs; i++) h[ptrs[i]] &= 0x007FFFFFu;
-    uint32_t sync0 = mrdp_sync_count_read();
+    uint32_t sync0 = rdp_sync_count_read();
     SP_STATUS = 0x200u | 0x800u | 0x2000u | 0x100u;     /* clear yield, yielded, task done; interrupt on break */
     SP_PC = 0;
     dma_in(0x0FC0u, task, 64u);
@@ -64,7 +64,7 @@ static void run(uint32_t task, int gap)
     SP_STATUS = 0x100u | 0x20u | 0x4u | 0x1u | 0x8u;    /* clear single step, broke, halt, interrupt */
     while (!t_sp || !t_dp) {
         if (!t_sp && (SP_STATUS & 1u)) t_sp = cyc() - t0;
-        if (!t_dp && mrdp_sync_count_read() != sync0) t_dp = cyc() - t0;
+        if (!t_dp && rdp_sync_count_read() != sync0) t_dp = cyc() - t0;
         if (gap < 0) continue;
         for (int k = 0; k < 8; k++) {
             uint32_t r = rnd();

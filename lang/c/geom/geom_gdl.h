@@ -46,7 +46,7 @@ enum {
                               [10] uls[15:0] | ult[31:16]: the tile's origin, u10.2
                                    texels, subtracted from every s,t (SET_TILE_SIZE's SL/TL)
                               The geom core decodes and stages the texture for
-                              MRDP; a host build samples it directly. */
+                              RDP; a host build samples it directly. */
     GDL_TEXENV    = 0x10,  /* arg: the N64 colour combiner, reduced to a few modes.
                               [1:0] rgb: GDL_TE_RGB_*; [3:2] alpha:
                               GDL_TE_A_*. 0 = modulate both (the default). The alpha test
@@ -55,11 +55,11 @@ enum {
                               G_SETCOMBINE, only when the mode changes. A geom ROM from
                               before [3:1] existed read bit0 alone: 5 (the old "1") still
                               means lerp there, the new modes fall back to modulate. */
-    GDL_RAW       = 0x11,  /* arg: n (1..GDL_RAW_MAX) ; +n raw MRDP command words,
-                              pushed to MRDP verbatim, in GDL order. This is how the
+    GDL_RAW       = 0x11,  /* arg: n (1..GDL_RAW_MAX) ; +n raw RDP command words,
+                              pushed to RDP verbatim, in GDL order. This is how the
                               game CPU's framebuffer commands (the per-frame clears,
-                              the end-of-frame sync) reach MRDP without the CPU
-                              writing its command FIFO itself: MRDP has ONE command
+                              the end-of-frame sync) reach RDP without the CPU
+                              writing its command FIFO itself: RDP has ONE command
                               FIFO, and a CPU write there would have to wait until
                               the geom core has finished streaming, serialising every
                               frame behind the previous one (frame.c, pipelined
@@ -102,7 +102,7 @@ enum {
                               fraction (G_SETPRIMCOLOR's w0 low byte). +4 words: the N64
                               colour combiner's two words (G_SETCOMBINE's w0 -- its low 24 bits
                               -- and w1, both cycles), PRIMITIVE and ENVIRONMENT as RGBA8. On,
-                              MRDP draws with them as written (and GDL_TEXENV / GDL_CCOLOR only
+                              RDP draws with them as written (and GDL_TEXENV / GDL_CCOLOR only
                               decide the alpha test); off, or a texel read with no texture
                               bound, with the GDL_TEXENV mode as before. n64rt's translator
                               sends it; a geom that predates it stops at it. */

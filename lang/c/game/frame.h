@@ -1,4 +1,4 @@
-/* Game-CPU frame loop: multi-buffered MRDP output, a GDL built every frame
+/* Game-CPU frame loop: multi-buffered RDP output, a GDL built every frame
  * and handed to the geometry core over the mailbox, vblank-synced flips.
  *
  *   frame_init();
@@ -30,15 +30,15 @@ void frame_set_clear_rgb(uint32_t rgb);
 uint32_t frame_back_buffer(void);
 
 /* Pipelined submission (opt-in, default off). Off: frame_submit() kicks the
- * geometry core and waits for it, then for MRDP, then flips -- every stage
+ * geometry core and waits for it, then for RDP, then flips -- every stage
  * idles while the others run. On: frame_submit() only waits for the geom core
  * to finish WALKING the previous list, kicks this one and returns, so the game
- * CPU builds frame k+2 while the geom core walks k+1 and MRDP draws k.
+ * CPU builds frame k+2 while the geom core walks k+1 and RDP draws k.
  *
  * The clears and the end-of-frame SYNC FULL travel inside the GDL (GDL_RAW),
- * so the geom core puts them in MRDP's single command FIFO in stream order;
+ * so the geom core puts them in RDP's single command FIFO in stream order;
  * the game CPU never writes that FIFO in this mode. A frame is complete when
- * MRDP's sync_count counts its SYNC FULL (every write before it is in DRAM),
+ * RDP's sync_count counts its SYNC FULL (every write before it is in DRAM),
  * and frames are flipped to as they complete.
  *
  * Measured on a 762-triangle scene: serial 105 ms/frame, pipelined 93 ms;

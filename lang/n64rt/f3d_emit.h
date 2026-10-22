@@ -19,7 +19,7 @@
 typedef struct { uint32_t w0; uint32_t w1; } f3d_word_t;
 extern uint8_t *f3d_n64_ram;        /* the RDRAM, as this CPU sees it */
 extern uint32_t f3d_n64_ram_size;
-extern uint32_t f3d_n64_sdram;      /* the RDRAM's address on MRDP's bus */
+extern uint32_t f3d_n64_sdram;      /* the RDRAM's address on RDP's bus */
 
 /* The task's microcode (f3d_ucode_kind): its lists are walked as F3DEX2,
  * the GBI 1 families translated command by command. */

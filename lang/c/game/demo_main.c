@@ -1,10 +1,10 @@
 /* A spinning, Gouraud-shaded triangle: the smallest program that draws with
- * the geometry core and MRDP.
+ * the geometry core and RDP.
  *
  * Every frame the game CPU writes a GDL (lang/c/geom/geom_gdl.h, built with
  * gdl_build.h): the projection and modelview matrices, the viewport, three
  * vertices and one triangle. frame_submit() hands it to the geom core, which
- * transforms, lights, clips and sets the triangle up for MRDP; frames flip on
+ * transforms, lights, clips and sets the triangle up for RDP; frames flip on
  * vblank. No vertex maths runs on this core.
  */
 #include <stdint.h>

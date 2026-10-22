@@ -12,7 +12,7 @@
 //                      line buffers (set `rd_set`), the Z span's words and
 //                      then the colour span's;
 //                      z_have / c_have count the words that are in. Or a
-//                      texture load (lang/c/mrdp/mrdp.c tmem_load, load_tlut):
+//                      texture load (lang/c/rdp/rdp.c tmem_load, load_tlut):
 //                      `ln` 32-bit words from byte address `cbase` (any) to
 //                      TMEM's 16-bit word `ldst`, by `lmode` -- 0 one after
 //                      the other, 1 each word's halves to the two halves of
@@ -51,7 +51,7 @@
 // for both spans' words either way, and take a clock each: two spans' words,
 // a clock a word of two pixels, are in as the row's last pixel can go.)
 //
-// The hidden plane (lang/c/mrdp/mrdp.h, MRDP_HID_BASE): the N64's other two
+// The hidden plane (lang/c/rdp/rdp.h, RDP_HID_BASE): the N64's other two
 // coverage bits of every 16-bit word, 16 of them a 32-bit word, at 0x0080_0000
 // + (A[22:5] << 2) for RDRAM byte A (the SoC maps the address's bit 23 to its
 // SDRAM). A pixel span reads its groups' words first (`rd_h`, into the raw

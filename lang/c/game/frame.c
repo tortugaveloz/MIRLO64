@@ -11,14 +11,14 @@
 #include GEOM_FW_HEADER
 #include "log.h"
 #include "../geom/geom_gdl.h"
-/* MRDP, the N64-style rasterizer: every
+/* RDP, the N64-style rasterizer: every
  * frame's clears lead its GDL and a SYNC FULL ends it (GDL_RAW, forwarded
  * by the geom core in stream order), in serial and pipelined mode alike, so
- * once frame_init() is done the geom core is the only writer of MRDP's
+ * once frame_init() is done the geom core is the only writer of RDP's
  * command FIFO. A frame is complete when sync_count counts its SYNC FULL:
- * MRDP counts one only once every write before it has left for DRAM. */
-#define FRAME_MRDP 1
-#include "../mrdp/mrdp_frame.h"
+ * RDP counts one only once every write before it has left for DRAM. */
+#define FRAME_RDP 1
+#include "../rdp/rdp_frame.h"
 
 /* GEOM_TRIS_EMITTED_ADDR: geom_load.h */
 
@@ -95,17 +95,17 @@ static uint32_t s_slow_n, s_max_ms, s_max_frame, s_last_print_ms;
 static uint32_t s_max_b, s_max_w, s_max_g, s_max_v;
 
 /* ---- low-level ------------------------------------------------------- */
-/* frame_init() only: the geom core is idle, so the game CPU may write MRDP's
+/* frame_init() only: the geom core is idle, so the game CPU may write RDP's
  * FIFO directly. Waits for room rather than dropping a word. */
-static void frame_mrdp_push(const uint32_t *w, unsigned n) {
+static void frame_rdp_push(const uint32_t *w, unsigned n) {
     for (unsigned i = 0; i < n; i++) {
         uint32_t spins = 0;
-        while (mrdp_cmd_status_full_read()) { if (++spins == 40000000u) break; }
-        mrdp_cmd_data_write(w[i]);
+        while (rdp_cmd_status_full_read()) { if (++spins == 40000000u) break; }
+        rdp_cmd_data_write(w[i]);
     }
 }
 /* frames completed (SYNC FULLs), the counter the pipelined path accumulates */
-static inline uint32_t frame_sync_count(void) { return mrdp_sync_count_read(); }
+static inline uint32_t frame_sync_count(void) { return rdp_sync_count_read(); }
 
 /* Pixels a clear has to touch, and the byte offset it starts at. */
 #define CLEAR_PIX   ((uint32_t)VIDEO_FRAMEBUFFER_HRES * (uint32_t)VIDEO_FRAMEBUFFER_VRES)
@@ -121,7 +121,7 @@ static inline uint32_t frame_sync_count(void) { return mrdp_sync_count_read(); }
  * (frame_set_clear_rgb(), e.g. SM64's background colour). In pipelined mode
  * the clear is already in the GDL when the frame is built, so its colour word
  * is patched there (s_clear_word) -- the GDL is flushed at submit, after. */
-/* MRDP: 0xRRGGBB; s_clear_word is the colour SET FILL's word (an RGB565 pair) */
+/* RDP: 0xRRGGBB; s_clear_word is the colour SET FILL's word (an RGB565 pair) */
 #define CLEAR_RGB_DEFAULT ((uint32_t)(CLEAR_R) << 16 | (uint32_t)(CLEAR_G) << 8 | (uint32_t)(CLEAR_B))
 static uint32_t  s_clear_rgb = CLEAR_RGB_DEFAULT;
 static uint32_t *s_clear_word;
@@ -218,16 +218,16 @@ void frame_set_video(unsigned hdr_hres)
 unsigned frame_hres(void) { return s_hres; }
 
 /* every buffer cleared at the current width, then one SYNC FULL: all four
- * are in DRAM once it counts. MRDP must be idle (no frame in flight).
+ * are in DRAM once it counts. RDP must be idle (no frame in flight).
  * Returns the spins waited. */
 static uint32_t clear_all_buffers(void)
 {
-    uint32_t w[MRDP_FRAME_CLEAR_WORDS], s0 = mrdp_sync_count_read(), n = 0;
+    uint32_t w[RDP_FRAME_CLEAR_WORDS], s0 = rdp_sync_count_read(), n = 0;
     for (int i = 0; i < NUM_FB; i++)
-        frame_mrdp_push(w, mrdp_frame_clear(w, s_fb[i], DEPTH_BUFFER, s_hres,
+        frame_rdp_push(w, rdp_frame_clear(w, s_fb[i], DEPTH_BUFFER, s_hres,
                                       VIDEO_FRAMEBUFFER_VRES, CLEAR_RGB_DEFAULT));
-    frame_mrdp_push(w, mrdp_frame_end(w));
-    while (mrdp_sync_count_read() == s0) { if (++n == 40000000u) break; }
+    frame_rdp_push(w, rdp_frame_end(w));
+    while (rdp_sync_count_read() == s0) { if (++n == 40000000u) break; }
     return n;
 }
 
@@ -248,7 +248,7 @@ void frame_init(void) {
     {
         uint32_t n = clear_all_buffers();
         printf("  fi: %d buffers cleared (sync spin=%lu, status=%08lx, dropped=%lu)\n", NUM_FB,
-               (unsigned long)n, (unsigned long)mrdp_status_read(), (unsigned long)mrdp_cmd_dropped_read());
+               (unsigned long)n, (unsigned long)rdp_status_read(), (unsigned long)rdp_cmd_dropped_read());
     }
 
     s_fbi = 0;
@@ -272,18 +272,18 @@ volatile uint32_t g_frames_done;   /* flips completed */
 
 /* ---- pipelined submission (opt-in; see frame.h) ----------------------
  *
- * The geom core and MRDP run frame after frame back to back: frame k+1 is
- * kicked as soon as the geom core has finished WALKING frame k, while MRDP
+ * The geom core and RDP run frame after frame back to back: frame k+1 is
+ * kicked as soon as the geom core has finished WALKING frame k, while RDP
  * is still drawing it. Two things make that safe:
  *
  *  - Every framebuffer command travels INSIDE the GDL (GDL_RAW): frame_begin
  *    writes this frame's clears at its head and frame_submit writes a SYNC
  *    FULL at its tail, so the geom core forwards them in stream order. The
- *    game CPU never writes MRDP's command FIFO in this mode -- it could not
+ *    game CPU never writes RDP's command FIFO in this mode -- it could not
  *    without waiting for the geom core to stop streaming, which would
  *    serialise every frame behind the previous one.
  *
- *  - Completion comes from the gateware, per frame: MRDP counts a SYNC FULL
+ *  - Completion comes from the gateware, per frame: RDP counts a SYNC FULL
  *    (sync_count) only once everything drawn before it is in DRAM. A "writes
  *    idle" flag could not answer this -- with frame k+1's clears already
  *    queued, the write channel never goes quiet.
@@ -350,10 +350,10 @@ static void pipe_poll(void) {
 static volatile uint32_t s_pipe_busy;
 void frame_isr_poll(void) { if (s_overlap && !s_pipe_busy) pipe_poll(); }
 
-/* this frame's clears at the head of its GDL (MRDP commands, GDL_RAW) */
+/* this frame's clears at the head of its GDL (RDP commands, GDL_RAW) */
 static void gdl_raw_clears(gdl_cur_t *c, uint32_t back) {
-    uint32_t w[MRDP_FRAME_CLEAR_WORDS];
-    unsigned n = mrdp_frame_clear(w, back, DEPTH_BUFFER, s_hres,
+    uint32_t w[RDP_FRAME_CLEAR_WORDS];
+    unsigned n = rdp_frame_clear(w, back, DEPTH_BUFFER, s_hres,
                                   VIDEO_FRAMEBUFFER_VRES, s_clear_rgb);
     gdl_fbsize(c, s_hres, VIDEO_FRAMEBUFFER_VRES);   /* the geom core's screen edges */
     gdl_w(c, GDL_HDR(GDL_RAW, n));
@@ -366,13 +366,13 @@ static void gdl_raw_clears(gdl_cur_t *c, uint32_t back) {
 static void gdl_raw_sync(gdl_cur_t *c, uint32_t *start) {
     uint32_t w[2];
     if (c->p > start && c->p[-1] == GDL_HDR(GDL_END, 0)) c->p--;
-    gdl_w(c, GDL_HDR(GDL_RAW, mrdp_frame_end(w)));
+    gdl_w(c, GDL_HDR(GDL_RAW, rdp_frame_end(w)));
     gdl_w(c, w[0]); gdl_w(c, w[1]);
     gdl_end(c);
 }
 
 /* Drain the pipeline: every submitted frame complete, the newest on screen
- * and latched. Leaves MRDP idle, so serial mode can take over. */
+ * and latched. Leaves RDP idle, so serial mode can take over. */
 static void pipe_drain(void) {
     uint32_t n = 0;
     (void)geom_wait_done();
@@ -412,12 +412,12 @@ void frame_set_overlap(int on) {
 /* Pipelined, it also splits the frame: "geom" is how long the game CPU sat
  * waiting for the geom core to take the next list, "buf" for a free
  * framebuffer, "cpu" the rest -- the game's own work. The biggest of
- * cpu / geom-walk / MRDP sets the frame rate, and a wait on geom that is
+ * cpu / geom-walk / RDP sets the frame rate, and a wait on geom that is
  * a large share of the frame says the geom core is the one. */
-/* MRDP command FIFO samples taken while waiting on the geom core (see
- * frame_submit_overlap): mostly near full = MRDP is the bottleneck, the geom
+/* RDP command FIFO samples taken while waiting on the geom core (see
+ * frame_submit_overlap): mostly near full = RDP is the bottleneck, the geom
  * core stalls on it; mostly empty = the geom core's own compute. */
-#define MRDP_CMD_FIFO_NEAR_FULL ((1u << (CSR_MRDP_CMD_STATUS_LEVEL_SIZE - 1)) * 15u / 16u)
+#define RDP_CMD_FIFO_NEAR_FULL ((1u << (CSR_RDP_CMD_STATUS_LEVEL_SIZE - 1)) * 15u / 16u)
 static uint32_t s_ws_n, s_ws_full, s_ws_tri;
 static uint64_t s_ws_lvl;
 /* Frames per second over the last half second, for the on-screen counter
@@ -450,7 +450,7 @@ static void frame_rate_tick(void) {
                    s_overlap ? "pipelined" : "serial",
                    (unsigned long)(cpu / 1000u), (unsigned long)(em / 1000u), (unsigned long)(wg / 1000u), (unsigned long)(wb / 1000u));
         if (s_ws_n)
-            log_printf("MRDPQ while waiting on geom: fifo avg %lu words, near-full %lu%%, rasterising %lu%% (%lu samples)\n",
+            log_printf("RDPQ while waiting on geom: fifo avg %lu words, near-full %lu%%, rasterising %lu%% (%lu samples)\n",
                        (unsigned long)(s_ws_lvl / s_ws_n), (unsigned long)(s_ws_full * 100u / s_ws_n),
                        (unsigned long)(s_ws_tri * 100u / s_ws_n), (unsigned long)s_ws_n);
         s_ws_n = s_ws_full = s_ws_tri = 0; s_ws_lvl = 0;
@@ -465,7 +465,7 @@ static void frame_submit_overlap(gdl_cur_t *c) {
         printf("!! GDL OVERFLOW: %lu / %u words -- geometry truncated\n",
                (unsigned long)gdl_words, (unsigned)GDL_WORDS);
     /* the geom core walks one list at a time: wait for it to finish the last
-     * one (MRDP may still be drawing it -- that is the point). Poll for
+     * one (RDP may still be drawing it -- that is the point). Poll for
      * completed frames meanwhile, so each one is flipped to as soon as it is
      * in DRAM rather than at the next submit: less display latency, and the
      * buffer the next frame needs is latched off the screen sooner. */
@@ -475,12 +475,12 @@ static void frame_submit_overlap(gdl_cur_t *c) {
         while (!mailbox_status_game_pending_read()) {
             if ((++spins & 0x3FFu) == 0u) {
                 pipe_poll(); log_pump();
-                /* who is the geom core waiting on? MRDP's command FIFO
+                /* who is the geom core waiting on? RDP's command FIFO
                  * level and whether it is rasterising, sampled while we wait */
-                uint32_t lvl = mrdp_cmd_status_level_read();
+                uint32_t lvl = rdp_cmd_status_level_read();
                 s_ws_n++; s_ws_lvl += lvl;
-                if (lvl >= MRDP_CMD_FIFO_NEAR_FULL) s_ws_full++;
-                if (!mrdp_status_idle_read()) s_ws_tri++;
+                if (lvl >= RDP_CMD_FIFO_NEAR_FULL) s_ws_full++;
+                if (!rdp_status_idle_read()) s_ws_tri++;
             }
             if (spins == 200000000u) break;
         }
@@ -541,7 +541,7 @@ void frame_submit(gdl_cur_t *c) {
      * kick: nothing else can end a SYNC while this frame is in flight. */
     uint64_t t_ph = uptime_cycles(), t_ph0 = t_ph;
     gdl_raw_sync(c, s_gdl[s_gslot]);
-    uint32_t sync0 = mrdp_sync_count_read();
+    uint32_t sync0 = rdp_sync_count_read();
     MARK('C'); if (DBG_FRAME) DBG_LOG("  fs: flush + kick geom (gdl=%lx)\n", (unsigned long)(uintptr_t)s_gdl[s_gslot]);
     flush_cpu_dcache();
     mailbox_game_msg_write((uint32_t)(uintptr_t)s_gdl[s_gslot]);
@@ -554,7 +554,7 @@ void frame_submit(gdl_cur_t *c) {
     MARK('G'); if (DBG_FRAME) DBG_LOG("  fs: geom g%s, wait SYNC\n", gok ? "ok" : "TO");
     uint32_t bspin = 0, wspin = 0, wdrops = 0;
     uint64_t t_wait0 = uptime_cycles();
-    while (mrdp_sync_count_read() == sync0) {
+    while (rdp_sync_count_read() == sync0) {
         if ((wspin & 0xFFu) == 0u) log_pump();
         if (++wspin == 40000000u) break;
     }

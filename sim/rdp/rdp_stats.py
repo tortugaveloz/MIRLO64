@@ -2,7 +2,7 @@
 """What a game's RDP command streams use: from `rdp_task -n -v` output (stdin),
 the state each primitive is drawn with -- cycle type, texture format and size,
 TLUT, filter, the blender's and Z's modes, the combiner -- counted per
-primitive. For deciding what MRDP has to take, and what it can leave out.
+primitive. For deciding what RDP has to take, and what it can leave out.
 
     ./rdp_task -n -v task_gfx_*.bin | ./rdp_stats.py
 """

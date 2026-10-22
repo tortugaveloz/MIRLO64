@@ -1,6 +1,6 @@
 // Mirlo's registers on the MIPS SoC (tools/mirlo_regs.py: the map, and the
 // firmware's csr.h), in place of the RISC-V Mirlo's CSR peripherals
-// (its APF blocks, mailbox, MRDP wrapper, timer, UART, video DMA) and with
+// (its APF blocks, mailbox, RDP wrapper, timer, UART, video DMA) and with
 // their behaviour:
 //   APF_AUDIO     the Pocket's audio FIFO (core_top's): samples, playback, flush
 //   APF_BRIDGE    the Pocket's target commands (core_top's core_bridge_cmd);
@@ -12,7 +12,7 @@
 //   APF_VIDEO     vblank: its level, a flag set at its start (cleared by the
 //                 read) and a frame counter
 //   MAILBOX       game <-> geom message words and doorbells
-//   MRDP          its command FIFO, fed by these registers or by the geom
+//   RDP          its command FIFO, fed by these registers or by the geom
 //                 CFU's PUSH port (a register write wins a same-cycle clash),
 //                 and its counters
 //   TIMER0        a free-running 64-bit cycle counter, latched by a write
@@ -23,7 +23,7 @@
 //                 boundary), its enables and its mode
 // One access port: an access in the cycle of r_req, its read data the next.
 // With MIRLO_RSP (the RSP in the geom core's place) what only that core's
-// build uses is left out -- the mailbox, MRDP's load and drop counters and
+// build uses is left out -- the mailbox, RDP's load and drop counters and
 // its unknown-opcode count, the scan-out's unused LENGTH -- and reads as 0.
 `default_nettype none
 
@@ -82,17 +82,17 @@ module mirlo_regs (
     output logic        geom_irq, game_irq,
     output logic        geom_run,           // MAILBOX.GEOM_RUN: the geom core out of reset
     output logic [31:0] dbg_geom_msg,
-    // MRDP's command stream and counters
+    // RDP's command stream and counters
     input  wire         su_valid,           // the geom CFU's PUSH
     output logic        su_ready,
     input  wire  [31:0] su_data,
     output logic        cmd_valid,
     input  wire         cmd_ready,
     output logic [31:0] cmd_data,
-    input  wire  [31:0] mrdp_sync_count,
-    input  wire  [31:0] mrdp_load_count,
-    input  wire  [15:0] mrdp_unknown_ops,
-    input  wire         mrdp_idle,
+    input  wire  [31:0] rdp_sync_count,
+    input  wire  [31:0] rdp_load_count,
+    input  wire  [15:0] rdp_unknown_ops,
+    input  wire         rdp_idle,
     // the JTAG UART
     output logic        uart_we,
     output logic [7:0]  uart_byte,
@@ -350,8 +350,8 @@ assign uart_we = wr && a == R_UART_RXTX;
 assign uart_byte = r_wdata[7:0];
 assign uart_rx_pop = rd && a == R_UART_RXTX && !uart_rxempty;
 
-// ---- MRDP's command FIFO
-wire         csr_push = wr && a == R_MRDP_CMD_DATA;
+// ---- RDP's command FIFO
+wire         csr_push = wr && a == R_RDP_CMD_DATA;
 logic        f_in_ready;
 logic [11:0] f_level;
 logic [15:0] dropped;
@@ -457,11 +457,11 @@ always_comb begin
     R_MAILBOX_GEOM_RUN[5:2]:               rb[6] = {31'd0, geom_run};
     default: ;
     endcase
-    case (a[5:2])                                               // MRDP
-    R_MRDP_CMD_STATUS[5:2]:                rb[7] = {19'd0, !f_in_ready, f_level};
-    R_MRDP_CMD_DROPPED[5:2]:               rb[7] = {16'd0, dropped};
-    R_MRDP_SYNC_COUNT[5:2]:                rb[7] = mrdp_sync_count;
-    R_MRDP_STATUS[5:2]:                    rb[7] = {31'd0, mrdp_idle && f_level == 0 && !cmd_valid};
+    case (a[5:2])                                               // RDP
+    R_RDP_CMD_STATUS[5:2]:                rb[7] = {19'd0, !f_in_ready, f_level};
+    R_RDP_CMD_DROPPED[5:2]:               rb[7] = {16'd0, dropped};
+    R_RDP_SYNC_COUNT[5:2]:                rb[7] = rdp_sync_count;
+    R_RDP_STATUS[5:2]:                    rb[7] = {31'd0, rdp_idle && f_level == 0 && !cmd_valid};
     default: ;
     endcase
     case (a[5:2])                                               // TIMER0

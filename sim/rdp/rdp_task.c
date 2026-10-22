@@ -1,7 +1,7 @@
 /* The software pipeline of a graphics task: the RSP reference model
  * (sim/rsp) runs the game's microcode on a task dump, the RDP commands it
- * gives go to MRDP's reference model (lang/c/mrdp), which draws into the
- * dump's RDRAM; the colour image comes out as a PPM. For MRDP's work on taking
+ * gives go to RDP's reference model (lang/c/rdp), which draws into the
+ * dump's RDRAM; the colour image comes out as a PPM. For RDP's work on taking
  * the N64's command stream: what a frame looks like, in seconds.
  *
  *   rdp_task [-o out_prefix] [-n] task_gfx_*.bin ...
@@ -17,17 +17,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rsp.h"
-#include "mrdp.h"
+#include "rdp.h"
 
 #define RDRAM_SIZE (8u << 20)
-#define MEM_SIZE (16u << 20)                 /* and the hidden plane at 8 MiB (mrdp.h, MRDP_HID_BASE) */
+#define MEM_SIZE (16u << 20)                 /* and the hidden plane at 8 MiB (rdp.h, RDP_HID_BASE) */
 static uint8_t ram[MEM_SIZE];
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static void wbe32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; }
 
-/* MRDP's memory: the N64's RDRAM, 16-bit big-endian */
+/* RDP's memory: the N64's RDRAM, 16-bit big-endian */
 static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM_SIZE - 2; return (uint16_t)(ram[a] << 8 | ram[a + 1]); }
-static mrdp_t rdp;
+static rdp_t rdp;
 static uint32_t watch = ~0u, cur_w[8], cur_n;
 static unsigned long cur_i;
 static void wr16(void *c, uint32_t a, uint16_t v)
@@ -40,7 +40,7 @@ static void wr16(void *c, uint32_t a, uint16_t v)
         {
             unsigned op = (cur_w[0] >> 24) & 63u;
             int ti = (op == 0x24 || op == 0x25) ? (int)((cur_w[1] >> 24) & 7) : (int)((cur_w[0] >> 16) & 7);
-            const mrdp_tile_t *t = &rdp.tile[ti];
+            const rdp_tile_t *t = &rdp.tile[ti];
             printf("      other modes %08x %08x, combine %08x %08x; tile %d: fmt %u size %u line %u tmem %u palette %u, s %u..%u t %u..%u (10.2), "
                    "mask %u/%u shift %u/%u clamp %u/%u mirror %u/%u; texture image %06x width %u\n",
                    rdp.other_h, rdp.other_l, rdp.combine_hi, rdp.combine_lo, ti, t->fmt, t->size, t->line, t->tmem, t->palette,
@@ -81,14 +81,14 @@ static void on_rdp(void *user, const uint32_t *w, int n)
         for (int i = 0; i < 6; i++) printf(" %04x", rd16(0, a + 2 * i));
         printf("\n");
     }
-    if (!skip) for (int i = 0; i < 2 * n; i++) mrdp_push(&rdp, w[i]);
+    if (!skip) for (int i = 0; i < 2 * n; i++) rdp_push(&rdp, w[i]);
     else { /* a draw skipped: the state it would have set (the primitive's tile) is not needed */ }
     if (trace) {   /* RDP_TRACE=<file>: every command, all its words, and the pixels it drew */
         fprintf(trace, "%02x %d", op, 2 * n);
         for (int i = 0; i < 2 * n; i++) fprintf(trace, " %08x", w[i]);
         fprintf(trace, " px=%llu\n", (unsigned long long)(rdp.pixels_drawn - px0));
     }
-    if (op == MRDP_OP_SET_CIMG && rdp.cimg != rdp.zimg) { last_cimg = rdp.cimg; last_width = rdp.cimg_width; last_size = rdp.cimg_size; }
+    if (op == RDP_OP_SET_CIMG && rdp.cimg != rdp.zimg) { last_cimg = rdp.cimg; last_width = rdp.cimg_width; last_size = rdp.cimg_size; }
 }
 
 int main(int argc, char **argv)
@@ -116,7 +116,7 @@ int main(int argc, char **argv)
         rsp_reset(&s, ram, RDRAM_SIZE);
         memset(ram + RDRAM_SIZE, 0xFF, MEM_SIZE - RDRAM_SIZE);      /* (the plane: all ones, as the runtime sets it) */
         s.rdp_cmd = on_rdp;
-        mrdp_init(&rdp, 0, rd16, wr16);
+        rdp_init(&rdp, 0, rd16, wr16);
         memset(ops, 0, sizeof ops);
         last_cimg = 0; last_width = 320; last_size = 2;
         uint8_t task[64];
@@ -171,7 +171,7 @@ int main(int argc, char **argv)
             if (getenv("RDP_RAW") && last_size != 3 && (f = fopen(path, "wb"))) {
                 for (uint32_t i = 0; i < last_width * 240u; i++) {
                     uint32_t a = (last_cimg + 2 * i) & (RDRAM_SIZE - 2), kk = (a >> 1) & 15u;
-                    uint32_t ha = MRDP_HID_BASE + ((a >> 5) << 2) + (kk < 8u ? 2u : 0u);
+                    uint32_t ha = RDP_HID_BASE + ((a >> 5) << 2) + (kk < 8u ? 2u : 0u);
                     uint8_t h = (uint8_t)((rd16(0, ha) >> (2u * (kk & 7u))) & 3u);
                     fwrite(&h, 1, 1, f);
                 }

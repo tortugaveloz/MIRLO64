@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs the SAME GDLs through the host build of geom_pipeline.c and through
 # the real geom-core RTL (CPU + CFU) executing lang/c/geom/build/geom.bin,
-# and requires both MRDP command streams, and the frames the MRDP C model
+# and requires both RDP command streams, and the frames the RDP C model
 # draws from them, to be bit-identical. Also prints
 # cycles per GDL. Run ./build.sh once for the Verilator model, and rebuild
 # geom.bin (make clean && make in lang/c/geom -- its Makefile does not track
@@ -13,7 +13,7 @@ OUT="$HERE/work"; mkdir -p "$OUT"
 CF="-O2 -w -std=gnu11 -fno-strict-aliasing -m64 -fcommon -ffp-contract=off -fsigned-char \
     -DGEOM_HOST_TEST -DGEOM_FB_HRES=268 -DGEOM_FB_VRES=240"
 INC="-I$R/lang/c/geom -I$R/lang/c/game"
-CF="$CF -DGEOM_MRDP"; MSRC="$R/lang/c/mrdp/mrdp.c"
+CF="$CF -DGEOM_RDP"; MSRC="$R/lang/c/rdp/rdp.c"
 # shellcheck disable=SC2086
 gcc $CF $INC -o "$HERE/tools/hostreplay" "$HERE/tools/hostreplay.c" \
     "$R/lang/c/geom/geom_pipeline.c" "$R/lang/c/geom/geom_triangle.c" \
@@ -32,6 +32,6 @@ for cfg in "0 1 1 0 0 1 7" "1 1 1 0 0 1 7" "1 5 1 0 0 1 7" "1 2 1 1 0 1 7" \
           | sed -n 's/.*signalled done after \([0-9]*\) cycles.*/\1/p')
     cp geom_cmd_stream.bin "rtl_$g.bin"
     printf '%-22s %9s cycles  ' "$g" "${cyc:-TIMEOUT}"
-    python3 "$HERE/tools/cmp_mrdp.py" "$g" || fail=1
+    python3 "$HERE/tools/cmp_rdp.py" "$g" || fail=1
 done
 exit $fail

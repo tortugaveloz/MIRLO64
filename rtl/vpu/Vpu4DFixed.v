@@ -2,7 +2,7 @@
 // Vpu4DFixed -- a parallel 4-lane fixed-point matrix-vector engine for the
 // geometry core's vertex transform, attached as a VexRiscv CFU (custom
 // function unit). It also hosts GeomSetupUnit, which owns the scalar setup
-// ops (ids 0x04 and 0x40 and up) and the PUSH port toward MRDP's command FIFO.
+// ops (ids 0x04 and 0x40 and up) and the PUSH port toward RDP's command FIFO.
 // ----------------------------------------------------------------------------
 // Format: S17.10 signed fixed point (17 integer bits incl. sign, 10
 // fractional, range +/-65536, step 2^-10). 27-bit operands because Cyclone
@@ -72,7 +72,7 @@ module Vpu4DFixed #(
     input  wire                     rsp_ready,
     output wire [31:0]              rsp_outputs_0,
 
-    // GeomSetupUnit's PUSH (0x61) toward MRDP's command FIFO
+    // GeomSetupUnit's PUSH (0x61) toward RDP's command FIFO
     output wire                     out_valid,
     input  wire                     out_ready,
     output wire [31:0]              out_data

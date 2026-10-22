@@ -386,9 +386,9 @@ logic [31:0] br_wdata;
 logic        su_valid, su_ready;
 logic [31:0] su_data;
 logic        cmd_valid, cmd_ready;
-logic [31:0] cmd_data, mrdp_sync, mrdp_load;
-logic [15:0] mrdp_unknown;
-logic        mrdp_idle;
+logic [31:0] cmd_data, rdp_sync, rdp_load;
+logic [15:0] rdp_unknown;
+logic        rdp_idle;
 logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
 logic [7:0]  r_uart_byte, uart_rx_byte;
 logic [31:0] fb_base_csr, dbg_geom_msg;
@@ -424,7 +424,7 @@ mirlo_regs regs (.clk, .rst,
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
-    .mrdp_sync_count(mrdp_sync), .mrdp_load_count(mrdp_load), .mrdp_unknown_ops(mrdp_unknown), .mrdp_idle,
+    .rdp_sync_count(rdp_sync), .rdp_load_count(rdp_load), .rdp_unknown_ops(rdp_unknown), .rdp_idle,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
     .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq,
     .mon_mi, .mi_line, .mi_w_mi(mi_op && x_mi), .mi_w_pi(mi_op && x_pi), .mi_w_we(x_we), .mi_w_a(x_addr[3:2]), .mi_w_wd(x_wdata), .mi_w_rd,
@@ -514,7 +514,7 @@ rcp_dpc_view dpc_view (.clk, .rst, .end_we(dpc_end_we), .status_we(dpc_status_we
     .st_raw(dpc_st_raw), .cur(dpc_current), .end_(dpc_end), .start_ok(dpc_start_ok), .st(dpc_status));
 rdp_dpc dpc (.clk, .rst, .start_we(dpc_start_we), .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata),
     .start(dpc_start), .end_(dpc_end), .end_rd(dpc_end_rd), .current(dpc_current), .status(dpc_st_raw),
-    .rdp_busy(cmd_valid || !mrdp_idle),
+    .rdp_busy(cmd_valid || !rdp_idle),
     .m_valid(p_valid[5]), .m_addr(dpc_m_addr), .m_ready(p_ready[5]), .m_rvalid(p_rvalid[5]), .m_rdata(p_rdata),
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
     .c_valid(su_valid), .c_data(su_data), .c_ready(su_ready));
@@ -537,7 +537,7 @@ assign a_s_ack = 1'b0; assign a_s_dat_r = '0; assign t_dat_r = '0;
 logic [31:0] dbg_geom_pc, dbg_aud_state, dbg_aud_pc;
 assign dbg_geom_pc = '0; assign dbg_aud_state = {30'd0, rsp_unimpl, rsp_halted}; assign dbg_aud_pc = '0;
 
-// ---------------------------------------------------------------- MRDP
+// ---------------------------------------------------------------- RDP
 logic        m_cmd_valid, m_cmd_ready, m_cmd_we, m_wdata_valid, m_wdata_ready, m_rdata_valid;
 logic [31:0] m_cmd_addr, m_wdata, m_rdata;
 logic [3:0]  m_wdata_we;
@@ -549,10 +549,10 @@ rdp_top rdp (.clk, .rst,
     .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
     .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
     .m_rdata_valid, .m_rdata,
-    .sync_count(mrdp_sync), .sync_ev(mon_dp), .load_count(mrdp_load), .unknown_ops(mrdp_unknown), .idle(mrdp_idle));
-// (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/mrdp/mrdp.h, layout.h)
+    .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle));
+// (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
 assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
-port_mrdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
+port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
     .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata);

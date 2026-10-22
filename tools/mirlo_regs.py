@@ -6,7 +6,7 @@ the RTL decode and the firmware's headers come from.
                       lang/mips/include/generated/csr.h, soc.h, mem.h
 
 It generates the firmware's csr.h: the blocks and registers keep the names
-the firmware has always used (apf_audio_out_write(), mrdp_status_read(),
+the firmware has always used (apf_audio_out_write(), rdp_status_read(),
 timer0_uptime_cycles_read(), ...), with the same accessors -- <reg>_read(),
 <reg>_write(), and per field <reg>_<field>_read() / _extract() -- so
 lang/c and the games build against it unchanged.
@@ -73,7 +73,7 @@ BLOCKS = [
         ("STATUS",    0x18, R,  1, [("GEOM_PENDING", 0, 1), ("GAME_PENDING", 1, 1)]),
         ("GEOM_RUN",  0x1C, RW, 1, []),             # the geom core out of reset (each game loads its firmware first)
     ]),
-    ("MRDP", 0x0700, [
+    ("RDP", 0x0700, [
         ("CMD_DATA",    0x00, W, 1, []),
         ("CMD_STATUS",  0x04, R, 1, [("LEVEL", 0, 12), ("FULL", 12, 1)]),
         ("CMD_DROPPED", 0x08, R, 1, []),
@@ -164,7 +164,7 @@ BLOCKS = [
     ]),
 ]
 # (GB_CART: only with the Verilog macro MIRLO_GB_CART -- without it all three read 0)
-MRDP_CMD_FIFO_DEPTH = 2048      # CMD_STATUS.LEVEL is its width + 1 bits: 12
+RDP_CMD_FIFO_DEPTH = 2048      # CMD_STATUS.LEVEL is its width + 1 bits: 12
 
 # soc.h's constants and mem.h's regions (the names the firmware uses)
 SOC = [("CONFIG_CLOCK_FREQUENCY", CLOCK_HZ), ("ROM_BOOT_ADDRESS", 0x4000_0000),
@@ -228,7 +228,7 @@ def main():
     for blk, base, regs in BLOCKS:
         for name, off, _, words, _ in regs:
             sv.append(f"localparam logic [15:0] R_{blk}_{name} = 16'h{base + off:04X};")
-    sv.append(f"localparam int MRDP_CMD_FIFO_DEPTH = {MRDP_CMD_FIFO_DEPTH};")
+    sv.append(f"localparam int RDP_CMD_FIFO_DEPTH = {RDP_CMD_FIFO_DEPTH};")
     open(os.path.join(root, "rtl", "soc", "mirlo_regs.svh"), "w").write("\n".join(sv) + "\n")
     gen = os.path.join(root, "lang", "mips", "include", "generated")
     os.makedirs(gen, exist_ok=True)
