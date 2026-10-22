@@ -201,7 +201,7 @@ endfunction
 function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
                                   input logic signed [33:0] p, input logic [15:0] vs, input logic [47:0] accm,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
-                                  input logic pre, input logic [3:0] fr);   // (pre: the adder's flags are fr, kept from the cycle before)
+                                  input logic [3:0] fr);    // (the adder's flags of the cycle before: VCL, VCH and VCR's with one pass)
     lane_t o = '0;
     logic signed [47:0] term, accn;
     logic eq, sign;
@@ -215,7 +215,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     logic       c15, clo;
     // one adder for every add, subtract and compare: s + t or s - t, with the
     // 17-bit signed result's top bit (b16) and the carry (unsigned: no borrow)
-    logic        sub, cin, cout, b16, zero, ones, z17;
+    logic        sub, cin, cout, b16, zero, ones;
+    logic        cout_c, b16_c, zero_c, ones_c, z17_c, eq_c;            // (VCL, VCH and VCR's: below)
     logic [15:0] bb, lo, nt;
     logic        cin_x;
     nt = -t;
@@ -234,9 +235,15 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     b16 = s[15] ^ bb[15] ^ cout;
     zero = lo == 16'd0; ones = &lo;
     o.fl = {cout, b16, zero, ones};
-    if (pre) {cout, b16, zero, ones} = fr;
-    z17 = zero && !b16;                                      // the signed result is 0
     eq = zero;                                               // (s == t: where it is asked the adder subtracts)
+    // VCL, VCH and VCR's flags: with one pass always the adder's of the cycle before (fr: their EX waits a cycle for
+    // them, x_wait), so nothing of this cycle's adder is in front of the select they make -- with a flag that chose
+    // between the two (as one did), the adder and its zero stood in front of every clip's select and were the longest
+    // path into the registers' write; with two passes, this cycle's
+    if (NP == 1) {cout_c, b16_c, zero_c, ones_c} = fr;
+    else         {cout_c, b16_c, zero_c, ones_c} = {cout, b16, zero, ones};
+    z17_c = zero_c && !b16_c;                                // the signed result is 0
+    eq_c  = zero_c;
     // the multiplies: the product into the accumulator (the accumulator's high words
     // are taken from here when the instruction is one -- acc_w -- and are no matter
     // otherwise), the clamped result
@@ -282,12 +289,12 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         // VCH, VCL, VCR: s or t (or -t, ~t) by what the compare found. A lane's
         // conditions: le (s <= -t) and ge (s >= t), and which of them decides
         if (f == 6'h24) begin                                // VCL: by VCO, the unsigned compare (cout is s >= t)
-            le_f = (co_lo && !co_hi) ? (ce ? (zero || !cout) : (zero && !cout)) : cc_lo;
-            ge_f = (!co_lo && !co_hi) ? cout : cc_hi;
+            le_f = (co_lo && !co_hi) ? (ce ? (zero_c || !cout_c) : (zero_c && !cout_c)) : cc_lo;
+            ge_f = (!co_lo && !co_hi) ? cout_c : cc_hi;
             negside = co_lo;
         end else begin                                       // VCH, VCR: by the signs
-            le_f = sign ? (b16 || z17) : t[15];
-            ge_f = sign ? t[15] : !b16;
+            le_f = sign ? (b16_c || z17_c) : t[15];
+            ge_f = sign ? t[15] : !b16_c;
             negside = sign;
         end
         cond = negside ? le_f : ge_f;
@@ -333,8 +340,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         6'h22:         begin o.cc_lo = !eq || co_hi; o.cc_w = 1'b1; o.co_w = 1'b1; end
         6'h24, 6'h26:  begin o.cc_lo = le_f; o.cc_hi = ge_f; o.cc_w = 1'b1; o.co_w = 1'b1; o.ce_w = 1'b1; end
         6'h25: begin                                         // VCH
-            o.ce = sign && ones && b16;
-            o.co_hi = sign ? (!z17 && !(ones && b16)) : !eq;
+            o.ce = sign && ones_c && b16_c;
+            o.co_hi = sign ? (!z17_c && !(ones_c && b16_c)) : !eq_c;
             o.co_lo = sign; o.co_w = 1'b1;
             o.cc_lo = le_f; o.cc_hi = ge_f; o.cc_w = 1'b1;
             o.ce_w = 1'b1;
@@ -428,9 +435,9 @@ always_comb
     end
 
 // EX's registers: the pass, its operands and products, the instruction's fields
-logic               x_v, x_pass, x_last, x_wait, x_one, x_rcp, x_pre;
+logic               x_v, x_pass, x_last, x_wait, x_one, x_rcp;
 logic               x_mw;                     // (MULW) a multiply: all eight lanes in this one pass
-logic [3:0]         fl_r [LANES];             // the adder's flags of the cycle EX waited (x_pre)
+logic [3:0]         fl_r [LANES];             // the adder's flags of the cycle EX waited (VCL, VCH, VCR with one pass)
 logic [3:0]         x_ve;
 logic [4:0]         x_vdn;
 logic [2:0]         x_de;
@@ -457,7 +464,7 @@ always_comb
         default: vs = 'x;
         endcase
         ex[l] = lane_ex(x_fn, x_am, x_ve, s_r[l], t_r[l], p_r[l], vs, {acc_h[lm], acc_m[lm], acc_l[lm]},
-                        vco[li], vco[4'd8 + li], vcc[li], vcc[4'd8 + li], vce[li], x_pre, fl_r[l]);
+                        vco[li], vco[4'd8 + li], vcc[li], vcc[4'd8 + li], vce[li], fl_r[l]);
     end
 lane_t exm [LANES];
 always_comb
@@ -811,7 +818,6 @@ always_ff @(posedge clk) begin
                               : (sel1 && lw_nx && x_one);       // (a write of one lane is not kept: it waits)
             if (sel0) begin
                 x_fn <= fn; x_am <= amode(fn); x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
-                x_pre <= NP == 1 && fn_ch;
                 for (int l = 0; l < LANES; l++) begin         // (two passes) the second's operands
                     s_hi[l] <= qa[((LANES + l) & 7)]; t_hi[l] <= tv[((LANES + l) & 7)];
                 end

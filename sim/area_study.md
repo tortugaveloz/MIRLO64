@@ -746,3 +746,136 @@ Against a bench built from unchanged main (Verilator 5.052; the toolchain's outp
   `viaa_test`, the 3D platformer for 300M cycles, a title with woven 640 x 480 screens and a PAL flight game for 250M
   cycles (4 s, a frame dump every fifth frame): 425 files byte for byte the same (the woven title's include 38 woven
   640 x 480 frames; the flight game's first 4 s are 640 x 240).
+
+## Timing round
+
+Goal: timing margin, not area. At 97 to 98 % fill main closed at one seed of
+three (13, 5, 9: worst +0.090, -0.306, -0.768 ns), and two paths came back
+whatever the seed: on the CPU's clock (93.75 MHz, 10.667 ns) the instruction
+register into M's result, on `clk_sys` (62.5 MHz, 16 ns) the RSP's operands
+into its vector registers' LUT RAM.
+
+### The two paths as the analyser shows them
+
+Detailed reports (`report_timing -setup -detail full_path`, slow corners) of
+the fits already on disk: main at seeds 5 and 9, round 4's branch (same CPU
+and RSP sources as main) at seed 13.
+
+* RSP, main seed 9, slow 0 C, slack -0.768: `rsp_vu|x_am[0]` to
+  `rsp_lutram:ma`'s data input, 12 logic levels, 16.57 ns of data path. The
+  segments: the adder's subtract select (`x_am` and the signs, fanout 19,
+  1.75 ns), the 16-bit adder (2.2 ns to its sum), the sum's zero (two levels,
+  2.5 ns), then the clip's select: the flag choice `zero = pre ? fr : live`,
+  `le_f`, `pk`, `tt` (fanout 16), the bit select, the result select and the
+  write data select (one level each, 0.6 to 1.9 ns with routing), and the LUT
+  RAM's data input (1.54 ns of routing, 0.77 ns cell). Seed 5's version (+0.151)
+  starts from `t_r` and is the same chain. With eight lanes VCL, VCH and VCR
+  always take the adder's flags of the cycle before (`x_pre` was set exactly
+  for them, EX waits a cycle), so the live adder in front of `le_f` was a path
+  no instruction uses, and the longest one into the register write.
+* CPU, round 4 seed 13, slow 0 C, slack -0.475: `e_insn[4]` to `m_res[25]`, 6
+  levels: the decode of `e_insn[5:0]` (sllv / srlv / srav: is the amount rs's)
+  with 2.73 ns of routing in front of it (`e_insn` fans out across E), the
+  amount select `e_sh` (fanout 33), two levels of the barrel shifter, the
+  reversal for `sll`, the result kind select, `m_res`. The same placement's
+  path from the forwarding selects through `e_sh` had +0.284: the decode and
+  its route were the 0.76 ns.
+* The CPU's other recurring path: E's branch decision into `rd_target`, where
+  the fetch goes after the delay slot (main seed 5 -0.078, round 4 seed 13
+  -0.206 at 85 C, the CPU alone -0.330): the forwarded operand, its compare
+  (`e_baz` / `e_eq`, three to four levels), `e_taken` (two levels), then
+  `e_taken` selecting between the target and pc + 8 in 32 selects (fanout 34,
+  1.2 to 1.7 ns of routing) in front of the register.
+
+### What changed (three commits, each cycle-identical)
+
+1. `mips_core.sv`: `e_k_shv`, registered with `e_insn` as it leaves D, says
+   that the shift's amount is rs's; `e_sh` is one select after rs's forwarding.
+   One register.
+2. `rsp_vu.sv`: the clips' flags (`cout_c`, `b16_c`, `zero_c`, `ones_c`) are
+   `fl_r` alone with one pass and this cycle's adder with two, where one flag
+   (`x_pre`) chose between them per instruction; `x_pre` is gone. The compares,
+   VADD and the rest still read this cycle's adder. ALUTs 5,930 to 5,860.
+3. `mips_core.sv`: as the branch leaves E, its target (`rd_tt`), pc + 8
+   (`rd_tn`) and whether it was taken (`rd_tk`) are registered; `rd_tgt`, the
+   choice between them, is made behind the registers, where `f_nx` reads it
+   (paths from there had 2.8 to 3.2 ns of slack). `e_taken` now ends in three
+   single flip-flops (`rd_tk`, `rd_fix`, `rd_annul`). 33 registers more.
+
+Measured on the way and not kept: the clips' and compares' results made as two
+16-bit candidates of s and t chosen by the late bit (accl = c_l ? sum : sel ?
+x : y), and `eq` taken from s == t beside the adder: the RSP alone +365 ALUTs,
++316 fitted ALMs; the same choice made on the 4-bit table `tt` instead: +9
+ALUTs, and its unit fit slower (+0.212 ns) than change 2 alone.
+
+### The units alone
+
+`ooc.sh` with every pin virtual, `quartus_fit` seed 1, a 16 ns clock for the
+RSP and 10.667 ns for the CPU, worst setup slack in the slow corners (85 C /
+0 C). One seed: a unit's placement moves its worst path by a few tenths.
+
+| Unit | ALUTs | registers | fitted ALMs | worst setup, 85 C / 0 C | the path named above |
+|---|---|---|---|---|---|
+| RSP, main | 5,930 | 1,968 | 4,543 | +0.061 / -0.043 (`x_am` into the LUT RAM) | the same |
+| RSP, change 2 | 5,860 | 1,967 | 4,537 | +0.883 / +0.642 (the scalar unit's `e_ins`) | write into the LUT RAM +1.315 / +1.645 |
+| CPU, main | 7,564 | 3,258 | 4,843 | -0.006 / -0.330 (`e_fa_w` into `rd_target`) | into `m_res` +0.847 / +0.856 |
+| CPU, change 1 | 7,560 | 3,259 | 4,798 | -0.059 / +0.055 (`ms` into the I-cache's address) | `rd_target` +0.330 / +0.292 |
+| CPU, changes 1 and 3 | 7,563 | 3,292 | 4,774 | +0.042 / +0.180 | `rd_tk` not in the worst 300; `m_res` +0.581 / +0.698 |
+
+### The whole design's fit
+
+`tools/area2/fit.sh`, Quartus Prime 23.1std.1 Lite, one compile at a time.
+Main is round 4's compiles of `e17dce2`. Worst setup per clock over the four
+corners (`closure.py`); "worst" is every analysis.
+
+| Seed | ALMs | Setup cpu / sys / sys2x | Hold cpu / sys | Worst | Closes |
+|---|---|---|---|---|---|
+| main 13 | 17,879 | +0.456 / +0.305 / +0.885 | +0.113 / +0.090 | +0.090 | yes |
+| main 5 | 17,842 | -0.078 / -0.306 / +0.446 | +0.038 / +0.101 | -0.306 (setup, sys: the RDP's `w0` into `l_n`) | no |
+| main 9 | 17,883 | +0.287 / -0.768 / +0.200 | +0.163 / +0.039 | -0.768 (setup, sys: the RSP's write) | no |
+| changes 1, 2: 13 | 18,051 | +0.180 / +0.563 / +0.886 | +0.128 / +0.048 | +0.048 | yes |
+| changes 1, 2: 5 | 17,815 | +0.112 / +0.744 / +0.235 | +0.149 / +0.012 | +0.012 | yes |
+| changes 1, 2: 9 | 17,821 | +0.538 / +0.321 / +0.240 | +0.114 / +0.119 | +0.114 | yes |
+| changes 1-3: 13 | 17,859 | +0.308 / +0.391 / +0.791 | +0.038 / +0.092 | +0.038 | yes |
+| changes 1-3: 5 | 17,809 | +0.133 / +0.275 / +0.246 | +0.032 / +0.096 | +0.032 | yes |
+| changes 1-3: 9 | 17,864 | +0.390 / +0.623 / +0.796 | -0.014 / +0.011 | -0.014 (hold, fast 0 C: `x_rdata` into `cpu_port`'s `c_xdata`) | no |
+
+Every setup analysis is positive in all six branch fits. The ALMs move by
+-62 to +172 seed for seed (the fit's spread at this fill; changes 1-3:
+-20, -33, -19). The paths named above, in the branch's fits (slow 0 C / 85 C):
+
+* the RSP's write into its LUT RAM: +1.13 to +2.01 ns (main seed 9: -0.768);
+  `clk_sys`'s worst is now elsewhere: the CPU port's crossing (`rq_addr` into
+  `a_addr`, `wp` into `wp_s`), the RDP's `w0` into `l_n` and `other_h` into
+  the texel registers, the RSP's scalar unit;
+* `e_insn` into `m_res`: not among the worst; `m_res`'s worst is +0.37 to
+  +1.09 (from `w_res` or `e_rb`, the shifter's data);
+* `rd_target`: with change 3 its paths end in `rd_tk`, worst +0.133 at seed 5
+  (`m_insn` through the FPU's condition into the branch decision of a
+  `bc1t` / `bc1f` at E), +0.322 behind `m_res`.
+
+The CPU's worst is spread over the D-cache's address (`m_addr`, `m_insn`,
+`m_c.x64` into the RAMs), the FPU's unpack (`st.S_UNPY` into `ax.f`) and that
+branch decision, +0.13 to +0.54 ns: no single path dominates any more. The one
+miss is a hold of 14 ps on a crossing from `clk_sys` into the CPU's clock, a
+path no change touched (round 4's branch missed seed 9 by the same kind of
+hold, -0.028); main's seed 5 miss on `clk_sys` is the RDP's `w0` into `l_n`
+(load tile's word count, `rdp_top.v`), outside this round's scope, which the
+branch's fits place with +0.71 to +2.38.
+
+### Verification
+
+Against a bench built from unchanged main (`e17dce2`, Verilator 5.052):
+
+* RSP (change 2): `tb_rsp` with 8 lanes and with 4 lanes on
+  `gen_rand_task.py` 1..60 and the 95 gfx dumps under `build/triage/*/dumps*`
+  and `build/lod_dumps/*/`: 155 runs each, all `identical` to the model, every
+  output byte for byte the reference's; `tb_dma` PASS on both, the same output;
+  `tb_dpc` (`DPC=1`) on 20 dumps: all "the same commands", the same output.
+* CPU (changes 1 and 3; the benches also carry change 2): the SoC programs
+  of `soc_regress.sh` and `dma_coh_test` (`-c 30`, `VGA=1`, a frame dump each
+  frame): 334 files, output text, cycle counts and frames byte for byte the
+  reference's (12 PASS; `cpu_test`'s three FAILs and `pi2_test`'s nine on
+  both). A 3D platformer for 300M cycles (`FB_N64=1 VGA=1 EXCSTAT=1 -e 60`):
+  the ten frame dumps and the log (288 frames, the CPU at 80246ddc) byte for
+  byte the same, with changes 1 and 2 and again with all three.

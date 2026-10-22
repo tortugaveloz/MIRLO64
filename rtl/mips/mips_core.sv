@@ -705,11 +705,16 @@ logic [31:0] f_pc;
 logic        f_ok;                           // the RAMs hold f_pc's line this cycle
 logic        ds_next;                        // the next instruction into D is a delay slot
 logic        rd_pend, rd_taken, rd_annul;    // its branch's decision, when it left D before it
-logic [31:0] rd_target;
+logic [31:0] rd_target;                      // (!FAST)
+// FAST: E's branch's two ways, its target (rd_tt) and the instruction after its delay slot (rd_tn), registered as it
+// leaves E with whether it was taken (rd_tk): the choice is made behind the registers, where the fetch reads it (rd_tgt),
+// so the branch's decision is not in front of 32 selects
+logic        rd_tk;
+logic [31:0] rd_tt, rd_tn;
 
 logic        d_valid, d_dly, d_fexc;
 logic        d_fmiss;                        // FAST: D's word is of another line than its pc's
-// FAST: the branch that left E last cycle (rd_res) -- rd_target is where the
+// FAST: the branch that left E last cycle (rd_res) -- rd_tgt is where the
 // fetch goes after its delay slot, rd_annul says the slot is dropped, rd_fix
 // that the fetch went elsewhere. rd_pend then keeps the two for a delay slot
 // that is still to come. e_bp: the fetch followed E's branch as taken
@@ -895,7 +900,10 @@ wire        e_lt   = FAST ? ((e_a[31] != e_bv[31]) ? e_a[31] : e_cs[31]) : $sign
 wire        e_ltu  = FAST ? !e_cs[32] : e_a < e_bv;
 wire        e_eq   = e_a == e_bv;
 wire [5:0]  e_fn  = e_insn[5:0];
-wire [4:0]  e_sh  = (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07) ? e_a[4:0] : e_insn[10:6];
+// (FAST: whether the amount is rs's -- sllv, srlv, srav -- is a register set with e_insn, e_k_shv, so the shifter's
+// amount is one select after rs's forwarding and no decode of e_insn sits in front of it)
+logic       e_k_shv;
+wire [4:0]  e_sh  = (FAST ? e_k_shv : (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07)) ? e_a[4:0] : e_insn[10:6];
 
 // one shifter: SRL/SRA directly, SLL as a right shift of the bit-reversed value
 function automatic logic [31:0] rev32(input logic [31:0] v);
@@ -1447,8 +1455,9 @@ wire f_hit_m = PG && f_ok && !f_misal && ic_tq[ITW] && ((f_mhit0 && ic_tq[ITW-1:
 wire f_hit = f_hit_k || f_hit_m;
 wire f_have = f_ok && (fs == FS_READY || (fs == FS_RUN && ((FAST ? f_cx : f_hit) || f_misal)));
 wire f_take = !d_valid || d_adv;
-// (FAST) the fetch went the wrong way behind the delay slot: to rd_target now
+// (FAST) the fetch went the wrong way behind the delay slot: to rd_tgt now
 wire b_redir = FAST && rd_res && rd_fix && !ds_next;
+wire [31:0] rd_tgt = rd_tk ? rd_tt : rd_tn;
 wire f_deliver = f_have && f_take && !flush && !d_imiss && !b_redir;
 // (what the fetch has under way is dropped by a flush, and by that)
 wire f_kill = flush || b_redir;
@@ -1498,9 +1507,9 @@ logic [31:0] f_nx;
 always_comb begin
     if (flush) f_nx = flush_pc;
     else if (d_imiss) f_nx = d_pc;
-    else if (b_redir) f_nx = rd_target;
+    else if (b_redir) f_nx = rd_tgt;
     else if (!f_have) f_nx = f_pc;
-    else if (ds_next) f_nx = (rd_res || rd_pend) ? rd_target : f_pc + 32'd4;    // (the delay slot of a branch decided, or not yet)
+    else if (ds_next) f_nx = (rd_res || rd_pend) ? rd_tgt : f_pc + 32'd4;    // (the delay slot of a branch decided, or not yet)
     else if (d_ok && d_k_cti) f_nx = d_k_pred ? d_ptarget : f_pc + 32'd4;
     else f_nx = f_pc + 32'd4;
 end
@@ -1967,6 +1976,7 @@ always_ff @(posedge clk) begin
             e_bp <= d_k_pred && f_deliver;
             e_ptarget <= d_ptarget;
             e_k_grp <= 2'd3; e_k_op <= 3'd1; e_k_f <= 1'b0;                 // (nothing)
+            e_k_shv <= d_insn[5:0] == 6'h04 || d_insn[5:0] == 6'h06 || d_insn[5:0] == 6'h07;
             e_k_sub <= d_cx.alu != A_ADD;                                   // (the adder subtracts: sub, and for the compares)
             case (d_cx.alu)
             A_ADD:  e_k_grp <= 2'd0;
@@ -2000,7 +2010,7 @@ always_ff @(posedge clk) begin
         rd_res <= 1'b0; rd_fix <= 1'b0;
         if (FAST && !flush && e_adv && e_valid && e_cti) begin
             rd_res <= 1'b1; rd_fix <= e_taken != e_bp;
-            rd_annul <= e_c.likely && !e_taken; rd_target <= e_taken ? e_target : e_pc + 32'd8;
+            rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= e_pc + 32'd8;
         end
         if (flush) begin
             d_valid <= 0; ds_next <= 0; rd_pend <= 0;

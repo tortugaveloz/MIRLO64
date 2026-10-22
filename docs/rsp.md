@@ -399,7 +399,10 @@ Several details of the RTL exist for this clock:
   after rs;
 * DMEM's 16-byte rotations are done in two steps, by words and then by bytes;
 * the ROM, IMEM and DMEM reads are registered, and the reciprocal spreads over
-  the cycles of its two passes.
+  the cycles of its two passes;
+* with eight lanes, VCL, VCH and VCR take their adder's flags in one cycle and
+  select by them in the next, and their select reads only the kept flags, so
+  the adder is not in front of the register write.
 
 In steady state the scalar unit completes one instruction per cycle. The
 cycles above that come from the load-use stall, taken branches, vector
