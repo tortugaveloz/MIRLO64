@@ -17,7 +17,7 @@ command stream the RTL writes the same memory, byte for byte. The benches in
 | `rtl/soc/rcp_dpc_view.sv` | DPC_STATUS as a reader sees it |
 | `rtl/rdp/rdp_top.v` | command intake and decode, state, the sequencer, the edge walker, the line buffers |
 | `rtl/rdp/rdp_pix.v` | the pixel pipeline: texture, combiner, coverage, depth, blender, dither |
-| `rtl/rdp/rdp_tmem.v` | one copy of TMEM |
+| `rtl/rdp/rdp_tmem.v` | TMEM: a copy in true dual-port memories (two read ports) |
 | `rtl/rdp/rdp_mem.v` | every access to the N64's memory: span reads, write-back, fills, texture loads |
 
 `rtl/soc/mirlo_mips.sv` instantiates `rdp_top`, `rdp_dpc` and `rcp_dpc_view`.
@@ -239,10 +239,18 @@ row as an even one.
 
 ### Coordinates
 
-* **Perspective** (other modes): W is normalised and its reciprocal comes
-  from a 64-entry table with linear interpolation; S and T are multiplied by
-  it. A W of zero or below counts as the smallest positive one. Without
-  perspective S and T are taken as they are.
+* **Perspective** (other modes): the perspective divide, S and T by W, as the
+  console's RDP does it. Only the 16-bit integer halves of S, T (s10.5) and W
+  (s.15) enter it: W's leading zeros, up to 14, are shifted out of its low 15
+  bits, its next 6 bits pick a point and a slope of the console's two 64-entry
+  tables and the 8 after them step along the slope, a 15-bit reciprocal; S and
+  T times it, shifted back by the normalisation, are S / W and T / W in s10.5,
+  17 bits kept. A product whose bits above those are not all its sign is out
+  of range, and so is any coordinate when W's integer half is zero or
+  negative; the texel takes the 17 bits saturated to 16, an out-of-range one
+  at the end it went past (the model's `RDP_EXACT_DIV`, `mrdp_n64_div`;
+  without that switch the model keeps its own perspective divide). Without
+  perspective S and T are taken as they are, their integer halves.
 * **The tile**: the shift, then the tile's origin is subtracted, then clamp
   (with the clamp bit, or a mask of 0), mirror and mask. Each axis gives two
   texel coordinates and a 5-bit fraction.
@@ -271,9 +279,12 @@ the other modes' TLUT type.
 With the filter select at 0 the texel is the one at the coordinates. Any
 other setting takes the N64's three-point filter: three texels of the 2 x 2,
 by which triangle of it the fractions fall in. A pixel reads the three at
-once, so TMEM is kept three times (`rdp_tmem.v`), each copy with a second
-small memory of the TLUT's entries for the lookup. The loads write all the
-copies alike.
+once: TMEM is kept twice (`rdp_tmem.v`), each copy in true dual-port
+memories with a second small memory of the TLUT's entries for the lookup.
+The first copy gives two texels, one by each port; the second gives the
+third by one port, its other port only written. A load runs only with the
+pixel pipeline empty, so a port that reads while drawing is the loads' write
+port while one runs. The loads write both copies alike.
 
 A pass whose BI_LERP bit is off (BI_LERP_0 for the first cycle, BI_LERP_1 for
 the second) converts a YUV texel instead of filtering it: the texel at the
@@ -285,9 +296,6 @@ a byte.
 
 ### TEXEL1 and LOD
 
-There is no LOD: no level selection, detail or sharpen. A pixel samples one
-level of its tile.
-
 TEXEL1 is the next tile's sample (tile + 1, wrapping at 8) at the same S and
 T. A 2-cycle textured primitive whose first combiner cycle reads TEXEL1, or
 whose second reads TEXEL0, sends each pixel through the texture stages twice,
@@ -296,12 +304,30 @@ next tile. `rdp_top` issues such a pixel every second clock. In the second
 cycle TEXEL0 is the next tile's sample and TEXEL1 the tile's own. In 1-cycle
 mode TEXEL1 is the same sample as TEXEL0.
 
+The texture LOD ([lod.md](lod.md)) applies to a 2-cycle primitive with
+TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C 0 in an
+alpha). For each pixel S and T go through the perspective divide at three
+points: the pixel, the next pixel of the N64's walk (x + 1 for a triangle with
+`lft` and for a rectangle, else x - 1) and the next line (plus DaDy, its top
+17 bits). The largest step of S or T, in texels, gives the level (the top
+bit's place, clamped to the triangle's level count) and the LOD fraction (the
+8 bits under it), with the N64's magnified, far, detail, sharpen and
+minimum-level rules. With TEX_LOD the passes sample the level's tile and the
+next; the fraction reaches both combiner cycles as a signed 9-bit C. The next
+pixel's perspective divide is the neighbour's own: `rdp_top` issues such a
+primitive's pixels in the walk's order, two clocks each, and a ghost (through
+the perspective divide, never drawn) where the walk's neighbour is outside the
+span or not issued in time; the next line's perspective divide takes the
+pixel's second clock. `rdp_top`'s parameter `LOD` (1 by default) leaves it
+out: LOD_FRACTION reads 0 and the tiles are the primitive's.
+
 ## The pixel pipeline
 
 `rdp_pix.v` takes one pixel a clock and never stalls: every operand is on
-chip. Its stages, in order: the perspective divide, the tile's coordinate
-arithmetic, the TMEM read, the TLUT read and decode, the filter, two combiner
-cycles, the alpha, coverage and depth tests, two blender cycles, the dither.
+chip. Its stages, in order: the perspective divide, the LOD (three stages, for
+the primitives that take it), the tile's coordinate arithmetic, the TMEM read,
+the TLUT read and decode, the filter, two combiner cycles, the alpha, coverage
+and depth tests, two blender cycles, the dither.
 
 ### Cycle types
 
@@ -332,8 +358,9 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
   coverage is multiplied by it (CVG_X_ALPHA): a fully covered opaque texel
   keeps all 8 samples.
 * SHADE is saturated to a byte, 0..255, when it enters the pipeline.
-* The primitive LOD fraction is an input. NOISE, the LOD fraction and the key
-  inputs read 0.
+* The primitive LOD fraction is an input, and the LOD fraction (a signed
+  9-bit number, as K5) in a 2-cycle primitive with the LOD ([lod.md](lod.md));
+  elsewhere it reads 0. NOISE and the key inputs read 0.
 * **K4** (as B) and **K5** (as C) are SET CONVERT's, 9 bits each, read as
   COMBINED is in those places: K4 is negative from 0x180, K5 a signed 9-bit
   number. With them `(TEXEL0 - K4) * K5 + TEXEL0` finishes a YUV texel's
@@ -508,8 +535,11 @@ A picture 512 wide or more is shown with the filters off.
   only (no image read, no depth, no hidden coverage).
 * **Depth**: the memory's dz is kept to its top two bits, as the word has
   room for, and the blender's coverage weight does not use it.
-* **LOD**: none. No detail, sharpen or level selection; the LOD fraction
-  reads 0.
+* **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
+  copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
+  samples its primitive's tile and the LOD fraction reads 0 there. A texture
+  rectangle's next line is its exact next row, where the console keeps 17
+  bits of it ([lod.md](lod.md), "Choices").
 * **TEXEL1** is the next tile at the same coordinates. In the second cycle
   of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
 * **YUV** textures are converted only from 16-bit YUV tiles, each channel
@@ -518,8 +548,7 @@ A picture 512 wide or more is shown with the filters off.
   noise inputs of the combiner read 0.
 * **Shade** is not corrected to the covered sample; only Z is.
 * **Scissor**: the interlace field bits are not read.
-* **Other modes**: detail, sharpen, LOD enable and the key enable are not
-  read.
+* **Other modes**: the key enable is not read.
 
 ## How it is verified
 
@@ -528,6 +557,7 @@ A picture 512 wide or more is shown with the filters off.
 | a frame in software | `sim/rdp/rdp_task` (`make`) | a captured task dump through the RSP's model (`sim/rsp`) and the reference model, to a PPM; `-n` counts the commands by opcode, `-v` lists them, `rdp_stats.py` summarises what the primitives use |
 | RTL against the model, captured tasks | `sim/rdp/build_rtl.sh`, `obj_rdp/tb_rdp task...` | the RSP model's commands go to both, each with its own copy of memory; every byte, hidden plane included, must match |
 | RTL against the model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind from any alignment, triangles and rectangles in every cycle type |
+| the texture LOD | `TB_LOD=1 tb_rdp -r SEED [N]`; `LOD=0 ./build_rtl.sh` | random streams made for the LOD (2-cycle mostly, DaDy on the scale of DaDx, the LOD blend combiner, the minimum level); without the LOD, the RTL (its parameter `LOD` at 0) and the model (no `RDP_LOD`) both |
 | the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
 | the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
 | the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks, on `gen_xbus_task.py`'s XBUS ones and on `gen_xbus_ring.py`'s (a ring in DMEM, START and END pairs that wait; `TB_CREADY=15`, a slow RDP, keeps lists under way) |
@@ -544,6 +574,8 @@ switches:
 * `TB_CC=1` makes random streams in which the combiner's result reaches
   memory unblended.
 * `TB_C8=1` makes the random stream's colour image an 8-bit one.
+* `TB_LOD=1` makes random streams for the texture LOD (above); without it
+  the streams are what they were.
 * `TB_SDRAM=1` gives the memory the SDRAM controller's timing (rows, turns
   between reads and writes, refresh); `TB_CPU=<percent>` adds another master.
 * `TB_FAST=1` is a memory that takes every request; `TB_PROF=1` prints the
@@ -573,17 +605,20 @@ CPU and the scan-out:
 
 Where the area goes, without figures:
 
-* **Block RAM.** Three copies of TMEM, each of four memories and a TLUT
-  copy. The line buffers: depth and colour as read, depth and colour as
+* **Block RAM.** Two copies of TMEM in true dual-port memories, each of
+  four memories and a TLUT copy. The line buffers: depth and colour as read, depth and colour as
   produced, their pass masks, and the raw hidden words. The attribute
   staging RAM.
 * **RAM in place of registers.** The eight tiles are two 8-entry RAMs, read
-  into registers for the drawing tile and the next one. The attributes'
+  into registers once a pass, at the pass's tile (the primitive's, the next,
+  or with the LOD the level's). What the texture stages do not read goes
+  down the pixel pipeline in a RAM, and so do the LOD's S, T and fraction. The attributes'
   row-start values and their DaDe are LUT RAM, stepped one attribute a clock;
   a copy of their DaDx sits in that RAM's free rows, for the span setup.
 * **Multipliers.** One shared 32 x 32 multiplier does all the setup
   arithmetic of the sequencer: edge and attribute start values, row offsets,
-  load addresses. The pixel pipeline has its own for the perspective divide,
+  load addresses. The pixel pipeline has its own for the perspective divide
+  (the reciprocal's table in logic),
   the tile shift, the TMEM row address, the filter, the two combiner cycles,
   the coverage and the two blender cycles with their divide.
 * **Registered stages.** Each combiner and blender cycle is two stages, the

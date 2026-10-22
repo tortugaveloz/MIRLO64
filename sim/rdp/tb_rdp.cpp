@@ -184,11 +184,17 @@ static void cmd2(uint32_t a, uint32_t b) { cmds.push_back(a); cmds.push_back(b);
 // blender passing the combiner's colour alone (no FORCE_BL, P = the pixel), every
 // combiner word random, the colour registers set often
 static const bool cc_mode = getenv("TB_CC") != nullptr;
+// TB_LOD=1: streams for the texture LOD (docs/lod.md) -- 2-cycle mostly, DaDy of S, T, W on the scale of DaDx (not
+// random words: the step to the next line then puts nearly every pixel at the far level), steps from a fraction of a
+// texel to tens, the LOD blend (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0 often, SET_PRIM_COLOR's minimum level, more
+// YUV tiles. Without it the streams are what they were, call for call.
+static const bool lod_mode = getenv("TB_LOD") != nullptr;
 static void rand_modes()
 {
     static const unsigned cyc[10] = { 0, 0, 0, 0, 1, 1, 1, 2, 3, 0 };
     uint32_t h = gr() & 0x00FFFFFFu & ~(3u << 20), l = gr() << 8 | gr(256);
-    h |= (cc_mode ? gr(2) : cyc[gr(10)]) << 20;
+    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : cyc[gr(10)]) << 20;
+    if (lod_mode && gr(2)) h |= 1u << 16;               // (TEX_LOD three times in four)
     if (cc_mode) l &= ~(0xF0000000u | 1u << 14);
     if (gr(3)) h &= ~(1u << 15);                       // the TLUT mostly off
     if (gr(4) == 0) l &= ~0x30u;                       // sometimes no Z at all
@@ -198,7 +204,9 @@ static void rand_modes()
 static void rand_tile(unsigned t)
 {
     static const unsigned fmts[8] = { 0, 0, 2, 3, 4, 0, 3, 1 };
-    unsigned fmt = fmts[gr(8)], size = gr(4), line = gr(4) ? gr(17) : gr(512), tmem = gr(3) ? gr(256) & ~3u : gr(512);
+    unsigned fmt = fmts[gr(8)], size = gr(4);
+    if (lod_mode && gr(6) == 0) { fmt = 1; size = 2; }  // (YUV 16: a converting pass checks the tile before TEXEL1's)
+    unsigned line = gr(4) ? gr(17) : gr(512), tmem = gr(3) ? gr(256) & ~3u : gr(512);
     uint32_t w1 = t << 24 | gr(16) << 20 | gr(2) << 19 | gr(2) << 18 | gr(2) << 9 | gr(2) << 8;
     w1 |= (gr(3) ? gr(8) : gr(16)) << 14 | (gr(3) ? 0 : gr(16)) << 10 | (gr(3) ? gr(8) : gr(16)) << 4 | (gr(3) ? 0 : gr(16));
     cmd2(0x35000000u | fmt << 21 | size << 19 | line << 9 | tmem, w1);
@@ -226,16 +234,17 @@ static void rand_load()
         cmd2(0x30000000u | (s0 << 2 | gr(4)) << 12 | (gr(6) ? 0 : gr(8) << 2), t << 24 | ((s1 << 2 | gr(4)) & 0xFFF) << 12);
     }
 }
-static void put_group(const int32_t v[4], const int32_t dx[4], const int32_t de[4])
+static void put_group(const int32_t v[4], const int32_t dx[4], const int32_t de[4], const int32_t *dy = nullptr)
 {
     uint32_t w[16];
-    for (int i = 0; i < 16; i++) w[i] = gr() << 8 | gr(256);     // DaDy: whatever
+    for (int i = 0; i < 16; i++) w[i] = gr() << 8 | gr(256);     // DaDy: whatever (TB_LOD: dy)
     for (int k = 0; k < 4; k++) {
         int wi = k >> 1, sh = (k & 1) ? 0 : 16;
         uint32_t m = ~(0xFFFFu << sh);
         w[0 + wi] = (w[0 + wi] & m) | ((uint32_t)v[k] >> 16) << sh;   w[4 + wi] = (w[4 + wi] & m) | ((uint32_t)v[k] & 0xFFFF) << sh;
         w[2 + wi] = (w[2 + wi] & m) | ((uint32_t)dx[k] >> 16) << sh;  w[6 + wi] = (w[6 + wi] & m) | ((uint32_t)dx[k] & 0xFFFF) << sh;
         w[8 + wi] = (w[8 + wi] & m) | ((uint32_t)de[k] >> 16) << sh;  w[12 + wi] = (w[12 + wi] & m) | ((uint32_t)de[k] & 0xFFFF) << sh;
+        if (dy) { w[10 + wi] = (w[10 + wi] & m) | ((uint32_t)dy[k] >> 16) << sh; w[14 + wi] = (w[14 + wi] & m) | ((uint32_t)dy[k] & 0xFFFF) << sh; }
     }
     for (int i = 0; i < 16; i++) cmds.push_back(w[i]);
 }
@@ -277,6 +286,16 @@ static void rand_tri()
         for (int k = 0; k < 2; k++) { v[k] = grs(wide ? 0x7FFFFFF0 : 64 << 21); dx[k] = grs(wide ? 1 << 24 : 1 << 20); de[k] = grs(wide ? 1 << 24 : 1 << 20); }
         v[2] = gr(8) ? (int32_t)(0x04000000u + gr(0x7B0000) * 256u) : grs(0x7FFFFFF0); dx[2] = grs(1 << (gr(4) ? 16 : 22)); de[2] = grs(1 << (gr(4) ? 16 : 22));
         v[3] = (int32_t)(gr() << 8); dx[3] = (int32_t)gr(); de[3] = (int32_t)gr();
+        if (lod_mode) {
+            // steps of S, T from a sixteenth of a texel a pixel to tens (2^21 is a texel), DaDy on the same scale; W's
+            // steps a small part of W (the perspective divide then gives steps on that scale too)
+            // (and now and then hundreds of texels, and a W that crosses 1.0 down to 0 and below inside the triangle)
+            int32_t dy[4];
+            for (int k = 0; k < 2; k++) { dx[k] = grs(1 << (14 + gr(15))); dy[k] = grs(1 << (14 + gr(15))); de[k] = grs(1 << (17 + gr(9))); }
+            dx[2] = grs(1 << (12 + gr(8))); dy[2] = grs(1 << (12 + gr(8))); dy[3] = (int32_t)gr();
+            if (gr(8) == 0) { v[2] = grs(1 << 18); dx[2] = grs(1 << 15); dy[2] = grs(1 << 15); }
+            put_group(v, dx, de, dy);
+        } else
         put_group(v, dx, de);
     }
     if (fl & 1) {
@@ -295,6 +314,15 @@ static void rand_rect(int tex)
 }
 static void rand_combine()
 {
+    if (lod_mode && gr(2)) {
+        // cycle 0: (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, colour and alpha; cycle 1: COMBINED, or now and then the
+        // fraction again, (TEXEL0 - COMBINED) * LOD_FRACTION + COMBINED (TEXEL0 there: the second pass's sample)
+        uint32_t hi = 2u << 20 | 13u << 15 | 2u << 12 | 0u << 9, lo = 1u << 28 | 1u << 15 | 1u << 12 | 1u << 9;
+        if (gr(3)) { hi |= 15u << 5 | 31u; lo |= 15u << 24 | 0u << 6 | 7u << 21 | 7u << 18 | 7u << 3 | 0u; }
+        else { hi |= 1u << 5 | 13u; lo |= 0u << 24 | 0u << 6 | 1u << 21 | 0u << 18 | 0u << 3 | 0u; }
+        cmd2(0x3C000000u | hi, lo);
+        return;
+    }
     unsigned k = cc_mode ? 9 : gr(10);
     if (k < 4)      cmd2(0x3C000000u | 0xFFFFFFu, 0xFF000000u | 1u << 15 | 7u << 12 | 1u << 9 | 1u << 6 | 7u << 3 | 1u | 7u << 21 | 7u << 18);   // TEXEL0
     else if (k < 6) cmd2(0x3C000000u | 1u << 20 | 4u << 15 | 1u << 12 | 4u << 9 | 1u << 5 | 4u, 0xFF000000u | 7u << 15 | 7u << 12 | 7u << 9 | 7u << 6 | 7u << 3 | 7u | 1u << 21 | 4u << 18);   // TEXEL0 * SHADE
@@ -339,7 +367,11 @@ static void rand_stream(unsigned seed, int n)
         else if (k < 68) rand_tile(gr(8));
         else if (k < 74) rand_timg();
         else if (k < 84) rand_load();
-        else if (k < 90) cmd2((cc_mode && gr(2) ? (gr(3) ? 0x3Au + gr(2) : 0x2Cu) : 0x37u + gr(5)) << 24 | gr(256), gr() << 8 | gr(256));        // fill, fog, blend, prim, env (TB_CC: and convert)
+        else if (k < 90) {
+            uint32_t w0 = (cc_mode && gr(2) ? (gr(3) ? 0x3Au + gr(2) : 0x2Cu) : 0x37u + gr(5)) << 24 | gr(256);        // fill, fog, blend, prim, env (TB_CC: and convert)
+            if (lod_mode) w0 |= gr(32) << 8;                                                  // (SET_PRIM_COLOR's minimum level)
+            cmd2(w0, gr() << 8 | gr(256));
+        }
         else if (k < 91) cmd2(0x2E000000u, gr() << 8 | gr(256));                              // prim depth
         else if (k < 92) cmd2(0x2C000000u | gr(1 << 22), gr() << 8 | gr(256));                // convert: K4, K5 (the combiner's)
         else if (k < 94) {                                                                    // scissor

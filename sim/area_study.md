@@ -5,11 +5,6 @@ Goal: free 1,000 to 1,500 ALMs in the RDP, the RSP and the CPU (the fits are at
 registers to block RAM, sharing arithmetic and narrowing it, without changing
 a cycle. This note is what was measured and what it means.
 
-The changes kept in rounds 1 to 3 (the RDP's DaDx copy, shared edge adder and
-operand select; the RSP's products in the DSP blocks; the FPU's `mprod`) were
-then fitted in the whole design, with a seed sweep: see "The whole design's
-fit" at the end.
-
 ## How it was measured
 
 `tools/area2/ooc.sh` (Analysis & Synthesis of one unit alone with the
@@ -500,49 +495,76 @@ ALUTs 7,169 to 7,205 (+36; the first version, with the choice on both
 copies, +55), map ALMs 4,701 to 4,712. Not fitted. The cost is copy 0's port A
 address choice (write address or texel 0's) and its second output select.
 
-## The whole design's fit
+## LOD
 
-Rounds 1 to 3's kept changes together (the RDP's `rdp_top.v` of rounds 1 and 2,
-`rsp_vu.sv`'s `p_r` / `pm_r` block, `fpu_n64.sv`'s `mprod`) on top of the tree
-whose fits `projects/fits.json` recorded (seeds 13, 5 and 9: 17,941, 17,913
-and 17,885 ALMs, worst slack +0.036, +0.018, +0.003 ns). Compiled with
-`tools/area2/fit.sh` in Quartus Prime 23.1std.1 Lite (the nightly's image),
-one seed at a time; `tools/area2/closure.py` and `tools/fits.py verify` read
-every analysis of the four corners.
+Texture LOD in the RDP (docs/lod.md, "Implementation"): variant (c), the
+neighbour's perspective divide, with ghosts for the missing neighbours, the
+pixel's extra clocks made by where two RAMs are read (a primitive without the
+LOD takes the clocks it took), and the console's perspective divide (its texel
+coordinates match the console's to the subtexel) in place of the old one for
+every pixel. Candidate 8 (two TMEM copies in true dual port)
+is in, as the M10K budget asked.
 
-| Seed | ALMs | Registers | RAM blocks | DSP blocks | Setup: cpu / sys / sys2x / vid | Hold: cpu / sys / sys2x / vid | Worst | Closes |
+Measured as round 2 was: `ooc.sh rdp` (here from a copy of the script whose
+project directory is under `build/lodw`, since `projects_ooc_*` directories
+were being removed by other runs), then the unit fitted with every pin
+virtual (`quartus_fit`, seed 1) and a 16 ns clock for `quartus_sta`. The
+reference is round 2's RDP (the tree before these edits).
+
+| RDP | ALUTs | registers | memory ALUTs | DSP | block memory bits | fitted ALMs | RAM blocks | worst setup slack (unit) |
 |---|---|---|---|---|---|---|---|---|
-| 13 | 17,731 | 16,925 | 279 | 56 | +0.208 / +0.660 / +0.611 / +3.422 | +0.147 / +0.101 / +0.189 / +0.141 | +0.101 (hold, sys) | yes |
-| 5 | 17,723 | 16,594 | 279 | 56 | +0.201 / +0.271 / +0.819 / +1.300 | +0.156 / +0.076 / +0.189 / +0.123 | +0.076 (hold, sys) | yes |
-| 9 | 17,758 | 16,932 | 279 | 56 | +0.208 / +0.723 / +0.808 / +2.765 | +0.150 / -0.021 / +0.190 / +0.143 | -0.021 (hold, sys) | no |
-| 1 | 17,675 | 16,804 | 279 | 56 | -0.438 / +0.382 / +0.549 / +3.128 | +0.141 / +0.026 / +0.172 / +0.122 | -0.438 (setup, cpu) | no |
+| round 2 | 7,169 | 6,094 | 64 | 39 | 269,704 | 4,955 | 55 | +1.018 ns |
+| round 2 with the console's perspective divide only | 7,067 | 6,013 | 64 | 39 | 269,515 | | | |
+| LOD, two TMEM copies | 7,325 | 6,313 | 64 | 39 | 231,341 | 5,097 | 48 | +1.251 ns |
+| LOD, three TMEM copies | 7,324 | 6,313 | 64 | 39 | 268,205 | 5,092 | 53 | +0.835 ns |
 
-All four: block memory bits 1,845,517 of 3,153,920, RAM blocks 279 of 308,
-DSP blocks 56 of 66. For 13, 5 and 9 the worst analysis is the fast corner's
-(1100 mV, 0 C) hold on `clk_sys`; seed 1 misses the CPU's setup in the slow
-corner (85 C) by 0.438 ns. Against the recorded fits, seed for seed, 127 to 210 ALMs
-fewer (13: -210, 5: -190, 9: -127), within the 300 or so the units fitted
-alone suggested once the seeds' spread is counted. The CPU's setup slack,
-which the earlier fits had closest to zero, is +0.2 ns with seeds 13, 5 and
-9, but seed 1 shows that it still depends on the seed. Seeds 13 and 5 close and are recorded in `projects/fits.json` (best first: 13).
+So the LOD adds 142 fitted ALMs (the budget was 300), no DSP block, and
+with the two TMEM copies 7 fewer RAM blocks. The two copies measure +1
+ALUT in synthesis here and +5 fitted ALMs against three copies (within one
+seed's noise; the area round measured +36 ALUTs on round 2's RDP), for 5
+RAM blocks: kept. (These builds are the final RTL but for a texture
+rectangle's next-line step, then kept to 17 bits and now exact as the model
+has it: four constant bits of an adder's operand.) Where it went, by synthesis:
 
-Verification of the same sources, against a bench built from the unchanged
-tree (Verilator 5.052):
+* **Saved.** The perspective divide: the console's (a 15-bit normaliser, a
+  64 x 25 table in logic, an 11 x 10 product for the slope, two 16 x 17
+  products) in place of a 31-bit normaliser, an M10K table and two 27 x 27
+  products: -102 ALUTs, -81 registers, one M10K, and the two products are
+  18 x 18 now (the fit puts them in two blocks of "two independent 18 x 18"
+  where it had two 27 x 27 blocks: the same count). The tile RAMs read once a
+  pass instead of for two tiles at once: their second copies (two M10K) and
+  the `ph ? t1_* : t_*` selects of P4 to P8t go, against some 50 registers
+  that carry the fields down.
+* **Added.** The next line's S, T, W adders in `rdp_top` (32, 32 and 17 bits)
+  and its DaDy registers (51); the issue's ghosts; P4's 17-bit values and
+  range; L1 (two 18-bit subtracters, the magnitudes, a 14-bit compare); L2,
+  L3 and the fraction's shifter; the P5 select between P3's S, T and
+  `st_ram`'s; the combiner's two fraction inputs (one select a cycle, shared
+  by the three channels: 13 and 14, or 0 and 6, are one input of each C
+  select); the first cycle's alpha in the signed arithmetic.
+* **Memory.** `sb_ram` (2 M10K) replaces the stages' delay registers that
+  Quartus had made into RAM shift registers; `st_ram` and `lf_ram` (one M10K
+  each, 16 deep). Net, without candidate 8, the LOD is about even in RAM
+  blocks; candidate 8 saves its 5.
+* **Timing.** The unit's worst setup path before was `ph8b -> texA9` (the
+  YUV conversion's input select, rdp.md's "timing option kept in reserve"),
+  +1.018 ns at the slow 0 C corner; it is +1.251 ns now. The first fit of the
+  LOD build had +0.521 ns, on the old reciprocal table: Quartus had made the
+  case statement an M10K ROM whose unregistered read fed P2's product; in
+  logic (`AUTO_ROM_RECOGNITION OFF`) the path starts from registers.
 
-* RDP: `tools/area2/rdp_regress.sh` prints `rdp_regress: 53 runs, 0 failed`.
-  117 runs with `TB_CMDT` on both RTLs (`tb_rdp -r 100..123 300`, the 79 game
-  task dumps under `build/triage/*/dumps*` with the fast memory, 14 of them
-  also with `TB_SDRAM=1 TB_CPU=30`): every summary line and every
-  per-command clock log (718,584 lines) byte for byte the same, every run
-  `RTL == model`.
-* RSP: `tb_rsp` with 8 lanes on `gen_rand_task.py 1..60` and the 79 dumps:
-  139 outputs byte for byte the same, all `identical` to the model; `tb_dma`
-  PASS on both.
-* SoC (both benches built with the scan-out's `fb_sys` marked
-  `public_flat_rd`, which `tb_soc.cpp` reads and Verilator 5.052 otherwise
-  optimises away): the 15 programs' output byte for byte the same (12
-  PASS; at this tree `cpu_test` prints three FAILs, the geometry RAM's and
-  the bus error count's, `pi2_test` its ROM reads' FAILs, and `vi_test` no
-  verdict, on both). Super Mario 64 for 300M cycles (`FB_N64=1 VGA=1`, `-e
-  60`): the ten frame dumps and the log (288 frames, the CPU at 80246ddc)
-  byte for byte the same.
+Item 5 of the request, the per-bit hold multiplexer of round 2's RSP fix:
+there is no candidate in the RDP. In the fit's DSP table every product whose
+result goes straight into a register is packed (`rdp_top`'s `mul_p`, the
+perspective divide's two products); the products that are not are followed
+by logic before their register (the tile shift's subtraction, the combiners'
+sums and clamps, the blender's sums), and none of their registers is written
+under a hold. One thing seen there: the depth's correction to the first
+covered sample, `z_dx[31:5] * ox` and `z_dy[31:5] * oy` with `ox`, `oy` of
+0 to 3, takes two 27 x 27 DSP blocks for what two shift-and-adds do (some 60
+ALUTs): a way to two DSP blocks if those become the limit.
+
+Verification: docs/lod.md, "How it was checked" (the regress with and
+without the LOD, seeds 100 to 160, 211 `TB_LOD=1` runs, the 79 dumps' per-
+command clocks byte for byte against the RTL before the LOD, with and
+without it).

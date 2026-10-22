@@ -9,14 +9,19 @@
 // order). The coverage (anti-aliasing) is the N64's (lang/c/mrdp/mrdp.h,
 // MRDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
 // pixels carry their 8-sample masks. YUV textures are converted (SET_CONVERT).
-// Not done: LOD.
+// The texture LOD of a 2-cycle primitive is the model's with RDP_LOD
+// (docs/lod.md), with the LOD parameter: rdp_pix computes it; this module
+// issues the pixels in the walk's order, with the ghosts that needs, and gives
+// the next line's S, T, W.
 //
 // Commands are executed one at a time. A primitive is drawn row by row: the
 // row's Z and color spans are read into on-chip line buffers, the pixels run
 // through mrdp_pix at one a clock, then the span is written back (only the
 // pixels that passed). State commands wait for the previous primitive to
 // finish, so the pixel pipeline never sees a state change mid-flight.
-module rdp_top (
+module rdp_top #(
+    parameter LOD = 1           // the texture LOD (docs/lod.md); 0: none (LOD_FRACTION reads 0, the primitive's tiles)
+) (
     input  wire        clk,
     input  wire        rst,
 
@@ -72,7 +77,8 @@ module rdp_top (
     // The 8 tiles, in two small RAMs (SET_TILE writes the format half,
     // SET_TILESIZE and LOAD_TILE the size half): as flip-flops they were 688
     // registers plus their write decode and an 8-way read mux. Read through
-    // one registered port at p_tile (ts_* below).
+    // one registered port (ts_* below), at the tile of the pass about to enter
+    // rdp_pix's P5 (tl_ra): the primitive's when nothing draws (the loads').
     //   tl_attr: {fmt 3, size 2, pal 4, line 9, tmem 9, cs, ms, ct, mt, masks 4, shifts 4, maskt 4, shiftt 4}
     //   tl_size: {uls 12, ult 12, lrs 12, lrt 12}
     (* ramstyle = "M10K, no_rw_check" *) reg [46:0] tl_attr [0:7];
@@ -117,7 +123,7 @@ module rdp_top (
     // (from the ninth on) wait in a staging RAM and are put together -- each
     // value, DaDx and DaDe from its integer and fraction halves -- in S_VSET
     reg        t_lft;
-    reg [2:0]  t_tile;
+    reg [2:0]  t_tile, t_lvl;      // (t_lvl: the level count, the LOD's)
     reg [13:0] t_yl, t_ym, t_yh;
     reg [31:0] t_xl, t_dxl, t_xh, t_dxh, t_xm, t_dxm;
     // the attribute start values go straight into e[] (row-start values):
@@ -158,7 +164,7 @@ module rdp_top (
     // ======================================================================
     // RAMs
     // ======================================================================
-    // TMEM: a copy for each of the filter's three texels
+    // TMEM: two copies of two read ports for the filter's three texels (rdp_tmem)
     wire [10:0] tm_ra0, tm_ra1, tm_ra2;
     wire [15:0] tm_q0, tm_q1, tm_q2, tm_h0, tm_h1, tm_h2, tl_q0, tl_q1, tl_q2;
     wire [7:0]  tl_a0, tl_a1, tl_a2;
@@ -166,11 +172,11 @@ module rdp_top (
     wire [8:0]  tm_wa;
     wire [15:0] tm_wd0, tm_wd1, tm_wd2, tm_wd3;
     rdp_tmem tmem0 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra0), .q(tm_q0), .qh(tm_h0), .ta(tl_a0), .tq(tl_q0));
-    rdp_tmem tmem1 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra1), .q(tm_q1), .qh(tm_h1), .ta(tl_a1), .tq(tl_q1));
-    rdp_tmem tmem2 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
-                    .ra(tm_ra2), .q(tm_q2), .qh(tm_h2), .ta(tl_a2), .tq(tl_q2));
+                    .ra_a(tm_ra0), .q_a(tm_q0), .qh_a(tm_h0), .ta_a(tl_a0), .tq_a(tl_q0),
+                    .ra_b(tm_ra1), .q_b(tm_q1), .qh_b(tm_h1), .ta_b(tl_a1), .tq_b(tl_q1));
+    rdp_tmem #(.RA(0)) tmem1 (.clk(clk), .we(tm_we), .wa(tm_wa), .wd0(tm_wd0), .wd1(tm_wd1), .wd2(tm_wd2), .wd3(tm_wd3),
+                    .ra_a(11'd0), .q_a(), .qh_a(), .ta_a(8'd0), .tq_a(),
+                    .ra_b(tm_ra2), .q_b(tm_q2), .qh_b(tm_h2), .ta_b(tl_a2), .tq_b(tl_q2));
 
     // span line buffers: 512 words of two pixels, and two sets of each -- a
     // row is on the other set than the row before, so that its reads, its
@@ -232,14 +238,39 @@ module rdp_top (
     // triangle's own S/T adders -- and pass s = cur[4] >>> shS, t = cur[5] >>> 5
     reg  [2:0]  shS;
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
-    // a W of s.15 -- taken to the pipeline's units (lang/c/mrdp/mrdp.c draw_pixel)
-    wire [4:0]  shN = other_h[19] ? 5'd4 : 5'd5;
-    wire [31:0] pr_s = p_direct ? asr(cur[4], {2'b0, shS}) : asr(cur[4], shN);
-    wire [31:0] pr_t = p_direct ? asr(cur[5], 5'd5) : asr(cur[5], shN);
-    // The drawing tile's fields, registered: indexing tile[p_tile] straight
-    // into the pixel pipe was the worst path of the first fit (-4 ns). p_tile
-    // and the tiles change only between primitives, many cycles before the
-    // first pixel.
+    // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
+    // affine path, take the integer halves (lang/c/mrdp/mrdp.c draw_pixel_cvg)
+    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
+    // 0 in an alpha, either cycle). (Registered: the modes are set many clocks before a primitive's first pixel.)
+    reg         lod_on;
+    always @(posedge clk) lod_on <= LOD && cyc == 2'd1 && (other_h[16] || cc_hi[19:15] == 5'd13 || cc_hi[4:0] == 5'd13
+                                                         || cc_hi[11:9] == 3'd0 || cc_lo[20:18] == 3'd0);
+    reg         lod_lft;            // the walk goes to the right (a triangle's lft; a rectangle's always): x + 1 is next
+    reg  [2:0]  lod_lvl;            // the level count (the triangle's level field; a rectangle's 0)
+    reg  [4:0]  min_lvl;            // SET_PRIM_COLOR's minimum level
+    reg         pix_ghost;          // the pixel issued is a ghost: through the perspective divide for its neighbour's LOD, never drawn
+    // The next line's S, T, W, which rdp_pix's P0 takes the clock after a pixel's (pix_valid down): plus DaDy, of which a
+    // triangle keeps the top 17 bits (ldy_*, from its texture block), or a texture rectangle's row step (t_dxl: DsDx
+    // flipped, DtDy not), the exact next row as the model takes it (the console keeps 17 bits of it as of a 16.16 DaDy,
+    // which would drop t_dxl's low 4 bits). On the whole 32 bits, as the model adds them: a sum that
+    // wraps wraps there too.
+    reg  [16:0] ldy_s, ldy_t, ldy_w;
+    wire        lpass = LOD && !pix_valid;
+    wire        rflip = op == 6'h25;
+    wire [31:0] dy_s = p_direct ? (rflip ? {{16{t_dxl[31]}}, t_dxl[31:16]} : 32'd0) : {ldy_s, 15'd0};
+    wire [31:0] dy_t = p_direct ? (rflip ? 32'd0 : {{16{t_dxl[15]}}, t_dxl[15:0]}) : {ldy_t, 15'd0};
+    wire [31:0] cur_s = cur[4] + (lpass ? dy_s : 32'd0);
+    wire [31:0] cur_t = cur[5] + (lpass ? dy_t : 32'd0);
+    wire [31:0] cur_w = {cur[6][31:15] + ((lpass && !p_direct) ? ldy_w : 17'd0), cur[6][14:0]};
+    wire [31:0] pr_s = p_direct ? asr(cur_s, {2'b0, shS}) : cur_s;
+    wire [31:0] pr_t = p_direct ? asr(cur_t, 5'd5) : cur_t;
+    // The pass's tile's fields, registered: indexing tile[p_tile] straight
+    // into the pixel pipe was the worst path of the first fit (-4 ns). rdp_pix
+    // names the tile a clock before its P5 takes the fields (tl_ra): the
+    // primitive's, the next (TEXEL1's), or with the LOD the pixel's level's.
+    // One read a clock serves both passes (it was a second copy of each RAM
+    // for the next tile); the tiles change only between primitives.
+    wire [2:0] tl_ra;
     reg [2:0]  ts_fmt;
     reg [1:0]  ts_sz;
     reg [3:0]  ts_pal;
@@ -249,23 +280,12 @@ module rdp_top (
     reg [3:0]  ts_masks, ts_shifts, ts_maskt, ts_shiftt;
     reg [11:0] ts_uls, ts_ult, ts_lrs, ts_lrt;
     always @(posedge clk) begin
-        {ts_fmt, ts_sz, ts_pal, ts_line, ts_tmem, ts_cs, ts_ms, ts_ct, ts_mt, ts_masks, ts_shifts, ts_maskt, ts_shiftt} <= tl_attr[p_tile];
-        {ts_uls, ts_ult, ts_lrs, ts_lrt} <= tl_size[p_tile];
+        {ts_fmt, ts_sz, ts_pal, ts_line, ts_tmem, ts_cs, ts_ms, ts_ct, ts_mt, ts_masks, ts_shifts, ts_maskt, ts_shiftt} <= tl_attr[tl_ra];
+        {ts_uls, ts_ult, ts_lrs, ts_lrt} <= tl_size[tl_ra];
     end
-    // and the next tile's (TEXEL1: tile + 1, wrapping at 8), for a pixel's second pass (rdp_pix two_pass)
-    wire [2:0] p_tile1 = p_tile + 3'd1;
-    reg [2:0]  ts1_fmt;
-    reg [1:0]  ts1_sz;
-    reg [3:0]  ts1_pal;
-    reg [8:0]  ts1_line;
-    reg [8:0]  ts1_tmem;
-    reg        ts1_cs, ts1_ms, ts1_ct, ts1_mt;
-    reg [3:0]  ts1_masks, ts1_shifts, ts1_maskt, ts1_shiftt;
-    reg [11:0] ts1_uls, ts1_ult, ts1_lrs, ts1_lrt;
-    always @(posedge clk) begin
-        {ts1_fmt, ts1_sz, ts1_pal, ts1_line, ts1_tmem, ts1_cs, ts1_ms, ts1_ct, ts1_mt, ts1_masks, ts1_shifts, ts1_maskt, ts1_shiftt} <= tl_attr[p_tile1];
-        {ts1_uls, ts1_ult, ts1_lrs, ts1_lrt} <= tl_size[p_tile1];
-    end
+    // which tiles are YUV 16-bit ones (a pass that converts checks its tile's, or with CONVERT_ONE the one before)
+    reg [7:0]  yuv_vec;
+    initial yuv_vec = 8'd0;
     wire two_pass;
     wire        px_valid, px_cpass, px_zpass, pix_busy, px_set;
     reg         set_cur;            // the line-buffer set of the row being drawn
@@ -273,7 +293,7 @@ module rdp_top (
     wire [15:0] px_color, px_depth;
     wire [7:0]  px_r8;
     wire [1:0]  px_hid;
-    rdp_pix pix (
+    rdp_pix #(.LOD(LOD)) pix (
         .clk(clk), .rst(rst),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
@@ -284,13 +304,11 @@ module rdp_top (
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
         .t_masks(ts_masks), .t_shifts(ts_shifts), .t_maskt(ts_maskt), .t_shiftt(ts_shiftt),
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
-        .t1_fmt(ts1_fmt), .t1_size(ts1_sz), .t1_pal(ts1_pal), .t1_line(ts1_line), .t1_tmem(ts1_tmem),
-        .t1_cs(ts1_cs), .t1_ms(ts1_ms), .t1_ct(ts1_ct), .t1_mt(ts1_mt),
-        .t1_masks(ts1_masks), .t1_shifts(ts1_shifts), .t1_maskt(ts1_maskt), .t1_shiftt(ts1_shiftt),
-        .t1_uls(ts1_uls), .t1_ult(ts1_ult), .t1_lrs(ts1_lrs), .t1_lrt(ts1_lrt), .two_pass(two_pass),
+        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
+        .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
         .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(y[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
-        .in_s(pr_s), .in_t(pr_t), .in_w(cur[6]), .in_z(cur[7]), .in_mask(pix_mask),
+        .in_s(pr_s), .in_t(pr_t), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
         .tm_q0(tm_q0), .tm_q1(tm_q1), .tm_q2(tm_q2), .tm_h0(tm_h0), .tm_h1(tm_h1), .tm_h2(tm_h2),
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
@@ -331,10 +349,10 @@ module rdp_top (
     reg  [10:0] res_q [0:1];
     // a set's old buffers are not written while the last pixels of the row
     // that had them are still ahead of the pipe's read of them
-    reg  [3:0]  old_hold [0:1];
+    reg  [4:0]  old_hold [0:1];
     rdp_mem mem (
         .clk(clk), .rst(rst),
-        .rd_valid(rq_pend && old_hold[rq_set] == 4'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
+        .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
         .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
@@ -372,9 +390,18 @@ module rdp_top (
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xs[0]} + px_cnt) >> 1;
     wire       pix_ok = !rq_pend && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > pix_wi);
-    // a pixel that goes through the texture stages twice (rdp_pix two_pass) is issued every second clock:
-    // pix_valid is still up the clock after an issue
-    wire       pix_go = pix_ok && !(two_pass && pix_valid);
+    // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
+    // clock: pix_valid is still up the clock after an issue
+    wire       pix_slot = !((two_pass || lod_on) && pix_valid);
+    // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
+    // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
+    // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself
+    // follows when it can). Walking left, the span's first pixel is preceded by a ghost of the pixel before it (pix_g0).
+    reg        pix_fol, pix_g0, pix_stp;    // (pix_stp: cur steps to the next place at the next issue)
+    wire [10:0] pix_pos = {1'b0, xs} + {1'b0, px_cnt};
+    wire       pix_end = pix_pos == xe;
+    wire       pix_gh = lod_on && pix_slot && (pix_g0 || (pix_fol && (pix_end || !pix_ok)));
+    wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
     // nothing of the primitive is under way any more
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
@@ -592,7 +619,9 @@ module rdp_top (
     // row differences y - YH, y - YM and y - 0 (the image row) are one
     // subtractor; AA_EN's start slopes are TRI_INIT's with bits 2..0 cleared;
     // a texrect's DsDx / DtDy and its row / column distances are one choice each
-    wire [31:0] dxs = {xs, 16'd0} - exh;                 // the span's start from the H edge, 16.16
+    // the span's start from the H edge, 16.16 (the LOD walking left: from its ghost, a pixel before)
+    wire [10:0] xs_g = {1'b0, xs} - {10'd0, lod_on && !lod_lft};
+    wire [31:0] dxs = {{5{xs_g[10]}}, xs_g, 16'd0} - exh;
     wire [31:0] r_dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}, r_dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
     wire signed [10:0] r_dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
     // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns from XH itself
@@ -658,7 +687,7 @@ module rdp_top (
             busy_exec <= 1'b0;
             rq_pend <= 1'b0; wq_pend <= 1'b0; row_wq <= 1'b0; set_cur <= 1'b0;
             res_n[0] <= 11'd0; res_n[1] <= 11'd0; res_d[0] <= 11'd0; res_d[1] <= 11'd0; res_q[0] <= 11'd0; res_q[1] <= 11'd0;
-            old_hold[0] <= 4'd0; old_hold[1] <= 4'd0;
+            old_hold[0] <= 5'd0; old_hold[1] <= 5'd0;
             sync_count <= 0; load_count <= 0; unknown_ops <= 0;
             other_h <= 0; other_l <= 0; cc_hi <= 0; cc_lo <= 0;
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
@@ -667,10 +696,10 @@ module rdp_top (
             timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0;
         end else begin
             // ---- the engines take their requests
-            if (rq_pend && rd_ready && old_hold[rq_set] == 4'd0 && hz_ok) rq_pend <= 1'b0;
+            if (rq_pend && rd_ready && old_hold[rq_set] == 5'd0 && hz_ok) rq_pend <= 1'b0;
             if (wq_pend && wr_ready) wq_pend <= 1'b0;
-            if (old_hold[0] != 4'd0) old_hold[0] <= old_hold[0] - 4'd1;
-            if (old_hold[1] != 4'd0) old_hold[1] <= old_hold[1] - 4'd1;
+            if (old_hold[0] != 5'd0) old_hold[0] <= old_hold[0] - 5'd1;
+            if (old_hold[1] != 5'd0) old_hold[1] <= old_hold[1] - 5'd1;
 
             // ---- pixel results into the new buffers
             res_d[0] <= res_n[0]; res_d[1] <= res_n[1];
@@ -699,6 +728,7 @@ module rdp_top (
                     if (op0[5:3] == 3'b001) begin
                         t_lft <= cmd_data[23];
                         t_tile <= cmd_data[18:16];
+                        t_lvl <= cmd_data[21:19];
                         t_yl <= cmd_data[13:0];
                         for (i = 0; i < 8; i = i + 1) adx[i] <= 0;
                     end
@@ -738,6 +768,7 @@ module rdp_top (
                     kind_tri <= 1'b1; kind_texrect <= 1'b0; kind_rect <= 1'b0; kind_fillmode <= 1'b0;
                     tflags <= op[2:0];
                     p_shade <= op[2]; p_tex <= op[1]; p_zbuf <= op[0]; p_direct <= 1'b0; p_tile <= t_tile;
+                    lod_lft <= t_lft; lod_lvl <= t_lvl;
                     y0r <= $signed(t_yh) >>> 2;
                     ymr <= $signed(t_ym) >>> 2;
                     p_aa <= 1'b1;               // every triangle is walked as the N64 walks it
@@ -761,6 +792,7 @@ module rdp_top (
                         kind_rect <= 1'b1;
                         p_shade <= 1'b0; p_tex <= op != 6'h36; p_zbuf <= 1'b0; p_direct <= 1'b1;
                         p_tile <= w1[26:24];
+                        lod_lft <= 1'b1; lod_lvl <= 3'd0;       // (walked left to right; the far level is level 0)
                         rx0 <= w1[23:14];
                         rxf <= (cyc != 2'd2) ? w1[13:12] : 2'd0;
                         ry0 <= {2'b00, w1[11:2]};
@@ -805,6 +837,7 @@ module rdp_top (
                         st <= S_LOAD_INIT;
                     end
                     6'h35: begin
+                        yuv_vec[w1[26:24]] <= w0[23:21] == 3'd1 && w0[20:19] == 2'd2;
                         tl_attr[w1[26:24]] <= {w0[23:21], w0[20:19], w1[23:20], w0[17:9], w0[8:0],
                                                w1[9], w1[8], w1[19], w1[18],
                                                w1[7:4], w1[3:0], w1[17:14], w1[13:10]};
@@ -813,7 +846,7 @@ module rdp_top (
                     6'h37: begin fill <= w1; busy_exec <= 1'b0; end
                     6'h38: begin fog <= w1; busy_exec <= 1'b0; end
                     6'h39: begin blend <= w1; busy_exec <= 1'b0; end
-                    6'h3A: begin prim <= w1; prim_lod_frac <= w0[7:0]; busy_exec <= 1'b0; end
+                    6'h3A: begin prim <= w1; prim_lod_frac <= w0[7:0]; min_lvl <= w0[12:8]; busy_exec <= 1'b0; end
                     6'h3B: begin env <= w1; busy_exec <= 1'b0; end
                     6'h3C: begin cc_hi <= w0[23:0]; cc_lo <= w1; busy_exec <= 1'b0; end
                     6'h3D: begin timg <= w1; timg_width <= {1'b0, w0[9:0]} + 11'd1; timg_size <= w0[20:19]; busy_exec <= 1'b0; end
@@ -839,6 +872,15 @@ module rdp_top (
             // ---- an attribute's value, DaDx, DaDe from the staging RAM (the
             // data two steps after the address)
             S_VSET: begin
+                // (the LOD's DaDy of S, T, W: read at steps 6 and 7, free, its integer half there at 15 and its fraction's
+                // top bit at the next attribute's step 0 -- the model keeps the top 17 bits)
+                if (vs == 4'd0 && tflags[1] && (vi == 3'd5 || vi == 3'd6 || vi == 3'd7)) begin
+                    case (vi)
+                        3'd5: ldy_s[0] <= vr_q[31];
+                        3'd6: ldy_t[0] <= vr_q[15];
+                        default: ldy_w[0] <= vr_q[31];
+                    endcase
+                end
                 case (vs)
                     4'd0: if (!attr_on(tflags, vi)) begin
                               vi <= vi + 3'd1;
@@ -862,10 +904,16 @@ module rdp_top (
                     end
                     4'd5: if (vz) begin zdy <= vr_q; vs <= 4'd15; end
                           else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vgx[15:0] <= vhalf; vs <= 4'd6; end
-                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; end
-                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; end
+                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
+                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
-                        adx[vi] <= vgx;             // e[vi], ade[vi]: the RAM writes below
+                        adx[vi] <= vgx;
+                        if (!vz) case (vi)
+                            3'd4: ldy_s[16:1] <= vhalf;
+                            3'd5: ldy_t[16:1] <= vhalf;
+                            3'd6: ldy_w[16:1] <= vhalf;
+                            default: ;
+                        endcase             // e[vi], ade[vi]: the RAM writes below
                         if (vz) z_tol <= zt_m;
                         vs <= 4'd0; vi <= vi + 3'd1;
                         if (vi == 3'd7) st <= S_TRI_INIT;
@@ -980,6 +1028,7 @@ module rdp_top (
                     end
                 end
                 px_cnt <= 10'd0;
+                pix_stp <= 1'b0; pix_fol <= 1'b0; pix_g0 <= lod_on && !lod_lft;
             end
 
             // ---- pixels, one a clock as what they read of memory comes in.
@@ -999,18 +1048,35 @@ module rdp_top (
                         res_n[set_cur] <= 11'd0; res_d[set_cur] <= 11'd0; res_q[set_cur] <= 11'd0;
                         row_wq <= 1'b1;
                     end
-                end else if (pix_go) begin
-                    pix_valid <= 1'b1;
-                    pix_x <= xs + px_cnt;
-                    pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
-                    if (px_cnt != 10'd0) begin
+                end else if (pix_gh) begin
+                    // a ghost: cur goes to its place but the pixel is not counted (walking right, the pixel itself
+                    // follows it there: no step then; walking left, the span's first pixel is the next place)
+                    pix_valid <= 1'b1; pix_ghost <= 1'b1; pix_mask <= 8'h00;
+                    if (pix_stp) begin
                         for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
                     end
-                    px_cnt <= px_cnt + 10'd1;
-                    if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe) begin
+                    pix_stp <= pix_g0; pix_g0 <= 1'b0; pix_fol <= 1'b0;
+                    if (pix_end) begin
                         st <= S_NEXT;
                         row_wq <= 1'b0;
-                        old_hold[set_cur] <= two_pass ? 4'd15 : 4'd14;
+                        old_hold[set_cur] <= 5'd20;
+                    end
+                end else if (pix_go) begin
+                    pix_valid <= 1'b1; pix_ghost <= 1'b0;
+                    pix_x <= xs + px_cnt;
+                    pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
+                    if (pix_stp) begin
+                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
+                    end
+                    pix_stp <= 1'b1;
+                    pix_fol <= lod_on && lod_lft;
+                    px_cnt <= px_cnt + 10'd1;
+                    // (walking right with the LOD the row ends with the last pixel's ghost)
+                    if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe && !(lod_on && lod_lft)) begin
+                        st <= S_NEXT;
+                        row_wq <= 1'b0;
+                        // (its last line buffer read: the pixel's P9, D clocks later with the LOD)
+                        old_hold[set_cur] <= lod_on ? 5'd20 : two_pass ? 5'd15 : 5'd14;
                     end
                 end
             end

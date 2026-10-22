@@ -16,12 +16,31 @@
 // first cycle's TEXEL1 there: Mario Golf's ground, an I8 detail tile times the RGBA16 grass, then the grass itself) (two_pass:
 // the skybox's day / night blend, a terrain's second layer) goes through the
 // texture stages twice, a clock apart -- the tile's sample, then the next
-// tile's (t1_*, the same S, T) -- and leaves P9 once, with both. rdp_top
+// tile's (the same S, T) -- and leaves P9 once, with both. rdp_top
 // issues such a pixel every second clock (pix_go); P0 repeats it for the
-// second pass (dup0). Each stage takes the tile's fields of its pass's tile:
-// the registers u<n>_*, loaded with the stage's data from the pass of the
-// stage before (ph<n>).
-module rdp_pix (
+// second pass (dup0). The tile's fields are read for each pass (tl_ra names
+// the tile a clock before P5, rdp_top's tile RAMs answer in t_*), and each
+// stage takes them from the pass's own read, carried down with it.
+//
+// LOD (lod_on; lang/c/mrdp/mrdp.c mrdp_lod, docs/lod.md): a 2-cycle primitive
+// with TEX_LOD, or whose combiner reads LOD_FRACTION. Its pixels take two
+// clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
+// W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
+// is the neighbour's own perspective divide -- rdp_top issues the pixels in
+// the walk's order and adds a ghost (through the perspective divide, never
+// drawn) where the walk's neighbour is not issued in time or is outside the
+// span. The distance, the level, the tiles
+// and the fraction take three stages after P4 (L1, L2, L3), and only then can
+// the pixel's texture passes start: its S, T wait in a RAM (st_ram), and P4
+// takes them back D clocks late (D 5 for a walk to the right, 4 to the left).
+// What the texture stages do not read (x, the line buffer set, the shade, the
+// depth, the coverage, the row) goes from P1 to P8b through a RAM (sb_ram)
+// read 9 clocks after it is written, or 9 + D: without the LOD every pixel
+// takes the clocks it took before, and only S, T at P4 choose between two
+// sources.
+module rdp_pix #(
+    parameter LOD = 1           // 0: no LOD (LOD_FRACTION reads 0, the first cycle's alpha takes the narrower arithmetic)
+) (
     input  wire        clk,
     input  wire        rst,
 
@@ -51,16 +70,17 @@ module rdp_pix (
     input  wire        t_cs, t_ms, t_ct, t_mt,
     input  wire [3:0]  t_masks, t_shifts, t_maskt, t_shiftt,
     input  wire [11:0] t_uls, t_ult, t_lrs, t_lrt,
-    // the next tile's (TEXEL1, the second pass of a two_pass pixel)
-    input  wire [2:0]  t1_fmt,
-    input  wire [1:0]  t1_size,
-    input  wire [3:0]  t1_pal,
-    input  wire [8:0]  t1_line,
-    input  wire [8:0]  t1_tmem,
-    input  wire        t1_cs, t1_ms, t1_ct, t1_mt,
-    input  wire [3:0]  t1_masks, t1_shifts, t1_maskt, t1_shiftt,
-    input  wire [11:0] t1_uls, t1_ult, t1_lrs, t1_lrt,
-    output wire        two_pass,    // the primitive's pixels take two clocks each (rdp_top issues one every second clock)
+    // (t_*: the fields of the tile tl_ra named the clock before -- rdp_top's tile RAMs, one read a clock: a pass's tile)
+    output wire [2:0]  tl_ra,
+    input  wire [2:0]  p_tile,      // the primitive's tile (TEXEL1's: the next)
+    input  wire [7:0]  yuv_vec,     // by tile: a YUV 16-bit one (the tile a converting pass checks)
+    output wire        two_pass,    // the primitive's pixels go through the texture stages twice (rdp_top issues one every second clock)
+    // the LOD (rdp_top: stable for a primitive)
+    input  wire        lod_on,      // the primitive's pixels take the LOD (and two clocks each)
+    input  wire        lod_lft,     // its walk goes to the right: the next pixel is x + 1 (else x - 1)
+    input  wire [2:0]  lod_lvl,     // its level count (the triangle's level field: the last level; a rectangle 0)
+    input  wire [4:0]  min_lvl,     // SET_PRIM_COLOR's minimum level
+    input  wire        in_ghost,    // (with in_valid) a ghost: through the perspective divide for its neighbour's LOD, never drawn
 
     // ---- pixels in
     input  wire        in_valid,
@@ -245,7 +265,7 @@ module rdp_pix (
     reg        v0;
     reg [9:0]  x0;
     // the line buffers' set of the pixel's row (rdp_top), along with x
-    reg        bs0, bs1, bs2, bs3, bs4, bs5, bs6, bs7, bs8, bs8t, bs8b, bs9, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
+    reg        bs0, bs9, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
     reg [31:0] s0r, t0r, w0r;
     reg [35:0] shade0;
     // the shade, as the interpolator gives it, saturated to a byte -- 0 below 0, 255 above -- and carried as 9 bits (bit 8 clear).
@@ -272,22 +292,27 @@ module rdp_pix (
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
                       + in_mask[4] + in_mask[5] + in_mask[6] + in_mask[7];
     reg  [31:0] z0r, zc0;
-    reg  [63:0] cvd;                 // the coverage, along with the pixel to P11 (16 x 4)
-    reg         dup0, ph0;           // two_pass: the pixel in these registers a second clock (its second pass); ph0 marks that clock
+    reg  [3:0]  cvg0;                // the coverage
+    reg  [1:0]  y0;                  // the row's low bits (a row's last pixels are still in the pipe when the next row's y is issued)
+    reg         g0;                  // a ghost (LOD)
+    reg         dup0, ph0;           // two_pass, LOD: the pixel in these registers a second clock (its second pass); ph0 marks that clock
     always @(posedge clk) begin
-        dup0 <= in_valid & two_pass & ~rst;
+        dup0 <= in_valid & (two_pass | lod_on) & ~rst;
         v0 <= (in_valid | dup0) & ~rst;
         ph0 <= dup0;
         if (!dup0) begin             // (the second pass repeats the pixel as it is: rdp_top has gone on)
             x0 <= in_x; bs0 <= in_set;
-            // (a primitive without texture coefficients has S = T = W = 0 and samples the tile's texel (0, 0) all the same: the model's
-            // draw_pixel_cvg; Link's collar is one)
-            s0r <= p_tex ? in_s : 32'd0; t0r <= p_tex ? in_t : 32'd0; w0r <= p_tex ? in_w : 32'd0;
             shade0 <= p_shade ? {sr9, sg9, sb9, sa9} : 36'd0;
             z0r <= in_z;
             zc0 <= p_aa ? zcorr : 32'd0;
+            cvg0 <= cvg_in; y0 <= row_y; g0 <= in_ghost;
         end
-        cvd <= {cvd[59:0], dup0 ? cvd[3:0] : cvg_in};
+        // (a primitive without texture coefficients has S = T = W = 0 and samples the tile's texel (0, 0) all the same: the model's
+        // draw_pixel_cvg; Link's collar is one. With the LOD the second clock takes S, T, W on the next line, which rdp_top
+        // gives while it waits: S = T = W = 0 there too)
+        if (!dup0 || lod_on) begin
+            s0r <= p_tex ? in_s : 32'd0; t0r <= p_tex ? in_t : 32'd0; w0r <= p_tex ? in_w : 32'd0;
+        end
     end
     wire [31:0] zin_c = z0r + zc0;
     // the depth: the N64's 18 bits. The depth image's word (the model's z_enc / z_dec): 14 of them as a floating-point number --
@@ -322,156 +347,280 @@ module rdp_pix (
         endcase
     endfunction
 
+    // What the texture stages do not read -- x, the line buffer set, the shade, the depth (P1's), the coverage, the row --
+    // from P1 to P8b: a RAM written every clock and read 9 clocks after (as the stages between took), or with the LOD 9 + D
+    // (its pixels reach P5 D clocks late: the pointers make the delay, nothing chooses between two paths). Two M10K
+    // where the stages' registers were (and Quartus's shift registers made of them).
+    wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
+    reg  [3:0]  sb_wa;
+    wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
+    (* ramstyle = "M10K, no_rw_check" *) reg [70:0] sb_ram [0:15];
+    reg  [70:0] sb_q;
+    always @(posedge clk) begin
+        sb_ram[sb_wa] <= {x0, bs0, shade0, depth_c, cvg0, y0};
+        sb_q <= sb_ram[sb_ra];
+        sb_wa <= sb_wa + 4'd1;
+    end
+    wire [9:0]  x8b     = sb_q[70:61];
+    wire        bs8b    = sb_q[60];
+    wire [35:0] shade8b = sb_q[59:24];
+    wire [17:0] depth8b = sb_q[23:6];
+    wire [3:0]  cvg8b   = sb_q[5:2];
+    wire [1:0]  y8b     = sb_q[1:0];
+
     // ======================================================================
-    // P1: normalise W, table lookup
+    // P1: normalise W, the reciprocal's table
     // ======================================================================
-    wire [31:0] wpos = ($signed(w0r) <= 0) ? 32'd1 : w0r;
-    reg  [4:0]  sh_c;
+    // The console's perspective divide (lang/c/mrdp/mrdp.c n64_div): the 16-bit integer halves of S, T (s10.5) and W
+    // (s.15). W's leading zeros, up to 14, are shifted out of its low 15 bits; its next 6 bits pick a point of the
+    // reciprocal and a slope, the 8 after them step along it (rdp_div_rom: the console's two tables)
+    wire [14:0] wi0 = w0r[30:16];
+    reg  [3:0]  sh_c;
     integer k;
     always @(*) begin
-        sh_c = 5'd30;
-        for (k = 0; k <= 30; k = k + 1)
-            if (wpos[k]) sh_c = 5'd30 - k[4:0];
+        sh_c = 4'd14;
+        for (k = 0; k <= 14; k = k + 1)
+            if (wi0[k]) sh_c = 4'd14 - k[3:0];
     end
-    wire [31:0] wn = wpos << sh_c;
-    wire [16:0] rom_p;
-    wire [10:0] rom_d;
-    mrdp_rcp_rom rom (.idx(wn[29:24]), .p(rom_p), .d(rom_d));
+    wire [14:0] wn = wi0 << sh_c;
+    wire [14:0] dv_pt;
+    wire [9:0]  dv_sl;
+    rdp_div_rom drom (.idx(wn[13:8]), .point(dv_pt), .slope(dv_sl));
 
-    // the pass of the pixel in each stage (0 the tile's, 1 the next tile's: two_pass) and the tile fields the stage
-    // takes, registered with it
+    // the pass of the pixel in each stage (0 the tile's, 1 the next tile's: two_pass; with the LOD, up to P4, 1 the next
+    // line's perspective divide) and the tile fields the stage takes, carried with it from the pass's read (t_*, at P5a)
     reg        ph1, ph2, ph3, ph4, ph5, ph6, ph7, ph8, ph8t, ph8b;
-    reg [3:0]  u4_shifts, u4_shiftt, u5_masks, u5_maskt;
-    reg [11:0] u4_uls, u4_ult, u5_uls, u5_ult, u5_lrs, u5_lrt;
+    reg [3:0]  u5_masks, u5_maskt;
+    reg [11:0] u5_uls, u5_ult, u5_lrs, u5_lrt;
     reg        u5_cs, u5_ms, u5_ct, u5_mt;
-    reg [8:0]  u6_tmem, u6_line;
-    reg [1:0]  u6_size, u8t_size;
-    reg        u6_yuv;                     // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
+    reg [8:0]  c5_tmem, c5_line, u6_tmem, u6_line;
+    reg [1:0]  c5_size, u6_size, c7_size, u8t_size;
+    reg [3:0]  c5_pal, c6_pal, c7_pal;
+    reg [2:0]  c5_fmt, c6_fmt, c7_fmt, c8_fmt;
+    reg        c5_yuv, u6_yuv;             // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
     // the pass converts YUV instead of filtering (mrdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
     // tile's pass, 10 for the next tile's) off; the texel a YUV tile's -- the pass's own, or with CONVERT_ONE (other_h 9) the
-    // second pass converts the first's texel (texA9), the tile's
-    wire       t_yuv  = t_fmt == 3'd1 && t_size == 2'd2;
-    wire       t1_yuv = t1_fmt == 3'd1 && t1_size == 2'd2;
-    reg        conv6, conv7, conv8, conv8t, conv8b;
+    // second pass converts the first's texel (texA9), and the tile checked is the one before the pass's (the first pass's
+    // without the LOD; with it, as the model, the tile before TEXEL1's whatever TEXEL0's is)
+    reg        conv5, conv6, conv7, conv8, conv8t, conv8b;
     reg        u8_size0, u8_size1;
     reg [3:0]  u8_pal;
     reg [2:0]  u8t_fmt;
     wire       tlut_on = other_h[15];
-    reg        v1;
-    reg [9:0]  x1;
-    reg [16:0] p1;
-    reg [10:0] d1;
-    reg [8:0]  f1;
-    reg [4:0]  sh1;
+    reg        v1, g1, g2, g3, g4;
+    reg        wle1, wle2, wle3;           // W's integer half is zero or negative: out of range, over (n64_div)
+    reg [14:0] pt1;
+    reg [9:0]  sl1;
+    reg [7:0]  f1;
+    reg [3:0]  sh1;
     reg [31:0] s1r, t1r;
-    reg [35:0] shade1;
-    reg [17:0] depth1;
     always @(posedge clk) begin
-        v1 <= v0 & ~rst; x1 <= x0; bs1 <= bs0; ph1 <= ph0;
-        p1 <= rom_p; d1 <= rom_d; f1 <= wn[23:15]; sh1 <= sh_c;
-        s1r <= s0r; t1r <= t0r; shade1 <= shade0;
-        depth1 <= (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
+        v1 <= v0 & ~rst; ph1 <= ph0; g1 <= g0;
+        pt1 <= dv_pt; sl1 <= dv_sl; f1 <= wn[7:0]; sh1 <= sh_c;
+        s1r <= s0r; t1r <= t0r;
+        wle1 <= w0r[31] || w0r[30:16] == 15'd0;
     end
 
     // ======================================================================
-    // P2: r = P - (D * frac >> 9); S, T clamped to the 27-bit multiplier input
+    // P2: the reciprocal, 15 bits: the point plus the slope's step, ((slope - 1023) * 4 frac) >> 10 (a negative step)
     // ======================================================================
-    // The products S * r and T * r go down by 27 - sh places (W is 2.30, lang/c/mrdp/mrdp_setup.h mrdp_slope30: 41 - 14;
-    // none above sh 27). r is taken up by the low part of that here, sh mod 8 places, so that what is left for the two
-    // 45-bit products is one of four shifts, 27, 19, 11 or 3 (sq: sh / 8) -- sh 28..30: up 3 and down 3
-    wire [19:0] dfrac = d1 * f1;
-    wire [16:0] r1 = p1 - {6'd0, dfrac[19:9]};
-    wire        sh_top = sh1 > 5'd27;
-    wire [2:0]  sj1 = sh_top ? 3'd3 : sh1[2:0];
-    function automatic [26:0] sat27;
-        input [31:0] v;
-        begin
-            if ($signed(v) > 32'sd67108863) sat27 = 27'h3FFFFFF;
-            else if ($signed(v) < -32'sd67108864) sat27 = 27'h4000000;
-            else sat27 = v[26:0];
-        end
+    // It is taken up (sh + 2) mod 3 places, so that the product's way back to s10.5, 13 - sh places, becomes a multiple of
+    // 3 (R, P4: 0 to 15); sh 14 is the product taken up 1 (n64_div's prod * 2): R 0 as well. (17 bits at most, 0x4000
+    // taken up 2: the products stay 18 x 18, two to a DSP block)
+    wire signed [10:0] dsl = $signed({1'b0, sl1}) - 11'sd1023;
+    wire signed [21:0] dst = dsl * $signed({1'b0, f1, 2'b00});
+    wire [14:0] rcp1 = pt1 + {{3{dst[21]}}, dst[21:10]};
+    function automatic [1:0] tk3;           // (sh + 2) mod 3
+        input [3:0] sh;
+        case (sh)
+            4'd1, 4'd4, 4'd7, 4'd10, 4'd13: tk3 = 2'd0;
+            4'd2, 4'd5, 4'd8, 4'd11, 4'd14: tk3 = 2'd1;
+            default:                        tk3 = 2'd2;
+        endcase
     endfunction
+    wire [1:0]  rm1 = tk3(sh1);
     reg        v2;
-    reg [9:0]  x2;
-    reg [23:0] r2;
-    reg [1:0]  sq2;
-    reg [26:0] sc2, tc2;
-    reg [15:0] s2r, t2r;                 // S and T as the affine and the direct paths take them (s10.5 in 16 bits), decided here: only the perspective path wants more
-    reg [35:0] shade2;
-    reg [17:0] depth2;
+    reg [16:0] r2;
+    reg [3:0]  sh2;
+    reg [15:0] s2r, t2r;                 // S and T in 16 bits: the integer halves the perspective divide takes, or a rectangle's s10.5
     always @(posedge clk) begin
-        v2 <= v1 & ~rst; x2 <= x1; bs2 <= bs1; ph2 <= ph1;
-        r2 <= {7'd0, r1} << sj1;
-        sq2 <= sh_top ? 2'd3 : sh1[4:3];
-        sc2 <= sat27(s1r); tc2 <= sat27(t1r);
-        s2r <= p_direct ? s1r[15:0] : sat16_32($signed(s1r) >>> 11);
-        t2r <= p_direct ? t1r[15:0] : sat16_32($signed(t1r) >>> 11);
-        shade2 <= shade1; depth2 <= depth1;
+        v2 <= v1 & ~rst; ph2 <= ph1; g2 <= g1; wle2 <= wle1;
+        r2 <= {2'd0, rcp1} << rm1;
+        sh2 <= sh1;
+        s2r <= p_direct ? s1r[15:0] : s1r[31:16];
+        t2r <= p_direct ? t1r[15:0] : t1r[31:16];
     end
 
     // ======================================================================
     // P3: S * r, T * r
     // ======================================================================
+    // (and for P4: R / 3, the take-up, and the product's bits n64_div's range takes -- its bits 29 down to the result's
+    // top, here 29 + m down to 16 + R -- as a mask of bits 31:16)
+    wire [1:0]  rm2 = tk3(sh2);
+    wire [4:0]  rr2 = 5'd13 - {1'b0, sh2} + {3'd0, rm2};
+    reg  [15:0] rk2;
+    integer kk;
+    always @(*) for (kk = 0; kk < 16; kk = kk + 1) rk2[kk] = kk >= rr2 && kk <= 13 + rm2;
     reg        v3;
-    reg [9:0]  x3;
-    reg signed [51:0] ps3, pt3;
-    reg [1:0]  sq3;
+    reg signed [32:0] ps3, pt3;
+    reg [2:0]  rq3;
+    reg [1:0]  rm3;
+    reg [15:0] rk3;
     reg [15:0] s3r, t3r;
-    reg [35:0] shade3;
-    reg [17:0] depth3;
     always @(posedge clk) begin
-        v3 <= v2 & ~rst; x3 <= x2; bs3 <= bs2; ph3 <= ph2;
-        ps3 <= $signed(sc2) * $signed({1'b0, r2});
-        pt3 <= $signed(tc2) * $signed({1'b0, r2});
-        sq3 <= sq2;
-        s3r <= s2r; t3r <= t2r; shade3 <= shade2; depth3 <= depth2;
+        v3 <= v2 & ~rst; ph3 <= ph2; g3 <= g2; wle3 <= wle2;
+        ps3 <= $signed(s2r) * $signed({1'b0, r2});
+        pt3 <= $signed(t2r) * $signed({1'b0, r2});
+        rq3 <= rr2 == 5'd15 ? 3'd5 : rr2 == 5'd12 ? 3'd4 : rr2 == 5'd9 ? 3'd3 : rr2 == 5'd6 ? 3'd2 : rr2 == 5'd3 ? 3'd1 : 3'd0;
+        rm3 <= rm2; rk3 <= rk2;
+        s3r <= s2r; t3r <= t2r;
     end
 
     // ======================================================================
     // P4: s10.5 coordinates (perspective, affine, or direct)
     // ======================================================================
-    // a product down by 27, 19, 11 or 3 places (q: 0..3), saturated to 16 bits: the 16 bits from there, when all above
-    // them are the sign
-    function automatic [15:0] sat16_q;
-        input signed [51:0] v;
-        input [1:0] q;
-        reg [15:0] lo;
-        reg        in0, in1, in2, in3, ok;
+    // the product down by R places, 17 bits (s11.5), and its range: out (2 over, 1 under) when the masked bits are not all
+    // one value -- under when the top one, the product's bit 29, is set
+    function automatic [18:0] dv17;          // {range 2, value 17}
+        input signed [32:0] p;
+        input [2:0]  q;
+        input [1:0]  m;
+        input [15:0] mk;
+        reg [16:0] v;
+        reg        mix, top;
         begin
-            in0 = v[51:42] == {10{v[51]}};
-            in1 = in0 && v[41:34] == {8{v[51]}};
-            in2 = in1 && v[33:26] == {8{v[51]}};
-            in3 = in2 && v[25:18] == {8{v[51]}};
             case (q)
-                2'd0:    begin lo = v[42:27]; ok = in0; end
-                2'd1:    begin lo = v[34:19]; ok = in1; end
-                2'd2:    begin lo = v[26:11]; ok = in2; end
-                default: begin lo = v[18:3];  ok = in3; end
+                3'd0:    v = p[16:0];
+                3'd1:    v = p[19:3];
+                3'd2:    v = p[22:6];
+                3'd3:    v = p[25:9];
+                3'd4:    v = p[28:12];
+                default: v = p[31:15];
             endcase
-            sat16_q = ok ? lo : v[51] ? 16'h8000 : 16'h7FFF;
+            mix = (|(p[31:16] & mk)) && !(&(p[31:16] | ~mk));
+            top = m == 2'd0 ? p[29] : m == 2'd1 ? p[30] : p[31];
+            dv17 = {mix && !top, mix && top, v};
         end
     endfunction
-    function automatic [15:0] sat16_32;
-        input signed [31:0] v;
-        sat16_32 = (v > 32'sd32767) ? 16'h7FFF : ((v < -32'sd32768) ? 16'h8000 : v[15:0]);
+    // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a primitive
+    // without texture coefficients: 0, as the model takes it, not the perspective divide's 0 / 0)
+    function automatic [15:0] tx16;
+        input [18:0] d;
+        input        wle;
+        tx16 = (wle || d[18]) ? 16'h7FFF : d[17] ? 16'h8000 : (d[16] != d[15]) ? (d[16] ? 16'h8000 : 16'h7FFF) : d[15:0];
     endfunction
-    reg        v4;
-    reg [9:0]  x4;
-    reg [15:0] s4, t4;
-    reg [35:0] shade4;
-    reg [17:0] depth4;
+    wire [18:0] dvs = dv17(ps3, rq3, rm3, rk3), dvt = dv17(pt3, rq3, rm3, rk3);
+    // the coordinates P5 takes: without the LOD this pass's, from P3; with it a pass's from st_ram, D clocks on (below)
+    wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3 && p_tex);
+    wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3 && p_tex);
+    // (the LOD's: the perspective divide, but a texture rectangle's S, T are its own s10.5, never out of range, as are an
+    // affine triangle's S >> 16; a rectangle without texture is a triangle without coefficients: S = T = W = 0)
+    wire        lod_pp = persp && !(p_direct && p_tex);
+    reg         v4;
+    reg  [15:0] s4, t4;
+    reg  [16:0] s17_4, t17_4;       // the LOD's S, T (s11.5) of this perspective divide
+    reg         oob4;               // ... out of range (n64_div)
+    reg  [3:0]  rw_a;               // st_ram's, sb_ram's and lf_ram's write address: every clock
+    reg  [31:0] st_q;
+    (* ramstyle = "M10K, no_rw_check" *) reg [31:0] st_ram [0:15];
+    wire        l3_v;
+    // (P4 loads a pixel's first pass at D, its second at D + 1: read at D - 2 and D - 1, the second in L3's clock)
+    wire [3:0]  st_ra = rw_a - (lod_lft ? 4'd4 : 4'd3) - {3'd0, l3_v};
     always @(posedge clk) begin
-        v4 <= v3 & ~rst; x4 <= x3; bs4 <= bs3; ph4 <= ph3;
-        // the tile fields P5's shift and origin take (the pass's tile)
-        u4_shifts <= ph3 ? t1_shifts : t_shifts; u4_shiftt <= ph3 ? t1_shiftt : t_shiftt;
-        u4_uls <= ph3 ? t1_uls : t_uls; u4_ult <= ph3 ? t1_ult : t_ult;
-        if (p_direct || !persp) begin
-            s4 <= s3r; t4 <= t3r;
-        end else begin
-            s4 <= sat16_q(ps3, sq3); t4 <= sat16_q(pt3, sq3);
-        end
-        shade4 <= shade3; depth4 <= depth3;
+        v4 <= v3 & ~rst; ph4 <= ph3; g4 <= g3;
+        s4 <= lod_on ? st_q[31:16] : s4n; t4 <= lod_on ? st_q[15:0] : t4n;
+        s17_4 <= lod_pp ? dvs[16:0] : {s3r[15], s3r};
+        t17_4 <= lod_pp ? dvt[16:0] : {t3r[15], t3r};
+        oob4 <= lod_pp && (wle3 || dvs[18] || dvs[17] || dvt[18] || dvt[17]);
+        st_ram[rw_a] <= {s4n, t4n};
+        st_q <= st_ram[st_ra];
+        rw_a <= rw_a + 4'd1;
     end
+
+    // ======================================================================
+    // The LOD (lang/c/mrdp/mrdp.c mrdp_lod, lod_dist): L1 the steps, L2 the
+    // distance and its level, L3 the tiles (the first pass's read) and the
+    // fraction
+    // ======================================================================
+    // L1. Each perspective divide's result at P4 is taken from the last pass A's (A: S, T at the pixel; B: on the next
+    // line). A pixel's B less its A is its step to the next line. An A less the A before it is a step to the next pixel:
+    // the pixel before's when the walk goes to the right (its next pixel follows it two clocks on: rdp_top), this pixel's
+    // own, negated, when it goes to the left (the walk's next pixel came before it). A step's magnitude is the model's: a
+    // negative one's ones' complement, |d| - 1; of a negated A - prev, -(A - prev) = ~(A - prev - 1), the same of
+    // A - prev - 1 (a borrow in). Of each step the larger of S's and T's, in 14 bits, and whether one was 512 texels or
+    // more, or a point out of range: the far level.
+    reg  [16:0] pa_s, pa_t;          // the last pass A's
+    reg         pa_o;
+    wire        l1_ci = !ph4 && !lod_lft;
+    wire [17:0] l1_ds = {s17_4[16], s17_4} - {pa_s[16], pa_s} - {17'd0, l1_ci};
+    wire [17:0] l1_dt = {t17_4[16], t17_4} - {pa_t[16], pa_t} - {17'd0, l1_ci};
+    wire [16:0] l1_ms = l1_ds[17] ? ~l1_ds[16:0] : l1_ds[16:0];
+    wire [16:0] l1_mt = l1_dt[17] ? ~l1_dt[16:0] : l1_dt[16:0];
+    wire [13:0] l1_m  = (l1_ms[13:0] > l1_mt[13:0]) ? l1_ms[13:0] : l1_mt[13:0];
+    wire        l1_f  = (|l1_ms[16:14]) || (|l1_mt[16:14]) || oob4 || pa_o;
+    reg  [13:0] mn_m, ml_m;          // the steps to the next pixel (n) and to the next line (l)
+    reg         mn_f, ml_f;
+    always @(posedge clk) if (v4 && lod_on) begin
+        if (ph4) begin
+            ml_m <= l1_m; ml_f <= l1_f;
+        end else begin
+            mn_m <= l1_m; mn_f <= l1_f;
+            pa_s <= s17_4; pa_t <= t17_4; pa_o <= oob4;
+        end
+    end
+    // The drawn pixels' passes A (not ghosts), followed from P4: L3 at D - 1 clocks, the first pass at P5 (its S, T in P4
+    // again) at D, the second at D + 1. D is 5 when the walk goes to the right (the next pixel's A is at P4 two clocks
+    // after this one's, its step in mn a clock later), 4 to the left (the line's B a clock after, its step a clock later).
+    reg  [6:1]  av;
+    wire        av0 = v4 && !ph4 && !g4 && lod_on;
+    always @(posedge clk) av <= rst ? 6'd0 : {av[5:1], av0};
+    assign      l3_v = lod_lft ? av[4] : av[3];
+    wire        p5_a = lod_lft ? av[5] : av[4];
+    wire        p5_b = (lod_lft ? av[6] : av[5]) && two_pass;
+    // L2. The distance, the larger step (the model's lod: under 0x4000 here, else far); its level, the top bit's place in
+    // its texels (bits 12:5, the ninth dropped as the model does), taken by the same compare from each step's own; under a
+    // texel, magnified
+    function automatic [2:0] lg8;
+        input [7:0] v;
+        lg8 = v[7] ? 3'd7 : v[6] ? 3'd6 : v[5] ? 3'd5 : v[4] ? 3'd4 : v[3] ? 3'd3 : v[2] ? 3'd2 : v[1] ? 3'd1 : 3'd0;
+    endfunction
+    wire        l2_ge = mn_m >= ml_m;
+    reg  [13:0] l2_lod;
+    reg  [2:0]  l2_lg;
+    reg         l2_far, l2_mag;
+    always @(posedge clk) begin
+        l2_lod <= l2_ge ? mn_m : ml_m;
+        l2_lg  <= l2_ge ? lg8(mn_m[12:5]) : lg8(ml_m[12:5]);
+        l2_far <= mn_f || ml_f;
+        l2_mag <= mn_m[13:5] == 9'd0 && ml_m[13:5] == 9'd0;
+    end
+    // L3. The level against the level count (far: the last level), the tiles (TEX_LOD: the primitive's tile plus the
+    // level; detail a tile on; TEXEL1's the next, or the same at the far level and magnified without sharpen), and the
+    // fraction: the 8 bits under the top bit, 0 or all ones where the next level is not blended, or magnified with sharpen
+    // or detail the distance itself (no less than the minimum level; sharpen's negative). The first pass's tile goes to
+    // rdp_top's tile RAMs now, the second's next clock.
+    wire        tex_lod = other_h[16], sharpen = other_h[17], detail = other_h[18];
+    wire        l3_mag = l2_mag && !l2_far;
+    wire        l3_dis = l2_far || lod_lvl == 3'd0 || (!l2_mag && (l2_lod[13] || l2_lg >= lod_lvl));
+    wire [2:0]  l3_lvl = l3_dis ? lod_lvl : l2_mag ? 3'd0 : l2_lg;
+    wire [2:0]  l3_t0 = p_tile + (tex_lod ? l3_lvl + {2'd0, detail && !l3_mag} : 3'd0);
+    wire        l3_inc = !tex_lod || (detail ? (l3_mag || !l3_dis) : !(l3_dis || (!sharpen && l3_mag)));
+    reg  [2:0]  l3_t1;
+    wire [4:0]  l3_mx = (l2_lod[4:0] < min_lvl) ? min_lvl : l2_lod[4:0];
+    wire [14:0] l3_sh = {l2_lod[11:0], 3'd0} >> l2_lg;
+    wire        l3_pl = !sharpen && !detail;
+    wire [8:0]  l3_lf = l2_far ? 9'h0FF : l3_mag ? (l3_pl ? {1'b0, {8{l3_dis}}} : {sharpen, l3_mx, 3'd0})
+                      : (l3_pl && l3_dis) ? 9'h0FF : {1'b0, l3_sh[7:0]};
+    reg  [8:0]  lf;                  // the pixel's LOD_FRACTION: from its first pass at P5 to the next pixel's
+    always @(posedge clk) begin
+        l3_t1 <= l3_t0 + {2'd0, l3_inc};
+        if (l3_v) lf <= l3_lf;
+    end
+    // the tile read for P5's pass, a clock ahead: L3's two, or (without the LOD) the pass at P3's
+    assign tl_ra = l3_v ? l3_t0 : p5_a ? l3_t1 : ph3 ? p_tile + 3'd1 : p_tile;
+    reg  [2:0]  tl_rq;               // (and P5's: its pass and its tile, for the conversion's check)
+    reg         tl_p2;
+    always @(posedge clk) begin tl_rq <= tl_ra; tl_p2 <= !l3_v && (p5_a || ph3); end
 
     // ======================================================================
     // P5: tile shift, origin (P5a); clamp, mirror, mask (P5b)
@@ -486,26 +635,26 @@ module rdp_pix (
             tc_pow = 16'd1 << k;
         end
     endfunction
-    wire signed [33:0] tcp_s = $signed(s4) * $signed({1'b0, tc_pow(u4_shifts)});
-    wire signed [33:0] tcp_t = $signed(t4) * $signed({1'b0, tc_pow(u4_shiftt)});
+    wire signed [33:0] tcp_s = $signed(s4) * $signed({1'b0, tc_pow(t_shifts)});
+    wire signed [33:0] tcp_t = $signed(t4) * $signed({1'b0, tc_pow(t_shiftt)});
     wire signed [23:0] tcs_s = tcp_s[33:10];
     wire signed [23:0] tcs_t = tcp_t[33:10];
-    wire signed [23:0] vs5 = tcs_s - $signed({9'd0, u4_uls, 3'd0});
-    wire signed [23:0] vt5 = tcs_t - $signed({9'd0, u4_ult, 3'd0});
+    wire signed [23:0] vs5 = tcs_s - $signed({9'd0, t_uls, 3'd0});
+    wire signed [23:0] vt5 = tcs_t - $signed({9'd0, t_ult, 3'd0});
     reg        v5;
-    reg [9:0]  x5;
     reg signed [23:0] vs5r, vt5r;
-    reg [35:0] shade5;
-    reg [17:0] depth5;
     always @(posedge clk) begin
-        v5 <= v4 & ~rst; x5 <= x4; bs5 <= bs4; ph5 <= ph4;
-        // and the clamp, mirror and mask of P5b
-        u5_uls <= u4_uls; u5_ult <= u4_ult;
-        u5_lrs <= ph4 ? t1_lrs : t_lrs; u5_lrt <= ph4 ? t1_lrt : t_lrt;
-        u5_cs <= ph4 ? t1_cs : t_cs; u5_ms <= ph4 ? t1_ms : t_ms; u5_ct <= ph4 ? t1_ct : t_ct; u5_mt <= ph4 ? t1_mt : t_mt;
-        u5_masks <= ph4 ? t1_masks : t_masks; u5_maskt <= ph4 ? t1_maskt : t_maskt;
+        // (with the LOD the passes come D clocks after their perspective divides: L3's)
+        v5 <= (lod_on ? (p5_a || p5_b) : v4) & ~rst;
+        ph5 <= lod_on ? !p5_a : ph4;
+        // the clamp, mirror and mask of P5b, and what the later stages take of the pass's tile
+        u5_uls <= t_uls; u5_ult <= t_ult; u5_lrs <= t_lrs; u5_lrt <= t_lrt;
+        u5_cs <= t_cs; u5_ms <= t_ms; u5_ct <= t_ct; u5_mt <= t_mt;
+        u5_masks <= t_masks; u5_maskt <= t_maskt;
+        c5_tmem <= t_tmem; c5_line <= t_line; c5_size <= t_size; c5_pal <= t_pal; c5_fmt <= t_fmt;
+        c5_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
+        conv5 <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
         vs5r <= vs5; vt5r <= vt5;
-        shade5 <= shade4; depth5 <= depth4;
     end
 
     // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction
@@ -547,19 +696,14 @@ module rdp_pix (
         tc_axis(vt5r, u5_ult, u5_lrt, u5_ct, u5_mt, u5_maskt, t0c, t1c, ftc);
     end
     reg        v6;
-    reg [9:0]  x6;
     reg [10:0] s06, s16, t06, t16;
     reg [4:0]  fs6, ft6;
-    reg [35:0] shade6;
-    reg [17:0] depth6;
     always @(posedge clk) begin
-        v6 <= v5 & ~rst; x6 <= x5; bs6 <= bs5; ph6 <= ph5;
+        v6 <= v5 & ~rst; ph6 <= ph5;
         // the TMEM addresses of P7
-        u6_tmem <= ph5 ? t1_tmem : t_tmem; u6_line <= ph5 ? t1_line : t_line; u6_size <= ph5 ? t1_size : t_size;
-        u6_yuv <= ph5 ? t1_yuv : t_yuv;
-        conv6 <= !cyc[1] && !(ph5 ? other_h[10] : other_h[11]) && ((ph5 && !other_h[9]) ? t1_yuv : t_yuv);
+        u6_tmem <= c5_tmem; u6_line <= c5_line; u6_size <= c5_size; u6_yuv <= c5_yuv;
+        conv6 <= conv5; c6_pal <= c5_pal; c6_fmt <= c5_fmt;
         s06 <= s0c; s16 <= s1c; t06 <= t0c; t16 <= t1c; fs6 <= fsc; ft6 <= ftc;
-        shade6 <= shade5; depth6 <= depth5;
     end
 
     // ======================================================================
@@ -588,20 +732,17 @@ module rdp_pix (
         end
     endfunction
     reg        v7;
-    reg [9:0]  x7;
     reg [1:0]  sl0_7, sl1_7, sl2_7;         // each texel's place in its 16-bit word
     reg [4:0]  fs7, ft7;
     reg        up7;
-    reg [35:0] shade7;
-    reg [17:0] depth7;
     always @(posedge clk) begin
-        v7 <= v6 & ~rst; x7 <= x6; bs7 <= bs6; ph7 <= ph6; conv7 <= conv6;
+        v7 <= v6 & ~rst; ph7 <= ph6; conv7 <= conv6;
+        c7_pal <= c6_pal; c7_fmt <= c6_fmt; c7_size <= u6_size;
         tm_a0 <= selA6 ? taddr(row0, s06, t06[0]) : taddr(row1, s16, t16[0]);
         tm_a1 <= taddr(row0, s16, t06[0]);
         tm_a2 <= taddr(row1, s06, t16[0]);
         sl0_7 <= selA6 ? s06[1:0] : s16[1:0]; sl1_7 <= s16[1:0]; sl2_7 <= s06[1:0];
         fs7 <= fs6; ft7 <= ft6; up7 <= selA6;
-        shade7 <= shade6; depth7 <= depth6;
     end
 
     // ======================================================================
@@ -609,19 +750,15 @@ module rdp_pix (
     // first byte of a 16- or 32-bit one's word)
     // ======================================================================
     reg        v8;
-    reg [9:0]  x8;
     reg [1:0]  sl0_8, sl1_8, sl2_8;
     reg [4:0]  fs8, ft8;
     reg        up8;
-    reg [35:0] shade8;
-    reg [17:0] depth8;
     always @(posedge clk) begin
-        v8 <= v7 & ~rst; x8 <= x7; bs8 <= bs7; ph8 <= ph7; conv8 <= conv7;
+        v8 <= v7 & ~rst; ph8 <= ph7; conv8 <= conv7;
         // the TLUT index
-        u8_size0 <= ph7 ? t1_size[0] : t_size[0]; u8_size1 <= ph7 ? t1_size[1] : t_size[1]; u8_pal <= ph7 ? t1_pal : t_pal;
+        u8_size0 <= c7_size[0]; u8_size1 <= c7_size[1]; u8_pal <= c7_pal; c8_fmt <= c7_fmt;
         sl0_8 <= sl0_7; sl1_8 <= sl1_7; sl2_8 <= sl2_7;
         fs8 <= fs7; ft8 <= ft7; up8 <= up7;
-        shade8 <= shade7; depth8 <= depth7;
     end
     function automatic [7:0] tl_idx;
         input [15:0] v;
@@ -638,21 +775,17 @@ module rdp_pix (
 
     // P8t: the words held while the TLUT is read
     reg        v8t;
-    reg [9:0]  x8t;
     reg [15:0] q0t, q1t, q2t, h0t, h1t, h2t;
     reg [1:0]  sl0_t, sl1_t, sl2_t;
     reg [4:0]  fs8t, ft8t;
     reg        up8t;
-    reg [35:0] shade8t;
-    reg [17:0] depth8t;
     always @(posedge clk) begin
-        v8t <= v8 & ~rst; x8t <= x8; bs8t <= bs8; ph8t <= ph8; conv8t <= conv8;
+        v8t <= v8 & ~rst; ph8t <= ph8; conv8t <= conv8;
         // the texel's decode
-        u8t_fmt <= ph8 ? t1_fmt : t_fmt; u8t_size <= ph8 ? t1_size : t_size;
+        u8t_fmt <= c8_fmt; u8t_size <= {u8_size1, u8_size0};
         q0t <= tm_q0; q1t <= tm_q1; q2t <= tm_q2; h0t <= tm_h0; h1t <= tm_h1; h2t <= tm_h2;
         sl0_t <= sl0_8; sl1_t <= sl1_8; sl2_t <= sl2_8;
         fs8t <= fs8; ft8t <= ft8; up8t <= up8;
-        shade8t <= shade8; depth8t <= depth8;
     end
     wire [31:0] tx0 = tlut_on ? tex16(tlut_ia, tl_q0) : texel(u8t_fmt, u8t_size, q0t, h0t, sl0_t);
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
@@ -672,20 +805,17 @@ module rdp_pix (
     wire [39:0] e2w8t = edge4(up8t ? tx2 : tx1, tx0);
 
     // P8b: the decoded texels, registered (the memories through the decode
-    // into the filter's multipliers is too long a path)
+    // into the filter's multipliers is too long a path); x, the set, the shade,
+    // the depth come out of sb_ram here
     reg        v8b;
-    reg [9:0]  x8b;
     reg [31:0] ta8b;                        // the corner (A or D)
     reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
     reg [5:0]  ws8b, wt8b;                  // the weights of those edges
-    reg [35:0] shade8b;
-    reg [17:0] depth8b;
     always @(posedge clk) begin
-        v8b <= v8t & ~rst; x8b <= x8t; bs8b <= bs8t; ph8b <= ph8t; conv8b <= conv8t;
+        v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
         ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
         wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
-        shade8b <= shade8t; depth8b <= depth8t;
     end
 
     // ======================================================================
@@ -759,6 +889,15 @@ module rdp_pix (
         tex19 <= tex_cur;
         shade9 <= shade8b; depth9 <= depth8b;
     end
+    // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 6 clocks after its write (the
+    // first pass at P5 to P9; lf holds for both passes)
+    reg  [8:0]  lf_q, lf9, lf10a, lf10;
+    (* ramstyle = "M10K, no_rw_check" *) reg [8:0] lf_ram [0:15];
+    always @(posedge clk) begin
+        lf_ram[rw_a] <= lf;
+        lf_q <= lf_ram[rw_a - 4'd5];
+        lf9 <= lf_q; lf10a <= lf9; lf10 <= lf10a;
+    end
 
     // ======================================================================
     // combiner selections (N64 SetCombine)
@@ -798,12 +937,13 @@ module rdp_pix (
         input [35:0] cm;
         rgb_b = (sel == 4'd7) ? cc_xab(k4) : (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
     endfunction
-    function automatic [9:0] rgb_c;
+    function automatic [9:0] rgb_c;        // (fr: the LOD fraction or the primitive's, 13 or 14, chosen once for the three)
         input [4:0]  sel;
         input [1:0]  i;
         input [31:0] tex, tex1;
         input [35:0] sh;
         input [35:0] cm;
+        input [9:0]  fr;
         case (sel)
             5'd0:  rgb_c = cc_xc(ch9(cm, i));
             5'd1, 5'd2, 5'd3, 5'd4, 5'd5: rgb_c = rgb_a(sel[3:0], i, tex, tex1, sh, cm);
@@ -813,7 +953,7 @@ module rdp_pix (
             5'd10: rgb_c = {2'b00, prim[7:0]};
             5'd11: rgb_c = {1'b0, ch9(sh, 2'd3)};
             5'd12: rgb_c = {2'b00, env[7:0]};
-            5'd14: rgb_c = {2'b00, prim_lod_frac};
+            5'd13, 5'd14: rgb_c = fr;
             5'd15: rgb_c = cc_xc(k5);
             default: rgb_c = 10'd0;
         endcase
@@ -857,17 +997,18 @@ module rdp_pix (
             al_d = t[8:0];
         end
     endfunction
-    function automatic [9:0] al_c;
+    function automatic [9:0] al_c;         // (fr: the LOD fraction or the primitive's, 0 or 6)
         input [2:0]  sel;
         input [31:0] tex, tex1;
         input [35:0] sh;
+        input [9:0]  fr;
         case (sel)
             3'd1: al_c = {2'b00, tex[7:0]};
             3'd2: al_c = {2'b00, tex1[7:0]};
             3'd3: al_c = {2'b00, prim[7:0]};
             3'd4: al_c = {1'b0, ch9(sh, 2'd3)};
             3'd5: al_c = {2'b00, env[7:0]};
-            3'd6: al_c = {2'b00, prim_lod_frac};
+            3'd0, 3'd6: al_c = fr;
             default: al_c = 10'd0;
         endcase
     endfunction
@@ -887,9 +1028,11 @@ module rdp_pix (
         input [31:0] tex, tex1;           // TEXEL0, TEXEL1
         input [35:0] sh;                  // SHADE: 9 bits a channel
         input [35:0] cm;
+        input [8:0]  lf;                  // the LOD fraction (a signed 9-bit as C, as K5; 0 without the LOD)
         reg [3:0] sa_r, sb_r;
         reg [4:0] mul_r;
         reg [2:0] sa_a, mul_a, sb_a, add_a, add_r;
+        reg [9:0] lfx, fr_c, fr_a;
         begin
             if (!cy) begin
                 sa_r = cc_hi[23:20]; mul_r = cc_hi[19:15]; sa_a = cc_hi[14:12]; mul_a = cc_hi[11:9];
@@ -898,20 +1041,26 @@ module rdp_pix (
                 sa_r = cc_hi[8:5];   mul_r = cc_hi[4:0];   sa_a = cc_lo[23:21]; mul_a = cc_lo[20:18];
                 sb_r = cc_lo[27:24]; add_r = cc_lo[8:6];   sb_a = cc_lo[5:3];   add_a = cc_lo[2:0];
             end
+            // (C's two fractions, the colour's 13 and 14, the alpha's 0 and 6, are one input of each C select: which of the
+            // two is chosen here, once for the three channels)
+            lfx = lod_on ? {lf[8], lf} : 10'd0;
+            fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
+            fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             cc_sel = {
                 rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), rgb_a(sa_r, 2'd1, tex, tex1, sh, cm), rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
                 rgb_b(sb_r, 2'd0, tex, tex1, sh, cm), rgb_b(sb_r, 2'd1, tex, tex1, sh, cm), rgb_b(sb_r, 2'd2, tex, tex1, sh, cm), al_abd(sb_a, tex, tex1, sh, cm),
-                rgb_c(mul_r, 2'd0, tex, tex1, sh, cm), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm), al_c(mul_a, tex, tex1, sh),
+                rgb_c(mul_r, 2'd0, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm, fr_c), al_c(mul_a, tex, tex1, sh, fr_a),
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
         end
     endfunction
-    // the four channels' raw 9 bits (cycle 0: operands 0..511, and its colours' K4 and K5; cycle 1: COMBINED too)
+    // the four channels' raw 9 bits (cycle 0: operands 0..511, and its colours' K4 and K5, and with the LOD its alpha's
+    // LOD fraction, a signed C; cycle 1: COMBINED too)
     function automatic [35:0] cc_arith0;
         input [155:0] o;
         cc_arith0 = { cc_eval1(o[155:146], o[115:106], o[75:66], o[35:27]),
                       cc_eval1(o[145:136], o[105:96],  o[65:56], o[26:18]),
                       cc_eval1(o[135:126], o[95:86],   o[55:46], o[17:9]),
-                      cc_eval0(o[125:116], o[85:76],   o[45:36], o[8:0]) };
+                      LOD ? cc_eval1(o[125:116], o[85:76], o[45:36], o[8:0]) : cc_eval0(o[125:116], o[85:76], o[45:36], o[8:0]) };
     endfunction
     function automatic [35:0] cc_arith1;
         input [155:0] o;
@@ -926,7 +1075,7 @@ module rdp_pix (
     // 2-cycle, 0 in 1-cycle); copy mode takes the texel. The line-buffer
     // words addressed at P9 are captured at P10b.
     // ======================================================================
-    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0);
+    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9);
     reg         v10a;
     reg [9:0]   x10a;
     reg [155:0] o10a;
@@ -958,7 +1107,7 @@ module rdp_pix (
         hid10 <= hl_rdata[{hk10a, 1'b0} +: 2];
     end
     wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
-    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
+    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
     reg [155:0] o11a;
@@ -1000,19 +1149,23 @@ module rdp_pix (
         zold11 <= zold11a; mem11 <= mem11a;
         memb11 <= memb11a; c0a11 <= c0a11a; c0f11 <= c0f11a; hid11 <= hid11a;
     end
-    wire [3:0] cvg11 = cvd[63:60];
+    // The coverage and the row's low bits (a row's last pixels are still in
+    // the pipe when the next row's y is issued), out of sb_ram at P8b, on to
+    // P11 (the coverage, the alpha dither) and P13b (the RGB dither)
+    reg [3:0] cv9, cv10a, cv10, cv11a, cv11;
+    reg [1:0] y9, y10a, y10, y11a, y11, y11b, y12a, y12, y13a, y13b;
+    always @(posedge clk) begin
+        cv9 <= cvg8b; cv10a <= cv9; cv10 <= cv10a; cv11a <= cv10; cv11 <= cv11a;
+        y9 <= y8b; y10a <= y9; y10 <= y10a; y11a <= y10; y11 <= y11a;
+        y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
+    end
+    wire [3:0] cvg11 = cv11;
+    wire [1:0] dy11 = y11;
+    wire [1:0] dy13 = y13b;
 
     // ======================================================================
     // the N64's alpha, coverage and depth (lang/c/mrdp/mrdp.c draw_pixel_cvg)
     // ======================================================================
-    // The row's low bits, carried along with its pixels (a row's last pixels
-    // are still in the pipe when the next row's y is issued): a 20 x 2 shift
-    // register. ysh[2k+1:2k] is row_y k + 1 clocks on: P11 is 16 (the alpha
-    // dither), the output stage's x13b 21 (the RGB dither).
-    reg [41:0] ysh;
-    always @(posedge clk) ysh <= {ysh[39:0], dup0 ? ysh[1:0] : row_y};     // (the second pass of a pixel: its row, not the next one's)
-    wire [1:0] dy11 = ysh[31:30];
-    wire [1:0] dy13 = ysh[41:40];
     // the alpha dither: the matrix the RGB dither's RGB_DITHER_SEL names for
     // the alpha (the Bayer matrix for 1 and 3, the magic square for 0 and 2:
     // Angrylion's get_dither_noise, the console's dither fetch) as
@@ -1368,7 +1521,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v2 | v3 | v4 | v5 | v6 | v7 | v8 | v8t | v8b | v9 | v10a | v10 | v11a | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v9 | v10a | v10 | v11a | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no
@@ -1405,4 +1558,86 @@ module rdp_dither_add (
     output wire [4:0] o
 );
     assign o = (d < lo && c != 5'd31) ? c + 5'd1 : c;
+endmodule
+
+// The console's reciprocal for the perspective divide (lang/c/mrdp/mrdp.c n64_div, its two 64-entry tables): the point
+// (15 bits) and the slope's low 10 bits (its upper ones are all ones). In logic, a LUT for each bit of the 25 (as a
+// ROM block its read is on P2's path, and it takes an M10K).
+(* altera_attribute = "-name AUTO_ROM_RECOGNITION OFF" *)
+module rdp_div_rom (
+    input  wire [5:0]  idx,
+    output wire [14:0] point,
+    output wire [9:0]  slope
+);
+    (* romstyle = "logic" *) reg [24:0] e;
+    always @(*) begin
+        case (idx)
+            6'd0: e = {15'h4000, 10'h303};
+            6'd1: e = {15'h3f04, 10'h30b};
+            6'd2: e = {15'h3e10, 10'h311};
+            6'd3: e = {15'h3d22, 10'h319};
+            6'd4: e = {15'h3c3c, 10'h320};
+            6'd5: e = {15'h3b5d, 10'h325};
+            6'd6: e = {15'h3a83, 10'h32d};
+            6'd7: e = {15'h39b1, 10'h332};
+            6'd8: e = {15'h38e4, 10'h337};
+            6'd9: e = {15'h381c, 10'h33d};
+            6'd10: e = {15'h375a, 10'h342};
+            6'd11: e = {15'h369d, 10'h347};
+            6'd12: e = {15'h35e5, 10'h34c};
+            6'd13: e = {15'h3532, 10'h350};
+            6'd14: e = {15'h3483, 10'h355};
+            6'd15: e = {15'h33d9, 10'h359};
+            6'd16: e = {15'h3333, 10'h35d};
+            6'd17: e = {15'h3291, 10'h362};
+            6'd18: e = {15'h31f4, 10'h364};
+            6'd19: e = {15'h3159, 10'h369};
+            6'd20: e = {15'h30c3, 10'h36c};
+            6'd21: e = {15'h3030, 10'h370};
+            6'd22: e = {15'h2fa1, 10'h373};
+            6'd23: e = {15'h2f15, 10'h376};
+            6'd24: e = {15'h2e8c, 10'h379};
+            6'd25: e = {15'h2e06, 10'h37c};
+            6'd26: e = {15'h2d83, 10'h37f};
+            6'd27: e = {15'h2d03, 10'h382};
+            6'd28: e = {15'h2c86, 10'h384};
+            6'd29: e = {15'h2c0b, 10'h387};
+            6'd30: e = {15'h2b93, 10'h38a};
+            6'd31: e = {15'h2b1e, 10'h38c};
+            6'd32: e = {15'h2aab, 10'h38e};
+            6'd33: e = {15'h2a3a, 10'h391};
+            6'd34: e = {15'h29cc, 10'h393};
+            6'd35: e = {15'h2960, 10'h395};
+            6'd36: e = {15'h28f6, 10'h397};
+            6'd37: e = {15'h288e, 10'h399};
+            6'd38: e = {15'h2828, 10'h39b};
+            6'd39: e = {15'h27c4, 10'h39d};
+            6'd40: e = {15'h2762, 10'h39f};
+            6'd41: e = {15'h2702, 10'h3a1};
+            6'd42: e = {15'h26a4, 10'h3a3};
+            6'd43: e = {15'h2648, 10'h3a4};
+            6'd44: e = {15'h25ed, 10'h3a6};
+            6'd45: e = {15'h2594, 10'h3a8};
+            6'd46: e = {15'h253d, 10'h3a9};
+            6'd47: e = {15'h24e7, 10'h3aa};
+            6'd48: e = {15'h2492, 10'h3ac};
+            6'd49: e = {15'h243f, 10'h3ae};
+            6'd50: e = {15'h23ee, 10'h3af};
+            6'd51: e = {15'h239e, 10'h3b0};
+            6'd52: e = {15'h234f, 10'h3b2};
+            6'd53: e = {15'h2302, 10'h3b3};
+            6'd54: e = {15'h22b6, 10'h3b5};
+            6'd55: e = {15'h226c, 10'h3b5};
+            6'd56: e = {15'h2222, 10'h3b7};
+            6'd57: e = {15'h21da, 10'h3b8};
+            6'd58: e = {15'h2193, 10'h3b9};
+            6'd59: e = {15'h214d, 10'h3ba};
+            6'd60: e = {15'h2108, 10'h3bc};
+            6'd61: e = {15'h20c5, 10'h3bc};
+            6'd62: e = {15'h2082, 10'h3be};
+            default: e = {15'h2041, 10'h3be};
+        endcase
+    end
+    assign point = e[24:10];
+    assign slope = e[9:0];
 endmodule
