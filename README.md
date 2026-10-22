@@ -108,6 +108,10 @@ python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.3.zip
 
 Every night at 00:00 (Europe/Madrid) the default branch is built with the recorded seed and, if that compile closes timing, published as an artifact of the [Nightly workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/nightly.yml), kept for two weeks: a zip to unpack onto the SD card's root, like a release. `tools/nightly.sh` is that build, and it can be run by hand. It can also be run by hand on any branch (Actions > Nightly > Run workflow), for instance to check that a pull request's `projects/fits.json` closes. A nightly is the tree of that day: it has not been tried on a Pocket the way a release has.
 
+### Simulation checks
+
+The [Simulation workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/sim.yml) runs on every pull request and every push to `main` (and by hand, Actions > Simulation > Run workflow), on Ubuntu with Verilator 5.052, no Quartus and no hardware. It builds the C library, the boot ROM, the runtime and the SoC's test programs, runs the test programs on the whole SoC (`sim/mips_soc`) and fails if one of them prints `FAIL` or no `PASS` (`vi_test` and `pi2_test` are run but not gated: the first gives no verdict in its 30 Mcycles, the second has a known failure), runs the RSP against its model on a random program with every kind of instruction and the RSP's DMA bench, and runs `tools/area2/rdp_regress.sh`. The outputs are kept as an artifact when it fails. Changes to the docs alone do not run it. It is one job of about 15 runner minutes; about 25 when its caches (Verilator, built from source, and the C library) are cold.
+
 ## Repository layout
 
 | Directory | Contents |

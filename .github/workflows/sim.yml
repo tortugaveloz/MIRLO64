@@ -1,0 +1,170 @@
+# The simulation checks: the SoC's test programs on the whole SoC, the RSP against its model and the RDP against its
+# model. No Quartus and no hardware: a regression in the RTL or the C shows here. One job, to spend few runner
+# minutes: the RSP and RDP benches run in the background while the SoC bench builds.
+name: Simulation
+
+on:
+  pull_request:
+    paths-ignore: ['docs/**', '**.md', 'pkg/**']
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**.md', 'pkg/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sim-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # the version the benches are run with locally; built once and cached
+  VERILATOR_VERSION: v5.052
+  MIPS_CC: mips-linux-gnu-gcc-13
+  # the SoC's test programs that print PASS today
+  GATED: >-
+    cpu_test int64_test libc_test n64win_test tlbram_test mon_test mi_test ai_test si_test rcpcpu_test
+    tlbmon_test tlbgame_test tlbpg_test
+  # run, not gated: vi_test gives no verdict within 30 Mcycles; pi2_test prints a known FAIL ("ROM reads, KSEG1")
+  UNGATED: vi_test pi2_test
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sim:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/cache/restore@v4
+        id: vl
+        with:
+          path: ~/verilator
+          key: verilator-${{ env.VERILATOR_VERSION }}-ubuntu-24.04
+
+      - name: The tools
+        id: tools
+        run: |
+          deps="gcc-13-mips-linux-gnu binutils-mips-linux-gnu meson ninja-build"
+          [ "${{ steps.vl.outputs.cache-hit }}" = true ] || deps="$deps help2man autoconf flex bison libfl-dev zlib1g-dev"
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends $deps
+          echo "lib=$(git ls-tree HEAD vendor | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Build Verilator
+        if: steps.vl.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$VERILATOR_VERSION" https://github.com/verilator/verilator "$RUNNER_TEMP/vsrc"
+          cd "$RUNNER_TEMP/vsrc"
+          autoconf
+          ./configure --prefix="$HOME/verilator"
+          make -j"$(nproc)"
+          make install
+
+      - if: steps.vl.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/verilator
+          key: verilator-${{ env.VERILATOR_VERSION }}-ubuntu-24.04
+
+      - name: Verilator on the path
+        run: |
+          echo "$HOME/verilator/bin" >> "$GITHUB_PATH"
+          echo "VERILATOR=$HOME/verilator/bin/verilator" >> "$GITHUB_ENV"
+          echo "VERILATOR_ROOT=$("$HOME/verilator/bin/verilator" --getenv VERILATOR_ROOT)" >> "$GITHUB_ENV"
+          "$HOME/verilator/bin/verilator" --version
+
+      - name: The RSP and RDP benches, in the background
+        id: bg
+        run: |
+          mkdir -p sim-out
+          python3 sim/rsp/make_div_rom.py rtl/rsp/rsp_div_rom.hex
+          cat > "$RUNNER_TEMP/bg.sh" <<'SH'
+          trap 'touch sim-out/bg.done' EXIT
+          st() { echo "$1 $2" >> sim-out/bg.status; }
+          # seed 2: one program with every instruction kind gen_rand_task.py makes
+          { LANES=8 sim/rsp/build_rtl.sh && python3 sim/rsp/gen_rand_task.py 2 sim-out/rand_2.bin &&
+            sim/rsp/obj_rsp_8/tb_rsp sim-out/rand_2.bin; } > sim-out/rsp.txt 2>&1; st rsp $?
+          { sim/rsp/build_dma.sh && sim/rsp/obj_dma/tb_dma; } > sim-out/dma.txt 2>&1; st dma $?
+          tools/area2/rdp_regress.sh > sim-out/rdp.txt 2>&1; st rdp $?
+          SH
+          nohup bash "$RUNNER_TEMP/bg.sh" > /dev/null 2>&1 &
+
+      # picolibc is the slow part; make rebuilds the rest from the sources' dates
+      - uses: actions/cache/restore@v4
+        id: lib
+        with:
+          path: lang/mips/build/game
+          key: mips-lib-ubuntu-24.04-gcc13-${{ steps.tools.outputs.lib }}-${{ hashFiles('lang/mips/lib.mk', 'lang/mips/mips.mk') }}
+
+      - name: The C library
+        run: make -C lang/mips -f lib.mk VARIANT=game    # serial: a parallel make runs picolibc's meson twice
+
+      - if: steps.lib.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: lang/mips/build/game
+          key: ${{ steps.lib.outputs.cache-primary-key }}
+
+      - name: The boot ROM, the images, the runtime, the test programs
+        run: |
+          make -C lang/mips/boot
+          python3 tools/mips_inits.py
+          make -C lang/n64rt
+          make -C lang/mips/test $GATED $UNGATED
+
+      - name: The SoC bench
+        run: sim/mips_soc/build.sh soc    # no VL_THREADS
+
+      - name: The test programs on the SoC
+        run: |
+          O=sim-out/soc; mkdir -p $O
+          head -c 16384 /dev/zero > "$RUNNER_TEMP/rom.z64"    # ROM= wants a file; any will do
+          printf '%s\n' $GATED $UNGATED | xargs -P "$(nproc)" -I{} sh -c \
+              'ROM="$1" timeout 900 sim/mips_soc/obj_soc/tb_soc "lang/mips/test/build/$2.bin" -c 30 > "$3/$2.txt" 2>&1; echo $? > "$3/$2.rc"' \
+              _ "$RUNNER_TEMP/rom.z64" {} $O
+          bad=0
+          for p in $GATED; do
+            f=$O/$p.txt; rc=$(cat $O/$p.rc)
+            if [ "$rc" = 0 ] && grep -q PASS $f && ! grep -q FAIL $f; then
+              echo "$p: PASS"
+            else
+              echo "::error::$p: exit $rc, $(grep -m3 FAIL $f | tr '\n' ' ')"; tail -5 $f; bad=1
+            fi
+          done
+          for p in $UNGATED; do
+            echo "$p (run, not gated): exit $(cat $O/$p.rc), $(grep -m1 -o 'PASS\|FAIL.*' $O/$p.txt || echo 'no verdict')"
+          done
+          exit $bad
+
+      - name: The RSP and RDP benches' results
+        if: ${{ !cancelled() && steps.bg.outcome == 'success' }}
+        run: |
+          while [ ! -f sim-out/bg.done ]; do sleep 10; done
+          for t in rsp dma rdp; do echo "::group::$t"; cat sim-out/$t.txt; echo "::endgroup::"; done
+          cat sim-out/bg.status
+          [ "$(wc -l < sim-out/bg.status)" = 3 ] || { echo "::error::the benches did not all run"; exit 1; }
+          if grep -v ' 0$' sim-out/bg.status; then echo "::error::a bench failed (above)"; exit 1; fi
+
+      - name: The outputs, if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-${{ github.run_id }}
+          path: |
+            sim-out/*.txt
+            sim-out/bg.status
+            sim-out/soc/
+            sim/mips_soc/obj_soc.log
+            sim/rsp/obj_*.log
+            sim/rdp/obj_rdp.log
+            sim/rdp/obj_cc_unit/build.log
+            lang/mips/build/game/picolibc/*.log
+          retention-days: 14
+          if-no-files-found: ignore
