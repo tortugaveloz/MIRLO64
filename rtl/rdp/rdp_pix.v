@@ -25,10 +25,11 @@
 // LOD (lod_on; lang/c/mrdp/mrdp.c mrdp_lod, docs/lod.md): a 2-cycle primitive
 // with TEX_LOD, or whose combiner reads LOD_FRACTION. Its pixels take two
 // clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
-// W plus DaDy): that divide is the LOD's next line. Its next pixel is the
-// neighbour's own divide -- rdp_top issues the pixels in the walk's order and
-// adds a ghost (divided, never drawn) where the walk's neighbour is not
-// issued in time or is outside the span. The distance, the level, the tiles
+// W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
+// is the neighbour's own perspective divide -- rdp_top issues the pixels in
+// the walk's order and adds a ghost (through the perspective divide, never
+// drawn) where the walk's neighbour is not issued in time or is outside the
+// span. The distance, the level, the tiles
 // and the fraction take three stages after P4 (L1, L2, L3), and only then can
 // the pixel's texture passes start: its S, T wait in a RAM (st_ram), and P4
 // takes them back D clocks late (D 5 for a walk to the right, 4 to the left).
@@ -79,7 +80,7 @@ module rdp_pix #(
     input  wire        lod_lft,     // its walk goes to the right: the next pixel is x + 1 (else x - 1)
     input  wire [2:0]  lod_lvl,     // its level count (the triangle's level field: the last level; a rectangle 0)
     input  wire [4:0]  min_lvl,     // SET_PRIM_COLOR's minimum level
-    input  wire        in_ghost,    // (with in_valid) a ghost: divided for its neighbour's LOD, never drawn
+    input  wire        in_ghost,    // (with in_valid) a ghost: through the perspective divide for its neighbour's LOD, never drawn
 
     // ---- pixels in
     input  wire        in_valid,
@@ -370,9 +371,9 @@ module rdp_pix #(
     // ======================================================================
     // P1: normalise W, the reciprocal's table
     // ======================================================================
-    // The console's divide (lang/c/mrdp/mrdp.c n64_div): the 16-bit integer halves of S, T (s10.5) and W (s.15). W's
-    // leading zeros, up to 14, are shifted out of its low 15 bits; its next 6 bits pick a point of the reciprocal and a
-    // slope, the 8 after them step along it (rdp_div_rom: the console's two tables)
+    // The console's perspective divide (lang/c/mrdp/mrdp.c n64_div): the 16-bit integer halves of S, T (s10.5) and W
+    // (s.15). W's leading zeros, up to 14, are shifted out of its low 15 bits; its next 6 bits pick a point of the
+    // reciprocal and a slope, the 8 after them step along it (rdp_div_rom: the console's two tables)
     wire [14:0] wi0 = w0r[30:16];
     reg  [3:0]  sh_c;
     integer k;
@@ -387,7 +388,7 @@ module rdp_pix #(
     rdp_div_rom drom (.idx(wn[13:8]), .point(dv_pt), .slope(dv_sl));
 
     // the pass of the pixel in each stage (0 the tile's, 1 the next tile's: two_pass; with the LOD, up to P4, 1 the next
-    // line's divide) and the tile fields the stage takes, carried with it from the pass's read (t_*, at P5a)
+    // line's perspective divide) and the tile fields the stage takes, carried with it from the pass's read (t_*, at P5a)
     reg        ph1, ph2, ph3, ph4, ph5, ph6, ph7, ph8, ph8t, ph8b;
     reg [3:0]  u5_masks, u5_maskt;
     reg [11:0] u5_uls, u5_ult, u5_lrs, u5_lrt;
@@ -441,7 +442,7 @@ module rdp_pix #(
     reg        v2;
     reg [16:0] r2;
     reg [3:0]  sh2;
-    reg [15:0] s2r, t2r;                 // S and T in 16 bits: the integer halves the divide takes, or a rectangle's s10.5
+    reg [15:0] s2r, t2r;                 // S and T in 16 bits: the integer halves the perspective divide takes, or a rectangle's s10.5
     always @(posedge clk) begin
         v2 <= v1 & ~rst; ph2 <= ph1; g2 <= g1; wle2 <= wle1;
         r2 <= {2'd0, rcp1} << rm1;
@@ -502,7 +503,7 @@ module rdp_pix #(
         end
     endfunction
     // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a primitive
-    // without texture coefficients: 0, as the model takes it, not the divide's 0 / 0)
+    // without texture coefficients: 0, as the model takes it, not the perspective divide's 0 / 0)
     function automatic [15:0] tx16;
         input [18:0] d;
         input        wle;
@@ -512,12 +513,12 @@ module rdp_pix #(
     // the coordinates P5 takes: without the LOD this pass's, from P3; with it a pass's from st_ram, D clocks on (below)
     wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3 && p_tex);
     wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3 && p_tex);
-    // (the LOD's: the divide, but a texture rectangle's S, T are its own s10.5, never out of range, as are an affine
-    // triangle's S >> 16; a rectangle without texture is a triangle without coefficients: S = T = W = 0)
+    // (the LOD's: the perspective divide, but a texture rectangle's S, T are its own s10.5, never out of range, as are an
+    // affine triangle's S >> 16; a rectangle without texture is a triangle without coefficients: S = T = W = 0)
     wire        lod_pp = persp && !(p_direct && p_tex);
     reg         v4;
     reg  [15:0] s4, t4;
-    reg  [16:0] s17_4, t17_4;       // the LOD's S, T (s11.5) of this divide
+    reg  [16:0] s17_4, t17_4;       // the LOD's S, T (s11.5) of this perspective divide
     reg         oob4;               // ... out of range (n64_div)
     reg  [3:0]  rw_a;               // st_ram's, sb_ram's and lf_ram's write address: every clock
     reg  [31:0] st_q;
@@ -541,12 +542,13 @@ module rdp_pix #(
     // distance and its level, L3 the tiles (the first pass's read) and the
     // fraction
     // ======================================================================
-    // L1. Each divide at P4 is taken from the last pass A's (A: S, T at the pixel; B: on the next line). A pixel's B less its
-    // A is its step to the next line. An A less the A before it is a step to the next pixel: the pixel before's when the
-    // walk goes to the right (its next pixel follows it two clocks on: rdp_top), this pixel's own, negated, when it goes to
-    // the left (the walk's next pixel came before it). A step's magnitude is the model's: a negative one's ones' complement,
-    // |d| - 1; of a negated A - prev, -(A - prev) = ~(A - prev - 1), the same of A - prev - 1 (a borrow in). Of each step
-    // the larger of S's and T's, in 14 bits, and whether one was 512 texels or more, or a point out of range: the far level.
+    // L1. Each perspective divide's result at P4 is taken from the last pass A's (A: S, T at the pixel; B: on the next
+    // line). A pixel's B less its A is its step to the next line. An A less the A before it is a step to the next pixel:
+    // the pixel before's when the walk goes to the right (its next pixel follows it two clocks on: rdp_top), this pixel's
+    // own, negated, when it goes to the left (the walk's next pixel came before it). A step's magnitude is the model's: a
+    // negative one's ones' complement, |d| - 1; of a negated A - prev, -(A - prev) = ~(A - prev - 1), the same of
+    // A - prev - 1 (a borrow in). Of each step the larger of S's and T's, in 14 bits, and whether one was 512 texels or
+    // more, or a point out of range: the far level.
     reg  [16:0] pa_s, pa_t;          // the last pass A's
     reg         pa_o;
     wire        l1_ci = !ph4 && !lod_lft;
@@ -642,7 +644,7 @@ module rdp_pix #(
     reg        v5;
     reg signed [23:0] vs5r, vt5r;
     always @(posedge clk) begin
-        // (with the LOD the passes come D clocks after their divides: L3's)
+        // (with the LOD the passes come D clocks after their perspective divides: L3's)
         v5 <= (lod_on ? (p5_a || p5_b) : v4) & ~rst;
         ph5 <= lod_on ? !p5_a : ph4;
         // the clamp, mirror and mask of P5b, and what the later stages take of the pass's tile

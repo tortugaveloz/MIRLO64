@@ -11,16 +11,22 @@ put in the model first, and the RTL was made to match it.
 
 | what | where |
 |---|---|
-| the switch | `MRDP_LOD`, with `MRDP_N64` (the N64's pixel pipeline); off by default |
+| the switch | `RDP_LOD`, with `MRDP_N64` (the N64's pixel pipeline); off by default |
 | the computation | `lang/c/mrdp/mrdp.c`, the LOD section: `mrdp_lod` (declared in `mrdp.h`), `lod_pixel`, `lod_persp`, `lod_dist`, `lod_tri` |
-| the console's divide | with `MRDP_EXACT_DIV` too: `mrdp_n64_div` in place of `lod_persp`, for the pixel and the LOD's points, as the RTL has it |
+| the console's perspective divide | with `RDP_EXACT_DIV` too: `mrdp_n64_div` in place of `lod_persp`, for the pixel and the LOD's points, as the RTL has it |
 | where it is used | `draw_pixel_cvg`: the tiles of TEXEL0 and TEXEL1, and LOD_FRACTION into the combiner |
 | a test | `lang/c/mrdp/test_lod.c` (its header has the two build lines) |
 | a frame | `make rdp_task_lod` in `sim/rdp`: `rdp_task` with the LOD, and a count of the pixels that took it, by level |
 | the RTL bench | `./build_rtl.sh` in `sim/rdp` (`LOD=1`, the default: the RTL and the model with the LOD; `LOD=0` both without), and `TB_LOD=1` for `tb_rdp`'s LOD streams |
 
-Without `MRDP_LOD` the model is what it was, byte for byte (below, "How it was
+Without `RDP_LOD` the model is what it was, byte for byte (below, "How it was
 checked").
+
+The perspective divide on this page is the RDP's per-pixel divide of the
+texture coordinates S and T by W, not the CPU's integer division. "The
+console's perspective divide" is that divide as the N64's RDP computes it (its
+reciprocal tables, `mrdp_n64_div`); "the model's own" is the model's
+reciprocal and product (`mrdp_rcp`, `mrdp_persp`).
 
 ## When it applies
 
@@ -40,7 +46,7 @@ checked").
 
 ## The algorithm
 
-### Three points through the divide
+### Three points through the perspective divide
 
 For each pixel, S and T are taken at three points:
 
@@ -56,14 +62,14 @@ its top-left corner, stepped by the whole DaDx. DaDy of S, T and W comes from
 the triangle's texture block (words 10 and 14, as the other coefficients'
 halves).
 
-Each point's S and T go through the same divide as the pixel's own:
+Each point's S and T go through the same perspective divide as the pixel's own:
 
 * **Perspective** (PERSP): the model's reciprocal (`mrdp_rcp`) and product
   (`mrdp_persp`), but not saturated to 16 bits: the result is kept as s11.5 in
   17 bits, and a value outside that range, or a W whose integer half is zero
-  or negative, makes the pixel **out of range**. With `MRDP_EXACT_DIV` the
-  console's divide, `mrdp_n64_div`: the 16-bit integer halves of S and W, the
-  console's two 64-entry tables, the same 17 bits and range flag
+  or negative, makes the pixel **out of range**. With `RDP_EXACT_DIV` the
+  console's perspective divide, `mrdp_n64_div`: the 16-bit integer halves of
+  S and W, the console's two 64-entry tables, the same 17 bits and range flag
   ([rdp.md](rdp.md), "Coordinates").
 * **Affine**: S >> 16, the s10.5 the pixel samples with, sign-extended to 17
   bits. Never out of range.
@@ -152,21 +158,22 @@ with captured frames.
 3. **LOD_FRACTION without TEX_LOD** (`LOD_FRAC_USED`): computed whenever the
    combiner reads it; TEX_LOD only moves the tiles. Set to 0 to compute it
    only with TEX_LOD (LOD_FRACTION then reads 0 otherwise, as without the LOD).
-4. **The divide** (`lod_persp`): the model's own reciprocal, not the console's
-   table, so that the three points are divided as the pixel is; the range
-   check is the 17 bits the console keeps there, and a W with a zero or
-   negative integer half is out of range whatever S is, as the console's
-   divide reports it. The range rule is the console's; the values are not
-   (S, T off by a few subtexels, and with them the fraction). With
-   `MRDP_EXACT_DIV` the pixel and the three points take the console's divide
-   (`mrdp_n64_div`), as the RTL does.
+4. **The perspective divide** (`lod_persp`): the model's own reciprocal, not
+   the console's table, so that the three points are divided as the pixel is;
+   the range check is the 17 bits the console keeps there, and a W with a zero
+   or negative integer half is out of range whatever S is, as the console's
+   perspective divide reports it. The range rule is the console's; the values
+   are not (S, T off by a few subtexels, and with them the fraction). With
+   `RDP_EXACT_DIV` the pixel and the three points take the console's
+   perspective divide (`mrdp_n64_div`), as the RTL does.
 5. **The walk's direction** (`lod_tri`): the next pixel is x - 1 for a
    triangle without `lft`. The model draws every span left to right; only the
    LOD sees the N64's direction.
 6. **Texture rectangles** (`draw_texrect`, `lod_pixel`): level count 0, so
    with TEX_LOD a rectangle samples its own tile (the far level, fraction 0xFF;
    detail moves it a tile on), and its other two points come from its own
-   column and row formula, without the divide, as its pixel's S and T do. The
+   column and row formula, without the perspective divide, as its pixel's S
+   and T do. The
    console's next line differs: its rectangle is a primitive whose DaDy is the
    row step (DtDy, DsDx flipped), kept to `LOD_DY_MASK` as a triangle's and
    added to the coordinate with its fraction.
@@ -191,13 +198,13 @@ with captured frames.
 
 ## How it was checked
 
-* **Without `MRDP_LOD`**: `tools/area2/rdp_regress.sh` (the RTL against the
+* **Without `RDP_LOD`**: `tools/area2/rdp_regress.sh` (the RTL against the
   model) prints `rdp_regress: 53 runs, 0 failed`. `rdp_task`, built from the
   committed model and from this one, writes the same PPM, byte for byte, for
   each of the 65 frames that the 79 captured task dumps of five games under
   `build/triage` give (16.5 million pixels), and `test_mrdp` and `test_cvg`
   print the same as before.
-* **The dumps with `MRDP_LOD`**: the same 65 frames again, byte for byte. None
+* **The dumps with `RDP_LOD`**: the same 65 frames again, byte for byte. None
   of the dumps draws a 2-cycle primitive with TEX_LOD, and no combiner reads
   LOD_FRACTION. The dumps in `build/triage/pd2` set TEX_LOD 32 times each, all
   in 1-cycle mode, and every triangle there has a level count of 0: on the
@@ -205,19 +212,19 @@ with captured frames.
 * **`test_lod`**: the steps above, and a perspective floor in 2-cycle mode
   with a mip chain of six levels (32 x 32 down to 1 x 1, each a checker of its
   own colour), combined as `(TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0`. With
-  `MRDP_LOD` the levels follow the distance down the middle of the picture:
+  `RDP_LOD` the levels follow the distance down the middle of the picture:
   level 0 from the bottom to row 98 (a step under about 1.5 texels), then
   levels 1 to 5 by row 54, blended between; of the floor's 61,220 pixels
   40,960 are magnified, and by level 47,680, 4,800, 3,520, 2,240, 1,480 and
   1,500 (the last at the far level). Without it the floor is level 0 to the
   horizon, an aliased moire there; 19,451 pixels differ, all in rows 43 to
   110, where the step passes one texel.
-* **`test_lod` with `MRDP_EXACT_DIV`**: the console's divide moves the
-  counts by level to 47,992, 4,488, 3,200, 2,560, 1,480 and 1,500, 40,637
+* **`test_lod` with `RDP_EXACT_DIV`**: the console's perspective divide moves
+  the counts by level to 47,992, 4,488, 3,200, 2,560, 1,480 and 1,500, 40,637
   magnified (the same 61,220 pixels): S and T at the three points are the
-  console's, a few subtexels from the model's own divide, which near a power
-  of two moves the level.
-* **The RTL bench with `MRDP_LOD`**, before the RTL had it: of 12 random seeds
+  console's, a few subtexels from the model's own perspective divide, which
+  near a power of two moves the level.
+* **The RTL bench with `RDP_LOD`**, before the RTL had it: of 12 random seeds
   (1 to 8 and `TB_CC`'s 51 to 54), 5 differed (4, 8, 51, 53, 54): the random
   streams set TEX_LOD and read LOD_FRACTION, so they cover the LOD now that
   the RTL has it.
@@ -233,7 +240,7 @@ not drawn). DaDy is not read, except Z's. The tiles are two 8-entry M10K RAMs,
 `tl_attr` and `tl_size`, read at `p_tile` and `p_tile + 1` into `ts_*` and
 `ts1_*` (the RAMs' output registers), stable for a primitive.
 
-`rdp_pix` divides at the front of the pipeline:
+`rdp_pix` does the perspective divide at the front of the pipeline:
 
 | stage | what | resources |
 |---|---|---|
@@ -248,14 +255,15 @@ not drawn). DaDy is not read, except Z's. The tiles are two 8-entry M10K RAMs,
 | P10, P11 | the two combiner cycles | |
 
 Each stage that reads tile fields (P4, P5, P6, P8, P8t) takes them from `t_*`
-or `t1_*` by its pass bit (`ph<n>`). A two-pass pixel's second pass divides
-the same S, T, W again: in 2-cycle mode with TEXEL1 the divider does every
-pixel's work twice.
+or `t1_*` by its pass bit (`ph<n>`). A two-pass pixel's second pass puts the
+same S, T, W through the perspective divide again: in 2-cycle mode with
+TEXEL1 the perspective divider does every pixel's work twice.
 
 ### What the LOD adds
 
 1. **Two more coordinate pairs a pixel**: the next pixel's and the next
-   line's S, T through the divide, as 17-bit values with a range flag.
+   line's S, T through the perspective divide, as 17-bit values with a range
+   flag.
 2. **The LOD arithmetic**: four 18-bit differences, their magnitudes, the
    maximum; the level (a priority encoder on 8 bits), the clamp against the
    level count, far and magnified, the fraction, the two tile numbers.
@@ -264,9 +272,9 @@ pixel's work twice.
 4. **LOD_FRACTION into the combiner**: 9 bits with the pixel to P10, and one
    more input on the C selects (colour 13, alpha 0), read as a signed 9-bit
    number like K5.
-5. **Latency**: the tile is known only after the divide and the LOD logic,
-   and the tile shift is the stage right after the divide. Two to five stages
-   go in between P4 and P5, by variant.
+5. **Latency**: the tile is known only after the perspective divide and the
+   LOD logic, and the tile shift is the stage right after the perspective
+   divide. Two to five stages go in between P4 and P5, by variant.
 
 Common to every variant:
 
@@ -297,7 +305,7 @@ Common to every variant:
   so the result does not depend on the fraction. (None of the dumps here reads
   LOD_FRACTION at all.)
 
-### Variant (a): full rate, two more dividers
+### Variant (a): full rate, two more perspective dividers
 
 The next pixel's and the next line's S, T, W at P0 (three adders on 32 bits
 for the next pixel, or `cur + adx` from `rdp_top` for `lft` and a subtractor
@@ -307,7 +315,7 @@ logic follows P4 directly: three stages before P5.
 
 | part | ALUTs | DSP blocks | M10K |
 |---|---|---|---|
-| two divide datapaths (normaliser, interpolation, two products, range check), the reciprocal table shared through the M10K's second port and one copy | 300 to 400 | 5 | 1 |
+| two perspective divide datapaths (normaliser, interpolation, two products, range check), the reciprocal table shared through the M10K's second port and one copy | 300 to 400 | 5 | 1 |
 | the next pixel's and next line's attributes, DaDy loaded from the staging RAM | 150 to 200 | | |
 | LOD logic, differences on DSPs | 100 to 130 | 2 | |
 | combiner inputs, control | 50 to 80 | | |
@@ -316,19 +324,20 @@ logic follows P4 directly: three stages before P5.
 
 It keeps every pixel at the rate it has now. But a mipmapped primitive's
 combiner reads TEXEL1, so its pixels take two clocks already; the second
-divider earns nothing there, and both would only pay for a 1-cycle LOD, which
+perspective divider earns nothing there, and both would only pay for a
+1-cycle LOD, which
 the model does not have. And 7 more DSP blocks is most of what is left: of the
 device's 66, the RDP, the RSP and the CPU use 51 before the scan-out's.
 
-### Variant (b): one divider, a 3-clock pixel in LOD mode
+### Variant (b): one perspective divider, a 3-clock pixel in LOD mode
 
 The pixel enters P0 three times (a 2-bit phase in place of `dup0`; `rdp_top`
 issues an LOD pixel every third clock): the pixel's S, T, W, then plus
 `+-DaDx`, then plus DaDy (a registered delta by phase, so each adder's input
-select fits the LUT in front of it). The divider runs as it does; its P4 keeps
-17 bits and a range flag besides the saturated 16. The first two results are
-held (70 flip-flops) until the third arrives, then the LOD logic, with the
-differences of the next pixel and the next line in turn on one pair of
+select fits the LUT in front of it). The perspective divider runs as it does;
+its P4 keeps 17 bits and a range flag besides the saturated 16. The first two
+results are held (70 flip-flops) until the third arrives, then the LOD logic,
+with the differences of the next pixel and the next line in turn on one pair of
 subtractors. The pixel's two texture passes then go into P5 from the held
 S, T of the first phase, with the tiles just found.
 
@@ -346,23 +355,23 @@ An LOD pixel takes three clocks, against two for a two-pass pixel today: such
 primitives' pixel issue is 1.5 times slower, part of which the memory's own
 pace hides on rows that wait for their spans.
 
-### Variant (c), a third option: the neighbour's divide, a 2-clock pixel
+### Variant (c), a third option: the neighbour's perspective divide, a 2-clock pixel
 
 The next pixel of the walk is the pixel just before or just after in the
 issue order, and its attributes are exactly the pixel's plus DaDx (the model
-and `rdp_top` both step `cur` by DaDx): its own first divide is the LOD's next
-point. So only the next line needs a divide of its own, and it fits the
-second clock a two-pass pixel already has, where the divider now repeats the
-first.
+and `rdp_top` both step `cur` by DaDx): its own first perspective divide is
+the LOD's next point. So only the next line needs a perspective divide of its
+own, and it fits the second clock a two-pass pixel already has, where the
+perspective divider now repeats the first.
 
-* The pixel's second phase divides S, T, W plus DaDy (three 17-bit adders on
-  the top bits; DaDy loaded as in (b)).
+* The pixel's second phase puts S, T, W plus DaDy through the perspective
+  divide (three 17-bit adders on the top bits; DaDy loaded as in (b)).
 * The last few pixels' first results are held: for `lft` the next one's
   arrives two clocks after the pixel's; without `lft` the one before's is
   already there.
 * At a span's end (with `lft`) or start (without) the neighbour is outside
-  the span: `rdp_top` issues one pixel more there, with a mask of 0, to be
-  divided and not drawn: two clocks a row.
+  the span: `rdp_top` issues one pixel more there, with a mask of 0, to go
+  through the perspective divide and not be drawn: two clocks a row.
 * The pipeline never stalls, so the next pixel must follow two clocks after
   the pixel: with `lft`, `rdp_top` issues a pixel only when the next one's
   memory words are there too (its issue test looks one pixel ahead).
@@ -382,33 +391,33 @@ primitive's do), plus two clocks a row.
 
 ### Which
 
-With hundreds of ALMs free, not thousands, and DSP blocks counted too, (a)
-is out. (b) is the simplest to make match the model: each pixel's LOD depends
-on nothing but its own three divides. (c) is the cheapest and the fastest but
-couples neighbouring pixels in a pipeline that never stalls. Either way the
-LOD logic should take the DSP route for the differences and the fraction (two
-blocks, some 30 to 40 ALUTs saved), and the tile RAMs read by pixel cost
-about nothing.
+With hundreds of ALMs free, not thousands, and DSP blocks counted too, (a) is
+out. (b) is the simplest to make match the model: each pixel's LOD depends on
+nothing but its own three perspective divides. (c) is the cheapest and the
+fastest but couples neighbouring pixels in a pipeline that never stalls.
+Either way the LOD logic should take the DSP route for the differences and the
+fraction (two blocks, some 30 to 40 ALUTs saved), and the tile RAMs read by
+pixel cost about nothing.
 
 Where to check it: the random bench already sets TEX_LOD and reads
-LOD_FRACTION (5 of 12 seeds differed with `MRDP_LOD` before), so building
-`tb_rdp` with `TB_CFLAGS=-DMRDP_LOD` and `rdp_regress.sh`'s seeds is the RTL's
+LOD_FRACTION (5 of 12 seeds differed with `RDP_LOD` before), so building
+`tb_rdp` with `TB_CFLAGS=-DRDP_LOD` and `rdp_regress.sh`'s seeds is the RTL's
 test, and `test_lod.c`'s floor, put through `tb_rdp` as a task, would be a
 directed one.
 
 ## Implementation
 
-The RTL has the LOD as the model has it with `MRDP_LOD` and
-`MRDP_EXACT_DIV` (the console's perspective divide, `mrdp_n64_div`: with it
-the texel coordinates match the console's to the subtexel), the flags
+The RTL has the LOD as the model has it with `RDP_LOD` and `RDP_EXACT_DIV`
+(the console's perspective divide, `mrdp_n64_div`: with it the texel
+coordinates match the console's to the subtexel), the flags
 `sim/rdp/build_rtl.sh` builds the model with: the perspective divide is now
-the console's for every pixel, LOD or not. It is
-variant (c), the neighbour's divide, with two changes to the design above: a
-missing neighbour is a ghost pixel rather than a look-ahead in the issue, and
-the LOD primitives' extra clocks come from where two RAMs are read, so that a
+the console's for every pixel, LOD or not. It is variant (c), the neighbour's
+perspective divide, with two changes to the design above: a missing neighbour
+is a ghost pixel rather than a look-ahead in the issue, and the LOD
+primitives' extra clocks come from where two RAMs are read, so that a
 primitive without the LOD takes the clocks it took before, to the clock.
-`rdp_top`'s parameter `LOD` (1 by default) turns it off: LOD_FRACTION reads
-0 and the tiles are the primitive's.
+`rdp_top`'s parameter `LOD` (1 by default) turns it off: LOD_FRACTION reads 0
+and the tiles are the primitive's.
 
 ### When
 
@@ -419,8 +428,8 @@ Its pixels take two clocks each, whether they make one texture pass or two.
 
 ### The pixel's three points
 
-* **The pixel**: P0's first load, the pixel's S, T, W, through the divide as
-  before.
+* **The pixel**: P0's first load, the pixel's S, T, W, through the
+  perspective divide as before.
 * **The next line**: P0's second load. `rdp_top` gives S, T, W plus DaDy in
   the clock after the issue, while `pix_valid` is down: a triangle's DaDy
   of S, T and W is read from the staging RAM at S_VSET's steps 6 and 7, which
@@ -429,17 +438,18 @@ Its pixels take two clocks each, whether they make one texture pass or two.
   keeps 17 bits of it as of a 16.16 DaDy: `dy_s` and `dy_t` in `rdp_top`
   would drop `t_dxl`'s low 4 bits).
   The sums are 32-bit, as the model's.
-* **The next pixel**: the neighbour's own first divide. `rdp_top` issues a
-  primitive's pixels in the walk's order: walking right (`lft`, and every
-  rectangle), each pixel's next pixel must be divided two clocks after it,
-  so the issue two clocks after a pixel is the next one, or, when its memory
-  is not in yet or the span has ended, a ghost of it (divided, mask 0, never
-  drawn; the pixel itself follows when its memory is there). Walking left,
+* **The next pixel**: the neighbour's own first perspective divide. `rdp_top`
+  issues a primitive's pixels in the walk's order: walking right (`lft`, and
+  every rectangle), each pixel's next pixel must go through the perspective
+  divide two clocks after it, so the issue two clocks after a pixel is the
+  next one, or, when its memory is not in yet or the span has ended, a ghost
+  of it (through the perspective divide, mask 0, never drawn; the pixel
+  itself follows when its memory is there). Walking left,
   the neighbour is the pixel issued before, and a row starts with a ghost of
   the pixel before the span (the span setup takes `xs - 1`, and the first
   step brings `cur` to the span's first pixel: the same values, bit for bit).
 
-### The divide
+### The perspective divide
 
 The console's (`n64_div`): W's integer half, its leading zeros up to 14
 shifted out, a 64-entry point and slope table (logic, 25 LUTs), a 15-bit
@@ -457,7 +467,7 @@ After P4 (`rdp_pix`, "The LOD"):
 
 | stage | what |
 |---|---|
-| L1 | each divide less the last pass A's (`pa_*`): a pass B (the next line) less its own A is the line's step; a pass A less the A before is a step to the next pixel, the pixel before's walking right, this pixel's own walking left (negated: the ones' complement of `A - prev - 1`, a borrow in). Of each step the larger magnitude of S's and T's, 14 bits, and a far flag (512 texels or more, or a point out of range) |
+| L1 | each perspective divide's result less the last pass A's (`pa_*`): a pass B (the next line) less its own A is the line's step; a pass A less the A before is a step to the next pixel, the pixel before's walking right, this pixel's own walking left (negated: the ones' complement of `A - prev - 1`, a borrow in). Of each step the larger magnitude of S's and T's, 14 bits, and a far flag (512 texels or more, or a point out of range) |
 | L2 | the distance (the larger step), its level (log2 of bits 12:5, chosen by the same compare from each step's own), far, magnified |
 | L3 | the level against the level count, the tiles, the fraction (into `lf`) |
 
@@ -469,15 +479,15 @@ selects of P4 to P8t: each stage's fields are carried from the pass's read.
 ### The latency
 
 A pixel's texture passes cannot start before L3. Its S, T wait in `st_ram`
-(16 x 32, M10K) and P4 takes them back D clocks after the divide, D = 5
-walking right (the next pixel's divide is two clocks after the pixel's, its
-step a clock later), 4 walking left. What the texture stages do not read (x,
-the line buffer set, the shade, the depth, the coverage, the row) goes from
-P1 to P8b through `sb_ram` (16 x 71, two M10K, where the stages' registers
-and Quartus's shift registers made of them were), read 9 clocks after its
-write, or 9 + D with the LOD: the pointers make the delay, and the only
-choice between two sources is S, T at P4. The fraction goes from L3 to P9 in
-`lf_ram` (16 x 9).
+(16 x 32, M10K) and P4 takes them back D clocks after the perspective divide,
+D = 5 walking right (the next pixel's perspective divide is two clocks after
+the pixel's, its step a clock later), 4 walking left. What the texture stages do
+not read (x, the line buffer set, the shade, the depth, the coverage, the row)
+goes from P1 to P8b through `sb_ram` (16 x 71, two M10K, where the stages'
+registers and Quartus's shift registers made of them were), read 9 clocks
+after its write, or 9 + D with the LOD: the pointers make the delay, and the
+only choice between two sources is S, T at P4. The fraction goes from L3 to P9
+in `lf_ram` (16 x 9).
 
 What the LOD costs in time: two clocks a pixel (a mipmapped primitive's
 pixels took two already for TEXEL1), a ghost a row (two clocks), a ghost for
@@ -509,13 +519,13 @@ unit fitted with every pin virtual, one seed, a 16 ns clock), before
 
 (+142 fitted ALMs, -7 RAM blocks, no DSP block more; with three TMEM copies
 5,092 ALMs, 53 RAM blocks, +0.835 ns: the two copies cost about nothing and
-are kept; sim/area_study.md, "LOD", has the breakdown. The console's divide
-alone, without the LOD, measured 7,067 ALUTs and 6,013 registers in
-synthesis: it is smaller than the old one.)
+are kept; sim/area_study.md, "LOD", has the breakdown. The console's
+perspective divide alone, without the LOD, measured 7,067 ALUTs and 6,013
+registers in synthesis: it is smaller than the old one.)
 
 ### How it was checked
 
-The model built with `MRDP_EXACT_DIV`, with and without `MRDP_LOD`
+The model built with `RDP_EXACT_DIV`, with and without `RDP_LOD`
 (`build_rtl.sh`'s `LOD=1`, the default, and `LOD=0`):
 
 * `tools/area2/rdp_regress.sh`: `rdp_regress: 53 runs, 0 failed`, with the
@@ -532,23 +542,23 @@ The model built with `MRDP_EXACT_DIV`, with and without `MRDP_LOD`
   next line, a rectangle's next line kept to 17 bits, a DaDy fraction bit,
   the first cycle's signed alpha, D, the two ghosts, the far flags, T's
   range, W's range) fails some of these runs (the 17-bit rectangle step one
-  run in 150); a fault in the divide's range direction (the product's bit 29)
-  fails none: that decomposition of `mrdp_n64_div` was checked against it in
-  Python instead, on 2 million random S, W.
+  run in 150); a fault in the perspective divide's range direction (the
+  product's bit 29) fails none: that decomposition of `mrdp_n64_div` was
+  checked against it in Python instead, on 2 million random S, W.
 * The 79 captured task dumps under `build/triage`, each with the fast memory
   and with `TB_SDRAM=1 TB_CPU=30`: all `RTL == model`, and every
   per-command clock log (`TB_CMDT`) byte for byte the RTL's before the LOD,
   with the LOD and without; the same against the RTL before the LOD with
-  only its divide made the console's. Without the LOD, the 113 random runs
-  above are clock for clock that RTL's too.
+  only its perspective divide made the console's. Without the LOD, the 113
+  random runs above are clock for clock that RTL's too.
 * The whole SoC (`sim/mips_soc`, `FB_N64=1 VGA=1 -e 60`, a bench built with
-  this RTL against `obj_soc` and against one built with the RTL before the
-  LOD with only its divide made the console's): Super Mario 64, 300M
+  this RTL against `obj_soc` and against one built with the RTL before the LOD
+  with only its perspective divide made the console's): Super Mario 64, 300M
   cycles, runs to the end (288 frames, the CPU at 80246ddc as on `obj_soc`);
   its five frame dumps are byte for byte the second bench's, and `obj_soc`'s
-  but for frame 240 (the title's 3D logo: 1,642 single pixels, the divide's
-  subtexels). Pokemon Snap, 625M cycles (600 frames): its ten frame dumps
-  are byte for byte the second bench's (no LOD primitive draws in its
+  but for frame 240 (the title's 3D logo: 1,642 single pixels, the perspective
+  divide's subtexels). Pokemon Snap, 625M cycles (600 frames): its ten frame
+  dumps are byte for byte the second bench's (no LOD primitive draws in its
   opening); against `obj_soc` frames 180 to 540 differ in 3,639 to 8,327
-  scattered pixels over the textured ground and trees, the same picture:
-  the divide again.
+  scattered pixels over the textured ground and trees, the same picture: the
+  perspective divide again.

@@ -1,13 +1,13 @@
-/* The texture LOD in the model (MRDP_LOD; mrdp.c, the LOD section; docs/lod.md):
+/* The texture LOD in the model (RDP_LOD; mrdp.c, the LOD section; docs/lod.md):
  * mrdp_lod against steps worked out by hand, then a perspective floor drawn in
  * 2-cycle mode with a mip chain of six levels, each a checker of its own colour,
  * through the combiner's (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, to
- * test_lod.ppm. Built without MRDP_LOD the floor is level 0 all the way to the
+ * test_lod.ppm. Built without RDP_LOD the floor is level 0 all the way to the
  * horizon; with it the levels follow the distance.
- *   cc -O2 -DMRDP_N64 -DMRDP_LOD -I. test_lod.c mrdp.c -o test_lod && ./test_lod
+ *   cc -O2 -DMRDP_N64 -DRDP_LOD -I. test_lod.c mrdp.c -o test_lod && ./test_lod
  *   cc -O2 -DMRDP_N64 -I. test_lod.c mrdp.c -o test_nolod && ./test_nolod
- * With -DMRDP_EXACT_DIV too (the console's divide, as the RTL has it) it checks that divide first, and the floor is
- * drawn with it.
+ * With -DRDP_EXACT_DIV too (the console's perspective divide, as the RTL has it) it checks that divide first, and the
+ * floor is drawn with it.
  */
 #include "mrdp.h"
 #include <math.h>
@@ -23,7 +23,7 @@ static mrdp_t R;
 static int fails;
 static void cmd(uint32_t w0, uint32_t w1) { mrdp_push(&R, w0); mrdp_push(&R, w1); }
 
-#ifdef MRDP_LOD
+#ifdef RDP_LOD
 /* ---- mrdp_lod alone ---------------------------------------------------------- */
 static void lod_case(const char *what, uint32_t h, unsigned minl, unsigned maxl, int32_t ds, int32_t dt,
                      unsigned want_t0, unsigned want_t1, unsigned want_frac, unsigned want_level)
@@ -36,7 +36,7 @@ static void lod_case(const char *what, uint32_t h, unsigned minl, unsigned maxl,
 }
 static void lod_units(void)
 {
-    const uint32_t L = MRDP_H_TEX_LOD;
+    const uint32_t L = RDP_H_TEX_LOD;
     /* one texel a pixel: level 0, fraction 0, blending toward level 1 */
     lod_case("1 texel: level 0", L, 0, 5, 32, 0, 2, 3, 0x00, 0);
     /* 2.5 texels: level 1 (2..4), a quarter of the way to level 2 */
@@ -46,13 +46,13 @@ static void lod_units(void)
     /* half a texel: magnified, level 0 and no blend */
     lod_case("magnified", L, 0, 5, 16, 0, 2, 2, 0x00, 0);
     /* magnified with sharpen: the next level is extrapolated against, the fraction negative (0x100 up) */
-    lod_case("magnified, sharpen", L | MRDP_H_SHARPEN, 0, 5, 16, 0, 2, 3, 0x180, 0);
+    lod_case("magnified, sharpen", L | RDP_H_SHARPEN, 0, 5, 16, 0, 2, 3, 0x180, 0);
     /* sharpen's fraction is no less than the minimum level */
-    lod_case("magnified, sharpen, min level 24", L | MRDP_H_SHARPEN, 24, 5, 16, 0, 2, 3, 0x1C0, 0);
+    lod_case("magnified, sharpen, min level 24", L | RDP_H_SHARPEN, 24, 5, 16, 0, 2, 3, 0x1C0, 0);
     /* detail, magnified: TEXEL0 the detail tile (the primitive's), TEXEL1 level 0 */
-    lod_case("magnified, detail", L | MRDP_H_DETAIL, 0, 5, 16, 0, 2, 3, 0x80, 0);
+    lod_case("magnified, detail", L | RDP_H_DETAIL, 0, 5, 16, 0, 2, 3, 0x80, 0);
     /* detail, minified: the levels are a tile on */
-    lod_case("2.5 texels, detail", L | MRDP_H_DETAIL, 0, 5, 80, 0, 4, 5, 0x40, 1);
+    lod_case("2.5 texels, detail", L | RDP_H_DETAIL, 0, 5, 80, 0, 4, 5, 0x40, 1);
     /* 16 texels with 2 levels after the first: clamped to the last, at the far level (no blend, fraction all ones) */
     lod_case("past the last level", L, 0, 2, 512, 0, 4, 4, 0xFF, 2);
     /* a primitive with one level: always that one */
@@ -72,8 +72,8 @@ static void lod_units(void)
 }
 #endif
 
-#ifdef MRDP_EXACT_DIV
-/* ---- the console's divide (MRDP_EXACT_DIV: mrdp_n64_div) ----------------------------- */
+#ifdef RDP_EXACT_DIV
+/* ---- the console's perspective divide (RDP_EXACT_DIV: mrdp_n64_div) ----------------- */
 static void div_case(const char *what, int32_t s16, int32_t w16, int32_t want, int want_range)
 {
     int range;
@@ -199,10 +199,10 @@ static int level_of(int r, int g, int b)
 
 int main(void)
 {
-#ifdef MRDP_LOD
+#ifdef RDP_LOD
     lod_units();
 #endif
-#ifdef MRDP_EXACT_DIV
+#ifdef RDP_EXACT_DIV
     div_units();
 #endif
     mrdp_init(&R, 0, rd16, wr16);
@@ -216,7 +216,7 @@ int main(void)
     cmd(0x3C000000u | 2u << 20 | 13u << 15 | 7u << 12 | 7u << 9 | 15u << 5 | 31u,
         1u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 6u << 9 | 0u << 6 | 7u << 3 | 0u);
     /* 2-cycle, perspective, TEX_LOD, the 3-point filter (BI_LERP both), no dithers; the blender passes the pixel */
-    cmd(0x2F000000u | 1u << 20 | MRDP_H_PERSP | MRDP_H_TEX_LOD | 2u << 12 | MRDP_H_BILERP0 | MRDP_H_BILERP1 | 3u << 6 | 3u << 4, 0);
+    cmd(0x2F000000u | 1u << 20 | MRDP_H_PERSP | RDP_H_TEX_LOD | 2u << 12 | MRDP_H_BILERP0 | MRDP_H_BILERP1 | 3u << 6 | 3u << 4, 0);
     vtx_t a = floor_pt(-10, 0.7), b = floor_pt(10, 0.7), c = floor_pt(10, 60), d = floor_pt(-10, 60);
     tri(a, b, c, LEVELS - 1);
     tri(a, c, d, LEVELS - 1);
@@ -247,17 +247,17 @@ int main(void)
         if (k != prev) { printf("     row %3d: level %d\n", y, k); if (prev >= 0 && k < prev) monotonic = 0; prev = k; }
         top = k;
     }
-#ifdef MRDP_LOD
+#ifdef RDP_LOD
     int ok = monotonic && bottom == 0 && top == LEVELS - 1;
     printf("%s the levels rise with the distance, 0 near to %d at the horizon\n", ok ? "ok  " : "FAIL", LEVELS - 1);
 #else
     int ok = bottom == 0 && top == 0;
     (void)monotonic;
-    printf("%s without MRDP_LOD the floor is level 0 throughout\n", ok ? "ok  " : "FAIL");
+    printf("%s without RDP_LOD the floor is level 0 throughout\n", ok ? "ok  " : "FAIL");
 #endif
     fails += !ok;
     printf("pixels drawn %llu, %s\n", (unsigned long long)R.pixels_drawn, fails ? "FAILED" : "all ok");
-#ifdef MRDP_LOD
+#ifdef RDP_LOD
     printf("LOD pixels %llu (magnified %llu, at the far level %llu); by level:", (unsigned long long)R.lod_px,
            (unsigned long long)R.lod_mag, (unsigned long long)R.lod_far);
     for (int k = 0; k < 8; k++) printf(" %llu", (unsigned long long)R.lod_lvl[k]);

@@ -288,7 +288,7 @@ static void rand_tri()
         v[3] = (int32_t)(gr() << 8); dx[3] = (int32_t)gr(); de[3] = (int32_t)gr();
         if (lod_mode) {
             // steps of S, T from a sixteenth of a texel a pixel to tens (2^21 is a texel), DaDy on the same scale; W's
-            // steps a small part of W (the perspective's divide then gives steps on that scale too)
+            // steps a small part of W (the perspective divide then gives steps on that scale too)
             // (and now and then hundreds of texels, and a W that crosses 1.0 down to 0 and below inside the triangle)
             int32_t dy[4];
             for (int k = 0; k < 2; k++) { dx[k] = grs(1 << (14 + gr(15))); dy[k] = grs(1 << (14 + gr(15))); de[k] = grs(1 << (17 + gr(9))); }

@@ -10,7 +10,7 @@
  *   RDP_WATCH=<hex address>: the commands that write that word of RDRAM
  *   RDP_RAW=1: and the colour image as it is (prefix_N.raw)
  * rdp_task_lod (make rdp_task_lod) is the same with the model's texture LOD
- * (MRDP_LOD, docs/lod.md), and counts the pixels that took it by level.
+ * (RDP_LOD, docs/lod.md), and counts the pixels that took it by level.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,7 +134,7 @@ int main(int argc, char **argv)
                (unsigned long long)s.rdp_cmds, (unsigned long long)rdp.pixels_drawn, rdp.unknown_ops);
         for (int i = 0; i < 64; i++) if (ops[i]) printf(" %02x:%llu", i, (unsigned long long)ops[i]);
         printf("\n");
-#ifdef MRDP_LOD
+#ifdef RDP_LOD
         /* (make rdp_task_lod: the model with the texture LOD, docs/lod.md) what of the frame took it */
         printf("  LOD: %llu pixels (2-cycle, TEX_LOD), %llu magnified, %llu at the far level; by level:", (unsigned long long)rdp.lod_px,
                (unsigned long long)rdp.lod_mag, (unsigned long long)rdp.lod_far);

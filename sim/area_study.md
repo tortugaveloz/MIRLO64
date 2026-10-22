@@ -498,9 +498,9 @@ address choice (write address or texel 0's) and its second output select.
 ## LOD
 
 Texture LOD in the RDP (docs/lod.md, "Implementation"): variant (c), the
-neighbour's divide, with ghosts for the missing neighbours, the pixel's extra
-clocks made by where two RAMs are read (a primitive without the LOD takes
-the clocks it took), and the console's perspective divide (its texel
+neighbour's perspective divide, with ghosts for the missing neighbours, the
+pixel's extra clocks made by where two RAMs are read (a primitive without the
+LOD takes the clocks it took), and the console's perspective divide (its texel
 coordinates match the console's to the subtexel) in place of the old one for
 every pixel. Candidate 8 (two TMEM copies in true dual port)
 is in, as the M10K budget asked.
@@ -514,7 +514,7 @@ reference is round 2's RDP (the tree before these edits).
 | RDP | ALUTs | registers | memory ALUTs | DSP | block memory bits | fitted ALMs | RAM blocks | worst setup slack (unit) |
 |---|---|---|---|---|---|---|---|---|
 | round 2 | 7,169 | 6,094 | 64 | 39 | 269,704 | 4,955 | 55 | +1.018 ns |
-| round 2 with the console's divide only | 7,067 | 6,013 | 64 | 39 | 269,515 | | | |
+| round 2 with the console's perspective divide only | 7,067 | 6,013 | 64 | 39 | 269,515 | | | |
 | LOD, two TMEM copies | 7,325 | 6,313 | 64 | 39 | 231,341 | 5,097 | 48 | +1.251 ns |
 | LOD, three TMEM copies | 7,324 | 6,313 | 64 | 39 | 268,205 | 5,092 | 53 | +0.835 ns |
 
@@ -526,15 +526,15 @@ RAM blocks: kept. (These builds are the final RTL but for a texture
 rectangle's next-line step, then kept to 17 bits and now exact as the model
 has it: four constant bits of an adder's operand.) Where it went, by synthesis:
 
-* **Saved.** The divide: the console's (a 15-bit normaliser, a 64 x 25 table
-  in logic, an 11 x 10 product for the slope, two 16 x 17 products) in place
-  of a 31-bit normaliser, an M10K table and two 27 x 27 products: -102
-  ALUTs, -81 registers, one M10K, and the two products are 18 x 18 now (the
-  fit puts them in two blocks of "two independent 18 x 18" where it had two
-  27 x 27 blocks: the same count). The tile RAMs read once a pass instead of
-  for two tiles at once: their second copies (two M10K) and the `ph ? t1_* :
-  t_*` selects of P4 to P8t go, against some 50 registers that carry the
-  fields down.
+* **Saved.** The perspective divide: the console's (a 15-bit normaliser, a
+  64 x 25 table in logic, an 11 x 10 product for the slope, two 16 x 17
+  products) in place of a 31-bit normaliser, an M10K table and two 27 x 27
+  products: -102 ALUTs, -81 registers, one M10K, and the two products are
+  18 x 18 now (the fit puts them in two blocks of "two independent 18 x 18"
+  where it had two 27 x 27 blocks: the same count). The tile RAMs read once a
+  pass instead of for two tiles at once: their second copies (two M10K) and
+  the `ph ? t1_* : t_*` selects of P4 to P8t go, against some 50 registers
+  that carry the fields down.
 * **Added.** The next line's S, T, W adders in `rdp_top` (32, 32 and 17 bits)
   and its DaDy registers (51); the issue's ghosts; P4's 17-bit values and
   range; L1 (two 18-bit subtracters, the magnitudes, a 14-bit compare); L2,
@@ -556,9 +556,9 @@ has it: four constant bits of an adder's operand.) Where it went, by synthesis:
 Item 5 of the request, the per-bit hold multiplexer of round 2's RSP fix:
 there is no candidate in the RDP. In the fit's DSP table every product whose
 result goes straight into a register is packed (`rdp_top`'s `mul_p`, the
-divide's two products); the products that are not are followed by logic
-before their register (the tile shift's subtraction, the combiners' sums
-and clamps, the blender's sums), and none of their registers is written
+perspective divide's two products); the products that are not are followed
+by logic before their register (the tile shift's subtraction, the combiners'
+sums and clamps, the blender's sums), and none of their registers is written
 under a hold. One thing seen there: the depth's correction to the first
 covered sample, `z_dx[31:5] * ox` and `z_dy[31:5] * oy` with `ox`, `oy` of
 0 to 3, takes two 27 x 27 DSP blocks for what two shift-and-adds do (some 60

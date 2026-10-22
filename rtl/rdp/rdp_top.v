@@ -9,7 +9,7 @@
 // order). The coverage (anti-aliasing) is the N64's (lang/c/mrdp/mrdp.h,
 // MRDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
 // pixels carry their 8-sample masks. YUV textures are converted (SET_CONVERT).
-// The texture LOD of a 2-cycle primitive is the model's with MRDP_LOD
+// The texture LOD of a 2-cycle primitive is the model's with RDP_LOD
 // (docs/lod.md), with the LOD parameter: rdp_pix computes it; this module
 // issues the pixels in the walk's order, with the ghosts that needs, and gives
 // the next line's S, T, W.
@@ -235,7 +235,7 @@ module rdp_top #(
     // triangle's own S/T adders -- and pass s = cur[4] >>> shS, t = cur[5] >>> 5
     reg  [2:0]  shS;
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
-    // a W of s.15 -- and go to the pipeline as they are: its divide, and the
+    // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
     // affine path, take the integer halves (lang/c/mrdp/mrdp.c draw_pixel_cvg)
     // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
     // 0 in an alpha, either cycle). (Registered: the modes are set many clocks before a primitive's first pixel.)
@@ -245,7 +245,7 @@ module rdp_top #(
     reg         lod_lft;            // the walk goes to the right (a triangle's lft; a rectangle's always): x + 1 is next
     reg  [2:0]  lod_lvl;            // the level count (the triangle's level field; a rectangle's 0)
     reg  [4:0]  min_lvl;            // SET_PRIM_COLOR's minimum level
-    reg         pix_ghost;          // the pixel issued is a ghost: divided for its neighbour's LOD, never drawn
+    reg         pix_ghost;          // the pixel issued is a ghost: through the perspective divide for its neighbour's LOD, never drawn
     // The next line's S, T, W, which rdp_pix's P0 takes the clock after a pixel's (pix_valid down): plus DaDy, of which a
     // triangle keeps the top 17 bits (ldy_*, from its texture block), or a texture rectangle's row step (t_dxl: DsDx
     // flipped, DtDy not), the exact next row as the model takes it (the console keeps 17 bits of it as of a 16.16 DaDy,
@@ -390,10 +390,10 @@ module rdp_top #(
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
     // clock: pix_valid is still up the clock after an issue
     wire       pix_slot = !((two_pass || lod_on) && pix_valid);
-    // The LOD: a pixel's next pixel is divided two clocks after it when the walk goes to the right (pix_fol: rdp_pix
-    // takes its step from the next pass A), so the pixel issued then is the next one, or -- its memory not in, or the
-    // span ended -- a ghost of it (divided, never drawn; the pixel itself follows when it can). Walking left, the
-    // span's first pixel is preceded by a ghost of the pixel before it (pix_g0).
+    // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
+    // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
+    // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself
+    // follows when it can). Walking left, the span's first pixel is preceded by a ghost of the pixel before it (pix_g0).
     reg        pix_fol, pix_g0, pix_stp;    // (pix_stp: cur steps to the next place at the next issue)
     wire [10:0] pix_pos = {1'b0, xs} + {1'b0, px_cnt};
     wire       pix_end = pix_pos == xe;

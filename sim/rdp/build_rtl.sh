@@ -8,16 +8,16 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 R="${RDP_DIR:-$HERE/../../rtl/rdp}"
 M="$HERE/../../rtl/mrdp"
-MD="${MRDP_DIR:-$HERE/../../lang/c/mrdp}"     # (the model: MRDP_DIR=<dir> for another copy of it)
+MD="${MODEL_DIR:-$HERE/../../lang/c/mrdp}"     # (the model: MODEL_DIR=<dir> for another copy of it)
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
 V="${VERILATOR:-$HOME/local/usr/bin/verilator}"
-# (the model with the console's perspective divide, MRDP_EXACT_DIV, as the RTL has it; docs/rdp.md)
-OBJ=${OBJ:-obj_rdp}; VD=""; CD="-DMRDP_N64 -DMRDP_EXACT_DIV"
-# LOD=1: the texture LOD (docs/lod.md) in both, the model built with MRDP_LOD and rdp_top's LOD parameter set;
+# (the model with the console's perspective divide, RDP_EXACT_DIV, as the RTL has it; docs/rdp.md)
+OBJ=${OBJ:-obj_rdp}; VD=""; CD="-DMRDP_N64 -DRDP_EXACT_DIV"
+# LOD=1: the texture LOD (docs/lod.md) in both, the model built with RDP_LOD and rdp_top's LOD parameter set;
 # LOD=0 without it in either. (RDP_DIR=<dir>: another copy of rtl/rdp, e.g. one from before the LOD, which has no
 # parameter to set.)
 LOD=${LOD:-1}
-if [ "$LOD" = 1 ]; then CD="$CD -DMRDP_LOD"; fi
+if [ "$LOD" = 1 ]; then CD="$CD -DRDP_LOD"; fi
 grep -q "parameter LOD" "$R/rdp_top.v" && VD="-GLOD=$LOD"
 cd "$HERE"
 # (make does not see the model's flags change: a build with other ones starts from an empty directory, or the model's
