@@ -1109,8 +1109,9 @@ module rdp_pix (
     wire [7:0]  zcm   = cvg_sb * zdifb;
     wire [3:0]  cvg_i = (z_cmp && zinter) ? zcm[6:3] : cvg_sb;
     wire        blend_en = force_bl || (!ovf11b && aa_en && (!z_cmp || zfar11b));
-    // no covered sample: not drawn (AA_EN, or CVG_X_ALPHA's cut-outs)
-    wire        kill11 = k0_11b || (cvg_i == 4'd0 && (aa_en || cvg_x_a) && cyc != 2'd2);
+    // no covered sample: not drawn; without AA_EN the pixel's own coverage decides,
+    // so a CVG_X_ALPHA pixel whose scaled coverage is 0 is still written
+    wire        kill11 = k0_11b || (cvg_i == 4'd0 && aa_en && cyc != 2'd2);
     // the coverage written (CVG_DST: clamp, wrap, zap, save) and so the bit 0
     wire [4:0]  csum = {1'b0, cvg_i} + {2'd0, mcvg11b};
     reg  [2:0]  cvo;

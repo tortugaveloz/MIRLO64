@@ -94,8 +94,11 @@ module rdp_top (
     wire rd_mem1 = other_l[29:28] == 2'd1 || other_l[21:20] == 2'd1;
     wire rd_p    = (cyc == 2'd1) ? (other_l[29:28] == 2'd1 || (other_l[29:28] == 2'd0 && rd_mem0))
                                  : other_l[31:30] == 2'd1;
-    // (and the memory's coverage: IM_RD, with AA_EN or CVG_X_ALPHA)
-    wire need_mem = (cyc[1] || cimg8) ? 1'b0 : (other_l[6] && (other_l[3] || other_l[12])) ? 1'b1
+    // (and the memory's coverage: IM_RD, with AA_EN or CVG_X_ALPHA; and its
+    // colour for CLR_ON_CVG with CVG_X_ALPHA and without AA_EN, where a pixel
+    // with no scaled coverage is written as the blender's M)
+    wire need_mem = (cyc[1] || cimg8) ? 1'b0
+                  : ((other_l[6] && (other_l[3] || other_l[12])) || (other_l[7] && other_l[12] && !other_l[3])) ? 1'b1
                   : !other_l[14] ? rd_p : (cyc == 2'd1) ? (rd_mem0 | rd_mem1) : rd_mem0;
     wire z_cmp = other_l[4] && !cyc[1] && !cimg8;       // (copy and fill mode have no depth, nor an 8-bit image)
     wire z_upd = other_l[5] && !cyc[1] && !cimg8;

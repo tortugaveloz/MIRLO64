@@ -243,6 +243,16 @@ int main(void)
     cmd(0x3A000000u, 0xFF0000FFu); tri_vleft((10 << 16) - 0x8000);
     check("no AA: an edge at 9.5 takes 10 (the old centre rule would take 9)", 10, 3, c5551(255, 0, 0, 1));
     check("no AA: ... and not 9", 9, 3, 0x0001);
+    /* ... and with CVG_X_ALPHA, a pixel whose scaled coverage is 0 (alpha 16) is still written */
+    setup((1u << 6) | (1u << 22) | (1u << 18) | (1u << 12));
+    cmd(0x3A000000u, 0x00FF0010u); tri_vleft(10 << 16);
+    check("no AA, CVG_X_ALPHA 16: written", 12, 3, c5551(0, 255, 0, 1));
+    /* ... and with CLR_ON_CVG it is written as the memory's colour */
+    setup((1u << 6) | (1u << 22) | (1u << 18));
+    cmd(0x3A000000u, 0xFF0000FFu); tri_vleft(10 << 16);
+    cmd(0x2F000000u | (3u << 6) | (3u << 4), (1u << 22) | (1u << 18) | (1u << 12) | (1u << 7));
+    cmd(0x3A000000u, 0x00FF0010u); tri_vleft(10 << 16);
+    check("no AA, CVG_X_ALPHA 16, CLR_ON_CVG: the memory's colour", 12, 3, c5551(255, 0, 0, 1));
 
     /* 8. a triangle without texture coefficients (its command has no S, T, W block) still takes TEXEL0 from the tile's texel
      * (0, 0): S = T = W = 0 and the texture stages run (as the hardware does; a character's collar, G_TEXTURE off with a combiner that reads

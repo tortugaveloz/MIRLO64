@@ -786,12 +786,14 @@ static inline uint32_t z_dec(uint16_t w)
 }
 
 /* does the pixel pipeline read the colour image (rtl/rdp/rdp_top.v need_mem):
- * for the memory coverage (IM_RD, with AA_EN or CVG_X_ALPHA), or for a
- * blender cycle that selects it */
+ * for the memory coverage (IM_RD, with AA_EN or CVG_X_ALPHA), for CLR_ON_CVG
+ * with CVG_X_ALPHA and without AA_EN (a pixel with no scaled coverage is
+ * written, as the blender's M), or for a blender cycle that selects it */
 static int cvg_need_mem(uint32_t l, unsigned cyc)
 {
     if (cyc == 2) return 0;
     if ((l & MRDP_L_IM_RD) && (l & (MRDP_L_AA_EN | MRDP_L_CVG_X_ALPHA))) return 1;
+    if ((l & MRDP_L_CLR_ON_CVG) && (l & MRDP_L_CVG_X_ALPHA) && !(l & MRDP_L_AA_EN)) return 1;
     int need = cyc == 1 ? (bl_reads_memory(l, 0) || bl_reads_memory(l, 1)) : bl_reads_memory(l, 0);
     if (!(l & MRDP_L_FORCE_BL)) {
         unsigned p = (l >> (cyc == 1 ? 28 : 30)) & 3;
@@ -962,9 +964,10 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
         sh_b = dzenc >= 12u ? 15u - dzenc : 4u;
     }
     if (!zpass) return;
-    /* drawn when a sample is covered (AA_EN); without, MRDP's rule keeps
-     * CVG_X_ALPHA's cut-outs out (the N64 would draw them as memory) */
-    if (cvg_sel == 0 && !copy && (aa || (l & MRDP_L_CVG_X_ALPHA))) return;
+    /* with AA_EN drawn when a sample is left after CVG_X_ALPHA; without, the
+     * pixel's own coverage (checked before) decides, so a CVG_X_ALPHA pixel
+     * whose scaled coverage is 0 is still written */
+    if (cvg_sel == 0 && !copy && aa) return;
 
     /* blender */
     mrdp_rgba_t out;
