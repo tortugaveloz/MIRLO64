@@ -95,3 +95,7 @@ sim/vi_filter/obj_vi.log
 /s_*/
 /projects_a2_*
 /nightly/
+
+# sim/rdp_oracle: its builds, logs and streams (B=build/linux too), and the oracle setup.sh fetches into build/oracle/
+/sim/rdp_oracle/build/
+/build/oracle/

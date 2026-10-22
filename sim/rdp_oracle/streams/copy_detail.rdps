@@ -1,0 +1,24 @@
+# Copy mode, TEX_LOD and DETAIL: a texture rectangle 4 pixels wide and 1 row high (DsDx 4, copy mode's step) of tile 0 (16 texels,
+# red); tile 1 is 16 texels of green. The oracle computes a copy-mode LOD (the next pixel against the one after: 4
+# texels, not magnified) and with DETAIL samples tile 0 + 1; the model samples tile 0. Without DETAIL both sample
+# tile 0 (the line "cmd 2f210000" in place of "cmd 2f250000": no difference).
+rdram zero
+mem 200000 f801f801f801f801f801f801f801f801f801f801f801f801f801f801f801f80107c107c107c107c107c107c107c107c107c107c107c107c107c107c107c107c1
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 3d10000f 00200000
+cmd 35100800 07000000
+cmd 27000000 00000000
+cmd 34000000 0703c000
+cmd 3d10000f 00200020
+cmd 35100804 07000000
+cmd 27000000 00000000
+cmd 34000000 0703c000
+cmd 27000000 00000000
+cmd 35100800 00000000
+cmd 32000000 0003c000
+cmd 35100804 01000000
+cmd 32000000 0103c000
+cmd 2f250000 00000000
+cmd 2402c020 00020020 00000000 10000400
+cmd 29000000 00000000

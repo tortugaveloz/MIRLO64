@@ -1,0 +1,9 @@
+# (Not the LOD; from one game's first captured task.) Fill mode, scissor (8, 20) to (311, 219), a fill rectangle (0, 20) to
+# (311, 219): the oracle fills column 311 (the scissor's right edge counts in fill mode); the model stops at 310.
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d020050 004dc36c
+cmd 2f300000 00000000
+cmd 37000000 fffcfffc
+cmd 364dc36c 00020050
+cmd 29000000 00000000

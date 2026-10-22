@@ -1,0 +1,18 @@
+# (Not the LOD.) An untextured triangle (opcode 0x08: no S, T, W block), 1-cycle with PERSP, combiner TEXEL0, point
+# sampled. Tile 0: 4 x 1 texels, red, black, black, green, clamped. The console's perspective divide sees W = 0 and
+# saturates S and T to 0x7FFF: the oracle samples the last texel (green); the model takes S = T = 0 (red).
+rdram zero
+mem 200000 f8010001000107c1
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 3d100003 00200000
+cmd 35100200 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 27000000 00000000
+cmd 35100200 00000000
+cmd 32000000 0000c000
+cmd 2f080cf0 00000000
+cmd 3cffffff fffffe79
+cmd 088000a0 00a00050 003c0000 00000000 00140000 00000000 003c0000 00000000
+cmd 29000000 00000000

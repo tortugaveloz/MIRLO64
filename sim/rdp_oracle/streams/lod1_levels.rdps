@@ -1,0 +1,32 @@
+# 1-cycle, TEX_LOD, level count 5, combiner TEXEL0, point sampled. Tile 0 is red, tile 1 green, tile 2 blue (4 x 1
+# texels each). An affine triangle, S 2.5 texels a pixel: level 1. The oracle samples tile 0 + 1 (its 1-cycle LOD: the
+# next pixel against the one after); the model without RDP_EXACT samples tile 0 (no LOD in 1-cycle mode). At each
+# row's last drawn pixel (x 27: the span's last but one, the span being 20 pixels long) the far point is the pixel
+# before, a step of 5 texels: level 2, blue.
+rdram zero
+mem 200000 f801f801f801f80107c107c107c107c1003f003f003f003f
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 3d100003 00200000
+cmd 35100200 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 3d100003 00200008
+cmd 35100201 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 3d100003 00200010
+cmd 35100202 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 27000000 00000000
+cmd 35100200 00000000
+cmd 32000000 0000c000
+cmd 35100201 01000000
+cmd 32000000 0100c000
+cmd 35100202 02000000
+cmd 32000000 0200c000
+cmd 2f010cf0 00000000
+cmd 3cffffff fffffe79
+cmd 0aa80040 00400020 001c0000 00000000 00080000 00000000 001c0000 00000000 10001000 7fff0000 00500000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+cmd 29000000 00000000

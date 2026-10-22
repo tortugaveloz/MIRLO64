@@ -1,0 +1,11 @@
+# (Not the LOD.) A flat triangle (PRIM colour, 1-cycle) 10 rows high whose right edge is at x = 2100: the console's
+# edges are 12 bits of whole pixels (28 bits in all), and one past 2047 wraps; the oracle draws none of these rows, the
+# model draws 10..319. test_lod.c's floor has such rows (229 to 239).
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 2f000cf0 00000000
+cmd 3a000000 ff8040ff
+cmd 3cffffff fffff8db
+cmd 08800078 00780050 08340000 00000000 000a0000 00000000 08340000 00000000
+cmd 29000000 00000000

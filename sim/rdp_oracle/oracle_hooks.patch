@@ -1,0 +1,117 @@
+diff --git a/src/core/n64video/rdp/rasterizer.c b/src/core/n64video/rdp/rasterizer.c
+index 6e448f4..072260f 100644
+--- a/src/core/n64video/rdp/rasterizer.c
++++ b/src/core/n64video/rdp/rasterizer.c
+@@ -502,6 +502,7 @@ static void render_spans_1cycle_complete(struct rdp_state* wstate, int start, in
+                 wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
+ 
++                ORACLE_AT(x, i);
+                 tclod_1cycle_current(wstate, &sss, &sst, news, newt, s, t, w, dsinc, dtinc, dwinc, i, prim_tile, &tile1, &sigs);
+ 
+ 
+@@ -518,6 +519,7 @@ static void render_spans_1cycle_complete(struct rdp_state* wstate, int start, in
+             t += dtinc;
+             w += dwinc;
+ 
++            ORACLE_AT(x + xinc, i);
+             tclod_1cycle_next(wstate, &news, &newt, s, t, w, dsinc, dtinc, dwinc, i, prim_tile, &newtile, &sigs, &prelodfrac);
+ 
+             texture_pipeline_cycle(wstate, &wstate->texel1_color, &wstate->texel1_color, news, newt, newtile, 0);
+@@ -700,6 +702,7 @@ static void render_spans_1cycle_notexel1(struct rdp_state* wstate, int start, in
+ 
+             wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++            ORACLE_AT(x, i);
+             tclod_1cycle_current_simple(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, i, prim_tile, &tile1, &sigs);
+ 
+             texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+@@ -1042,6 +1045,7 @@ static void render_spans_2cycle_complete(struct rdp_state* wstate, int start, in
+ 
+                 wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++                ORACLE_AT(x, i);
+                 tclod_2cycle(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1, &tile2, &wstate->lod_frac);
+ 
+                 texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+@@ -1071,6 +1075,7 @@ static void render_spans_2cycle_complete(struct rdp_state* wstate, int start, in
+ 
+             if (j < length || !wstate->span[i + 1].validline || lodlength < 3)
+             {
++                ORACLE_AT(x + xinc, i);
+                 tclod_2cycle(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1, &tile2, &prelodfrac);
+ 
+                 texture_pipeline_cycle(wstate, &wstate->nexttexel_color, &wstate->nexttexel_color, sss, sst, tile1, 0);
+@@ -1085,6 +1090,7 @@ static void render_spans_2cycle_complete(struct rdp_state* wstate, int start, in
+                 sw = wstate->span[i + 1].w >> 16;
+                 wstate->tcdiv_ptr(ss, st, sw, &sss2, &sst2);
+ 
++                ORACLE_AT(-1000, i);
+                 tclod_2cycle_next(wstate, &sss, &sst, &sss2, &sst2, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1, &tile3, &prelodfrac, i);
+ 
+                 texture_pipeline_cycle(wstate, &wstate->nexttexel_color, &wstate->nexttexel_color, sss, sst, tile1, 0);
+@@ -1301,6 +1307,7 @@ static void render_spans_2cycle_notexelnext(struct rdp_state* wstate, int start,
+ 
+                 wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++                ORACLE_AT(x, i);
+                 tclod_2cycle(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1, &tile2, &wstate->lod_frac);
+ 
+                 texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+@@ -1356,6 +1363,7 @@ static void render_spans_2cycle_notexelnext(struct rdp_state* wstate, int start,
+ 
+             wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++            ORACLE_AT(x, i);
+             tclod_2cycle(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1, &tile2, &wstate->lod_frac);
+ 
+             texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+@@ -1525,6 +1533,7 @@ static void render_spans_2cycle_notexel1(struct rdp_state* wstate, int start, in
+ 
+                 wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++                ORACLE_AT(x, i);
+                 tclod_2cycle_notexel1(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1);
+ 
+                 texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+@@ -1579,6 +1588,7 @@ static void render_spans_2cycle_notexel1(struct rdp_state* wstate, int start, in
+ 
+             wstate->tcdiv_ptr(ss, st, sw, &sss, &sst);
+ 
++            ORACLE_AT(x, i);
+             tclod_2cycle_notexel1(wstate, &sss, &sst, s, t, w, dsinc, dtinc, dwinc, prim_tile, &tile1);
+ 
+             texture_pipeline_cycle(wstate, &wstate->texel0_color, &wstate->texel0_color, sss, sst, tile1, 0);
+diff --git a/src/core/n64video/rdp/tcoord.c b/src/core/n64video/rdp/tcoord.c
+index 3c09544..b24405d 100644
+--- a/src/core/n64video/rdp/tcoord.c
++++ b/src/core/n64video/rdp/tcoord.c
+@@ -1,5 +1,12 @@
+ #ifdef N64VIDEO_C
+ 
++#ifndef ORACLE_AT
++#define ORACLE_AT(x, y)
++#endif
++#ifndef ORACLE_LOD_HOOK
++#define ORACLE_LOD_HOOK(kind, s0, t0, s1, t1, s2, t2, clamp, lod, mag, dis, lf, tile1, tile2)
++#endif
++
+ static const int32_t norm_point_table[64] = {
+     0x4000, 0x3f04, 0x3e10, 0x3d22, 0x3c3c, 0x3b5d, 0x3a83, 0x39b1,
+     0x38e4, 0x381c, 0x375a, 0x369d, 0x35e5, 0x3532, 0x3483, 0x33d9,
+@@ -465,6 +472,7 @@ static STRICTINLINE void tclod_2cycle(struct rdp_state* wstate, int32_t* sss, in
+ 
+ 
+         }
++        ORACLE_LOD_HOOK(2, inits, initt, nexts, nextt, nextys, nextyt, lodclamp, lod, magnify, distant, *lf, *t1, *t2);
+     }
+ }
+ 
+@@ -599,6 +607,7 @@ static STRICTINLINE void tclod_2cycle_notexel1(struct rdp_state* wstate, int32_t
+                 *t1 = (prim_tile + l_tile + 1) & 7;
+         }
+ 
++        ORACLE_LOD_HOOK(2, inits, initt, nexts, nextt, nextys, nextyt, lodclamp, lod, magnify, distant, wstate->lod_frac, *t1, -1);
+     }
+ }
+ 

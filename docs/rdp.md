@@ -541,6 +541,11 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 
 ## Not implemented, or approximated
 
+The model built with `RDP_EXACT` follows the console on the LOD, TEXEL1,
+shade and scissor items below, and on edges, spans, rectangles and the
+attributes' arithmetic ([rdp_exact.md](rdp_exact.md), with the RTL change each
+needs); the RTL, and the model as its benches build it, do not.
+
 * **Colour images**: an 8-bit one is written only (no image read, no depth,
   no hidden coverage). A 32-bit one is drawn as the model draws it, from
   the programming manual's rules ([cimg32.md](cimg32.md),
@@ -571,6 +576,7 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 | RTL against the model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind from any alignment, triangles and rectangles in every cycle type |
 | 32-bit colour images | `TB_C32=1 tb_rdp -r SEED [N]` | random streams into a 32-bit colour image at widths 320, 296, 640 and 1,000 (the wide ones' spans in two halves) |
 | the texture LOD | `TB_LOD=1 tb_rdp -r SEED [N]` | random streams made for the LOD (2-cycle mostly, DaDy on the scale of DaDx, the LOD blend combiner, the minimum level) |
+| the console's rules | `sim/rdp_oracle` (`./setup.sh`, `make`, `./run.sh 50`); `make rdp_task EXACT=1` in `sim/rdp` | the model, command for command, against an independent pixel-exact software RDP fetched by `setup.sh`: the colour image, its hidden bits and the depth image after every primitive, and each pixel's LOD inputs and result, on random suites, minimal streams and captured dumps. Built with `RDP_EXACT` the model agrees on every random suite; without it, the differences [rdp_exact.md](rdp_exact.md) lists. `build_rtl.sh` builds the model without `RDP_EXACT` |
 | the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
 | the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
 | the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks, on `gen_xbus_task.py`'s XBUS ones and on `gen_xbus_ring.py`'s (a ring in DMEM, START and END pairs that wait; `TB_CREADY=15`, a slow RDP, keeps lists under way) |

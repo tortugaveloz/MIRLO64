@@ -14,6 +14,7 @@ put in the model first, and the RTL was made to match it.
 | where | the N64's pixel pipeline of the model (`MRDP_N64`) |
 | the computation | `lang/c/mrdp/mrdp.c`, the LOD section: `mrdp_lod` (declared in `mrdp.h`), `lod_pixel`, `lod_dist`, `lod_tri` |
 | the console's perspective divide | `mrdp_n64_div`, for the pixel and the LOD's points, as the RTL has it |
+| the console's rules | with `RDP_EXACT` ([rdp_exact.md](rdp_exact.md)): the console's attributes, and the LOD in 1-cycle and copy mode (`lod1_pixel`); not in the RTL |
 | where it is used | `draw_pixel_cvg`: the tiles of TEXEL0 and TEXEL1, and LOD_FRACTION into the combiner |
 | a test | `lang/c/mrdp/test_lod.c` (its header has the build line) |
 | a frame | `make` in `sim/rdp`: `rdp_task` counts the pixels that took the LOD, by level |
@@ -29,7 +30,8 @@ pipeline used before the LOD and which only MRDP's own triangles still take.
 ## When it applies
 
 * **2-cycle mode only.** In 1-cycle, copy and fill mode nothing changes (see
-  "Choices" for what the N64 does in 1-cycle mode).
+  "Choices" for what the N64 does in 1-cycle mode). With `RDP_EXACT`, 1-cycle
+  and copy mode too, as the console does ([rdp_exact.md](rdp_exact.md), rule 3).
 * **TEX_LOD** (bit 16 of SET_OTHER_MODES' high word) moves the tiles.
 * The **LOD fraction** is computed for every pixel of a 2-cycle primitive
   with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C 0 in
@@ -58,7 +60,9 @@ The attributes are the model's: S and T s10.5 in the integer half of a
 32-bit word (s10.5.16), W s.15 in the integer half, each pixel's the plane at
 its top-left corner, stepped by the whole DaDx. DaDy of S, T and W comes from
 the triangle's texture block (words 10 and 14, as the other coefficients'
-halves).
+halves). With `RDP_EXACT` they are the console's: each span started at the
+major edge's pixel and stepped by DaDx without its low 5 bits, the next pixel
+too ([rdp_exact.md](rdp_exact.md), rule 4).
 
 Each point's S and T go through the same perspective divide as the pixel's own:
 
@@ -70,7 +74,9 @@ Each point's S and T go through the same perspective divide as the pixel's own:
 * **Affine**: S >> 16, the s10.5 the pixel samples with, sign-extended to 17
   bits. Never out of range.
 * **A texture rectangle**: its own S and T (s10.5) at the column and row,
-  from the rectangle's formula. Never out of range.
+  from the rectangle's formula. Never out of range. With `RDP_EXACT` a
+  rectangle is the console's primitive, walked as a triangle (rule 6 there):
+  its next line is its row step kept to `LOD_DY_MASK` as a triangle's DaDy.
 
 A triangle without texture coefficients has S = T = W = 0 at all three
 points: affine, a step of 0 (magnified); with perspective, out of range.
@@ -160,7 +166,9 @@ with captured frames.
    negative integer half is out of range whatever S is, as the console's
    perspective divide reports it. (The model's own reciprocal, which the LOD
    took at first, had the console's range rule but not its values: S, T off
-   by a few subtexels, and with them the fraction.)
+   by a few subtexels, and with them the fraction.) With all of `RDP_EXACT`
+   the LOD agrees with the console's on every pixel of the comparison
+   ([rdp_exact.md](rdp_exact.md)).
 5. **The walk's direction** (`lod_tri`): the next pixel is x - 1 for a
    triangle without `lft`. The model draws every span left to right; only the
    LOD sees the N64's direction.
@@ -171,7 +179,8 @@ with captured frames.
    and T do. The
    console's next line differs: its rectangle is a primitive whose DaDy is the
    row step (DtDy, DsDx flipped), kept to `LOD_DY_MASK` as a triangle's and
-   added to the coordinate with its fraction.
+   added to the coordinate with its fraction; with `RDP_EXACT` the model does
+   that ([rdp_exact.md](rdp_exact.md), rule 2).
 7. **1-cycle mode**: unchanged. The console computes the LOD in 1-cycle mode
    too, from the next pixel and the one after it (with a look at the next
    row's span near a span's end), and with TEX_LOD it moves TEXEL0's tile;
@@ -179,10 +188,13 @@ with captured frames.
    in 2-cycle mode, and the one set of dumps here that sets TEX_LOD in 1-cycle
    mode does it with a level count of 0 and without DETAIL, where the tile does
    not move (below); with DETAIL it would move a tile on even at a level count
-   of 0.
+   of 0. With `RDP_EXACT` the model follows the console here, and in copy
+   mode with TEX_LOD ([rdp_exact.md](rdp_exact.md), rule 3, where the span-end
+   cases are written out).
 8. **The second cycle's TEXEL0 and TEXEL1**: as without the LOD. On the console the
    second cycle's TEXEL1 is the next pixel's first texel; the model keeps the
-   tile's own sample there, with or without the LOD.
+   tile's own sample there, with or without the LOD. With `RDP_EXACT` it takes
+   the console's ([rdp_exact.md](rdp_exact.md), rule 7).
 9. **The 9th bit of `LOD >> 5`** is dropped before the log2, as the
    console's 8-bit table would: it only matters for a step of 256 texels or
    more, which is at the far level anyway, and then only for the fraction in
@@ -211,6 +223,13 @@ with captured frames.
   model's own perspective divide, a few subtexels off, gave 47,680, 4,800,
   3,520, 2,240, 1,480 and 1,500, as near a power of two that moves the level.
   Before the LOD the floor was level 0 to the horizon, an aliased moire there.
+* **`test_lod` with `RDP_EXACT`** ([rdp_exact.md](rdp_exact.md)): the
+  floor's rows 229 to 239 are not drawn (an edge there is past 2048 pixels,
+  which the console's 12-bit edges count as crossed: rule 6), 3,520 pixels of
+  level 0: 57,700 LOD pixels, by level 44,472, 4,488, 3,200, 2,560, 1,480 and
+  1,500, 37,117 magnified; level 1 from row 97, 2 from 81, 3 from 68, 4 from
+  60, 5 from 54. The comparison (`sim/rdp_oracle`) finds the console's levels
+  and fractions on every one of those pixels.
 * **The RTL bench**, before the RTL had the LOD: of 12 random seeds (1 to 8
   and `TB_CC`'s 51 to 54), 5 differed from the model with it (4, 8, 51, 53,
   54): the random streams set TEX_LOD and read LOD_FRACTION, so they cover
@@ -416,9 +435,10 @@ Its pixels take two clocks each, whether they make one texture pass or two.
   the clock after the issue, while `pix_valid` is down: a triangle's DaDy
   of S, T and W is read from the staging RAM at S_VSET's steps 6 and 7, which
   were free, and kept to its top 17 bits; a texture rectangle's row step is
-  DtDy (DsDx flipped), the exact next row, as the model has it (the console
-  keeps 17 bits of it as of a 16.16 DaDy: `dy_s` and `dy_t` in `rdp_top`
-  would drop `t_dxl`'s low 4 bits).
+  DtDy (DsDx flipped), the exact next row, as the model has it without
+  `RDP_EXACT` (the console, and `RDP_EXACT`, keep 17 bits of it as of a
+  16.16 DaDy: `dy_s` and `dy_t` in `rdp_top` would drop `t_dxl`'s low 4
+  bits).
   The sums are 32-bit, as the model's.
 * **The next pixel**: the neighbour's own first perspective divide. `rdp_top`
   issues a primitive's pixels in the walk's order: walking right (`lft`, and
@@ -479,8 +499,10 @@ it took.
 
 ### 1-cycle mode, later
 
-The console's 1-cycle LOD takes the step between the next pixel and the one after it, and no next line. In
-this pipeline that is L1's step to the next pixel of the walk's next pixel:
+The console's 1-cycle LOD ([rdp_exact.md](rdp_exact.md), rule 3; the model's
+with `RDP_EXACT`) takes the step between the next pixel and the one after it,
+and no next line. In this pipeline that is L1's step to the next pixel of
+the walk's next pixel:
 the pixel's LOD is its neighbour's `mn`, one pixel later (L2 a pixel later,
 D two clocks longer), at a pixel a clock (no second load). Walking right the
 issue would follow a pixel by its next two (ghosts where they are missing:

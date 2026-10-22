@@ -1,0 +1,12 @@
+# One perspective triangle (test_lod.c's floor, its near half; 2-cycle, PERSP, TEX_LOD, six levels) with its LOD
+# fraction drawn as the colour. The oracle divides the 16-bit integer halves of S, T and W with the console's
+# reciprocal table; the model divides S >> 4 by all of W with its own reciprocal: S and T at the three points
+# differ by a few subtexels, and with them the fraction (and near a power of two, the level). No texture is read.
+# (The scissor stops at row 228: below it the triangle's right edge is past 2048 pixels, a difference of its own.)
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d000000 00500390
+cmd 2f190cf0 00000000
+cmd 3c66e1ff 8ffffe38
+cmd 0a280432 043200aa f7b24925 00000000 00b40000 000a0000 00c17da0 fff5c390 00b302c6 011e0000 00040000 00000000 3333872b b6140000 7ae10000 00000000 0059fffc 008f0000 002cfffc 008f0000 999add2f 5b0a0000 cccddd2f 5b0a0000
+cmd 29000000 00000000

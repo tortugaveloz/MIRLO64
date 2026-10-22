@@ -97,6 +97,9 @@ static inline int32_t s105_noperp(int32_t s)
     return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
 }
 
+#if defined(RDP_EXACT) && !defined(MRDP_CVG)
+#error "RDP_EXACT is the N64's pixel pipeline's: build it with MRDP_N64 (and without MRDP_NO_BLEND)"
+#endif
 #ifdef MRDP_CVG
 /* ---- the console's perspective divide (MRDP_CVG; docs/rdp.md, Coordinates) ---------
  * Only the 16-bit integer halves of S (or T, s10.5) and W (s.15) enter it. W's leading zeros among its low 15 bits (up to
@@ -150,6 +153,13 @@ static int32_t n64_persp(int32_t s, int32_t w)
     const int32_t v = mrdp_n64_div(s, w, &range);
     if (range) return range == 2 ? 32767 : -32768;
     return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+}
+#endif
+#ifdef RDP_EXACT
+/* S, T, W (o) of a point m steps d along from b: the walk's points, wrapping as the console's adders do */
+static inline void x_pt(int32_t *o, const int32_t *b, int m, const int32_t *d)
+{
+    for (int k = 0; k < 3; k++) o[k] = (int32_t)((uint32_t)b[k] + (uint32_t)m * (uint32_t)d[k]);
 }
 #endif
 
@@ -352,6 +362,30 @@ static mrdp_rgba_t texture_sample(const mrdp_t *r, int tilei, int32_t s105, int3
     return o;
 }
 
+#ifdef RDP_EXACT
+/* Copy mode's texel (docs/rdp_exact.md, rule 6): the console's copy takes the group's coordinate through the tile's
+ * shift and origin to whole texels and adds the pixel's place in the group (m), then mirrors and masks each by the
+ * tile's mask (at most 10 bits; none without a mask), and never clamps: a copy that reads past its tile's rows reads the
+ * TMEM after them, as the console's does. (s, t: s10.5 in 16 bits, the perspective divide's.) */
+static int x_copy_axis(int32_t v, unsigned shift, unsigned lo, unsigned mask, unsigned mirror, int m)
+{
+    v = (int16_t)v;
+    v = shift < 11 ? v >> shift : (int16_t)(uint16_t)((uint32_t)v << (16 - shift));
+    v = ((v - (int32_t)(lo << 3)) >> 5) + m;
+    if (mask) {
+        const unsigned mc = mask > 10 ? 10 : mask;
+        if (mirror && ((v >> mc) & 1)) v = ~v;
+        v &= (int32_t)((0xFFFFu >> (16 - mask)) & 0x3FFu);
+    }
+    return v;
+}
+static mrdp_rgba_t x_copy_texel(const mrdp_t *r, int tilei, int32_t s, int32_t t, int m)
+{
+    const mrdp_tile_t *tl = &r->tile[tilei & 7];
+    return tmem_fetch(r, tl, x_copy_axis(s, tl->shifts, tl->uls, tl->masks, tl->ms, m), x_copy_axis(t, tl->shiftt, tl->ult, tl->maskt, tl->mt, 0));
+}
+#endif
+
 static const mrdp_rgba_t s_no_texel = { 0, 0, 0, 0 };   /* (texture_pass's prev for the first pass) */
 #ifdef MRDP_N64
 /* The texture filter's YUV -> RGB (SET_CONVERT's K0..K3, the N64's 2K + 1 in 1/256ths), from a texel (U, V, Y, Y) as
@@ -550,6 +584,19 @@ static int cc1_uses_texel0(const mrdp_t *r)
            sa_a == 1 || sb_a == 1 || mul_a == 1 || add_a == 1;
 }
 
+#ifdef RDP_EXACT
+/* does the second combiner cycle (a 1-cycle pixel's one) read TEXEL1? The console's TEXEL1 there is a texel of the next
+ * pixel (docs/rdp_exact.md, rules 3 and 7), which such a pixel then samples too */
+static int cc1_uses_texel1(const mrdp_t *r)
+{
+    uint32_t hi = r->combine_hi, lo = r->combine_lo;
+    unsigned sa_r = (hi >> 5) & 15, mul_r = hi & 31, sa_a = (lo >> 21) & 7, mul_a = (lo >> 18) & 7;
+    unsigned sb_r = (lo >> 24) & 15, add_r = (lo >> 6) & 7, sb_a = (lo >> 3) & 7, add_a = lo & 7;
+    return sa_r == 2 || sb_r == 2 || mul_r == 2 || mul_r == 9 || add_r == 2 ||
+           sa_a == 2 || sb_a == 2 || mul_a == 2 || add_a == 2;
+}
+#endif
+
 /* one combiner cycle's four results: MRDP_CVG the raw 9 bits (cc_eval), else the clamped bytes */
 typedef struct { int v[4]; } cc_out_t;
 static cc_out_t combine_raw(const mrdp_t *r, const cc_in_t *in, int cyc)
@@ -745,6 +792,20 @@ typedef struct {
                                       triangle, which the N64 walks right to left) and to the next line (DaDy, as kept) */
     int32_t rnx[2], rny[2];        /* a texture rectangle's S, T (s10.5) at the next pixel and on the next line: set per pixel */
 #endif
+#ifdef RDP_EXACT
+    /* the console's walk (docs/rdp_exact.md), set per pixel: where the pixel is in its span and what follows the span,
+     * which the 1-cycle LOD and the texels taken a pixel ahead depend on */
+    int xj, xlen, xlodlen;         /* the pixel's place from the walk's start (the major edge's end of the span), the
+                                      span's pixels after the first, and that plus the pixels the scissor took off the
+                                      span at the major edge (the console counts those for its span-end cases) */
+    int xnvalid;                   /* the next row has a span */
+    int32_t xinc[3];               /* S, T, W a pixel along the walk */
+    int32_t xnrow[3];              /* S, T, W where the next row's span starts: at its major edge, before the scissor */
+    int32_t xcd[5], xdy[5];        /* shade R, G, B, A and Z: a pixel's and a line's step as the console moves them to the
+                                      first covered sample (s13 in 1/16ths of the shade's unit; Z s22 in 1/1024ths) */
+    unsigned xdzpix;               /* the console's depth step (|DzDx| + |DzDy| of the integer halves, as a power of 2) */
+    int xcopy;                     /* copy mode: the pixel's place in its group (its texel is the group's first plus it) */
+#endif
 } prim_t;
 
 /* attribute order in the iterators */
@@ -892,6 +953,57 @@ static mrdp_lod_t lod_pixel(const mrdp_t *r, const prim_t *pr, const int32_t *at
     return mrdp_lod(r->other_h, r->min_level, pr->level, (unsigned)pr->tile, s, t, oob);
 }
 
+#ifdef RDP_EXACT
+/* ---- the LOD in 1-cycle mode (RDP_EXACT; docs/rdp_exact.md, rule 3) ----
+ * The console computes an LOD in 1-cycle mode too, but from two points ahead of the pixel: the next pixel of the walk
+ * (N) and the one after it (F), no next line. Near the end of a span it looks at the next row's span instead, by how
+ * long the span is (lodlen: its pixels after the first, the scissored ones at its start included):
+ *   next row with a span, pixel q of 0..len:  N = P + d, F = P + 2d; F = P - d at the last but one pixel of a span
+ *       longer than 7 or the last of one of 7; at the last pixel of one longer than 7, N = the next row's start, F = N + d
+ *   q = len + 1 (the pixel after the span, whose texel is the last one's TEXEL1): longer than 7: N = next row's start
+ *       + d, F = + 2d; 7: N = the start, F = + d; 6: N = P + d, F = P - d; else N = P + d, F = P + 2d
+ *   no next row: N = P + d, F = P + 2d
+ * The LOD is the larger step of S and T from N to F (ones' complement, sticky bit as in 2-cycle mode); level, far,
+ * magnified, fraction and TEXEL0's tile are mrdp_lod's. */
+static int lod1_wanted(const mrdp_t *r)
+{
+    if (r->other_h & RDP_H_TEX_LOD) return 1;
+    if (!LOD_FRAC_USED) return 0;
+    return (r->combine_hi & 31) == 13 || ((r->combine_lo >> 18) & 7) == 0;   /* (the one cycle's C: the second's selects) */
+}
+static void lod1_pts(const prim_t *pr, const int32_t *P, int q, int32_t *N, int32_t *F)
+{
+    const int len = pr->xlen, ll = pr->xlodlen;
+    const int32_t *d = pr->xinc, *n = pr->xnrow;
+    if (!pr->xnvalid) { x_pt(N, P, 1, d); x_pt(F, P, 2, d); }
+    else if (q <= len) {
+        if (q != len || ll <= 7) { x_pt(N, P, 1, d); x_pt(F, P, ((q == len - 1 && ll > 7) || (q == len && ll == 7)) ? -1 : 2, d); }
+        else { x_pt(N, n, 0, d); x_pt(F, n, 1, d); }
+    }
+    else if (ll > 7) { x_pt(N, n, 1, d); x_pt(F, n, 2, d); }
+    else if (ll == 7) { x_pt(N, n, 0, d); x_pt(F, n, 1, d); }
+    else { x_pt(N, P, 1, d); x_pt(F, P, ll == 6 ? -1 : 2, d); }
+}
+/* a point's S, T through the perspective divide the pixel's take, as the LOD keeps them (17 bits, the range flag) */
+static void x_div(const mrdp_t *r, const int32_t *p, int32_t *s, int32_t *t, int *oob)
+{
+    if (r->other_h & MRDP_H_PERSP) { int rs, rt; *s = mrdp_n64_div(p[0], p[2], &rs); *t = mrdp_n64_div(p[1], p[2], &rt); *oob |= rs || rt; }
+    else { *s = p[0] >> 16; *t = p[1] >> 16; }
+}
+/* the 1-cycle LOD of the span's pixel q, from the pixel's own S, T, W (at: pixel pr->xj's) */
+static mrdp_lod_t lod1_pixel(const mrdp_t *r, const prim_t *pr, const int32_t *at, int q)
+{
+    int32_t P[3], N[3], F[3], s[3], t[3];
+    int oob = 0;
+    x_pt(P, &at[AS], q - pr->xj, pr->xinc);
+    lod1_pts(pr, P, q, N, F);
+    x_div(r, N, &s[0], &t[0], &oob);
+    x_div(r, F, &s[1], &t[1], &oob);
+    s[2] = s[0]; t[2] = t[0];                         /* (no next line: a step of 0 there) */
+    const mrdp_lod_t L = mrdp_lod(r->other_h, r->min_level, pr->level, (unsigned)pr->tile, s, t, oob);
+    return L;
+}
+#endif
 #endif /* MRDP_CVG (the LOD) */
 
 /* An 8-bit colour image (SET_COLOR_IMAGE's size 1): a pixel is a byte, at image + y * width + x -- what software that
@@ -915,6 +1027,25 @@ static const uint32_t s_bl_recip[16] = { 0x3ffff, 0x20001, 0x10001, 0x0aaab, 0x0
 
 /* the highest set bit's place (0 for 0 and 1): the N64's dz encoding */
 static inline unsigned hibit(unsigned v) { unsigned e = 0; while (v > 1) { v >>= 1; e++; } return e; }
+#ifdef RDP_EXACT
+/* the console's dz encoding: the OR of the places of the set bits (the place of the one set bit of a power of 2) */
+static inline unsigned x_dzcomp(unsigned v)
+{
+    return ((v & 0xFF00u) ? 8u : 0u) | ((v & 0xF0F0u) ? 4u : 0u) | ((v & 0xCCCCu) ? 2u : 0u) | ((v & 0xAAAAu) ? 1u : 0u);
+}
+/* the console's depth step: |DzDx| + |DzDy| of the integer halves (a negative one's complement, 15 bits), as the power
+ * of 2 above its top bit (1 for 0, 3 for 1, 0x8000 from 0x4000) */
+static unsigned x_dzpix(int32_t dzdx, int32_t dzdy)
+{
+    const unsigned a = ((uint32_t)dzdx >> 16) & 0xFFFFu, b = ((uint32_t)dzdy >> 16) & 0xFFFFu;
+    const unsigned sum = (((a & 0x8000u) ? ~a & 0x7FFFu : a) + ((b & 0x8000u) ? ~b & 0x7FFFu : b)) & 0xFFFFu;
+    if (sum & 0xC000u) return 0x8000u;
+    if (!sum) return 1u;
+    if (sum == 1u) return 3u;
+    for (unsigned c = 0x2000u; c; c >>= 1) if (sum & c) return c << 1;
+    return 0u;
+}
+#endif
 
 /* one blender cycle. P * A5 + M * (B5 + 1) a channel: A5 is the A alpha's
  * top five bits (B = memory alpha, the coverage: {a[7:5] >> sh_a, 00} and
@@ -1039,22 +1170,65 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
 
     /* depth: 18 bits (z_enc) */
     uint32_t depth;
+#ifdef RDP_EXACT
+    /* the console's (docs/rdp_exact.md, rule 4): a pixel without full coverage moves its Z and shade to its first covered
+     * sample (offx quarters right, offy subscanlines down: the topmost covered subscanline, its leftmost sample), with
+     * the steps' top bits; Z is 22 bits of the attribute >> 10, the depth its 19-bit result kept to 18 (negative: 0,
+     * past the top: all ones). A primitive without Z coefficients has Z = 0 there, not the primitive depth. */
+    int offx = 0, offy = 0;
+    if (cvg != 8) {
+        while (offy < 4 && !((mask >> (offy < 2 ? 4 : 0)) & ((offy & 1) ? 0x5u : 0xAu))) offy++;
+        if (offy < 4) {
+            const unsigned row = (mask >> (offy < 2 ? 4 : 0)) & ((offy & 1) ? 0x5u : 0xAu);
+            while (!((row >> (3 - offx)) & 1u)) offx++;
+        } else offy = 0;
+    }
+    if (l & MRDP_L_Z_SRC_PRIM) {
+        depth = (uint32_t)r->prim_z << 2;
+    } else {
+        const int32_t sz = (at[AZ] >> 10) & 0x3FFFFF;
+        const int32_t zc = cvg == 8 ? sz >> 3 : (int32_t)((uint32_t)sz * 4u + (uint32_t)(offx * pr->xcd[4]) + (uint32_t)(offy * pr->xdy[4])) >> 5;
+        const unsigned zt = ((unsigned)zc >> 17) & 3u;
+        depth = zt == 2 ? 0x3FFFFu : zt == 3 ? 0u : (uint32_t)zc & 0x3FFFFu;
+    }
+#else
     if ((l & MRDP_L_Z_SRC_PRIM) || !pr->zbuf) {
         depth = (uint32_t)r->prim_z << 2;
     } else {
         int32_t z = at[AZ] >> 13;
         depth = (uint32_t)(z < 0 ? 0 : z > 0x3FFFF ? 0x3FFFF : z);
     }
+#endif
     /* the pixel's dz code (the N64's dzpixenc: the top bit of the primitive's depth step, in 18-bit units and
      * doubled, or of SET_PRIM_DEPTH's delta), 4 bits */
     unsigned dzenc = (l & MRDP_L_Z_SRC_PRIM) ? hibit(r->prim_dz) : (pr->zbuf ? hibit(pr->dz) + 3u : 0u);
     if (dzenc > 15u) dzenc = 15u;
+#ifdef RDP_EXACT
+    /* the dz code the depth word keeps (its top two bits): the console's, the step in its units of 8 depth units (the
+     * model's own code above is in depth units, 3 more, and keeps serving its depth compare and blender shifts) */
+    const unsigned dzst = x_dzcomp((l & MRDP_L_Z_SRC_PRIM) ? r->prim_dz : (pr->xdzpix ? pr->xdzpix : 1u));
+#else
+    const unsigned dzst = dzenc;
+#endif
 
     /* inputs */
     cc_in_t in;
     memset(&in, 0, sizeof in);
     mrdp_rgba_t tex_next = { 0, 0, 0, 0 };   /* the next tile's sample (TEXEL1 of the first cycle) */
     int have_next = 0;
+#ifdef RDP_EXACT
+    mrdp_rgba_t tex_ahead = { 0, 0, 0, 0 };  /* the next pixel's first texel (the second cycle's TEXEL1) */
+    int have_ahead = 0;
+#endif
+#ifdef RDP_EXACT
+    /* (the console's: 9 bits of the shade, at the first covered sample, then 256..383 saturated to 255 and 384..511, a
+     * negative shade, to 0) */
+    for (int c = 0; c < 4; c++) {
+        const int32_t v = cvg == 8 ? at[AR + c] >> 16 : (int32_t)((uint32_t)(at[AR + c] >> 14) * 4u + (uint32_t)(offx * pr->xcd[c]) + (uint32_t)(offy * pr->xdy[c])) >> 4;
+        const unsigned v9 = (unsigned)v & 0x1FFu;
+        in.sh9[c] = v9 < 256u ? (int)v9 : v9 < 384u ? 255 : 0;
+    }
+#else
     if (pr->shade) {
         /* saturated to a byte: a shade past 255 enters the combiner as 255 (see the comment above cc_in_t) */
         in.sh9[0] = clamp8(at[AR] >> 16);
@@ -1062,6 +1236,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
         in.sh9[2] = clamp8(at[AB] >> 16);
         in.sh9[3] = clamp8(at[AA] >> 16);
     }
+#endif
     {
         /* A primitive without texture coefficients (a triangle whose command has no S, T, W block; a fill rectangle)
          * has S = T = W = 0, and the texture stages run all the same: TEXEL0 is the tile's texel at (0, 0) -- what
@@ -1070,10 +1245,19 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
          * not a mistake of the game's: a character's collar (G_TEXTURE off, combiner TEXEL0 * SHADE, then
          * ENV * COMBINED) is drawn that way, and with TEXEL0 = 0 it was black. */
         int32_t s = 0, t = 0;
+#ifdef RDP_EXACT
+        /* (every primitive's S, T go through the perspective divide, a rectangle's too, as the console walks it as a
+         * primitive with S, T in the integer halves; a primitive without texture coefficients has S = T = W = 0 there,
+         * so with PERSP W's integer half is 0, out of range, and S and T saturate to 0x7FFF: TEXEL0 is the tile's texel
+         * there (its last, clamped), not its first (docs/rdp_exact.md, rule 5)) */
+        if (h & MRDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
+        else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
+#else
         if (!pr->tex) { }
         else if (pr->texrect) { s = (int16_t)at[AS]; t = (int16_t)at[AT]; }
         else if (h & MRDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
+#endif
         /* the tiles of TEXEL0 and TEXEL1: the primitive's and the next, or with the LOD the level's */
         int tile0 = pr->tile;
         int tile1 = (pr->tile + 1) & 7;
@@ -1086,17 +1270,88 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
                 r->lod_mag += L.magnify; r->lod_far += L.distant && !L.magnify;
             }
         }
+#ifdef RDP_EXACT
+        /* 1-cycle mode: the console's LOD from the next pixel and the one after (lod1_pixel): TEX_LOD moves TEXEL0's
+         * tile, and the one cycle reads LOD_FRACTION (with DETAIL the tile moves on even at a level count of 0) */
+        if (cyc == 0 && lod1_wanted(r)) {
+            const mrdp_lod_t L1 = lod1_pixel(r, pr, at, pr->xj);
+            in.lodf = L1.frac;
+            tile0 = L1.tile0;
+        }
+#endif
+#ifdef RDP_EXACT
+        if (cyc == 2) {
+            if (h & RDP_H_TEX_LOD) {
+                /* copy mode with TEX_LOD (rule 3): an LOD from the group's next step and the one after; the tile plus the
+                 * level, plus 1 with DETAIL when not magnified */
+                int32_t P[3], N[3], F[3], ls[3], lt[3];
+                int oob = 0;
+                x_pt(P, &at[AS], 0, pr->xinc);
+                x_pt(N, P, 1, pr->xinc); x_pt(F, P, 2, pr->xinc);
+                x_div(r, N, &ls[0], &lt[0], &oob); x_div(r, F, &ls[1], &lt[1], &oob);
+                ls[2] = ls[0]; lt[2] = lt[0];
+                tile0 = mrdp_lod(h, r->min_level, pr->level, (unsigned)pr->tile, ls, lt, oob).tile0;
+            }
+            in.tex = x_copy_texel(r, tile0, s, t, pr->xcopy);
+        } else
+#endif
         in.tex = texture_pass(r, tile0, s, t, 0, s_no_texel);
         /* TEXEL1 in the first cycle of a 2-cycle pixel: the next tile (tile + 1) at the same S, T -- the N64's
          * second texture (a skybox's day / night blend, a terrain's second layer). Its second cycle still
          * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients:
          * TEXEL0 again, one pass.) */
         in.tex1 = in.tex;
+#ifdef RDP_EXACT
+        if (cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {      /* (the next tile's texel, coefficients or not) */
+#else
         if (pr->tex && cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
+#endif
             tex_next = texture_pass(r, tile1, s, t, 1, in.tex);
             if (cc0_uses_texel1(r)) in.tex1 = tex_next;
             have_next = 1;
         }
+#ifdef RDP_EXACT
+        if (cyc == 1 && cc1_uses_texel1(r)) {
+            /* 2-cycle mode, the second cycle's TEXEL1 (rule 7): the next pixel's first texel, at the next point of the
+             * walk in the tile of that pixel's own LOD; at the span's last pixel, when the next row has a span and this
+             * one is 3 or more long, the tile is the next row's start's (its LOD from that start and the line after
+             * it alone), the coordinates still the next point's */
+            int32_t an[NATTR], s1, t1;
+            memcpy(an, at, sizeof an);
+            x_pt(&an[AS], &at[AS], 1, pr->xinc);
+            if (h & MRDP_H_PERSP) { s1 = n64_persp(an[AS], an[AW]); t1 = n64_persp(an[AT], an[AW]); }
+            else { s1 = s105_noperp(an[AS] >> 5); t1 = s105_noperp(an[AT] >> 5); }
+            int tl = pr->tile;
+            if (h & RDP_H_TEX_LOD) {
+                if (pr->xj == pr->xlen && pr->xnvalid && pr->xlodlen >= 3) {
+                    int32_t N0[3], N2[3], ls[3], lt[3];
+                    int oob = 0;
+                    x_pt(N0, pr->xnrow, 0, pr->ddy); x_pt(N2, pr->xnrow, 1, pr->ddy);
+                    x_div(r, N0, &ls[0], &lt[0], &oob); x_div(r, N2, &ls[2], &lt[2], &oob);
+                    ls[1] = ls[0]; lt[1] = lt[0];
+                    tl = mrdp_lod(h, r->min_level, pr->level, (unsigned)pr->tile, ls, lt, oob).tile0;
+                } else {
+                    const mrdp_lod_t La = lod_pixel(r, pr, an);
+                    tl = La.tile0;
+                }
+            }
+            tex_ahead = texture_pass(r, tl, s1, t1, 0, s_no_texel);
+            have_ahead = 1;
+        }
+        if (cyc == 0 && cc1_uses_texel1(r)) {
+            /* 1-cycle TEXEL1: the next pixel's texel, at the next point of the walk (at the last pixel of a span longer
+             * than 7, with a next row, that row's start) in the next pixel's LOD tile */
+            int32_t N[3], s1, t1;
+            int tl = pr->tile;
+            const int nr = pr->xj == pr->xlen && pr->xlodlen > 7 && pr->xnvalid;
+            if (nr) x_pt(N, pr->xnrow, 0, pr->xinc);
+            else x_pt(N, &at[AS], 1, pr->xinc);
+            if (h & MRDP_H_PERSP) { s1 = n64_persp(N[0], N[2]); t1 = n64_persp(N[1], N[2]); }
+            else { s1 = s105_noperp(N[0] >> 5); t1 = s105_noperp(N[1] >> 5); }
+            if ((h & RDP_H_TEX_LOD)) tl = lod1_pixel(r, pr, at, pr->xj + 1).tile0;
+            in.tex1 = texture_pass(r, tl, s1, t1, 0, s_no_texel);
+        }
+#endif
     }
 
     /* combiner (the alphas as cc_alpha_res: 0..256, ar for the coverage; the first cycle's, ar0, for the alpha compare) */
@@ -1114,6 +1369,9 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
              * the next pixel's tile sample: not kept). A pixel without texture coefficients keeps TEXEL0 as it is. */
             in.tex1 = in.tex;
             if (have_next) in.tex = tex_next;
+#ifdef RDP_EXACT
+            if (have_ahead) in.tex1 = tex_ahead;
+#endif
         }
         cc_out_t c1 = combine_raw(r, &in, 1);
         comb.r = (uint8_t)cc_color_res(c1.v[0]); comb.g = (uint8_t)cc_color_res(c1.v[1]); comb.b = (uint8_t)cc_color_res(c1.v[2]);
@@ -1252,14 +1510,14 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
         if (CIMG32_DITHER) out = dither_n64(r, out, x, y, rnd, 1);
         r->wr16(r->ctx, caddr, (uint16_t)(out.r << 8 | out.g));
         r->wr16(r->ctx, caddr + 2u, (uint16_t)(out.b << 8 | cvg_out << 5));
-        if (l & MRDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzenc >> 2));
+        if (l & MRDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
         r->pixels_drawn++;
         return;
     }
     if (cyc != 2) out = dither_n64(r, out, x, y, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
-    if ((l & MRDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzenc >> 2));
+    if ((l & MRDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
     r->pixels_drawn++;
 }
 #endif /* MRDP_CVG */
@@ -1570,6 +1828,178 @@ static void draw_triangle_aa(mrdp_t *r, const prim_t *pr, int aa_en, int lft, in
 }
 #endif /* MRDP_CVG */
 
+#ifdef RDP_EXACT
+/* ---- the console's walk (RDP_EXACT; docs/rdp_exact.md, rules 4 and 6) ----------------------
+ * A primitive (a triangle; a texture or fill rectangle is one too, as the console makes it) is walked as the console
+ * walks it. Each row's four subscanlines put each edge in eighths of a pixel (a sticky bit for the rest), in its 12 bits
+ * of whole pixels: an edge at or past 2048 pixels counts as left of the scissor, and the crossing test compares the
+ * edges' 12.2 bits, so a row whose edge passed 2047 is not drawn. Each edge is clamped to the scissor; a row is drawn
+ * when a subscanline is in and not every edge is past the scissor on one side. The span runs from the major edge's
+ * end (rx: the left end with lft, else the right) to the minor edge's (lx), both ends included; in fill and copy mode
+ * every pixel of it is written (the scissor's last column too), in the sampled modes those with a covered sample. Each
+ * row is computed before the one above it is drawn, as the console walks every edge before it renders: the 1-cycle LOD
+ * and the texels taken a pixel ahead look at the next row's span. */
+typedef struct {
+    int valid;
+    int rx, lx, len, lodlen;       /* the walk's first pixel and last, the pixels after the first (negative: none), and
+                                      len plus the pixels the scissor took off at the major edge (the LOD's span ends) */
+    int unscrx, scd;               /* the major edge's own pixel, where the attributes are taken (not clipped), and the
+                                      walk's steps from it to rx, 12 bits */
+    int32_t a[NATTR];              /* the attributes at unscrx */
+    int lp[4], rp[4], lf[4], rf[4], sv[4];   /* each subscanline's left and right edges (pixel, eighth), and whether in */
+} xrow_t;
+typedef struct {
+    int lft;
+    int32_t yh, ym, yl, xh, dxh, xm, dxm, xl, dxl;
+    const attr_t *at;
+    const int32_t *dy;             /* DaDy of each attribute */
+} xtri_t;
+/* a pixel's step of attribute i along x: DaDx without its low 5 bits (the console's span adders are 27 bits), Z whole */
+static inline int32_t x_dx(const xtri_t *T, int i) { return i == AZ ? T->at[i].dx : (int32_t)((uint32_t)T->at[i].dx & ~0x1Fu); }
+/* the rows the console renders: from YH's and to YL's, both clipped by the scissor (a negative YH: the scissor's; a YL of
+ * 4096 quarter rows or more: the scissor's) */
+static int32_t x_yhlimit(const mrdp_t *r, int32_t yh) { return (yh & 0x2000) ? (int32_t)r->sc_yh : (yh & 0x1000) ? yh : yh >= (int32_t)r->sc_yh ? yh : (int32_t)r->sc_yh; }
+static int32_t x_yllimit(const mrdp_t *r, int32_t yl) { return (yl & 0x2000) ? yl : (yl & 0x1000) ? (int32_t)r->sc_yl : (yl & 0xFFF) < (int32_t)r->sc_yl ? yl : (int32_t)r->sc_yl; }
+/* an edge on a subscanline, in eighths clamped to the scissor (cxh, cxl: its edges in eighths) */
+static int32_t x_edge(int32_t x, int32_t cxh, int32_t cxl, int *over, int *under)
+{
+    const int32_t sticky = ((x >> 1) & 0x1FFF) != 0;
+    int32_t e = ((x >> 13) & 0x1FFE) | sticky;
+    *under = (x & 0x8000000) || (e < cxh && !(x & 0x4000000));
+    e = *under ? cxh : (((x >> 13) & 0x3FFE) | sticky);
+    *over = (e & 0x2000) || (e & 0x1FFF) >= cxl;
+    return (*over ? cxl : e) & 0x1FFF;
+}
+
+static void x_row(const mrdp_t *r, const xtri_t *T, int y, xrow_t *o)
+{
+    const int flip = T->lft;
+    const int32_t ycur = T->yh & ~3, yhl = x_yhlimit(r, T->yh), yll = x_yllimit(r, T->yl);
+    const int32_t cxh = (int32_t)r->sc_xh << 1, cxl = (int32_t)r->sc_xl << 1;
+    const uint32_t qh = (uint32_t)(T->dxh >> 2) & ~1u, qm = (uint32_t)(T->dxm >> 2) & ~1u, ql = (uint32_t)(T->dxl >> 2) & ~1u;
+    /* the attributes are taken on subscanline 0, or 3 when the major edge leans away from the walk */
+    const int ld = ((T->dxh < 0) ^ flip) ? 0 : 3;
+    int allover = 1, allunder = 1, allinval = 1, mxmin = 0xFFF, mxmax = 0, hxmin = 0xFFF, hxmax = 0, xfrac = 0;
+    o->unscrx = 0;
+    for (int j = 0; j < 4; j++) {
+        const int32_t k = 4 * y + j;
+        const int32_t xr = (int32_t)(((uint32_t)T->xh & ~1u) + (uint32_t)(k - ycur) * qh);
+        /* (the minor edge turns at YM itself, if the walk reaches it) */
+        const int32_t xm = (int32_t)((k >= T->ym && T->ym >= ycur) ? ((uint32_t)T->xl & ~1u) + (uint32_t)(k - T->ym) * ql
+                                                                    : ((uint32_t)T->xm & ~1u) + (uint32_t)(k - ycur) * qm);
+        int ov, un;
+        const int32_t hs = x_edge(xr, cxh, cxl, &ov, &un);
+        allover &= ov; allunder &= un;
+        const int32_t ms = x_edge(xm, cxh, cxl, &ov, &un);
+        allover &= ov; allunder &= un;
+        const int32_t a = (int32_t)(((uint32_t)xm ^ (1u << 27)) & (0x3FFFu << 14)), b = (int32_t)(((uint32_t)xr ^ (1u << 27)) & (0x3FFFu << 14));
+        const int inval = k < yhl || k >= yll || (flip ? a < b : b < a);
+        o->sv[j] = !inval;
+        allinval &= inval;
+        if (!inval) {
+            const int mp = (ms >> 3) & 0xFFF, hp = (hs >> 3) & 0xFFF;
+            if (mp < mxmin) mxmin = mp;
+            if (mp > mxmax) mxmax = mp;
+            if (hp < hxmin) hxmin = hp;
+            if (hp > hxmax) hxmax = hp;
+        }
+        const int32_t le = flip ? hs : ms, re = flip ? ms : hs;
+        o->lp[j] = le >> 3; o->lf[j] = le & 7; o->rp[j] = re >> 3; o->rf[j] = re & 7;
+        if (j == ld) { o->unscrx = (int32_t)((uint32_t)xr << 4) >> 20; xfrac = (int)(((uint32_t)xr >> 8) & 0xFFu); }
+    }
+    o->rx = flip ? hxmin : hxmax;
+    o->lx = flip ? mxmax : mxmin;
+    o->len = flip ? o->lx - o->rx : o->rx - o->lx;
+    o->valid = !allinval && !allover && !allunder && (!r->sc_field || (y & 1) == r->sc_odd);
+    const int scdiff = flip ? o->rx - o->unscrx : o->unscrx - o->rx;
+    o->scd = scdiff & 0xFFF;
+    o->lodlen = o->len + o->scd;
+    /* the row's attributes as the console starts its span: the value on the major edge (A + k DaDe, its low 9 bits
+     * cleared), when the edge leans away from the walk moved to subscanline 3 and back up to the row's top (3/4 of DaDe
+     * - DaDy, each with its low 9 bits cleared), then back to the edge's pixel by the edge's 8-bit x fraction times
+     * DaDx >> 8 (its low bit cleared; nothing in copy mode), the low 10 bits of the sum cleared */
+    const uint32_t k = (uint32_t)(y - (T->yh >> 2));
+    const int copy = ((r->other_h >> MRDP_H_CYCLE_SHIFT) & 3) == 2;
+    for (int i = 0; i < NATTR; i++) {
+        const uint32_t e = (uint32_t)T->at[i].v + k * (uint32_t)T->at[i].de;
+        int32_t diff = 0;
+        if (ld == 3) {
+            const int32_t de = (int32_t)((uint32_t)T->at[i].de & ~0x1FFu), dy = (int32_t)((uint32_t)T->dy[i] & ~0x1FFu);
+            diff = (int32_t)((uint32_t)de - (uint32_t)(de >> 2) - (uint32_t)dy + (uint32_t)(dy >> 2));
+        }
+        const uint32_t dxh8 = copy ? 0u : (uint32_t)(T->at[i].dx >> 8) & ~1u;
+        o->a[i] = (int32_t)(((e & ~0x1FFu) + (uint32_t)diff - (uint32_t)xfrac * dxh8) & ~0x3FFu);
+    }
+}
+
+static void draw_triangle_x(mrdp_t *r, prim_t *pr, int aa_en, const xtri_t *T)
+{
+    const attr_t *at = T->at;
+    const unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
+    const int ya = x_yhlimit(r, T->yh) >> 2, yb = x_yllimit(r, T->yl) >> 2;   /* (rows ya to yb, both included) */
+    if (ya > yb) return;
+    for (int k = 0; k < 3; k++) pr->xinc[k] = T->lft ? x_dx(T, AS + k) : (int32_t)(0u - (uint32_t)x_dx(T, AS + k));
+    /* the coverage correction's steps: DaDx (as stepped) and DaDy of the shade >> 14, of Z >> 10 */
+    for (int i = 0; i < 4; i++) {
+        pr->xcd[i] = sext((uint32_t)(x_dx(T, AR + i) >> 14), 13);
+        pr->xdy[i] = sext((uint32_t)(T->dy[AR + i] >> 14), 13);
+    }
+    pr->xcd[4] = sext((uint32_t)(at[AZ].dx >> 10), 22);
+    pr->xdy[4] = sext((uint32_t)(T->dy[AZ] >> 10), 22);
+    /* (the 2-cycle LOD's next pixel is a step of the walk too: DaDx as stepped, without its low 5 bits) */
+    for (int k = 0; k < 3; k++) { pr->ddx[k] = pr->xinc[k]; pr->ddy[k] = T->dy[AS + k] & LOD_DY_MASK; }
+    xrow_t row[2];
+    x_row(r, T, ya, &row[ya & 1]);
+    for (int y = ya; y <= yb; y++) {
+        const xrow_t *o = &row[y & 1], *nx = &row[(y + 1) & 1];
+        x_row(r, T, y + 1, &row[(y + 1) & 1]);
+        pr->xnvalid = y + 1 <= yb && nx->valid;
+        for (int k = 0; k < 3; k++) pr->xnrow[k] = nx->a[AS + k];
+        pr->xlen = o->len; pr->xlodlen = o->lodlen;
+        if (!o->valid || o->len < 0) continue;
+        const int xinc = T->lft ? 1 : -1;
+        for (int j = 0; j <= o->len; j++) {
+            const int x = o->rx + j * xinc;
+            unsigned mask = 0xFFu;
+            if (cyc < 2) {
+                unsigned cj[4];
+                for (int q = 0; q < 4; q++) {
+                    unsigned fm = (q & 1) ? 0x5u : 0xAu;
+                    unsigned lm = (0xFu >> ((o->lf[q] + 1) >> 1)) & fm;
+                    unsigned rm = ((0xF0u >> ((o->rf[q] + 1) >> 1)) & 0xFu) & fm;
+                    cj[q] = 0;
+                    if (!o->sv[q]) continue;
+                    if (x > o->lp[q] && x < o->rp[q]) cj[q] = fm;
+                    else if (x == o->lp[q] && x == o->rp[q]) cj[q] = lm & rm;
+                    else if (o->rp[q] > o->lp[q] && x == o->lp[q]) cj[q] = lm;
+                    else if (o->rp[q] > o->lp[q] && x == o->rp[q]) cj[q] = rm;
+                }
+                mask = ((cj[0] | cj[1]) << 4) | (cj[2] | cj[3]);
+                if (!mask) continue;
+                if (!aa_en && !(mask & 0x80u)) continue;
+            }
+            /* the pixel's attributes: the span's start stepped along the walk, first past the pixels the scissor took
+             * off, then to the pixel (the shade and Z are moved to the first covered sample in draw_pixel_cvg). Copy
+             * mode steps once a group of 4 pixels (8 in an 8-bit image), from the span's start as it is (the scissor
+             * does not move it: a copy cut by the scissor's left edge is shifted, not cut) */
+            int32_t pc[NATTR];
+            pr->xj = j;
+            uint32_t n = (uint32_t)o->scd + (uint32_t)j;
+            if (cyc == 2) {
+                const int g = r->cimg_size == 1 ? 8 : 4;
+                n = (uint32_t)(j / g);
+                pr->xcopy = j % g;
+            }
+            for (int i = 0; i < NATTR; i++) {
+                const uint32_t d = T->lft ? (uint32_t)x_dx(T, i) : 0u - (uint32_t)x_dx(T, i);
+                pc[i] = (int32_t)((uint32_t)o->a[i] + n * d);
+            }
+            draw_pixel(r, pr, x, y, pc, mask);
+        }
+    }
+}
+#endif
+
 #ifdef MRDP_CVG
 /* the LOD's steps of S, T, W (prim_t ddx, ddy) from a triangle's texture block p: DaDx toward the next pixel of the
  * N64's walk, which starts at the major edge (left to right with lft; right to left without), and DaDy (the integer
@@ -1620,6 +2050,9 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
         s |= s >> 1; s |= s >> 2; s |= s >> 4; s |= s >> 8; s |= s >> 16;
         pr.dz = (s & 0xFFFFu) | 1u;
         pr.dzdy = zy;
+#ifdef RDP_EXACT
+        pr.xdzpix = x_dzpix(zx, zy);
+#endif
 #endif
     }
 
@@ -1630,6 +2063,26 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
      * YM's integer scanline as XH and XM are at YH's: taken back the quarter
      * rows between them. (As if at the scanline, a shallow low edge was off
      * by up to 3/4 of its slope: cracks all along it.) */
+#ifdef RDP_EXACT
+    {
+        /* DaDy of each attribute (the shade's and the texture's at words 10 and 14 of their blocks, Z's the 4th) */
+        int32_t dy[NATTR] = { 0 };
+        const uint32_t *q = w + 8;
+        for (int b = 0; b < 2; b++) {
+            if (!(b ? pr.tex : pr.shade)) continue;
+            for (int i = 0; i < (b ? 3 : 4); i++) {
+                const int wi = i >> 1, sh = (i & 1) ? 0 : 16;
+                dy[(b ? AS : AR) + i] = (int32_t)((((q[10 + wi] >> sh) & 0xFFFFu) << 16) | ((q[14 + wi] >> sh) & 0xFFFFu));
+            }
+            q += 16;
+        }
+        if (pr.zbuf) dy[AZ] = (int32_t)q[3];
+        /* (the console's edges: X 28 bits, the slopes 30, sign-extended) */
+        const xtri_t T = { lft, yh, ym, yl, sext(w[4], 28), sext(w[5], 30), sext(w[6], 28), sext(w[7], 30), sext(w[2], 28), sext(w[3], 30), at, dy };
+        draw_triangle_x(r, &pr, (r->other_l & MRDP_L_AA_EN) != 0, &T);
+        return;
+    }
+#endif
 #ifdef MRDP_CVG
     draw_triangle_aa(r, &pr, (r->other_l & MRDP_L_AA_EN) != 0, lft, yh, ym, yl, xh, dxh, xm, dxm, xl, dxl, at);
     return;
@@ -1701,8 +2154,43 @@ static inline void texrect_st(const texrect_t *g, int x, int y, int32_t *ps, int
     *pt = g->flip ? g->t + ((g->dtdy * cq) >> (5 + cs)) : g->t + ((g->dtdy * (y - g->y0)) >> 5);
 }
 #endif
+
+#ifdef RDP_EXACT
+/* A rectangle as the console draws it (docs/rdp_exact.md, rule 6): a primitive of its own walked as a left-major
+ * triangle with vertical edges at XH and XL (their quarter pixels kept), YL taken to its row's last subscanline in fill
+ * and copy mode, level count 0. A texture rectangle's S and T are s10.5 in the integer halves; the column-stepped one
+ * steps by DsDx (DtDy flipped) along x, the row-stepped one by DtDy (DsDx) a row, DaDe and DaDy alike (so the LOD's next
+ * line is a triangle's: the step kept to LOD_DY_MASK). Its pixels are then the walk's: partial coverage at a
+ * fractional edge (the top-left sample decides without AA_EN, as for a triangle), the scissor's last column in fill and
+ * copy mode, and the console's texel coordinates. */
+static void draw_rect_x(mrdp_t *r, const uint32_t *w, int tex, int flip)
+{
+    const unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
+    int32_t xl = (w[0] >> 12) & 0xFFF, yl = w[0] & 0xFFF, xh = (w[1] >> 12) & 0xFFF, yh = w[1] & 0xFFF;
+    if (cyc >= 2) yl |= 3;
+    prim_t pr = { .tex = tex, .tile = tex ? (int)((w[1] >> 24) & 7) : 0, .fillq = !tex };
+    attr_t at[NATTR];
+    int32_t dy[NATTR] = { 0 };
+    memset(at, 0, sizeof at);
+    if (tex) {
+        const int32_t s = sext(w[2] >> 16, 16), t = sext(w[2], 16), dsdx = sext(w[3] >> 16, 16), dtdy = sext(w[3], 16);
+        at[AS].v = (int32_t)((uint32_t)s << 16); at[AT].v = (int32_t)((uint32_t)t << 16);
+        const int c = flip ? AT : AS, ro = flip ? AS : AT;            /* the coordinate stepped along x, and down */
+        at[c].dx = (int32_t)((uint32_t)(flip ? dtdy : dsdx) << 11);
+        at[ro].de = dy[ro] = (int32_t)((uint32_t)(flip ? dsdx : dtdy) << 11);
+    }
+    const int32_t exl = (int32_t)(((uint32_t)(xl >> 2) << 16) | ((uint32_t)(xl & 3) << 14));
+    const int32_t exh = (int32_t)(((uint32_t)(xh >> 2) << 16) | ((uint32_t)(xh & 3) << 14));
+    const xtri_t T = { 1, yh, yl, yl, exh, 0, exl, 0, exl, 0, at, dy };
+    draw_triangle_x(r, &pr, (r->other_l & MRDP_L_AA_EN) != 0, &T);
+}
+#endif
 static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
 {
+#ifdef RDP_EXACT
+    draw_rect_x(r, w, 1, flip);
+    return;
+#endif
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
     int xl = (w[0] >> 12) & 0xFFF, yl = w[0] & 0xFFF;
     int xh = (w[1] >> 12) & 0xFFF, yh = w[1] & 0xFFF;
@@ -1744,6 +2232,10 @@ static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
 
 static void fill_rect(mrdp_t *r, const uint32_t *w)
 {
+#ifdef RDP_EXACT
+    draw_rect_x(r, w, 0, 0);
+    return;
+#endif
     unsigned cyc = (r->other_h >> MRDP_H_CYCLE_SHIFT) & 3;
     int xl = (w[0] >> 12) & 0xFFF, yl = w[0] & 0xFFF;
     int xh = (w[1] >> 12) & 0xFFF, yh = w[1] & 0xFFF;
@@ -1995,6 +2487,9 @@ static void execute(mrdp_t *r, const uint32_t *w)
     case MRDP_OP_SET_SCISSOR:
         r->sc_xh = (w[0] >> 12) & 0xFFF; r->sc_yh = w[0] & 0xFFF;
         r->sc_xl = (w[1] >> 12) & 0xFFF; r->sc_yl = w[1] & 0xFFF;
+#ifdef RDP_EXACT
+        r->sc_field = (uint8_t)((w[1] >> 25) & 1u); r->sc_odd = (uint8_t)((w[1] >> 24) & 1u);
+#endif
         break;
 #ifdef MRDP_N64
     case MRDP_OP_SET_PRIM_Z: r->prim_z = (uint16_t)((w[1] >> 16) << 1); r->prim_dz = (uint16_t)w[1]; break;   /* the N64's: 15 bits, and its delta */

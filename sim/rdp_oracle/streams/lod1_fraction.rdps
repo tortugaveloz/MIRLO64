@@ -1,0 +1,10 @@
+# 1-cycle, TEX_LOD, the combiner's one cycle reading LOD_FRACTION: (1 - 0) * LOD_FRACTION + 0. An affine triangle,
+# 20 x 8 pixels, S 2.5 texels a pixel (DsDx 80 subtexels), level count 5. The oracle computes the 1-cycle LOD
+# (fraction 0x40: level 1, a quarter of the way to 2); the model computes no LOD in 1-cycle mode (LOD_FRACTION 0).
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 2f010cf0 00000000
+cmd 3cfffecd f8c3ffff
+cmd 0aa80040 00400020 001c0000 00000000 00080000 00000000 001c0000 00000000 10001000 7fff0000 00500000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+cmd 29000000 00000000

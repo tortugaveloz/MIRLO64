@@ -1,0 +1,11 @@
+# A 2-cycle texture rectangle with TEX_LOD and DETAIL, its LOD fraction drawn as the colour: (1 - 0) * LOD_FRACTION + 0.
+# DsDx 1 texel a pixel, DtDy 0x044F (1.077 texels a line): the LOD is the T step to the next line. The oracle steps T
+# by DtDy kept to the 17 bits of a triangle's DaDy (0x0440 here, 34 subtexels: fraction 0x10 on every row); the model
+# takes the exact T of the next row (34 or 35 subtexels: 0x10 or 0x18 by row). No texture is read.
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 2f150cf0 00000000
+cmd 3c66e1ff 8ffffe38
+cmd 240a0060 00020020 00000000 0400044f
+cmd 29000000 00000000
