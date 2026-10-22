@@ -139,12 +139,8 @@ always_ff @(posedge clk) begin
             else phase <= phase - 21'h10000;
             st <= S_ADV;
         end
-        S_MUL0: begin
-            ma <= rch ? $signed({nr[15], nr}) - $signed({pr[15], pr}) : $signed({nl[15], nl}) - $signed({pl[15], pl});
-            mb <= $signed({1'b0, phase[15:1]});
-            st <= S_MUL1;
-        end
-        S_MUL1: begin mp <= ma * mb; st <= S_MUL2; end
+        S_MUL0:  st <= S_MUL1;     // (the operands and the product: below)
+        S_MUL1:  st <= S_MUL2;
         S_MUL2: begin
             if (!rch) begin fd[31:16] <= mix; rch <= 1'b1; st <= S_MUL0; end
             else begin fd[15:0] <= mix; sil <= 1'b0; phase <= phase + {1'b0, step}; dry <= '0; st <= S_WR; end
@@ -168,6 +164,14 @@ always_ff @(posedge clk) begin
         default: ;
         endcase
     end
+end
+// A channel's difference and phase (S_MUL0's), the product (S_MUL1's): taken at every clock, nothing in between -- S_MUL1 sees
+// the operands S_MUL0 took (what they come from does not change in S_MUL0), S_MUL2 the product of S_MUL1 -- so that the
+// multiplier's registers are its DSP block's own
+always_ff @(posedge clk) begin
+    ma <= rch ? $signed({nr[15], nr}) - $signed({pr[15], pr}) : $signed({nl[15], nl}) - $signed({pl[15], pl});
+    mb <= $signed({1'b0, phase[15:1]});
+    mp <= ma * mb;
 end
 
 endmodule

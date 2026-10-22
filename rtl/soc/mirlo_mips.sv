@@ -335,35 +335,48 @@ always_ff @(posedge clk) begin
         else if (x_audio) xs <= X_AUDIO;
         else if (x_tcm) xs <= X_TCM;
         else if (x_mon) xs <= X_MON;
-        else if (x_mi || x_pi) begin x_rdata <= mi_w_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_mi || x_pi) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_vi) xs <= x_we ? X_VIW : X_VIR;
-        else if (x_ai) begin x_rdata <= ai_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
-        else if (x_si) begin x_rdata <= si_rd; if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_ai) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
+        else if (x_si) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_pif) xs <= X_PIF;
-        else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) begin x_rdata <= 0; x_ack <= 1; end else xs <= X_CART; end
-        else if (x_grom) begin x_rdata <= 0; x_ack <= 1; end
+        else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
+        else if (x_grom) x_ack <= 1;
         else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
-        else begin x_rdata <= 0; x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
+        else begin x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
-    X_REGD: begin x_rdata <= r_rdata; x_ack <= 1; xs <= X_IDLE; end
-    X_AUDIO: if (a_s_ack) begin x_rdata <= a_s_dat_r; x_ack <= 1; xs <= X_IDLE; end
+    X_REGD: begin x_ack <= 1; xs <= X_IDLE; end
+    X_AUDIO: if (a_s_ack) begin x_ack <= 1; xs <= X_IDLE; end
     X_MON:  xs <= X_MOND;
-    X_MOND: begin x_rdata <= mon_rd; x_ack <= 1; xs <= X_IDLE; end
+    X_MOND: begin x_ack <= 1; xs <= X_IDLE; end
     // (a store to the MI waits two cycles for its effect on the line to be in the CPU's clock: rcp_mi.sv)
-    X_VIR: begin x_rdata <= vi_rd; x_ack <= 1; xs <= X_IDLE; end
+    X_VIR: begin x_ack <= 1; xs <= X_IDLE; end
     X_PIF:  if (!si_busy) xs <= x_we ? X_MIW2 : X_PIFR;          // (the write is done in this cycle: rcp_si.sv's c_wr_s)
-    X_PIFR: begin x_rdata <= si_q; x_ack <= 1; xs <= X_IDLE; end
-    X_CART: if (io_ack) begin x_rdata <= pa_dat_r; x_ack <= 1; xs <= X_IDLE; end
+    X_PIFR: begin x_ack <= 1; xs <= X_IDLE; end
+    X_CART: if (io_ack) begin x_ack <= 1; xs <= X_IDLE; end
     X_VIW: xs <= X_MIW1;                            // (the write is done in this cycle: rcp_vi.sv's wr_s)
     X_MIW1: xs <= X_MIW2;
     X_MIW2: begin x_ack <= 1; xs <= X_IDLE; end
     X_TCM:  xs <= X_TCMD;
-    X_TCMD: begin x_rdata <= t_dat_r; x_ack <= 1; xs <= X_IDLE; end
-    X_RSP:  if (rsp_x_go) begin x_rdata <= rsp_x_rdata; x_ack <= 1; xs <= X_IDLE; end
+    X_TCMD: begin x_ack <= 1; xs <= X_IDLE; end
+    X_RSP:  if (rsp_x_go) begin x_ack <= 1; xs <= X_IDLE; end
     default: xs <= X_IDLE;
     endcase
 end
+// The read data, x_ack's: cpu_port takes it only with the ack, and only for a read (a store's ack carries nothing), so it is
+// loaded at every cycle with what the state answers -- the device's word in a read's last state, 0 where a read is answered
+// from X_IDLE with nothing -- and not held in between (a hold was one more input of each bit's select)
+always_ff @(posedge clk)
+    case (xs)
+    X_IDLE:  x_rdata <= (x_mi || x_pi) ? mi_w_rd : x_ai ? ai_rd : x_si ? si_rd : 32'd0;
+    X_MOND:  x_rdata <= mon_rd;
+    X_VIR:   x_rdata <= vi_rd;
+    X_PIFR:  x_rdata <= si_q;
+    X_CART:  x_rdata <= pa_dat_r;
+    X_RSP:   x_rdata <= rsp_x_rdata;
+    default: x_rdata <= r_rdata;                    // X_REGD's (X_AUDIO and X_TCMD are not reached: no audio core, no TCM)
+    endcase
 assign xr_go = xs == X_REGS && !bus_r_req;
 
 // ---------------------------------------------------------------- registers, bus

@@ -82,24 +82,29 @@ assign c_busy = busy;
 assign clr = wr_s && a == 3'd6;
 
 // ---------------------------------------------------------------- PIF RAM: a block RAM of 16 words
+// Two ports, never writing in one cycle: the CPU's (port A: its word, at ca) and the DMA's (port B: the engine's word, at idx), each
+// read at its own address at every clock -- no choice of address or data in front of the RAM
 (* ramstyle = "M10K, no_rw_check" *) reg [31:0] m [0:15];
-reg [31:0] q;
+reg [31:0] qa, qb;
 integer ii;
 initial for (ii = 0; ii < 16; ii = ii + 1) m[ii] = 32'd0;
+function automatic logic [31:0] w15m(input logic [3:0] wa, input logic [31:0] wd);     // word 15's byte 63 as the PIF leaves it
+    return wa == 4'd15 ? {wd[31:8], 6'd0, wd[1], 1'b0} : wd;
+endfunction
 wire         eng_wr = st == S_REQ && ack && !dir_rd;
-wire         m_we   = eng_wr || (c_wr_s && !busy);
-wire  [3:0]  m_wa   = busy ? idx : ca;
-wire  [31:0] m_wd   = busy ? rdata : c_wd;
-wire         w15    = m_wa == 4'd15;
 always @(posedge clk) begin
-    if (m_we) m[m_wa] <= w15 ? {m_wd[31:8], 6'd0, m_wd[1], 1'b0} : m_wd;
-    q <= m[busy ? idx : ca];
+    if (c_wr_s && !busy) m[ca] <= w15m(ca, c_wd);
+    qa <= m[ca];
 end
-assign c_q   = q;
+always @(posedge clk) begin
+    if (eng_wr) m[idx] <= w15m(idx, rdata);
+    qb <= m[idx];
+end
+assign c_q   = qa;
 assign req   = st == S_REQ;
 assign we    = dir_rd;
 assign adr   = {3'b111, dram[20:0]};
-assign wdata = q;
+assign wdata = qb;
 
 // ---------------------------------------------------------------- the registers, the DMA
 always_comb begin

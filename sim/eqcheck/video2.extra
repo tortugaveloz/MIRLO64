@@ -1,0 +1,4 @@
+t->m_rvalid = outst > 0 && (rand() % 3 == 0); if (t->m_rvalid) outst--;
+static int K = rand() % 4; static int NW = 8 + rand() % 40;
+t->vi_width = K == 0 ? 1280 : K == 1 ? 640 : K == 2 ? 320 : 1024; t->vi_il = K < 2; t->vi_ys = K == 1 ? 0x800 : K == 0 ? 0x400 : (0x200 + (rand() % 2) * 0x200);
+t->vi_nw = NW; t->enable = (rand() % 64) != 0; t->vi_rows = 0; t->vi_y0 = rand() % 4; t->vi_xs = 0x200 + (rand() % 2) * 0x200; t->vi_px0 = 0; t->vi_pw = 640;

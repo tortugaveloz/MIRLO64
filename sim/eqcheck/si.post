@@ -1,0 +1,1 @@
+static int prevb = 0; int pb_now = prevb; prevb = t->a_c_busy;

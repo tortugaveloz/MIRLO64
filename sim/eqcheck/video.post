@@ -1,0 +1,1 @@
+if (t->a_m_valid && t->m_ready) outst++;

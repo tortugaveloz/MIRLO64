@@ -611,3 +611,138 @@ Timing: the worst path is the same in every fit before and after, the YUV conver
 endpoints, reported on the seed 1 fits: the split's compares into `xe` +3.8 ns and into `spl` +4.6 ns, `rq_cbase`
 +3.1 ns (+2.8 before), the write engine's `w_idx` +3.0 ns (+3.1 before) and `lbr_addr` +3.3 ns (+3.5 before), the
 `rf` to `wf` bypass +2.1 ns (+1.5 before).
+
+## Round 4: the blocks outside the three cores
+
+The fit of main with texture LOD is about 18,160 of 18,480 ALMs, and 32-bit colour images add some 140 more: 300 to 500
+fitted ALMs are wanted back, cycle for cycle. Rounds 1 to 3 worked in the RDP, the RSP and the CPU; this round looks at the
+rest of the SoC, about 4,000 ALUTs: the register block, the scan-out, the RCP's small units, the SDRAM's arbiter and
+controller, the CPU's port, the ports, the PSRAM, the cartridge slot.
+
+**Method.** `tools/area2/ooc.sh` synthesises the smaller blocks alone now too (`ai`, `si`, `vi`, `arb`, `sdr`, `dpc`,
+`cport`, `ports`, `psram`, `gbc`), and `soc`, `mirlo_mips` whole for its entity table; `glue` is `mirlo_mips` with the
+CPU, the RSP and the RDP replaced by stubs (`tools/area2/glue_stubs.sv`: each output a shift register fed by the parity
+of the core's inputs, so nothing around them is pruned or made constant), which synthesises the SoC's own logic in three
+minutes where `soc` takes twenty. `OOC_ROOT` puts the projects elsewhere (here under `build/`); `FIT="1 2 3"` then fits the
+unit alone with every pin virtual, once a seed. A unit alone fitted with its pins virtual is packed loosely and its
+virtual pins cost ALMs of their own, so its fitted figure is larger than its share of the whole design; the differences
+are what is compared. `glue` cannot be fitted that way (the SDRAM clock's DDIO output must drive a real pin).
+To find where a block's ALUTs go, the synthesised netlist (`quartus_cdb --vqm`) was walked back from each register through
+the LUTs of its block: each LUT charged to the registers whose input cone it is in. That is what pointed at the register
+block's read (609 of its 1,167 LUTs), the scan-out's row address (96), the VI's origin compare (73) and the SDRAM
+controller's timers.
+
+Synthesis, each unit alone, before and after (ALUTs, registers, DSP blocks, block memory bits; RAM blocks from the fits):
+
+| Unit | ALUTs | Registers | DSP | Block memory bits (RAM blocks) | Fitted ALMs, seeds 1 / 2 / 3 | Mean |
+|---|---|---|---|---|---|---|
+| `mirlo_regs` | 1,276 to 1,144 | 801 to 768 | 0 | 131,072 to 139,264 (16 to 17) | 1,568 / 1,566 / 1,569 to 1,446 / 1,448 / 1,454 | -118 |
+| `n64_video` | 1,581 to 1,551 | 1,104 | 4 to 3 | 666,272 | 1,062 / 1,059 / 1,056 to 1,052 / 1,051 / 1,052 (the row adder alone) | -7 |
+| `rcp_vi` (on the second-field origin fix, c98087e) | 251 to 210 | 72 | 0 | 512 | 211 / 210 / 207 to 187 / 190 / 193 | -19 |
+| `rcp_ai` | 263 to 258 | 328 (fitted 280) | 1 | 0 | 255 / 258 / 256 to 250 / 250 / 250 | -6 |
+| `rcp_si` | 172 to 150 | 58 | 0 | 512 (1 to 2) | 220 / 222 / 220 to 209 / 209 / 209 | -12 |
+| `sdr_ctrl` | 333 to 293 | 186 to 168 | 0 | 0 | 340 / 338 / 338 to 302 / 300 / 300 | -38 |
+| `cpu_port` | 166 to 121 | 251 | 0 | 1,072 | 311 / 311 / 311 to 288 / 289 / 289 | -22 |
+| `mirlo_mips` itself (`glue`) | 570 to 536 | 113 | | | | |
+| `glue` (all of the above in place) | 5,034 to 4,729 | 4,021 to 3,959 | 5 | 816,227 to 824,419 | | |
+| unchanged: `sdr_arb`, `rdp_dpc` with `rcp_dpc_view`, `port_mrdp` and `port_apf`, `psram`, `gb_cart` | 282, 199, 56, 81, 49 | 99, 160, 73, 62, 75 | | | | |
+
+`mirlo_mips` whole (`soc`) measures 25,236 ALUTs, 14,661 registers before these changes.
+
+### Kept
+
+* **The register block's read-back from a block RAM.** The read is a 60-way choice of 32 bits, some 1,040 bits of
+  data, 609 LUTs with its decode. Of those bits 280 are registers only the CPU writes (the bridge's slot, offset, length and
+  address, SCRATCH, the scan-out's base, window, scale and enables, the monitor's CTL, MASK and PI2, the cartridge's CTRL,
+  the audio's PLAYBACK_EN): they are now also written into a shadow (one M10K, a word a register at {bank, word}), and read
+  back from it with their writable bits, the RAM starting as their reset values (the SoC is reset only at its start).
+  The RAM's read is registered: an access's address stands from the cycle the CPU asks (`X_IDLE`) to the cycle of `r_req`,
+  so the read registered at the first edge is the word in the second, which is where the old read took it. SCRATCH loses
+  its flip-flops (it is only read back); the others still drive their outputs. The rest of the read is written as a word
+  of a bank, then the bank (alone that was -14 ALUTs). -132 ALUTs, -33 registers, one M10K.
+* **The device port's read data without a hold** (`mirlo_mips.sv`). `x_rdata` was loaded in ten states and held in
+  between, the hold one more input of each bit's 20- to 30-way select. Only the cycle of `x_ack` reads it (`cpu_port`
+  takes it with the ack, and a store's ack carries nothing), so it is now loaded at every cycle with what the state
+  answers. -34 ALUTs (`glue`).
+* **The SDRAM controller's timers to 3 bits.** The saturating counts of cycles since a bank's ACTIVATE, PRECHARGE, WRITE,
+  READ were 4 bits; they are compared with thresholds of at most 6, so a count that saturates at 7 compares as the 4-bit
+  one did. The width now follows the largest threshold (`CW`). -40 ALUTs, -18 registers.
+* **The CPU port's read address without an adder.** `a_addr[25:2] + issued` (a 24-bit adder in front of the arbiter's
+  select) is `{a_addr[25:5], a_addr[4:2] | issued}`: a line is asked for at its first word (`{pa[31:5], 5'd0}`), a single
+  word with `issued` 0. -45 ALUTs.
+* **The VI's second-field origin compared with one subtracter.** `wd == org_b + 2 WIDTH || wd == org_b + WIDTH` (two 23-bit
+  adders and two compares) is `wd - org_b` against the two row sizes, and the second-field rule's `wd != org_b` is that
+  difference against 0. -41 ALUTs (on main, before that rule: 201 to 167).
+* **The PIF RAM with a port each for the CPU and the SI's DMA.** It had one write port behind a choice of address and data
+  and one read port behind a choice of address; the two writers never write in one cycle, and each reads at its own
+  address. -22 ALUTs, one M10K more (32 bits in true dual port are two).
+* **The AI's multiplier registers free to be its DSP block's.** The operands (taken in S_MUL0) and the product (S_MUL1)
+  are now taken at every clock: S_MUL1 sees the operands S_MUL0 took, S_MUL2 the product. -5 ALUTs; the fit packs them.
+* **The scan-out: the woven frame's second-field row from the row adder** (`rowp + 320` and `rowp + the steps` are one
+  adder with the 320 among its operands; for a 32-bit picture the step is 640 words, a second constant in the same select) **and the row's last word held as `vi_nw - 1`** (no subtracter at each word):
+  -19 ALUTs. **The short lines' end from four constants**: `SHORT_S + (wv ? 2 : 1) * (pal ? 50 : 9) - 1` was a product of
+  two selects, which synthesis gave a DSP block: -11 ALUTs, one DSP block.
+
+### Not kept
+
+* The interact words written a bit at a time (each bit: the Pocket's word, its field, or the CPU's): -2 ALUTs.
+* The scan-out's reads in flight as one counter in place of `issued` and `got`: not cycle-identical. `inflight =
+  16'(issued - got)` is taken in 16 bits, and both count every read of the frame, so in the cycles after `issued` wraps
+  at 1,024 and before `got` does the sum reads near 64 Ki: `room` and `low` drop for those cycles (the request is held off,
+  the urgency lost). One counter gives the true count, and a 3D platformer's log changed (one interrupt fewer in 300M
+  cycles). The wrap is left as it is: fixing it changes the scan-out's timing.
+* The PSRAM's data lines' register in a block of its own: +2 ALUTs, +1 fitted ALM.
+* The AA filter's three products in DSP blocks: they already are.
+* For the three cores, the study's remaining candidates were looked at again and left: `e` / `ade` to M10K (`e` is read
+  and written at one address in a clock, its read address would be needed a clock ahead, or a falling-edge read in half
+  a cycle); `rdp_mem`'s FIFOs (they are M10K already; `wf`'s bypass cone is 170 LUTs but most of it is its write data's
+  select, which stays; an MLAB measured worse in round 2); COP0 in RAM (round 2: -15); the RSP's vector registers in M10K
+  (a 128-bit bypass a copy).
+
+### The whole design's fit
+
+`tools/area2/fit.sh`, Quartus Prime 23.1std.1 Lite, one compile at a time; main is `e17dce2` (the D-cache snoop in),
+compiled the same way from a copy of its tree, and the branch was this round on `e17dce2` (before it moved onto the second-field
+origin fix, which adds 50 ALUTs to the VI on main, 43 with this round's subtracter); `tools/area2/closure.py` for the four corners.
+
+| Seed | ALMs, main | ALMs, this branch | Difference | Worst, main | Worst, this branch |
+|---|---|---|---|---|---|
+| 13 | 17,879 | 17,563 | -316 | +0.090 (hold, sys): closes | -0.475 (setup, cpu), sys -0.050 |
+| 5 | 17,842 | 17,624 | -218 | -0.306 (setup, sys) | +0.064 (hold, sys): closes |
+| 9 | 17,883 | 17,625 | -258 | -0.768 (setup, sys) | -0.028 (hold, cpu) |
+| mean | 17,868 | 17,604 | -264 | | |
+
+RAM blocks 280 to 282 of 308 (the shadow, the PIF RAM's second port), DSP blocks 56 to 55, registers 16,763 to 16,843
+(seed 13). A build of this branch with the PSRAM variant of "Not kept" in it (two ALUTs more) fitted at 17,730 with seed
+13 and closed (+0.104): the fit of a design this full moves by a hundred ALMs or more for a change of a few LUTs, so it is
+the mean that says what the round gives, about 260 ALMs. Closing still depends on the seed, as it does for main (one of the
+three here for each). The paths that miss are inside the cores, not in what this round touched: with seed 13 the CPU's
+`e_insn` into `m_res` (setup, -0.475) and, in sys, the RSP's `x_am` / `t_r` into its vector registers' LUT RAM, which is
+also main's miss with seed 9 (-0.768): the sys domain's critical path is that write.
+
+### Verification
+
+Against a bench built from unchanged main (Verilator 5.052; the toolchain's outputs built in this tree):
+
+* The SoC programs `cpu_test`, `int64_test`, `libc_test`, `n64win_test`, `tlbram_test`, `mon_test`, `mi_test`,
+  `vi_test`, `ai_test`, `si_test`, `viaa_test`, `pi2_test`, `hires_test`, `vwin_test`, `tlbmon_test`, `tlbgame_test`,
+  `tlbpg_test` and `dma_coh_test` (`-c 30`, `VGA=1`, a frame dump each frame: `-e 1`; `vi32_test` is not in this tree):
+  every output text, cycle count and frame dump, 334 files, byte for byte the same (12 PASS; `cpu_test` its geometry
+  RAM's and bus error count's FAILs, `pi2_test` its ROM reads', on both; `vi_test`, `viaa_test`, `hires_test` and
+  `vwin_test` print no verdict: their pictures are the frame dumps, the same).
+* The 3D platformer for 300M cycles (`FB_N64=1 VGA=1 EXCSTAT=1 -e 60`): the ten frame dumps and the log (288 frames,
+  the CPU at 80246ddc) byte for byte the same.
+* `sim/vi_filter`'s regress: the 44 runs' pad hashes the same.
+* Each changed module side by side with its unchanged version on random inputs (`sim/eqcheck/eq.sh`: a Verilator top
+  instantiating both, every output compared at every cycle, the outputs that only mean something under the SoC's
+  protocol compared where they do: the register block's read in the cycle after a read, the CPU port's address where it
+  is valid with line addresses aligned, the PIF RAM's two outputs where they are read, the scan-out with a memory that
+  returns the words it asked for, woven and PAL frames among them): 2 to 4 million cycles each, no difference. A
+  deliberately broken copy of the register block, the SDRAM controller, the AI and the scan-out was caught each time, and
+  the CPU port's check, run first with unaligned line addresses, caught the assumption it rests on.
+* On the second-field origin fix (the branch rebased onto a82eaed), against a bench built from a82eaed: `rcp_vi` side by
+  side with a82eaed's (`EXTRA=vi.extra`: origins a row apart, the field turning over; 4 million cycles three times, no
+  difference; broken copies of the zero test and of a row compare caught); `vi_test`, `hires_test`, `vwin_test`,
+  `viaa_test`, the 3D platformer for 300M cycles, a title with woven 640 x 480 screens and a PAL flight game for 250M
+  cycles (4 s, a frame dump every fifth frame): 425 files byte for byte the same (the woven title's include 38 woven
+  640 x 480 frames; the flight game's first 4 s are 640 x 240).

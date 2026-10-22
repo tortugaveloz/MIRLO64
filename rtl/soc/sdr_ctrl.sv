@@ -105,13 +105,16 @@ wire [9:0]  q_col  = {req_addr[8:0], 1'b0};
 // ---- bank state and timers (saturating counts of cycles since the event)
 logic [3:0]  open;
 logic [12:0] row [4];
-logic [3:0]  c_act [4], c_pre [4], c_wr [4];
-logic [3:0]  c_rd, c_wrany;
-logic [3:0]  c_use [4];             // since a READ or a WRITE there
+// (wide enough for the largest threshold they are compared with: a count that saturates there compares as the wider one did)
+function automatic int imax(input int x, input int y); return x > y ? x : y; endfunction
+localparam int CW = $clog2(imax(imax(imax(T_RAS, T_IDLE), imax(T_R2W, T_W2R)), imax(imax(T_RCD, T_RP), T_WR)) + 1);
+logic [CW-1:0] c_act [4], c_pre [4], c_wr [4];
+logic [CW-1:0] c_rd, c_wrany;
+logic [CW-1:0] c_use [4];           // since a READ or a WRITE there
 logic        act1_d;                // phase 1 of the last cycle was an ACTIVATE
 wire [12:0] l_row  = la_addr[23:11];
 wire [1:0]  l_bank = la_addr[10:9];
-function automatic logic [3:0] sat(input logic [3:0] v); return v == 4'hF ? v : v + 4'd1; endfunction
+function automatic logic [CW-1:0] sat(input logic [CW-1:0] v); return &v ? v : v + 1'b1; endfunction
 
 // ---- init / refresh sequencing
 typedef enum logic [3:0] { S_POWER, S_PRE1, S_MRS1, S_PRE2, S_REF1, S_REF2, S_MRS2, S_RUN,
@@ -169,13 +172,13 @@ always_ff @(posedge clk) begin
     end else begin
         dfi_cke <= 1;
         // timers
-        c_rd <= cmd == C_RD ? 4'd1 : sat(c_rd);
-        c_wrany <= cmd == C_WR ? 4'd1 : sat(c_wrany);
+        c_rd <= cmd == C_RD ? CW'(1) : sat(c_rd);
+        c_wrany <= cmd == C_WR ? CW'(1) : sat(c_wrany);
         for (int b = 0; b < 4; b++) begin
-            c_act[b] <= ((cmd == C_ACT && cmd_ba == 2'(b)) || (cmd1 == C_ACT && cmd1_ba == 2'(b))) ? 4'd1 : sat(c_act[b]);
-            c_pre[b] <= ((cmd == C_PRE && (cmd_ba == 2'(b) || cmd_a[10])) || (cmd1 == C_PRE && cmd1_ba == 2'(b))) ? 4'd1 : sat(c_pre[b]);
-            c_wr[b]  <= (cmd == C_WR && cmd_ba == 2'(b)) ? 4'd1 : sat(c_wr[b]);
-            c_use[b] <= ((cmd == C_WR || cmd == C_RD) && cmd_ba == 2'(b)) ? 4'd1 : sat(c_use[b]);
+            c_act[b] <= ((cmd == C_ACT && cmd_ba == 2'(b)) || (cmd1 == C_ACT && cmd1_ba == 2'(b))) ? CW'(1) : sat(c_act[b]);
+            c_pre[b] <= ((cmd == C_PRE && (cmd_ba == 2'(b) || cmd_a[10])) || (cmd1 == C_PRE && cmd1_ba == 2'(b))) ? CW'(1) : sat(c_pre[b]);
+            c_wr[b]  <= (cmd == C_WR && cmd_ba == 2'(b)) ? CW'(1) : sat(c_wr[b]);
+            c_use[b] <= ((cmd == C_WR || cmd == C_RD) && cmd_ba == 2'(b)) ? CW'(1) : sat(c_use[b]);
         end
         act1_d <= cmd1 == C_ACT;
         // bank state (the two phases are never of one bank)

@@ -1,0 +1,1 @@
+if (t->s_line) t->s_addr &= ~0x1Fu;

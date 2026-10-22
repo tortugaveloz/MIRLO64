@@ -275,9 +275,7 @@ always_ff @(posedge clk)
         default: ;
     endcase
 
-// ---- CTRL
-logic [31:0] scratch;
-always_ff @(posedge clk) if (rst) scratch <= 32'h1234_5678; else if (wr && a == R_CTRL_SCRATCH) scratch <= r_wdata;
+// ---- CTRL (SCRATCH is only read back: it is the shadow's word alone, below)
 
 // ---- the mailbox
 wire [31:0] game_msg = 32'd0, geom_msg = 32'd0;
@@ -368,78 +366,137 @@ assign su_ready = !csr_push && f_in_ready;
 assign dropped = 16'd0;
 
 // ---- reads
+// The registers that only the CPU writes are read back from a shadow (a block RAM: a word a register, at {bank a[11:8], word
+// a[5:2]}), written with the word and read with its writable bits; the RAM starts as the registers' reset values (the SoC is
+// reset only at its start). An access's address stands from the cycle the CPU asks (mirlo_mips.sv: X_IDLE) through the cycle
+// of r_req, so the RAM's read, registered at the first of these edges, is the word in the second; a write is taken in its
+// own cycle of r_req, long before any read after it asks.
+function automatic logic [31:0] smask(input logic [15:0] ad);     // a shadowed register's bits (0: not shadowed)
+    case (ad)
+    R_APF_AUDIO_PLAYBACK_EN, R_APF_BRIDGE_BOOT_READY, R_VIDEO_FRAMEBUFFER_DMA_ENABLE, R_VIDEO_FRAMEBUFFER_VTG_ENABLE,
+    R_VIDEO_FRAMEBUFFER_VTG_MODE, R_MONITOR_PI2:                                        return 32'h0000_0001;
+    R_APF_BRIDGE_SLOT_ID:                                                              return 32'h0000_FFFF;
+    R_APF_BRIDGE_DATA_OFFSET, R_APF_BRIDGE_TRANSFER_LENGTH, R_APF_BRIDGE_RAM_DATA_ADDRESS, R_CTRL_SCRATCH,
+    R_VIDEO_FRAMEBUFFER_DMA_BASE:                                                      return 32'hFFFF_FFFF;
+    R_VIDEO_FRAMEBUFFER_WIDTH:                                                         return 32'h0007_0FFF;   // (bit 19, tv_pal, is live: below)
+    R_VIDEO_FRAMEBUFFER_WINDOW:                                                        return 32'h01FF_FF00;
+    R_VIDEO_FRAMEBUFFER_HWINDOW:                                                       return 32'h03FF_03FF;
+    R_VIDEO_FRAMEBUFFER_SCALE:                                                         return 32'h0FFF_07FF;
+    R_VIDEO_FRAMEBUFFER_ROWWORDS:                                                      return 32'h0000_07FF;
+    R_GB_CART_CTRL:                                                                    return 32'h0000_0003;
+    R_MONITOR_CTL, R_MONITOR_MASK:                                                     return 32'h0000_001F;
+    default:                                                                           return 32'd0;
+    endcase
+endfunction
+wire  [7:0]  sh_a = {a[11:8], a[5:2]};
+(* ramstyle = "M10K, no_rw_check" *) logic [31:0] shadow [0:255];
+logic [31:0] sh_q;
+initial begin
+    for (int k = 0; k < 256; k++) shadow[k] = 32'd0;
+    shadow[{R_CTRL_SCRATCH[11:8], R_CTRL_SCRATCH[5:2]}] = 32'h1234_5678;
+    shadow[{R_VIDEO_FRAMEBUFFER_DMA_BASE[11:8], R_VIDEO_FRAMEBUFFER_DMA_BASE[5:2]}] = 32'h40C0_0000;
+    shadow[{R_VIDEO_FRAMEBUFFER_HWINDOW[11:8], R_VIDEO_FRAMEBUFFER_HWINDOW[5:2]}] = {6'd0, 10'd640, 16'd0};
+    shadow[{R_VIDEO_FRAMEBUFFER_SCALE[11:8], R_VIDEO_FRAMEBUFFER_SCALE[5:2]}] = {4'd0, 12'h400, 5'd0, 11'h200};
+    shadow[{R_VIDEO_FRAMEBUFFER_ROWWORDS[11:8], R_VIDEO_FRAMEBUFFER_ROWWORDS[5:2]}] = 32'd170;
+end
 always_ff @(posedge clk) begin
-    case (a)
-    R_APF_AUDIO_PLAYBACK_EN:            r_rdata <= {31'd0, aud_playback_en};
-    R_APF_AUDIO_BUFFER_FILL:            r_rdata <= {20'd0, aud_fill};
-    R_APF_BRIDGE_SLOT_ID:               r_rdata <= {16'd0, br_slot_id};
-    R_APF_BRIDGE_DATA_OFFSET:           r_rdata <= br_data_offset;
-    R_APF_BRIDGE_TRANSFER_LENGTH:       r_rdata <= br_length;
-    R_APF_BRIDGE_RAM_DATA_ADDRESS:      r_rdata <= br_ram_data_address;
-    R_APF_BRIDGE_FILE_SIZE:             r_rdata <= br_file_size;
-    R_APF_BRIDGE_STATUS:                r_rdata <= {31'd0, br_status};
-    R_APF_BRIDGE_CURRENT_ADDRESS:       r_rdata <= br_current_address;
-    R_APF_BRIDGE_COMMAND_RESULT_CODE:   r_rdata <= {29'd0, br_command_result_code};
-    R_APF_BRIDGE_BOOT_READY:            r_rdata <= {31'd0, br_boot_ready};
-    R_APF_BRIDGE_HOST_STATE:            r_rdata <= {30'd0, br_host_loaded, br_host_reset_n};
-    R_APF_INPUT_CONT1_KEY:              r_rdata <= cont_key[0];
-    R_APF_INPUT_CONT2_KEY:              r_rdata <= cont_key[1];
-    R_APF_INPUT_CONT3_KEY:              r_rdata <= cont_key[2];
-    R_APF_INPUT_CONT4_KEY:              r_rdata <= cont_key[3];
-    R_APF_INPUT_CONT1_JOY:              r_rdata <= cont_joy[0];
-    R_APF_INPUT_CONT2_JOY:              r_rdata <= cont_joy[1];
-    R_APF_INPUT_CONT3_JOY:              r_rdata <= cont_joy[2];
-    R_APF_INPUT_CONT4_JOY:              r_rdata <= cont_joy[3];
-    R_APF_INPUT_CONT1_TRIG:             r_rdata <= cont_trig[0];
-    R_APF_INPUT_CONT2_TRIG:             r_rdata <= cont_trig[1];
-    R_APF_INPUT_CONT3_TRIG:             r_rdata <= cont_trig[2];
-    R_APF_INPUT_CONT4_TRIG:             r_rdata <= cont_trig[3];
-    R_APF_INTERACT_INTERACT0:           r_rdata <= ia0;
-    R_APF_INTERACT_INTERACT_CHANGED0:   r_rdata <= {31'd0, ia_ch0};
-    R_APF_INTERACT_INTERACT1:           r_rdata <= ia1;
-    R_APF_INTERACT_INTERACT_CHANGED1:   r_rdata <= {31'd0, ia_ch1};
-    R_APF_VIDEO_VIDEO:                  r_rdata <= {vb_count, vb_trig, vb_d};
-    R_CTRL_SCRATCH:                     r_rdata <= scratch;
-    R_CTRL_BUS_ERRORS:                  r_rdata <= {16'd0, bus_errors};
-    R_MAILBOX_GAME_MSG:                 r_rdata <= game_msg;
-    R_MAILBOX_GEOM_MSG:                 r_rdata <= geom_msg;
-    R_MAILBOX_STATUS:                   r_rdata <= {30'd0, game_irq, geom_irq};
-    R_MAILBOX_GEOM_RUN:                 r_rdata <= {31'd0, geom_run};
-    R_MRDP_CMD_STATUS:                  r_rdata <= {19'd0, !f_in_ready, f_level};
-    R_MRDP_CMD_DROPPED:                 r_rdata <= {16'd0, dropped};
-    R_MRDP_SYNC_COUNT:                  r_rdata <= mrdp_sync_count;
-    R_MRDP_STATUS:                      r_rdata <= {31'd0, mrdp_idle && f_level == 0 && !cmd_valid};
-    R_TIMER0_UPTIME_CYCLES:             r_rdata <= uptime_l[63:32];
-    R_TIMER0_UPTIME_CYCLES + 16'd4:     r_rdata <= uptime_l[31:0];
-    R_UART_RXTX:                        r_rdata <= {24'd0, uart_rx_byte};
-    R_UART_TXFULL:                      r_rdata <= {31'd0, uart_txfull};
-    R_UART_RXEMPTY:                     r_rdata <= {31'd0, uart_rxempty};
-    R_VIDEO_FRAMEBUFFER_DMA_BASE:       r_rdata <= fb_base;
-    R_VIDEO_FRAMEBUFFER_DMA_LENGTH:     r_rdata <= fb_length;
-    R_VIDEO_FRAMEBUFFER_DMA_ENABLE:     r_rdata <= {31'd0, fb_dma_enable};
-    R_VIDEO_FRAMEBUFFER_WIDTH:          r_rdata <= {12'd0, tv_pal, fb_pal, fb_tall, fb_gamma, 4'd0, fb_width};
-    R_VIDEO_FRAMEBUFFER_WINDOW:         r_rdata <= {7'd0, fb_rows, fb_y0, 8'd0};
-    R_VIDEO_FRAMEBUFFER_HWINDOW:        r_rdata <= {6'd0, fb_pw, 6'd0, fb_px0};
-    R_VIDEO_FRAMEBUFFER_SCALE:          r_rdata <= {4'd0, fb_ys, 5'd0, fb_xs};
-    R_VIDEO_FRAMEBUFFER_ROWWORDS:       r_rdata <= {21'd0, fb_nw};
-    R_VIDEO_FRAMEBUFFER_VTG_ENABLE:     r_rdata <= {31'd0, fb_vtg_enable};
-    R_VIDEO_FRAMEBUFFER_VTG_MODE:       r_rdata <= {31'd0, fb_mode};
-    R_MONITOR_ID:                       r_rdata <= 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
-    R_MONITOR_CTL:                      r_rdata <= {27'd0, mon_ai, mon_vi, mon_mi, mon_rcp, mon_own};
-    R_MONITOR_AIRATE:                   r_rdata <= {18'd0, ai_dac};
-    R_MONITOR_PI2:                      r_rdata <= {31'd0, d2_flash};
-    R_MONITOR_PEND:                     r_rdata <= {27'd0, mon_pend};
-    R_MONITOR_MASK:                     r_rdata <= {27'd0, mon_mask};
-    R_MONITOR_LEVEL:                    r_rdata <= {31'd0, mon_sp};
-    R_MONITOR_MIINTR:                   r_rdata <= {15'd0, pi_busy, 2'd0, mi_mask, 2'd0, mi_intr};
-    R_MONITOR_PILEN:                    r_rdata <= {pi_busy, 10'd0, pi_cnt};
-    R_GB_CART_ID:                       r_rdata <= 32'h4742_0001;
-    R_GB_CART_CTRL:                     r_rdata <= {30'd0, gbc_trust, gbc_on};
+    if (!rst && wr && smask(a) != 32'd0) shadow[sh_a] <= r_wdata;
+    sh_q <= shadow[sh_a];
+end
+// The rest: the map's banks are a[11:8], a register's word in its bank a[5:2] (a[15:12] and a[7:6] are 0 for every register).
+// An address that names no register reads 0.
+logic [31:0] rb [16];
+always_comb begin
+    for (int k = 0; k < 16; k++) rb[k] = 32'd0;
+    case (a[5:2])                                               // APF_AUDIO
+    R_APF_AUDIO_BUFFER_FILL[5:2]:          rb[0] = {20'd0, aud_fill};
+    default: ;
+    endcase
+    case (a[5:2])                                               // APF_BRIDGE
+    R_APF_BRIDGE_FILE_SIZE[5:2]:           rb[1] = br_file_size;
+    R_APF_BRIDGE_STATUS[5:2]:              rb[1] = {31'd0, br_status};
+    R_APF_BRIDGE_CURRENT_ADDRESS[5:2]:     rb[1] = br_current_address;
+    R_APF_BRIDGE_COMMAND_RESULT_CODE[5:2]: rb[1] = {29'd0, br_command_result_code};
+    R_APF_BRIDGE_HOST_STATE[5:2]:          rb[1] = {30'd0, br_host_loaded, br_host_reset_n};
+    default: ;
+    endcase
+    case (a[5:2])                                               // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4
+    R_APF_INPUT_CONT1_KEY[5:2]:            rb[2] = cont_key[0];
+    R_APF_INPUT_CONT2_KEY[5:2]:            rb[2] = cont_key[1];
+    R_APF_INPUT_CONT3_KEY[5:2]:            rb[2] = cont_key[2];
+    R_APF_INPUT_CONT4_KEY[5:2]:            rb[2] = cont_key[3];
+    R_APF_INPUT_CONT1_JOY[5:2]:            rb[2] = cont_joy[0];
+    R_APF_INPUT_CONT2_JOY[5:2]:            rb[2] = cont_joy[1];
+    R_APF_INPUT_CONT3_JOY[5:2]:            rb[2] = cont_joy[2];
+    R_APF_INPUT_CONT4_JOY[5:2]:            rb[2] = cont_joy[3];
+    R_APF_INPUT_CONT1_TRIG[5:2]:           rb[2] = cont_trig[0];
+    R_APF_INPUT_CONT2_TRIG[5:2]:           rb[2] = cont_trig[1];
+    R_APF_INPUT_CONT3_TRIG[5:2]:           rb[2] = cont_trig[2];
+    R_APF_INPUT_CONT4_TRIG[5:2]:           rb[2] = cont_trig[3];
+    default: ;
+    endcase
+    case (a[5:2])                                               // APF_INTERACT
+    R_APF_INTERACT_INTERACT0[5:2]:         rb[3] = ia0;
+    R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
+    R_APF_INTERACT_INTERACT1[5:2]:         rb[3] = ia1;
+    R_APF_INTERACT_INTERACT_CHANGED1[5:2]: rb[3] = {31'd0, ia_ch1};
+    default: ;
+    endcase
+    case (a[5:2])                                               // APF_VIDEO
+    R_APF_VIDEO_VIDEO[5:2]:                rb[4] = {vb_count, vb_trig, vb_d};
+    default: ;
+    endcase
+    case (a[5:2])                                               // CTRL
+    R_CTRL_BUS_ERRORS[5:2]:                rb[5] = {16'd0, bus_errors};
+    default: ;
+    endcase
+    case (a[5:2])                                               // MAILBOX (left out with the RSP: 0)
+    R_MAILBOX_GAME_MSG[5:2]:               rb[6] = game_msg;
+    R_MAILBOX_GEOM_MSG[5:2]:               rb[6] = geom_msg;
+    R_MAILBOX_STATUS[5:2]:                 rb[6] = {30'd0, game_irq, geom_irq};
+    R_MAILBOX_GEOM_RUN[5:2]:               rb[6] = {31'd0, geom_run};
+    default: ;
+    endcase
+    case (a[5:2])                                               // MRDP
+    R_MRDP_CMD_STATUS[5:2]:                rb[7] = {19'd0, !f_in_ready, f_level};
+    R_MRDP_CMD_DROPPED[5:2]:               rb[7] = {16'd0, dropped};
+    R_MRDP_SYNC_COUNT[5:2]:                rb[7] = mrdp_sync_count;
+    R_MRDP_STATUS[5:2]:                    rb[7] = {31'd0, mrdp_idle && f_level == 0 && !cmd_valid};
+    default: ;
+    endcase
+    case (a[5:2])                                               // TIMER0
+    R_TIMER0_UPTIME_CYCLES[5:2]:           rb[8] = uptime_l[63:32];
+    4'(R_TIMER0_UPTIME_CYCLES[5:2] + 4'd1): rb[8] = uptime_l[31:0];
+    default: ;
+    endcase
+    case (a[5:2])                                               // UART
+    R_UART_RXTX[5:2]:                      rb[9] = {24'd0, uart_rx_byte};
+    R_UART_TXFULL[5:2]:                    rb[9] = {31'd0, uart_txfull};
+    R_UART_RXEMPTY[5:2]:                   rb[9] = {31'd0, uart_rxempty};
+    default: ;
+    endcase
+    case (a[5:2])                                               // VIDEO_FRAMEBUFFER
+    R_VIDEO_FRAMEBUFFER_DMA_LENGTH[5:2]:   rb[10] = fb_length;
+    R_VIDEO_FRAMEBUFFER_WIDTH[5:2]:        rb[10] = {12'd0, tv_pal, 19'd0};
+    default: ;
+    endcase
+    case (a[5:2])                                               // GB_CART
+    R_GB_CART_ID[5:2]:                     rb[12] = 32'h4742_0001;
     // (BUSY from the write on: the engine's own busy is a cycle behind gbc_start)
-    R_GB_CART_ACCESS:                   r_rdata <= {gbc_busy || gbc_start, 23'd0, gbc_rdata};
-    default:                            r_rdata <= 32'd0;
+    R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
+    default: ;
+    endcase
+    case (a[5:2])                                               // MONITOR
+    R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
+    R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};
+    R_MONITOR_PEND[5:2]:                   rb[13] = {27'd0, mon_pend};
+    R_MONITOR_LEVEL[5:2]:                  rb[13] = {31'd0, mon_sp};
+    R_MONITOR_MIINTR[5:2]:                 rb[13] = {15'd0, pi_busy, 2'd0, mi_mask, 2'd0, mi_intr};
+    R_MONITOR_PILEN[5:2]:                  rb[13] = {pi_busy, 10'd0, pi_cnt};
+    default: ;
     endcase
 end
+always_ff @(posedge clk) r_rdata <= (a[15:12] == 4'd0 && a[7:6] == 2'd0 ? rb[a[11:8]] : 32'd0) | (sh_q & smask(a));
 
 endmodule
 `default_nettype wire

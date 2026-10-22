@@ -1,0 +1,1 @@
+t->ia_wr = (rand() % 16) == 0; t->br_complete_trigger = (rand() % 8) == 0;

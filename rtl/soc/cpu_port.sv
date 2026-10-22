@@ -143,7 +143,9 @@ wire         r_ask = a_go && !a_dev && issued != (a_line ? 4'd8 : 4'd1);
 wire         r_mine = rd_next && rd_next_tag == 3'(PORT);
 assign p_valid = (w_valid && !w_dev && w_run) || r_ask;
 assign p_we    = w_valid;
-assign p_addr  = w_valid ? w_head[23:0] : a_addr[25:2] + {20'd0, issued};
+// (a line's address is the line's first word -- mips_core asks for {pa[31:5], 5'd0} -- and a single word is asked for with issued
+// 0: the read's word is the address's with issued in its low three bits, no adder)
+assign p_addr  = w_valid ? w_head[23:0] : {a_addr[25:5], a_addr[4:2] | issued[2:0]};
 assign p_wdata = w_head[61:30];
 assign p_be    = w_head[65:62];
 assign x_req   = (w_valid && w_dev) || (a_go && a_dev);

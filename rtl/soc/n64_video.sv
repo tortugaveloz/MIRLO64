@@ -151,7 +151,10 @@ wire  [9:0] SHORT_PX    = pal_v ? SHORT_PX_P : SHORT_PX_N;
 wire  [9:0] VSCAN       = wv_v ? (pal_v ? 10'd625 : 10'd527) : pal_v ? VSCAN_P : VSCAN_N;
 wire  [9:0] VRES        = wv_v ? 10'd480 : 10'd240;
 wire  [9:0] SHORT_S     = wv_v ? 2 * SHORT_V : SHORT_V;
-wire  [9:0] SHORT_END   = SHORT_S + (wv_v ? 10'd2 : 10'd1) * (pal_v ? 10'(SHORT_LINES_P) : 10'(SHORT_LINES_N)) - 10'd1;
+// (four constants: as a product of the two selects it took a DSP block)
+localparam logic [9:0] SHORT_END_N = SHORT_V + 10'(SHORT_LINES_N) - 10'd1, SHORT_END_P = SHORT_V + 10'(SHORT_LINES_P) - 10'd1;
+localparam logic [9:0] SHORT_END_WN = 2 * SHORT_V + 10'(2 * SHORT_LINES_N) - 10'd1, SHORT_END_WP = 2 * SHORT_V + 10'(2 * SHORT_LINES_P) - 10'd1;
+wire  [9:0] SHORT_END   = wv_v ? (pal_v ? SHORT_END_WP : SHORT_END_WN) : (pal_v ? SHORT_END_P : SHORT_END_N);
 logic       hactive, vactive, hsync, vsync;
 logic       ann;
 logic       wvf_v1, wvf_v2;         // (wv_f, two flip-flops)
@@ -231,7 +234,7 @@ logic [9:0]  issued, got;          // (the reads in flight are their difference)
 // draws it with (the window and the X_SCALE: static for the frame)
 logic        all;
 logic [8:0]  orow, nr, nrm1;          // (rows: a woven frame's up to 480)
-logic [10:0] nw_f, stride_f;
+logic [10:0] nwm1_f, stride_f;      // (the words a row reads, less one)
 logic [11:0] ys_f;
 logic [9:0]  px0_f, pw_f;
 logic [8:0]  y0_f;
@@ -264,7 +267,9 @@ wire         px32_n = vi_px32 && N64FB;
 wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 // the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
 wire  [11:0] yan    = {2'b00, yacc} + ys_f;                    // (at most 0x3FF + 0x800: never both carries)
-wire  [23:0] rowp_n = rowp + (yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
+// (a woven frame: the second field's line is one 640-pixel row on, 320 words or a 32-bit picture's 640: the same adder)
+wire         w2nd   = wv_f && !wodd;
+wire  [23:0] rowp_n = rowp + (w2nd ? (px32_f ? 24'd640 : 24'd320) : yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
 // a word as the FIFO takes it: two pixels, the left one in the low half --
 // RGBA5551 as the game's (N64FB: its bit 0 the RDP's coverage, "complete"),
 // or RGB565 without N64FB. A 32-bit picture's word goes through the same
@@ -300,7 +305,7 @@ always_ff @(posedge clk) begin
             rowp  <= vi_origin[25:2] & ORIGIN_MASK;
             orow <= 0; all <= vi_nr == 0; yacc <= 0; rs_next <= 1'b1;
             nr <= wv_rq ? vi_nr2[8:0] : vi_nr; nrm1 <= (wv_rq ? vi_nr2[8:0] : vi_nr) - 9'd1;
-            nw_f <= vi_nw; ys_f <= vi_ys; wodd <= 1'b0;
+            nwm1_f <= vi_nw - 11'd1; ys_f <= vi_ys; wodd <= 1'b0;
             // (a program that never set the pitch: 320 pixels; a 32-bit picture's pitch is a word a pixel)
             stride_f <= vi_width[11:1] == 0 ? (px32_n ? 11'd320 : 11'd160) : px32_n ? vi_width[10:0] : 11'(vi_width[11:1]);
             px0_f <= vi_px0; pw_f <= vi_pw; y0_f <= wv_rq ? {vi_y0, 1'b0} : {1'b0, vi_y0}; xs_f <= vi_xs; nofilt_f <= hires;
@@ -318,10 +323,11 @@ always_ff @(posedge clk) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
                 raddr <= raddr + 24'd1;
-                if (col == nw_f - 11'd1) begin            // a row's last word: the next row
+                if (col == nwm1_f) begin                  // a row's last word: the next row
                     col <= 0;
-                    if (wv_f && !wodd) begin raddr <= rowp + (px32_f ? 24'd640 : 24'd320); wodd <= 1'b1; end      // (the second field's line: a 640-pixel row on)
-                    else begin raddr <= rowp_n; rowp <= rowp_n; yacc <= yan[9:0]; wodd <= 1'b0; end
+                    raddr <= rowp_n;
+                    if (w2nd) wodd <= 1'b1;               // (the second field's line)
+                    else begin rowp <= rowp_n; yacc <= yan[9:0]; wodd <= 1'b0; end
                     orow <= orow + 9'd1; all <= orow == nrm1;
                     rs_next <= 1'b1; h_next <= hid_f;
                 end else begin
