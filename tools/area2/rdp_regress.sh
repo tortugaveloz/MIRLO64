@@ -1,5 +1,5 @@
 #!/bin/bash
-# RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode and SDRAM timing
+# RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode and SDRAM timing, 8-bit and 32-bit images
 set -u
 cd "$(dirname "$0")/../../sim/rdp"
 ./build_rtl.sh >/dev/null || exit 1
@@ -16,6 +16,10 @@ for s in 24 25 26; do TB_SDRAM=1 TB_CPU=30 TB_ZIMG=0x280800 run ./obj_rdp/tb_rdp
 for s in 31 32 33; do TB_C8=1 run ./obj_rdp/tb_rdp -r $s 200; done
 for s in 34 35; do TB_C8=1 TB_CW=292 run ./obj_rdp/tb_rdp -r $s 200; done
 TB_C8=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 36 150
+# a 32-bit colour image (TB_C32: widths 320, 296, 640 and 1000 by the seed, a wide one's spans in two halves), and with
+# the SoC's memory
+for s in 41 42 43 44 45 46 47 48; do TB_C32=1 run ./obj_rdp/tb_rdp -r $s 200; done
+for s in 49 50; do TB_C32=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r $s 150; done
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))

@@ -23,7 +23,8 @@
 //            row before it, the first field's of the same buffer -- a game that swaps its buffer every field gives
 //            each field's origin in a buffer the other field's is not in, and the frame is the newest buffer whole.
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
-//            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
+//            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA). TYPE (bits 1:0; 3: 32-bit pixels) is the
+//            runtime's to give the scan-out with the pitch it goes with: a change of its bit 0 (2 and 3) is a `chg`.
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
 //            the picture out of the game's RDRAM (`thr`, MONITOR.VITHR: the last origin, in 64-byte units, a picture
 //            of the mode's size fits at; the runtime keeps it).
@@ -33,7 +34,7 @@
 //            runtime's choice from the ROM's region (n64rt_boot.c). The
 //            half-line counter of a PAL field is 312 lines (CURRENT 0..623), VI_V_START's first line 47 (libultra's PAL modes:
 //            half-line 95) where the NTSC modes' is 18.
-//   WIDTH, H_START, V_START, X_SCALE, Y_SCALE   what the scan-out's window and size come from (the runtime computes them: n64rt_io.c, and
+//   WIDTH, H_START, V_START, X_SCALE, Y_SCALE, and STATUS' TYPE   what the scan-out's window, size and pixel size come from (the runtime computes them: n64rt_io.c, and
 //            is told when one of them has changed -- `chg`, a pulse -- reading the registers back).
 // The accesses are sequenced by mirlo_mips.sv: the address is held while the access lasts; for a read, `rd` is the answer
 // in the cycle after the address (rd_s); a write is done in the cycle `wr_s` is up.
@@ -55,7 +56,7 @@ module rcp_vi (
     output wire         vi_clr,         // a write to CURRENT (the MI's VI bit is cleared)
     // events
     output logic        irq,            // a pulse: the line V_INTR names began
-    output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE or Y_SCALE changed
+    output logic        chg,            // a pulse: WIDTH, H_START, V_START, X_SCALE, Y_SCALE or STATUS' TYPE changed
     // the scan-out's
     output wire  [25:0] base,           // the framebuffer's byte address in the SDRAM
     output wire         il,             // a serrated picture: SERRATE (VI_CTRL bit 6), hi-res (sent woven)
@@ -120,7 +121,9 @@ end
 
 // a register the window is computed from has changed (q is the register's old word)
 wire [31:0] dx = q ^ wd;
-wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]) || (a == 4'd12 && |dx[11:0]) || (a == 4'd9 && |dx[25:0]));
+wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx & 32'h03FF_03FF)) || (a == 4'd13 && |dx[11:0]) || (a == 4'd12 && |dx[11:0]) || (a == 4'd9 && |dx[25:0])
+                               || (a == 4'd0 && dx[0]));         // (the pixel size, type 2 or 3: a 32-bit picture's pitch and row are the runtime's;
+                                                                 // type 0 to 2, a 16-bit game's start, is no change of it)
 always_ff @(posedge clk) chg <= !rst && chg_now;
 
 // ---------------------------------------------------------------- the half-line counter

@@ -1,13 +1,10 @@
-/* The texture LOD in the model (RDP_LOD; mrdp.c, the LOD section; docs/lod.md):
- * mrdp_lod against steps worked out by hand, then a perspective floor drawn in
- * 2-cycle mode with a mip chain of six levels, each a checker of its own colour,
- * through the combiner's (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, to
- * test_lod.ppm. Built without RDP_LOD the floor is level 0 all the way to the
- * horizon; with it the levels follow the distance.
- *   cc -O2 -DMRDP_N64 -DRDP_LOD -I. test_lod.c mrdp.c -o test_lod && ./test_lod
- *   cc -O2 -DMRDP_N64 -I. test_lod.c mrdp.c -o test_nolod && ./test_nolod
- * With -DRDP_EXACT_DIV too (the console's perspective divide, as the RTL has it) it checks that divide first, and the
- * floor is drawn with it.
+/* The texture LOD in the model (mrdp.c, the LOD section; docs/lod.md): the
+ * console's perspective divide (mrdp_n64_div) and mrdp_lod against values
+ * worked out by hand, then a perspective floor drawn in 2-cycle mode with a mip
+ * chain of six levels, each a checker of its own colour, through the
+ * combiner's (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, to test_lod.ppm: the
+ * levels follow the distance.
+ *   cc -O2 -DMRDP_N64 -I. test_lod.c mrdp.c -o test_lod && ./test_lod
  */
 #include "mrdp.h"
 #include <math.h>
@@ -23,7 +20,6 @@ static mrdp_t R;
 static int fails;
 static void cmd(uint32_t w0, uint32_t w1) { mrdp_push(&R, w0); mrdp_push(&R, w1); }
 
-#ifdef RDP_LOD
 /* ---- mrdp_lod alone ---------------------------------------------------------- */
 static void lod_case(const char *what, uint32_t h, unsigned minl, unsigned maxl, int32_t ds, int32_t dt,
                      unsigned want_t0, unsigned want_t1, unsigned want_frac, unsigned want_level)
@@ -70,10 +66,8 @@ static void lod_units(void)
         fails += !ok;
     }
 }
-#endif
 
-#ifdef RDP_EXACT_DIV
-/* ---- the console's perspective divide (RDP_EXACT_DIV: mrdp_n64_div) ----------------- */
+/* ---- the console's perspective divide (mrdp_n64_div) ----------------------------- */
 static void div_case(const char *what, int32_t s16, int32_t w16, int32_t want, int want_range)
 {
     int range;
@@ -96,7 +90,6 @@ static void div_units(void)
     div_case("W 0: over", 0, 0x0000, 0, 2);
     div_case("W negative: over", 5, -0x100, 0, 2);
 }
-#endif
 
 /* ---- a perspective floor --------------------------------------------------------- */
 #define CIMG 0x100000u
@@ -199,12 +192,8 @@ static int level_of(int r, int g, int b)
 
 int main(void)
 {
-#ifdef RDP_LOD
     lod_units();
-#endif
-#ifdef RDP_EXACT_DIV
     div_units();
-#endif
     mrdp_init(&R, 0, rd16, wr16);
     cmd(0x3F000000u | 2u << 19 | (W - 1), CIMG);                              /* 16-bit colour image */
     cmd(0x2D000000u, (W << 2) << 12 | (H << 2));
@@ -247,21 +236,13 @@ int main(void)
         if (k != prev) { printf("     row %3d: level %d\n", y, k); if (prev >= 0 && k < prev) monotonic = 0; prev = k; }
         top = k;
     }
-#ifdef RDP_LOD
     int ok = monotonic && bottom == 0 && top == LEVELS - 1;
     printf("%s the levels rise with the distance, 0 near to %d at the horizon\n", ok ? "ok  " : "FAIL", LEVELS - 1);
-#else
-    int ok = bottom == 0 && top == 0;
-    (void)monotonic;
-    printf("%s without RDP_LOD the floor is level 0 throughout\n", ok ? "ok  " : "FAIL");
-#endif
     fails += !ok;
     printf("pixels drawn %llu, %s\n", (unsigned long long)R.pixels_drawn, fails ? "FAILED" : "all ok");
-#ifdef RDP_LOD
     printf("LOD pixels %llu (magnified %llu, at the far level %llu); by level:", (unsigned long long)R.lod_px,
            (unsigned long long)R.lod_mag, (unsigned long long)R.lod_far);
     for (int k = 0; k < 8; k++) printf(" %llu", (unsigned long long)R.lod_lvl[k]);
     printf("\n");
-#endif
     return fails != 0;
 }

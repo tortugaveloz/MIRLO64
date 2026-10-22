@@ -86,7 +86,6 @@ projects_*/
 sim/rsp/obj_rsp*
 sim/rsp/rsp_task
 sim/rdp/rdp_task
-sim/rdp/rdp_task_lod
 sim/rdp/obj_rdp*
 sim/ai/obj_ai*
 sim/rsp/obj_dma*

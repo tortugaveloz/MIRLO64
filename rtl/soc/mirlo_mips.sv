@@ -667,7 +667,7 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
     .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_il(mon_vi && vi_il), .vblank,
-    .vi_width(fb_width), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
+    .vi_width(fb_width), .vi_px32(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

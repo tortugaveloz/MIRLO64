@@ -17,6 +17,11 @@
 //    A SERRATED hi-res picture (VI_CTRL's SERRATE: 640 x 480 as two fields of 240 rows, `vi_il`) is sent woven: its 480
 //    rows in order, a frame each field of the VI's, 640 x 480 progressive (docs/resolution.md) -- the picture two fields
 //    make; the Pocket's scaler shows interlaced fields torn.
+//  - a 32-bit picture (VI_STATUS type 3, `vi_px32`: RGBA8888, R the lowest byte) is a pixel a word: the pitch is
+//    VI_WIDTH words, a row reads twice the words (the runtime's `vi_nw`), and the coverage is the alpha byte's top three
+//    bits (no hidden plane read). The FIFO's read side converts each pixel to what a 16-bit picture's carries -- each
+//    channel's top five bits, the coverage as bit 0 and the two hidden bits -- so the line buffers and the filters are
+//    the 16-bit picture's, unchanged: the picture is shown at five bits a channel (the low three are dropped).
 //  - sys: at the frame boundary (the first line of vblank, from vid) the base is latched from VI_ORIGIN (a new
 //    origin never tears the frame being sent) and the frame's rows are read in
 //    order into the FIFO: 64 KiB (16,384 words), which is what rides out the DRAM contention -- the arbiter puts
@@ -59,6 +64,7 @@ module n64_video #(
     input  wire         vi_il,          // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): sent woven
     output logic        vblank,         // sys
     input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
+    input  wire         vi_px32,        // sys: the pixels are 32-bit (VI_STATUS type 3): RGBA8888, a pixel a word
     input  wire         vi_black,       // sys: H_START 0 (osViBlack): black
     input  wire         vi_pal,         // sys: the TV system asked for: 1 PAL (625 lines, 50 Hz), 0 NTSC (and MPAL: 525 lines, 59.94 Hz)
     output logic        tv_pal,         // sys: the field being scanned out is PAL (vi_pal, taken at the frame boundary)
@@ -231,6 +237,7 @@ logic [9:0]  px0_f, pw_f;
 logic [8:0]  y0_f;
 logic [10:0] xs_f;
 logic        nofilt_f;             // a hi-res picture (512 pixels or more a row): the filters are off
+logic        px32_f;               // a 32-bit picture (N64FB only: the RGB565 picture has no such mode)
 logic [1:0]  ann_s;                // the frame announced, from vid
 always_ff @(posedge clk) ann_s <= {ann_s[0], ann};
 // a woven frame: a serrated picture of the two pitches of its fields -- WIDTH 640 with Y_SCALE 2.0 (a field every other row; or
@@ -253,13 +260,16 @@ logic [9:0]  drop;                 // the last frame's reads still to come back 
 logic [FAW:0] wlevel;              // the FIFO's fill as sys sees it (words)
 wire         keep = m_rvalid && !fb_sys && drop == 0;
 wire         hires  = |vi_width[11:9];                       // 512 or more: a hi-res picture
+wire         px32_n = vi_px32 && N64FB;
 wire  [8:0]  vi_nr  = (vi_rows == 0 || vi_rows > 9'd240) ? 9'd240 : vi_rows;
 // the next row: this one and the pitches Y_SCALE's accumulator steps (0 for an enlarged line: the row again, 1, 2)
 wire  [11:0] yan    = {2'b00, yacc} + ys_f;                    // (at most 0x3FF + 0x800: never both carries)
 wire  [23:0] rowp_n = rowp + (yan[11] ? {12'd0, stride_f, 1'b0} : yan[10] ? {13'd0, stride_f} : 24'd0);
 // a word as the FIFO takes it: two pixels, the left one in the low half --
 // RGBA5551 as the game's (N64FB: its bit 0 the RDP's coverage, "complete"),
-// or MRDP's RGB565
+// or RGB565 without N64FB. A 32-bit picture's word goes through the same
+// swap, one pixel: {B, A} in the high half, {R, G} in the low (the vid side
+// takes it so).
 wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // MIRLO_VI_AA: each word goes with its pixels' hidden coverage bits (the RDP's
 // plane, 1 MiB below the RDRAM: lang/c/mrdp/mrdp.h, layout.h) -- a group's
@@ -291,12 +301,15 @@ always_ff @(posedge clk) begin
             orow <= 0; all <= vi_nr == 0; yacc <= 0; rs_next <= 1'b1;
             nr <= wv_rq ? vi_nr2[8:0] : vi_nr; nrm1 <= (wv_rq ? vi_nr2[8:0] : vi_nr) - 9'd1;
             nw_f <= vi_nw; ys_f <= vi_ys; wodd <= 1'b0;
-            stride_f <= vi_width[11:1] == 0 ? 11'd160 : 11'(vi_width[11:1]);   // (a program that never set the pitch: 320)
+            // (a program that never set the pitch: 320 pixels; a 32-bit picture's pitch is a word a pixel)
+            stride_f <= vi_width[11:1] == 0 ? (px32_n ? 11'd320 : 11'd160) : px32_n ? vi_width[10:0] : 11'(vi_width[11:1]);
             px0_f <= vi_px0; pw_f <= vi_pw; y0_f <= wv_rq ? {vi_y0, 1'b0} : {1'b0, vi_y0}; xs_f <= vi_xs; nofilt_f <= hires;
-            hid_f <= vi_aa && !hires && N64FB;
+            px32_f <= px32_n;
+            // (a 32-bit picture's coverage is in its own words: no hidden plane)
+            hid_f <= vi_aa && !hires && N64FB && !px32_n;
             issued <= 0; got <= 0; col <= 0;
             drop <= issued - got - 10'(m_rvalid);
-            h_next <= vi_aa && !hires && N64FB;
+            h_next <= vi_aa && !hires && N64FB && !px32_n;
         end else begin
             if (m_valid && m_ready && m_hid) begin
                 issued <= issued + 10'd1;
@@ -307,7 +320,7 @@ always_ff @(posedge clk) begin
                 raddr <= raddr + 24'd1;
                 if (col == nw_f - 11'd1) begin            // a row's last word: the next row
                     col <= 0;
-                    if (wv_f && !wodd) begin raddr <= rowp + 24'd320; wodd <= 1'b1; end      // (the second field's line)
+                    if (wv_f && !wodd) begin raddr <= rowp + (px32_f ? 24'd640 : 24'd320); wodd <= 1'b1; end      // (the second field's line: a 640-pixel row on)
                     else begin raddr <= rowp_n; rowp <= rowp_n; yacc <= yan[9:0]; wodd <= 1'b0; end
                     orow <= orow + 9'd1; all <= orow == nrm1;
                     rs_next <= 1'b1; h_next <= hid_f;
@@ -361,14 +374,15 @@ afifo #(.W(FW), .AW(FAW)) fifo (
 
 // --------------------------------------------------------------- vid: the picture
 // the frame's parameters (static: latched by sys at the boundary)
-logic [50:0] win_s;
-always_ff @(posedge clk_vid) win_s <= {nofilt_f, nr, y0_f, px0_f, pw_f, xs_f};
+logic [51:0] win_s;
+always_ff @(posedge clk_vid) win_s <= {px32_f, nofilt_f, nr, y0_f, px0_f, pw_f, xs_f};
 wire  [10:0] xs_v    = win_s[10:0];
 wire  [9:0]  pw_v    = win_s[20:11];
 wire  [9:0]  px0_v   = win_s[30:21];
 wire  [9:0]  py0_v   = {1'b0, win_s[39:31]};
 wire  [9:0]  nr_v    = {1'b0, win_s[48:40]};
 wire         nofilt_v = win_s[49];
+wire         px32_v   = win_s[50];
 // the window's rows (the fetch lines: vcount py0 .. py0 + nr - 1; line d shows the row of line d - 1: the filters' row below
 // is the one just fetched), by line, from the priming on: nv this line fetches a row, cv the one before did (and is shown
 // now), av the one before that (the filters' row above)
@@ -398,7 +412,7 @@ wire         stale = !f_empty && f_q[FW-1] != epoch_vid;
 wire         hd_ok = !f_empty && !stale;
 wire         sync_ph = nv && hcount > PR_SYNC && hcount < PR0;
 wire         rs_drop = sync_ph && hd_ok && !f_q[FW-2];
-wire         pop_ev  = adv && !flush && nv && wpos && hd_ok;
+wire         pop_ev  = adv && !flush && nv && (wpos || px32_v) && hd_ok;   // (a 32-bit picture: a word a step)
 always_comb f_rd = ce && (stale || rs_drop || pop_ev);
 logic [15:0] pix;
 logic [1:0]  phid;                 // its hidden coverage bits (MIRLO_VI_AA)
@@ -411,9 +425,12 @@ always_ff @(posedge clk_vid) if (ce) begin
         if (nv) wpos <= ~wpos;
     end
 end
-// a word's two pixels (the hidden bits of the one) -- the pixel the step loads
-wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : wpos ? f_q[31:16] : f_q[15:0];
-wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : wpos ? f_q[35:34] : f_q[33:32];
+// a word's two pixels (the hidden bits of the one) -- the pixel the step loads. A 32-bit word's pixel (R f_q[15:8],
+// G [7:0], B [31:24], A [23:16]) as a 16-bit one: each channel's top five bits, the coverage (alpha[7:5]) as bit 0 and
+// the hidden two
+wire [15:0] p32_hi = {f_q[15:11], f_q[7:3], f_q[31:27], f_q[23]};
+wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : px32_v ? p32_hi : wpos ? f_q[31:16] : f_q[15:0];
+wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : px32_v ? f_q[22:21] : wpos ? f_q[35:34] : f_q[33:32];
 wire        nx_pv  = nv && hd_ok && !flush;
 
 // the filters' line buffers and windows (the column of the slot, and its two rows above)
@@ -458,6 +475,8 @@ end
 // smooth colour the RDP's dither stood for. Then the divot filter: where
 // any of three neighbours on the line is not complete, the median of the
 // three. Delay: six steps.
+// A 32-bit picture: the same filters on its pixels' top five bits and the coverage of its alpha byte (the VI's own work
+// on eight bits; the line buffers have no room for the low three, so they are dropped at the FIFO's read side).
 logic [1:0]  aa_s, dv_s, dd_s;
 always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], vi_divot}; dd_s <= {dd_s[0], vi_dedither}; end
 // (a hi-res picture: the filters are off; its pixels go through the line buffers all the same -- 1024 slots: a 640-pixel line and the priming's)

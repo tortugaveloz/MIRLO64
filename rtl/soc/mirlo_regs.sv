@@ -70,7 +70,8 @@ module mirlo_regs (
     output logic [9:0]  fb_px0, fb_pw,
     output logic [10:0] fb_xs, fb_nw,
     output logic [11:0] fb_ys,
-    output logic        fb_tall,        // (WIDTH's bit 17, unused)
+    output logic        fb_tall,        // (WIDTH's bit 17) the frame buffer's pixels are 32-bit, VI_STATUS type 3: n64_video's
+                                        // vi_px32 (the name is a former use's)
     output logic        fb_gamma,       // (WIDTH's bit 16) the scan-out's gamma correction
     output logic        fb_pal,         // (WIDTH's bit 18) the TV system before the game programs the VI's V_SYNC: 1 PAL (the ROM's region)
     input  wire         tv_pal,         // (WIDTH's bit 19, read) the TV system the scan-out is using

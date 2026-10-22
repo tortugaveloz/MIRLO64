@@ -1,7 +1,7 @@
 all:
 include ../program.mk
 CFLAGS += -O2 -Wall -fno-strict-aliasing
-ifneq ($(filter mon_test mi_test vi_test ai_test rcpcpu_test si_test viaa_test pi2_test tlbmon_test tlbgame_test ram8_test,$(PROGRAM)),)
+ifneq ($(filter mon_test mi_test vi_test ai_test rcpcpu_test si_test viaa_test vi32_test pi2_test tlbmon_test tlbgame_test ram8_test,$(PROGRAM)),)
 CFLAGS += -DMIRLO_VEC_JUMP
 endif
 all: $(BUILD)/$(PROGRAM).bin

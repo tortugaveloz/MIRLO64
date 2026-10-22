@@ -100,7 +100,8 @@ BLOCKS = [
         ("VTG_MODE",   0x14, RW, 1, []),            # (no effect: the frame is always 320 x 240)
         ("WIDTH",      0x18, RW, 1, []),            # [11:0] the VI's WIDTH, the framebuffer's rows' pitch in pixels (512 or
                                                     # more: a hi-res picture, the VI's filters off); bit 16: the N64
-                                                    # VI's gamma correction; 17: (unused); 18: PAL; 19 (read): PAL in use
+                                                    # VI's gamma correction; 17: 32-bit pixels (VI_STATUS type 3);
+                                                    # 18: PAL; 19 (read): PAL in use
         # the scan-out is the VI's: a 640-clock line, 240 lines (rtl/soc/n64_video.sv). The picture's window in it:
         # [15:8] its first line, [24:16] its lines (0: the whole field)
         ("WINDOW",     0x1C, RW, 1, []),

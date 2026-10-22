@@ -17,6 +17,9 @@
 //   TB_CROPV, TB_CROPR (the core's crop options), TB_PAL=1: vi_pal on from the start (PAL timing: 313 lines, 1,250,000 sys
 //   clocks a field), TB_SEQ=0,1,1,0,...: vi_pal set to the n-th value at the n-th vsync (the TV system changes at the
 //   end of the field: the fields are checked line by line), TB_DUMP=prefix, TB_V.
+//   TB_PX32=1: a 32-bit picture (VI_STATUS type 3, vi_px32): RGBA8888, a pixel a word, the coverage in the alpha byte's
+//   top three bits, a row twice the words. The scan-out shows it as the 16-bit picture of each channel's top five bits
+//   and that coverage (rtl/soc/n64_video.sv): the model is the 16-bit one on that picture, made from the 32-bit buffer.
 // A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out through the DMA port; a frame is taken off
 // the pads and every pixel compared (a serrated picture's field has a black line of DE before its 240). Outside DE the pads are 0
 // but for a serrated picture's words for the Pocket: the slot of
@@ -41,6 +44,9 @@ static bool ser, wov;                             // SERRATE with a hi-res pitch
 static unsigned LOAD = 0, RDY = 75;               // the SDRAM's load: TB_LOAD, TB_RDY
 static std::vector<uint16_t> fbw;                 // the buffer
 static std::vector<uint8_t> hidw;                 // each pixel's hidden two coverage bits (the RDP's plane)
+static bool px32;                                 // TB_PX32: a 32-bit picture
+static std::vector<uint32_t> fb32;                // its buffer: RGBA8888, R the top byte (the word as the SDRAM gives it); fbw / hidw its 16-bit view
+static long hid_reads;                            // reads of the hidden plane (none for a 32-bit picture)
 static unsigned rng = 1;
 static int pal0;                                  // TB_PAL
 static std::vector<int> seq;                      // TB_SEQ
@@ -138,7 +144,9 @@ static void tick()
         if (a >= 0xDC0000u && a < 0xE00000u) {      // the hidden plane (SDRAM 0x0370_0000): pixels 16 (a - base) on
             uint32_t p0 = (a - 0xDC0000u) * 16u;
             for (uint32_t k = 0; k < 16; k++) if (p0 + k < hidw.size()) w |= (uint32_t)hidw[p0 + k] << (2 * k);
-        } else if (i + 1 < fbw.size()) w = (uint32_t)fbw[i] << 16 | fbw[i + 1];
+            hid_reads++;
+        } else if (px32) w = a < fb32.size() ? fb32[a] : 0;     // (a 32-bit picture: a pixel a word)
+        else if (i + 1 < fbw.size()) w = (uint32_t)fbw[i] << 16 | fbw[i + 1];
         pend.push_back({ sys_cyc + 4 + rnd() % 8, w });
     }
     t->m_rvalid = 0;
@@ -172,12 +180,14 @@ int main(int argc, char **argv)
     dedither = argc > 5 ? atoi(argv[5]) : 0;
     if (const char *e = getenv("TB_LOAD")) LOAD = (unsigned)atoi(e);
     if (const char *e = getenv("TB_RDY")) RDY = (unsigned)atoi(e);
+    px32 = getenv("TB_PX32") && atoi(getenv("TB_PX32"));
     rng = seed * 2654435761u + 7;
     pal0 = getenv("TB_PAL") ? atoi(getenv("TB_PAL")) : 0;
     if (const char *q = getenv("TB_SEQ")) for (; *q; q++) if (*q == '0' || *q == '1') seq.push_back(*q - '0');
     HB = (wov ? 2 * R + 8 : frow((int)R) + 4);    // the buffer's rows
     const unsigned smax = (((PW - 1) * XS) >> 10);   // the window's last source pixel
-    const unsigned NW = (smax + 8) / 2 + 1;          // the words a row reads: its priming's seven pixels and the window's, and one more
+    // the words a row reads: its priming's seven pixels and the window's, and one more (a 32-bit picture: a word a pixel; the runtime's vi_width_gamma)
+    const unsigned NW = px32 ? smax + 8 + 1 : (smax + 8) / 2 + 1;
     fbw.resize((size_t)WB * HB + 4096); hidw.resize((size_t)WB * HB + 4096);
     // patches of colour with partial pixels, and noise
     for (size_t i = 0; i < fbw.size(); i++) {
@@ -187,8 +197,20 @@ int main(int argc, char **argv)
         fbw[i] = v | (uint16_t)(c >> 2);
         hidw[i] = (uint8_t)(c & 3u);
     }
+    if (px32) {   // a 32-bit buffer: patches of 8-bit colour (their low bits as random as the rest), the coverage in alpha[7:5], alpha[4:0] noise
+        fb32.resize(fbw.size());
+        for (size_t i = 0; i < fb32.size(); i++) {
+            uint32_t v = (uint32_t)(rnd() << 16 | rnd()) & 0xFFFFFF00u;
+            if ((rnd() % 4) && i > 0) v = (fb32[i - 1] & 0xFFFFFF00u) ^ (rnd() % 3 == 0 ? (rnd() & 0x07070700u) : 0u);
+            unsigned c = (int)(rnd() % 100) >= pct ? 7u : rnd() % 7u;
+            fb32[i] = v | c << 5 | (rnd() & 31u);
+            const uint32_t w = fb32[i];
+            fbw[i] = (uint16_t)(((w >> 27) & 31u) << 11 | ((w >> 19) & 31u) << 6 | ((w >> 11) & 31u) << 1 | ((w >> 7) & 1u));
+            hidw[i] = (uint8_t)((w >> 5) & 3u);
+        }
+    }
     t = new Vn64_video;
-    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0;
+    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0; t->vi_px32 = px32;
     t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->vi_lines = 240;
     t->vi_px0 = PX0; t->vi_pw = PW; t->vi_y0 = Y0; t->vi_rows = R == 240 ? 0 : R; t->vi_xs = XS; t->vi_ys = YS; t->vi_nw = NW;
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
@@ -290,11 +312,12 @@ int main(int argc, char **argv)
         pvs = t->vga_vsync;
     }
     errs += outside + (int)tim_errs;
+    if (px32 && hid_reads) { printf("a 32-bit picture read the hidden plane %ld times\n", hid_reads); errs++; }
     if (seq.empty()) printf("field timing: %u fields of %ld sys clocks (%s at 62.5 MHz), %d lines each, %d of them shorter\n", fields_ok, FLD[pal0], pal0 ? "50.000 Hz, PAL" : "59.940 Hz", NLN[pal0], NSH[pal0]);
     else printf("field timing: %u intervals as predicted\n", fields_ok);
     if (fields_ok < (unsigned)(seq.empty() ? (pal0 ? 3 : nfr - 1 - (wov ? 1 : 0)) : seq.size())) { printf("field timing: not seen\n"); errs++; }
     printf("pad hash %016llx\n", (unsigned long long)pad_hash);
-    printf("seed %u divot %d dedither %d partial %d%% width %u%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
-           seed, divot, dedither, pct, WB, wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
+    printf("seed %u divot %d dedither %d partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
+           seed, divot, dedither, pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
     return errs != 0;
 }

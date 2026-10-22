@@ -62,6 +62,11 @@ Three cases are not the plain rule:
   the frame has) is fitted to what is left of the field, not cut: it has fewer lines and a proportionally larger step
   through the rows, so its first and last lines show the same rows as the VI's (`lang/n64rt/n64rt_vifit.h`).
 
+A **32-bit picture** (`VI_STATUS` type 3, RGBA8888) is read a word a pixel: `VI_WIDTH` is still its pitch in pixels,
+and a row reads twice the words of a 16-bit one (a 320-wide picture what a 640-wide 16-bit one does). Its pixels are
+shown at five bits a channel, the coverage the VI's filters use taken from the alpha byte's top three bits
+([cimg32.md](cimg32.md)). The runtime gives the scan-out the type with the width (`VIDEO_FRAMEBUFFER.WIDTH` bit 17).
+
 The runtime works the window, the scales and the words to read for a row out of the VI's registers
 (`lang/n64rt/n64rt_io.c`, `vi_width_gamma`) and writes them to `VIDEO_FRAMEBUFFER`.
 
@@ -102,7 +107,8 @@ picture's window; the frame and its timing do not change.
 
 `sim/vi_filter/regress.sh` builds the scan-out alone against a model of it (`tb_vi.cpp`) and checks the pads pixel for
 pixel: the filters, pitches and scales other than 320, windows, the crop settings, serrated pictures (the woven frame's
-rows and timing, the slot words), PAL and a change of TV system between fields. `sim/vi_filter/vifit_test.c` checks the
+rows and timing, the slot words), PAL, a change of TV system between fields, and 32-bit pictures. `lang/mips/test/vi32_test.c`
+shows a 32-bit picture on the SoC, and `sim/vi_filter/vi32_check.py` checks the frame off the pads. `sim/vi_filter/vifit_test.c` checks the
 fitted window's arithmetic. `lang/n64rt/test/il_test.c` is a game that drives a serrated picture as libultra does: on the
 SoC in `sim/mips_soc` (`VGA=1 VGAT=1`: each frame off the pads, and the slot each line's end says) or on a Pocket, where `ROWCODE` puts each
 row's number in it as a bar code to read off a capture, and `FLASH` turns between two pictures, for catching a tear.

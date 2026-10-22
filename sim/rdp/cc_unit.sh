@@ -10,10 +10,10 @@ V="${VERILATOR:-$HOME/local/usr/bin/verilator}"
 OBJ="$HERE/obj_cc_unit"
 rm -rf "$OBJ"; mkdir -p "$OBJ"
 {
-  echo "module cc_unit(input [8:0] a, b, c, d, input ka, kb, kc, output [8:0] e0, e1, output [7:0] cl, output f256);"
+  echo "module cc_unit(input [8:0] a, b, c, d, input ka, kb, kc, output [8:0] e1, output [7:0] cl, output f256);"
   sed -n '/cc_begin/,/cc_end/p' "$HERE/../../rtl/rdp/rdp_pix.v"
   echo "  wire [9:0] xa = ka ? cc_xab(a) : {1'b0, a}, xb = kb ? cc_xab(b) : {1'b0, b}, xc = kc ? cc_xc(c) : {1'b0, c};"
-  echo "  assign e0 = cc_eval0(xa, xb, xc, d); assign e1 = cc_eval1(xa, xb, xc, d); assign cl = cc_clamp(e1); assign f256 = cc_a256(e1);"
+  echo "  assign e1 = cc_eval1(xa, xb, xc, d); assign cl = cc_clamp(e1); assign f256 = cc_a256(e1);"
   echo "endmodule"
 } > "$OBJ/cc_unit.v"
 "$V" --cc --exe --build -j 8 -O2 -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME --top-module cc_unit --Mdir "$OBJ/m" \

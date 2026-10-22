@@ -1,7 +1,7 @@
 #!/bin/bash
 # The scan-out against its model (tb_vi.cpp): the filters at 320 (doubled to 640), the VI's scales (440 x 330, 384 in a
 # 597-clock window, other pitches and steps), the hi-res pictures (filters off), the crop options, PAL, and the TV system
-# changing between fields.
+# changing between fields; and 32-bit pictures.
 #   ./regress.sh      (builds obj_vi first)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
@@ -45,6 +45,11 @@ TB_PAL=1 TB_Y0=0 TB_ROWS=237 run $T 3 0 30 320
 TB_PAL=1 TB_Y0=0 TB_ROWS=240 TB_YS=3FD run $T 4 1 30 320
 TB_PAL=1 TB_Y0=0 TB_ROWS=240 TB_YS=3FD TB_CROPV=3 run $T 5 0 30 320
 TB_SEQ=0,1,1,0,0 TB_Y0=0 TB_ROWS=240 TB_YS=3FD run $T 6 0 30 320       # (NTSC <-> PAL with the fitted window)
+# 32-bit pictures (VI_STATUS type 3: RGBA8888, a pixel a word, the coverage in the alpha byte's top bits): the filters on each
+# channel's top five bits, a row of twice the words, no hidden plane read; scaled, hi-res, woven, and under the SDRAM's load
+TB_PX32=1 run $T 1 0 30 320; TB_PX32=1 run $T 2 1 40 320; TB_PX32=1 run $T 5 1 30 320 1; TB_PX32=1 run $T 3 1 30 440 1
+TB_PX32=1 run $T 3 0 30 640p; TB_PX32=1 run $T 4 0 30 640s; TB_PX32=1 TB_CROPV=3 TB_CROPR=2 TB_PAL=1 run $T 8 1 30 320
+TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_PX32=1 TB_LOAD=5 run $T 7 0 30 640p; TB_PX32=1 TB_LOAD=2 run $T 4 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
 cc -O1 -o obj_vi/vifit_test vifit_test.c && n=$((n+1)) && { out=$(./obj_vi/vifit_test 2>&1); case "$out" in *"vifit: PASS"*) ;; *) echo "FAIL: vifit_test"; echo "$out" | tail -4; fail=$((fail+1));; esac; }
 echo "vi_filter regress: $n runs, $fail failed"

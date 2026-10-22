@@ -380,7 +380,7 @@ verdict on either; `pi2_test` prints `FAIL ROM reads, KSEG1: got 00000040 want
 A COP0 program written for this outside the repository (reset values, each
 register written and read back at once and later, Config's merge, LL then
 mfc0 LLAddr at once, tlbp and tlbr; 196 values) prints the same on both, with
-the same clock count. Super Mario 64 for 300M cycles (`FB_N64=1 tb_soc
+the same clock count. A 3D platformer for 300M cycles (`FB_N64=1 tb_soc
 lang/n64rt/build/n64rt.bin -c 300 -e 60`): the five frame dumps and the log
 (288 frames, the CPU at 80246ddc) are byte for byte those of the unchanged
 tree, and of `obj_soc`, which gives the unchanged tree's too. Those SoC runs
@@ -417,7 +417,7 @@ compared by the lowest and the mean of its three fits.
 |---|---|---|---|---|---|---|---|
 | CPU | baseline (C0RAM code removed) | | 7,532 | 3,094 (3,006 / 3,002 / 3,005) | 4,425 | 4,760 / 4,750 / 4,750 | |
 | CPU | `ms_data` (the slow path's read) in its own block | reverted | 7,497 (-35) | 3,094 (3,006) | | 4,785 / 4,758 / 4,766 (mean +17) | 15 programs identical |
-| CPU | the FPU's product in a register of its own (`mprod`) | kept | 7,483 (-49) | 3,112 (2,977 / 2,979 / 2,978) | 4,395 (-30) | 4,764 / 4,745 / 4,742 (lowest -8, mean -3) | 15 programs, 4 more, SM64 identical |
+| CPU | the FPU's product in a register of its own (`mprod`) | kept | 7,483 (-49) | 3,112 (2,977 / 2,979 / 2,978) | 4,395 (-30) | 4,764 / 4,745 / 4,742 (lowest -8, mean -3) | 15 programs, 4 more, the 3D platformer identical |
 | RSP | (round 2's `p_r` in place) | nothing left | 5,930 | 1,968 (1,697) | 4,196 | 4,554 | |
 | RDP | survey only | | | | | | |
 
@@ -459,7 +459,7 @@ Verification of the kept FPU change, against the unchanged tree's bench,
 both run with the same ROM file: the 15 SoC programs byte for byte the same
 (13 PASS, `vi_test` no verdict, `pi2_test` its usual FAIL on both), and
 `fpu64_test`, `cvtl_test`, `ddiv_test` (built from a copy of `lang/`, PASS on
-both) and the COP0 program of round 2, the same; Super Mario 64 for 300M
+both) and the COP0 program of round 2, the same; the 3D platformer for 300M
 cycles: the five frames and the log byte for byte the same.
 
 **The control signals (item 3 of the round).** Registers by control inputs,
@@ -564,7 +564,50 @@ covered sample, `z_dx[31:5] * ox` and `z_dy[31:5] * oy` with `ox`, `oy` of
 0 to 3, takes two 27 x 27 DSP blocks for what two shift-and-adds do (some 60
 ALUTs): a way to two DSP blocks if those become the limit.
 
-Verification: docs/lod.md, "How it was checked" (the regress with and
-without the LOD, seeds 100 to 160, 211 `TB_LOD=1` runs, the 79 dumps' per-
-command clocks byte for byte against the RTL before the LOD, with and
-without it).
+Verification: docs/lod.md, "How it was checked" (the regress, seeds 100 to
+160, 211 `TB_LOD=1` runs, the 79 dumps' per-command clocks byte for byte
+against the RTL before the LOD).
+
+## 32-bit colour images
+
+32-bit colour images in the RDP (docs/cimg32.md, "Implementation"), measured as the LOD was: `ooc.sh rdp` from a copy
+of the script whose project directory is under `build/c32`, then the unit fitted with every pin virtual
+(`quartus_fit`) and a 16 ns clock for `quartus_sta`, here with three seeds since a fit moves by up to 25 ALMs from one
+seed to the next. The reference is the tree before these edits (the LOD's RDP, `rtl/rdp` copied aside), synthesised
+and fitted the same way: its 7,332 ALUTs and 4,976 to 4,992 ALMs are this run's figures for the LOD's table's 7,325 and
+5,097 (a later edit to a texture rectangle's next-line step, and the fit's seed).
+
+| RDP | ALUTs | registers | memory ALUTs | DSP | block memory bits | RAM blocks | fitted ALMs, seeds 1 / 2 / 3 | worst setup slack, seeds 1 / 2 / 3 |
+|---|---|---|---|---|---|---|---|---|
+| before | 7,332 | 6,313 | 64 | 39 | 231,341 | 48 | 4,992 / 4,982 / 4,976 | +1.119 / +0.595 / +0.828 ns |
+| first build | 7,598 | 6,428 | 64 | 39 | 231,381 | 50 | 5,181 | +0.864 ns |
+| kept | 7,535 | 6,367 | 64 | 39 | 231,381 | 48 | 5,124 / 5,119 / 5,114 | +1.149 / +0.909 / +1.005 ns |
+
+So +132 to +138 fitted ALMs (the budget was 150), no RAM block, no DSP block. By entity, in synthesis: `rdp_top` itself
++94 ALUTs (the split, the colour base, the colour buffer's address, the drop), `rdp_mem` +91 (10-bit word indices in
+both engines, a word a pixel in the write engine, the colour span's words in the read engine), `rdp_pix` +18 (the
+colour buffer's read address, the memory colour and coverage selects, the 8-bit outputs after the dither). The 40
+block memory bits more are the memory colour's shift register from P10 to the blender (9 bits wider, in the same
+`altshift_taps` RAM block) and the write engine's `rf` (a bit wider); the RAM blocks are the same.
+
+What the first build taught:
+
+* **Two RAM blocks from packing.** With `cmsk` written at the colour buffer's own address (a pixel an entry) and
+  `zmsk` at the depth's, the fit could no longer pack the two pass masks together: 50 blocks against 48. The pixel's
+  pass bit now goes in `cnew`'s entry (bit 19, the entry written for every pixel), and `cmsk` keeps `zmsk`'s address.
+* **The read request's columns.** `rq_x0` and `rq_x1` were registers loaded from three places (a rectangle's row, a
+  triangle's span, the split's second half); the read engine now takes `xs` and `xe`, which hold the same values
+  while the request waits. The read engine keeps the span's first and last pixel rather than three derived words. The
+  second half's end is a select of `xb` and `aa_xe`, which still hold it, rather than a register.
+* **The write word.** `cnew`'s 32-bit entry is laid out so that the write engine's 16-bit word select, `{[35:20],
+  [17:2]}`, is the memory word as it is: no 27-bit select.
+
+Together -63 ALUTs, -61 registers and -57 fitted ALMs (seed 1). On a build before the last two, a variant without the
+split (its two cuts tied to 0) measured 61 ALUTs fewer, and one with the 32-bit images turned off (by a parameter it then
+had) 190 fewer: the rest is the widened indices and the separate addresses, which stayed with them off.
+
+Timing: the worst path is the same in every fit before and after, the YUV conversion's input select into `texA9`
+(docs/rdp.md, "A timing option kept in reserve"), and it moves with the seed (+0.595 to +1.149 ns). The new logic's
+endpoints, reported on the seed 1 fits: the split's compares into `xe` +3.8 ns and into `spl` +4.6 ns, `rq_cbase`
++3.1 ns (+2.8 before), the write engine's `w_idx` +3.0 ns (+3.1 before) and `lbr_addr` +3.3 ns (+3.5 before), the
+`rf` to `wf` bypass +2.1 ns (+1.5 before).

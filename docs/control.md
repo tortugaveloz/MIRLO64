@@ -201,7 +201,7 @@ registers.
 | `DMA_OFFSET` | `0x0C` | R | Reads 0 |
 | `VTG_ENABLE` | `0x10` | RW | The video timing runs (with `DMA_ENABLE`: the picture) |
 | `VTG_MODE` | `0x14` | RW | No effect |
-| `WIDTH` | `0x18` | RW | Bits 11:0: the pitch, the pixels from one row of the frame buffer to the next (512 or more: the VI's filters are off). Bit 16: the VI's gamma correction. Bit 18: the TV system to use until the game programs the VI (1: PAL). Bit 19, read only: the TV system the scan-out is using |
+| `WIDTH` | `0x18` | RW | Bits 11:0: the pitch, the pixels from one row of the frame buffer to the next (512 or more: the VI's filters are off). Bit 16: the VI's gamma correction. Bit 17: the pixels are 32-bit (`VI_STATUS` type 3: RGBA8888, the pitch in words, the coverage in the alpha byte). Bit 18: the TV system to use until the game programs the VI (1: PAL). Bit 19, read only: the TV system the scan-out is using |
 | `WINDOW` | `0x1C` | RW | The picture's window in the field: bits 15:8 its first line, bits 24:16 its lines (0: the whole field) |
 | `HWINDOW` | `0x20` | RW | Its window in the line: bits 9:0 its first clock, bits 25:16 its width in clocks |
 | `SCALE` | `0x24` | RW | The steps through the frame buffer, with 10 fraction bits: bits 10:0 the pixels a clock of the window steps (at most 1), bits 26:16 the rows a line steps (at most 2) |

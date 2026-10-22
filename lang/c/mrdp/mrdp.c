@@ -97,11 +97,8 @@ static inline int32_t s105_noperp(int32_t s)
     return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
 }
 
-#if defined(RDP_EXACT_DIV) && !defined(MRDP_CVG)
-#error "RDP_EXACT_DIV is the N64's pixel pipeline's: build it with MRDP_N64 (and without MRDP_NO_BLEND)"
-#endif
-#ifdef RDP_EXACT_DIV
-/* ---- the console's perspective divide (RDP_EXACT_DIV; docs/rdp.md, Coordinates) ----
+#ifdef MRDP_CVG
+/* ---- the console's perspective divide (MRDP_CVG; docs/rdp.md, Coordinates) ---------
  * Only the 16-bit integer halves of S (or T, s10.5) and W (s.15) enter it. W's leading zeros among its low 15 bits (up to
  * 14) normalise it; the next 6 bits pick a point of the reciprocal and the 8 after them step along the slope there: a
  * 15-bit reciprocal. S times it, shifted back by the normalisation, is S / W in s10.5, 17 bits kept. The product's bits
@@ -238,7 +235,7 @@ static mrdp_rgba_t texel_expand(unsigned fmt, uint16_t v)
  * found is word ^ 2), as they did when the row was loaded -- the N64's, which
  * shows when a load's rows are not the tile's: a LOAD BLOCK with dxt 0 loads
  * every row as an even one, and a game that does that keeps its texture's
- * odd rows swapped in the ROM (Pilotwings 64's). */
+ * odd rows swapped in the ROM (a flight game's terrain). */
 static mrdp_rgba_t tmem_fetch(const mrdp_t *r, const mrdp_tile_t *t, int s, int tt)
 {
     const uint16_t *m = r->tmem16;
@@ -401,8 +398,6 @@ typedef struct {
 #ifdef MRDP_CVG
     int cm9[4];                    /* COMBINED (the first cycle's result): r, g, b, a as the 9 raw bits (below) */
     int sh9[4];                    /* SHADE: r, g, b, a saturated to a byte, 0..255 (below; 9 bits wide as the RTL's) */
-#endif
-#ifdef RDP_LOD
     int lodf;                      /* LOD_FRACTION: the pixel's, 9 bits (mrdp_lod; read as a signed 9-bit, as K5 is) */
 #endif
 } cc_in_t;
@@ -418,8 +413,8 @@ typedef struct {
  * positive number in A, B, C and D; the blender's shade alpha is clamped at 255
  * (blend_n64). (With 9 bits, 0..511, a lit surface's shade overshoots 255 at its
  * edges, TEXEL0 * SHADE reached 256 and over, and as COMBINED -- the second
- * cycle's C, ENV * COMBINED -- that is a negative number: black pixels on Link's
- * tunic with Navi's light.)
+ * cycle's C, ENV * COMBINED -- that is a negative number: black pixels on a
+ * character's tunic lit by a moving light.)
  * The result's 9 bits: a colour clamps them (bits 8:7
  * both set -> 0, bit 8 -> 255), an alpha likewise but to 256 for bit 8 and
  * for exactly 255 (cc_alpha_res). */
@@ -470,7 +465,7 @@ static int cc_rgb_c(const mrdp_t *r, const cc_in_t *in, unsigned sel, int ch)
 #ifdef MRDP_N64
     case 15: return r->k5;       /* (a signed 9-bit: combine_raw) */
 #endif
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
     case 13: return in->lodf;    /* (a signed 9-bit: combine_raw) */
 #endif
     default: return 0;           /* 6 key scale, 13 LOD fraction, 16+ (MRDP: 15, K5, too) */
@@ -502,7 +497,7 @@ static int cc_alpha_c(const mrdp_t *r, const cc_in_t *in, unsigned sel)
     case 4: return CC_SH(in, 3);
     case 5: return r->env.a;
     case 6: return r->prim_lod_frac;
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
     case 0: return in->lodf;     /* (a signed 9-bit: combine_raw) */
 #endif
     default: return 0;           /* 0 LOD fraction, 7 zero */
@@ -544,7 +539,7 @@ static int cc0_uses_texel1(const mrdp_t *r)
 
 /* does the second combiner cycle of a 2-cycle pixel read TEXEL0 (as a colour, or its alpha)? The N64's second cycle takes the
  * first cycle's TEXEL1 there -- the next tile's sample -- so such a pixel needs that sample too (rtl/rdp rdp_pix.v two_pass).
- * Mario Golf's ground: cycle 0 TEXEL0 (an I8 detail tile) * TEXEL1 (the RGBA16 grass), cycle 1 (COMBINED - TEXEL0) * A + TEXEL0 --
+ * A golf course's ground: cycle 0 TEXEL0 (an I8 detail tile) * TEXEL1 (the RGBA16 grass), cycle 1 (COMBINED - TEXEL0) * A + TEXEL0 --
  * the grass itself, which a TEXEL0 of the first tile makes a pale grey-green. */
 static int cc1_uses_texel0(const mrdp_t *r)
 {
@@ -583,22 +578,16 @@ static cc_out_t combine_raw(const mrdp_t *r, const cc_in_t *in, int cyc)
         if (sa_r == 0) a = cc_ext9(a);
         if (sb_r == 0 || sb_r == 7) b = cc_ext9(b);                       /* (7: K4) */
         if (mul_r == 0 || mul_r == 7 || mul_r == 15) c = cc_sgn9(c);      /* (15: K5) */
-#ifdef RDP_LOD
         if (mul_r == 13) c = cc_sgn9(c);                                  /* the LOD fraction: sharpen's is negative */
-#endif
         o.v[ch] = cc_eval(a, b, c, cc_rgb_d(r, in, add_r, ch));
     }
     {
         int a = cc_alpha_abd(r, in, sa_a), b = cc_alpha_abd(r, in, sb_a);
         if (sa_a == 0) a = cc_ext9(a);
         if (sb_a == 0) b = cc_ext9(b);
-#ifdef RDP_LOD
         int c = cc_alpha_c(r, in, mul_a);
         if (mul_a == 0) c = cc_sgn9(c);                                   /* the LOD fraction, as in the colour */
         o.v[3] = cc_eval(a, b, c, cc_alpha_abd(r, in, add_a));
-#else
-        o.v[3] = cc_eval(a, b, cc_alpha_c(r, in, mul_a), cc_alpha_abd(r, in, add_a));
-#endif
     }
 #else
     for (int ch = 0; ch < 3; ch++)
@@ -750,7 +739,7 @@ typedef struct {
     unsigned dz;                   /* MRDP_N64: the primitive's depth step (a decal's tolerance; the coverage's dz) */
     int32_t dzdy;                  /* MRDP_CVG: the triangle's DzDy (the Z offset to the first covered sample) */
     int fillq;                     /* a fill rectangle (fill mode): the hidden bits by 4-pixel quads */
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
     unsigned level;                /* the triangle command's level field: the primitive's last level (a texture rectangle: 0) */
     int32_t ddx[3], ddy[3];        /* S, T, W: to the next pixel of the N64's walk (its DaDx, negated for a right-major
                                       triangle, which the N64 walks right to left) and to the next line (DaDy, as kept) */
@@ -761,11 +750,14 @@ typedef struct {
 /* attribute order in the iterators */
 enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
 
-#ifdef RDP_LOD
-#ifndef MRDP_CVG
-#error "RDP_LOD is the N64's pixel pipeline's: build it with MRDP_N64 (and without MRDP_NO_BLEND)"
-#endif
-/* ---- texture level of detail (RDP_LOD; docs/lod.md) ----------------------
+/* A 32-bit colour image's RGB is dithered as a 16-bit one's (dither_n64: a channel either kept or taken up to the next
+ * multiple of 8) and written whole: the N64 programming manual's blender section says the RGB dither "is enabled even
+ * in 32 bit mode", which is why it tells games to turn it off for opaque surfaces there. 0: not dithered (the model
+ * only: rtl/rdp dithers). */
+#define CIMG32_DITHER 1
+
+#ifdef MRDP_CVG
+/* ---- texture level of detail (MRDP_CVG; docs/lod.md) ---------------------
  * The N64's mipmapping, in a 2-cycle primitive. Per pixel, S and T are taken
  * through the perspective divide at three points: the pixel, the next pixel of
  * the N64's walk (DaDx; a right-major triangle is walked right to left, so its
@@ -793,27 +785,6 @@ enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
  * without TEX_LOD, as the N64 does (TEX_LOD only moves the tiles). 0: only
  * with TEX_LOD. */
 #define LOD_FRAC_USED 1
-
-#ifndef RDP_EXACT_DIV
-/* S (or T) at one of the LOD's three points with the perspective divide: the
- * model's own (mrdp_persp), not saturated to 16 bits but flagged outside the
- * 17 bits (s11.5) the N64's perspective divide keeps for the LOD. A W whose
- * integer half is zero or negative is out of range too, as the N64's
- * perspective divide reports it whatever S is. */
-static int32_t lod_persp(int32_t s, uint32_t w, int *oob)
-{
-    int sh;
-    uint32_t rc = mrdp_rcp(w, &sh);
-    if ((int32_t)w < 0x10000) *oob = 1;
-    if (s > (1 << 26) - 1) s = (1 << 26) - 1;       /* (the multiplier's 27-bit input, as mrdp_persp) */
-    if (s < -(1 << 26)) s = -(1 << 26);
-    int64_t p = (int64_t)s * (int64_t)rc;
-    int k = 27 - sh;
-    int64_t v = k >= 0 ? p >> k : p * ((int64_t)1 << -k);
-    if (v < -65536 || v > 65535) *oob = 1;
-    return (int32_t)v;
-}
-#endif
 
 /* the larger of a point's two coordinate steps from the pixel, and prev: the
  * LOD so far (15 bits; bit 14 is sticky for any step of 512 texels or more) */
@@ -913,19 +884,15 @@ static mrdp_lod_t lod_pixel(const mrdp_t *r, const prim_t *pr, const int32_t *at
             const int32_t *d = k == 1 ? pr->ddx : pr->ddy;
             uint32_t S = pr->tex ? (uint32_t)at[AS] : 0u, T = pr->tex ? (uint32_t)at[AT] : 0u, Wv = pr->tex ? (uint32_t)at[AW] : 0u;
             if (k && pr->tex) { S += (uint32_t)d[0]; T += (uint32_t)d[1]; Wv += (uint32_t)d[2]; }
-#ifdef RDP_EXACT_DIV
             /* (the console's perspective divide, as the pixel's own S, T take it: its 17 bits and its range flag) */
             if (persp) { int rs, rt; s[k] = mrdp_n64_div((int32_t)S, (int32_t)Wv, &rs); t[k] = mrdp_n64_div((int32_t)T, (int32_t)Wv, &rt); oob |= rs || rt; }
-#else
-            if (persp) { s[k] = lod_persp((int32_t)S >> 4, Wv, &oob); t[k] = lod_persp((int32_t)T >> 4, Wv, &oob); }
-#endif
             else { s[k] = (int32_t)S >> 16; t[k] = (int32_t)T >> 16; }   /* (s105_noperp's: s10.5 in 16 bits) */
         }
     }
     return mrdp_lod(r->other_h, r->min_level, pr->level, (unsigned)pr->tile, s, t, oob);
 }
 
-#endif /* RDP_LOD */
+#endif /* MRDP_CVG (the LOD) */
 
 /* An 8-bit colour image (SET_COLOR_IMAGE's size 1): a pixel is a byte, at image + y * width + x -- what software that
  * draws into a colour-indexed texture uses. Its value is the blender's red, as it is (not dithered); a fill writes the
@@ -1060,6 +1027,10 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     const int c8 = r->cimg_size == 1;
     uint32_t pix_off = ((uint32_t)y * r->cimg_width + (uint32_t)x) * 2;
     uint32_t caddr = c8 ? r->cimg + (uint32_t)y * r->cimg_width + (uint32_t)x : r->cimg + pix_off, zaddr = r->zimg + pix_off;
+    /* a 32-bit image: 4 bytes a pixel (R, G, B, then the coverage in the alpha byte's top bits); the depth image is
+     * 16-bit whatever the colour image is, so zaddr keeps the 2-byte offset */
+    const int c32 = r->cimg_size == 3;
+    if (c32) caddr = r->cimg + 2u * pix_off;
     const int aa = (l & MRDP_L_AA_EN) != 0;
     unsigned cvg = (unsigned)__builtin_popcount(mask & 0xFFu);                  /* 0..8 */
     /* the noise (the RTL's LFSR: a step for each pixel with coverage) */
@@ -1096,20 +1067,15 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
          * has S = T = W = 0, and the texture stages run all the same: TEXEL0 is the tile's texel at (0, 0) -- what
          * the last texture bound there left (the hardware's command unit starts every primitive with S, T, W at 0
          * and its pixel pipeline never skips the fetch). A combiner that reads TEXEL0 on such a triangle is
-         * not a mistake of the game's: Link's tunic collar (object_link_child, gLinkChildCollarNearDL: G_TEXTURE off,
-         * combiner TEXEL0 * SHADE, then ENV * COMBINED) is drawn that way, and with TEXEL0 = 0 it was black. */
+         * not a mistake of the game's: a character's collar (G_TEXTURE off, combiner TEXEL0 * SHADE, then
+         * ENV * COMBINED) is drawn that way, and with TEXEL0 = 0 it was black. */
         int32_t s = 0, t = 0;
         if (!pr->tex) { }
         else if (pr->texrect) { s = (int16_t)at[AS]; t = (int16_t)at[AT]; }
-#ifdef RDP_EXACT_DIV
         else if (h & MRDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
-#else
-        else if (h & MRDP_H_PERSP) { s = mrdp_persp(at[AS] >> 4, (uint32_t)at[AW]); t = mrdp_persp(at[AT] >> 4, (uint32_t)at[AW]); }
-#endif
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
-        /* the tiles of TEXEL0 and TEXEL1: the primitive's and the next, or (RDP_LOD) the level's */
+        /* the tiles of TEXEL0 and TEXEL1: the primitive's and the next, or with the LOD the level's */
         int tile0 = pr->tile;
-#ifdef RDP_LOD
         int tile1 = (pr->tile + 1) & 7;
         if (cyc == 1 && lod_wanted(r)) {
             const mrdp_lod_t L = lod_pixel(r, pr, at);
@@ -1120,7 +1086,6 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
                 r->lod_mag += L.magnify; r->lod_far += L.distant && !L.magnify;
             }
         }
-#endif
         in.tex = texture_pass(r, tile0, s, t, 0, s_no_texel);
         /* TEXEL1 in the first cycle of a 2-cycle pixel: the next tile (tile + 1) at the same S, T -- the N64's
          * second texture (a skybox's day / night blend, a terrain's second layer). Its second cycle still
@@ -1128,11 +1093,7 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
          * TEXEL0 again, one pass.) */
         in.tex1 = in.tex;
         if (pr->tex && cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
-#ifdef RDP_LOD
             tex_next = texture_pass(r, tile1, s, t, 1, in.tex);
-#else
-            tex_next = texture_pass(r, (pr->tile + 1) & 7, s, t, 1, in.tex);
-#endif
             if (cc0_uses_texel1(r)) in.tex1 = tex_next;
             have_next = 1;
         }
@@ -1194,9 +1155,18 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
     unsigned memcvg = 7;
     const int rd_mem = !c8 && cvg_need_mem(l, cyc);
     if (rd_mem) {
-        uint16_t mw = r->rd16(r->ctx, caddr);
-        mem = unrgb565(mw);
-        if (l & MRDP_L_IM_RD) memcvg = (mw & 1u) << 2 | hid_get(r, caddr);                       /* bit 0 and the hidden two */
+        if (c32) {
+            /* the memory colour at 8 bits a channel, and the coverage from the alpha byte's top three bits (the
+             * hidden bits are not used with a 32-bit image: the manual's "the hidden bits are ignored") */
+            const uint16_t hi = r->rd16(r->ctx, caddr), lo = r->rd16(r->ctx, caddr + 2u);
+            mem.r = (uint8_t)(hi >> 8); mem.g = (uint8_t)hi; mem.b = (uint8_t)(lo >> 8);
+            if (l & MRDP_L_IM_RD) memcvg = (lo >> 5) & 7u;
+        } else
+        {
+            uint16_t mw = r->rd16(r->ctx, caddr);
+            mem = unrgb565(mw);
+            if (l & MRDP_L_IM_RD) memcvg = (mw & 1u) << 2 | hid_get(r, caddr);                   /* bit 0 and the hidden two */
+        }
     }
     const int overflow = (memcvg + cvg_sel) >= 8u;
 
@@ -1276,6 +1246,16 @@ static void draw_pixel_cvg(mrdp_t *r, const prim_t *pr, int x, int y, const int3
         r->pixels_drawn++;
         return;
     }
+    if (c32) {
+        /* RGBA8888: the channels whole (no 5-bit truncation), the alpha byte the coverage << 5 and its low five bits 0
+         * (the pixel's own alpha is not stored, as in a 16-bit image); no hidden bits (copy mode never gets here) */
+        if (CIMG32_DITHER) out = dither_n64(r, out, x, y, rnd, 1);
+        r->wr16(r->ctx, caddr, (uint16_t)(out.r << 8 | out.g));
+        r->wr16(r->ctx, caddr + 2u, (uint16_t)(out.b << 8 | cvg_out << 5));
+        if (l & MRDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzenc >> 2));
+        r->pixels_drawn++;
+        return;
+    }
     if (cyc != 2) out = dither_n64(r, out, x, y, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
@@ -1297,6 +1277,15 @@ static void draw_pixel(mrdp_t *r, const prim_t *pr, int x, int y, const int32_t 
         r->pixels_drawn++;
         return;
     }
+#ifdef MRDP_CVG
+    if (cyc == 3 && r->cimg_size == 3) {           /* fill mode, a 32-bit image: the fill colour whole, a pixel a word (no hidden bits) */
+        caddr = r->cimg + 2u * pix_off;
+        r->wr16(r->ctx, caddr, (uint16_t)(r->fill >> 16));
+        r->wr16(r->ctx, caddr + 2u, (uint16_t)r->fill);
+        r->pixels_drawn++;
+        return;
+    }
+#endif
     if (cyc == 3) {                                /* fill mode */
         r->wr16(r->ctx, caddr, (x & 1) ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16));
 #ifdef MRDP_CVG
@@ -1581,7 +1570,7 @@ static void draw_triangle_aa(mrdp_t *r, const prim_t *pr, int aa_en, int lft, in
 }
 #endif /* MRDP_CVG */
 
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
 /* the LOD's steps of S, T, W (prim_t ddx, ddy) from a triangle's texture block p: DaDx toward the next pixel of the
  * N64's walk, which starts at the major edge (left to right with lft; right to left without), and DaDy (the integer
  * halves at word 10, the fractions at 14: tri_attrs's layout), kept to LOD_DY_MASK */
@@ -1612,12 +1601,12 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
     if (pr.shade) { tri_attrs(p, at, AR, 4); p += 16; }
     if (pr.tex) {                                       /* S, T, W (4th unused) */
         tri_attrs(p, at, AS, 3);
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
         lod_tri(&pr, p, at, lft);
 #endif
         p += 16;
     }
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
     pr.level = (w[0] >> 19) & 7;
 #endif
     if (pr.zbuf) {
@@ -1700,7 +1689,7 @@ static void draw_triangle(mrdp_t *r, const uint32_t *w)
 #define RECT_QUARTERS 0
 #endif
 
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
 /* a texture rectangle's geometry, and its S, T (s10.5) at column x of row y: draw_texrect's, for the LOD's other two
  * points (the pixel's own are worked out in place there, the same way) */
 typedef struct { int flip, q, dshift, xh, x0, y0; int32_t s, t, dsdx, dtdy; } texrect_t;
@@ -1734,7 +1723,7 @@ static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
     if (xa < sc_x0(r)) xa = sc_x0(r);
     if (ya < sc_y0(r)) ya = sc_y0(r);
     int xb = x1 < sc_x1(r) ? x1 : sc_x1(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
     const texrect_t g = { flip, q, dshift, xh, x0, y0, s, t, dsdx, dtdy };
 #endif
     for (int y = ya; y < yb; y++)
@@ -1744,7 +1733,7 @@ static void draw_texrect(mrdp_t *r, const uint32_t *w, int flip)
             int cs = q ? 2 : 0;
             at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ((dsdx * cq) >> (dshift + cs));
             at[AT] = flip ? t + ((dtdy * cq) >> (5 + cs)) : t + ((dtdy * (y - y0)) >> 5);
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
             /* the LOD's other two points: the N64 walks a rectangle left to right (and its level count is 0) */
             texrect_st(&g, x + 1, y, &pr.rnx[0], &pr.rnx[1]);
             texrect_st(&g, x, y + 1, &pr.rny[0], &pr.rny[1]);
@@ -1970,9 +1959,17 @@ static void execute(mrdp_t *r, const uint32_t *w)
     unsigned op = (w[0] >> 24) & 0x3F;
     r->grow = 0;                                  /* TRI_R sets it (draw_triangle_r) */
 #ifdef MRDP_N64
+#ifdef MRDP_CVG
+    /* drawn to a 16-bit colour image, an 8-bit one (wr8) and a 32-bit one -- but not a 32-bit one in copy mode, which the
+     * console does not do (the manual: "You cannot copy the 32-bit RGBA color image type"); a 4-bit one: nothing */
+    const int cimg_ok = r->cimg_size == 2 || r->cimg_size == 1
+                        || (r->cimg_size == 3 && ((r->other_h >> MRDP_H_CYCLE_SHIFT) & 3) != 2);
+    if (!cimg_ok && ((op >= 0x08 && op <= 0x0F) || op == MRDP_OP_TEXRECT || op == MRDP_OP_TEXRECT_FLIP || op == MRDP_OP_FILL_RECT)) return;
+#else
     /* drawn to a 16-bit colour image and an 8-bit one (wr8); a 32-bit one: nothing */
     if (r->cimg_size != 2 && r->cimg_size != 1 && ((op >= 0x08 && op <= 0x0F) || op == MRDP_OP_TEXRECT || op == MRDP_OP_TEXRECT_FLIP
                               || op == MRDP_OP_FILL_RECT)) return;
+#endif
 #endif
     if (op >= 0x08 && op <= 0x0F) { draw_triangle(r, w); return; }
 #ifndef MRDP_N64
@@ -2019,7 +2016,7 @@ static void execute(mrdp_t *r, const uint32_t *w)
     case MRDP_OP_SET_FOG: r->fog = rgba_of(w[1]); break;
     case MRDP_OP_SET_BLEND: r->blend = rgba_of(w[1]); break;
     case MRDP_OP_SET_PRIM: r->prim = rgba_of(w[1]); r->prim_lod_frac = (uint8_t)w[0];
-#ifdef RDP_LOD
+#ifdef MRDP_CVG
         r->min_level = (uint8_t)((w[0] >> 8) & 31);
 #endif
         break;
