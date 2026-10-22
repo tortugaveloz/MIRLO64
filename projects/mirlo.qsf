@@ -22,32 +22,21 @@ set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 # ==============================================================================
 set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
-# Parts of the design this build leaves out (Verilog macros):
-# the geom CFU's edge-setup ops (0x62, 0x64..0x67) and blend ops (0x40/0x41/
-# 0x46) -- MRDP's triangle setup does that work -- -403 ALMs, -2 DSP;
-set_global_assignment -name VERILOG_MACRO "SU_NO_EDGE=1"
-set_global_assignment -name VERILOG_MACRO "SU_NO_BLEND=1"
-# MRDP's 2-cycle mode and texture rectangles (1-cycle triangles and fill
-# rectangles only), -540 ALMs, -7 DSP; the C model keeps both, so the random
-# RTL tests run without these macros;
-set_global_assignment -name VERILOG_MACRO "MRDP_NO_2CYCLE=1"
-set_global_assignment -name VERILOG_MACRO "MRDP_NO_TEXRECT=1"
-# and MRDP's PRIM / ENV / FOG colours: the geometry core bakes them into the
-# vertex colours (GDL_CCOLOR), so their combiner and blender inputs go.
-# MRDP's small triangle microcode ROM in LUTs: its M10K output started the
-# failing paths of every seed once the game CPU went big-endian
-set_global_assignment -name VERILOG_MACRO "MRDP_UCODE_LOGIC=1"
+# The build's Verilog macros: the depth of the RDP's command FIFO in the
+# register block (rtl/soc/mirlo_regs.sv) and the JTAG UART left out
+# (rtl/soc/mirlo_mips.sv).
 set_global_assignment -name VERILOG_MACRO "CMDQ_AW=12"
 set_global_assignment -name VERILOG_MACRO "MIRLO_NO_JTAG_UART=1"
 set_global_assignment -name SAVE_DISK_SPACE OFF
-# The design uses ~98 % of the device's ALMs, and whether it closes timing
+# The design uses about 97 % of the device's ALMs (projects/fits.json records
+# the fits that closed, with their ALMs), and whether it closes timing
 # depends on the fitter seed: after an RTL change, if setup slack goes
 # negative, compile three seeds in parallel (copies of projects/ with a
 # different SEED each) and keep the one that closes. With
 # PLACEMENT_EFFORT_MULTIPLIER 10.0 (below).
 set_global_assignment -name SEED 34
 # Off: smart recompilation can skip synthesis when only a memory's init file
-# changed -- the geometry core's ROM is one.
+# changed -- the game CPU's boot ROM is one.
 set_global_assignment -name SMART_RECOMPILE OFF
 
 # ==============================================================================
@@ -72,7 +61,8 @@ set_global_assignment -name ALLOW_ANY_ROM_SIZE_FOR_RECOGNITION ON
 # is fixed in the RTL; the physical synthesis stays ON, at its FAST effort (Normal duplicates 1,500 registers,
 # ~320 ALMs more than FAST, for nothing the clocks need) and PLACEMENT_EFFORT_MULTIPLIER is 10. The closing
 # set (docs/mips.md): 17.4-17.5k ALMs (94-95 %); of eight seeds 12, 5, 20, 3, 41 and 27 close (34 by -0.03
-# ns of hold in the fast 0C corner, 9 by -0.08 ns of setup on the CPU's clock).
+# ns of hold in the fast 0C corner, 9 by -0.08 ns of setup on the CPU's clock). The design has grown since: the
+# fits of today's sources are in projects/fits.json (17,885 to 17,941 ALMs, about 97 %).
 set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT FAST
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS OFF
@@ -789,15 +779,6 @@ set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 10.0
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA ON
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
-# GeomSetupUnit build options (rtl/vpu/GeomSetupUnit.v): the full unit, RECIPN
-# and NORMF included. Their SU_NO_RECIP / SU_NO_NORMF switches (removed from the
-# RTL in the 2026-10 cleanup; they are in the history) were for when
-# area gets tight again -- then build lang/c/geom with
-# CFLAGS_EXTRA=-DGEOM_SU_PROBE, so it probes for both at boot and falls back to
-# its C (geom_setup_probe()); by default it assumes this full unit. Full is ~1,790 ALMs, ~1,430 without the
-# two -- as small as the old reduced set, since the unit's float<->fixed
-# conversion ops went when the triangle stream became fixed point.
-
 # The PSRAMs' pads (rtl/soc/psram.sv): every register at its pad
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram0_a[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to cram1_a[*]

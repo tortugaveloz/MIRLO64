@@ -1,7 +1,5 @@
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_top.v"]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_pix.v"]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_mem.v"]
+# The two files of rtl/mrdp/ the RDP (rtl/rdp, rtl/rdp.qip) is built with:
+# the dual-port RAM with lane enables of its TMEM and line buffers (rdp_tmem,
+# rdp_top) and the reciprocal table of its 1/w (rdp_pix).
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_sdpram.v"]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_rcp_rom.v"]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_seed_rom.v"]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "mrdp/mrdp_ucode_rom.v"]

@@ -1,6 +1,5 @@
-# The RSP (rtl/rsp): the N64's, clean-room -- docs/rsp.md. In MIRLO's SoC with
-# the Verilog macro MIRLO_RSP (rtl/soc/mirlo_mips.sv), in place of the geom
-# and audio cores.
+# The RSP (rtl/rsp): the N64's, clean-room -- docs/rsp.md. Always in MIRLO's
+# SoC (rtl/soc/mirlo_mips.sv).
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rsp/rsp_lutram.v"]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp/rsp_su.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp/rsp_vu.sv"]

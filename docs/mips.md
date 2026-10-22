@@ -827,11 +827,13 @@ between them is timed. The other clocks are asynchronous groups.
 
 ### Timing closure
 
-The device is a Cyclone V `5CEBA4F23C8` and the design fills about 95 % of its logic. The RDP, the CPU with its FPU and
-the RSP are the three largest blocks, followed by the scan-out and the register block. With the device this full,
-whether a compile closes timing depends on the fitter's seed (`SEED` in `projects/mirlo.qsf`); README.md names seeds
-that closed for the release. A bitstream is good only if no analysis is negative in any of the four corners (the slow
-and fast models at 85 and 0 degrees): setup, hold, recovery, removal and pulse width.
+The device is a Cyclone V `5CEBA4F23C8` and the design fills about 97 % of its logic (`projects/fits.json` is the
+record: each fit that closed, with its ALMs, 17,885 to 17,941 of 18,480 for today's sources). The RDP, the CPU with its
+FPU and the RSP are the three largest blocks, followed by the scan-out and the register block. With the device this
+full, whether a compile closes timing depends on the fitter's seed (`SEED` in `projects/mirlo.qsf`);
+`projects/fits.json` records the seeds that closed for the sources as they are. A bitstream is good only if no analysis
+is negative in any of the four corners (the slow and fast models at 85 and 0 degrees): setup, hold, recovery, removal
+and pulse width.
 
 The CPU's 93.75 MHz domain is the most demanding. The `FAST` structure of `mips_core` and `fpu_n64` exists for it:
 cache words used ahead of their tags, branches decided at E, decode and forwarding selects registered a stage ahead,
@@ -848,8 +850,9 @@ synthesis at its fast effort, and a placement effort multiplier of 10. The fitte
 - `fit.sh <tag> <seed> [extra.qsf|-] [map]` copies `rtl/`, `platform/`, `target/` and `projects/` into `s_<tag>/`, so
   that later edits cannot reach a run in progress, sets the seed, appends a list of Verilog macros and any extra
   assignments, and starts a full compile in the background (`quartus_map` only with `map`). The log is
-  `projects_a2_<tag>.compile.log`. `QUARTUS_BIN` names Quartus's `bin` directory. The macros it appends set the
-  configuration the bitstream is built with (the caches' sizes among them); `EXTRA_MACROS` adds others.
+  `projects_a2_<tag>.compile.log`. `QUARTUS_BIN` names Quartus's `bin` directory. The macros it appends are the ones
+  the RTL still reads with a value (the RSP's lanes, the caches' sizes), at the RTL's own defaults; `EXTRA_MACROS` adds
+  others.
 - `ooc.sh <tag> <unit>` synthesises one unit alone (the CPU, the RDP, the RSP, the scan-out or the registers) with the
   project's settings and the same macros: a minute or two, and the same count for the same source, where the whole
   design's synthesis can move a unit nobody touched from one run to the next.

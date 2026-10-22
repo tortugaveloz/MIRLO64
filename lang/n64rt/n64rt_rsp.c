@@ -12,10 +12,12 @@
  * itself (the SoC's DPC registers and fetch); a graphics task's DP event comes
  * when its SYNC FULL has been through -- every write of the frame in memory.
  *
- * The AI: with no audio core, the game CPU feeds the Pocket's audio FIFO
- * itself, from the timer's tick -- the game's buffers (two queued, as the
- * AI's), resampled from the game's rate to the Pocket's 48 kHz, each frame
- * read when the AI would play it. */
+ * The AI: in hardware (rtl/soc/rcp_ai.sv, n64rt_io.c's n64rt_ai_hw) on the
+ * SoC the runtime ships for. On a SoC without it, or in a build without
+ * OWN=1, the game CPU feeds the Pocket's audio FIFO itself, from the timer's
+ * tick -- the game's buffers (two queued, as the AI's), resampled from the
+ * game's rate to the Pocket's 48 kHz, each frame read when the AI would play
+ * it. */
 #include <stdio.h>
 #include <string.h>
 #include <generated/csr.h>

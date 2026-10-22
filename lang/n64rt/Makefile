@@ -2,8 +2,8 @@
 # own ROM (a .z64 in slot 0) with the game's own libultra: loader/main.c plus the runtime's objects (n64rt.mk).
 # It is built for the SoC as the bitstream has it (RSP, the CPU's monitor level), so these are fixed here: RSP=1 OWN=1.
 #
-#   (once, from the repository's root, the steps of README.md's "Building the hardware" up to the libraries and the
-#    boot ROM, and the geometry core's firmware -- that is, the first four commands)
+#   (once, from the repository's root, the steps of README.md's "Building from source" up to the libraries, the
+#    boot ROM and the bitstream's images -- that is, the first four commands)
 #   make -C lang/n64rt MIPS_CC=... MIPS_BIN=...
 #   -> lang/n64rt/build/n64rt.bin, which is released as n64rt.sys (cp build/n64rt.bin n64rt.sys)
 #

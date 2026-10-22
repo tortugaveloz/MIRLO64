@@ -1,9 +1,10 @@
 /* n64rt: the N64's hardware behind libultra's functions -- VI, PI, SI, AI,
  * the RSP's tasks, the caches, libultra's 64-bit helpers.
  *
- * The RSP's tasks are reported for now (and finish at once): the graphics
- * path (f3d_emit -> the geom core -> MRDP) and the audio path (the audio
- * core's ABI firmware) come next. */
+ * The RSP's tasks run on Mirlo's RSP with the game's own microcode, and the
+ * RDP draws what they leave in RDRAM (n64rt_rsp.c). The AI is in hardware
+ * (rtl/soc/rcp_ai.sv) when the SoC has it; else the game CPU feeds the
+ * Pocket's audio FIFO itself (n64rt_rsp.c). */
 #include <string.h>
 #include <generated/csr.h>
 #include <system.h>

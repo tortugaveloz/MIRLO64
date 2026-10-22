@@ -1,8 +1,8 @@
-# MIRLO's SoC (docs/mips.md), rtl/soc -- the game CPU, the geom core (MIPS),
-# MRDP, SDRAM, the scan-out. The Quartus project: projects/.
+# MIRLO's SoC (docs/mips.md), rtl/soc -- the game CPU, the RSP, the RDP,
+# SDRAM, the scan-out. The Quartus project: projects/.
 # Before a compile: tools/mirlo_regs.py (the register map) and
-# tools/mips_inits.py (the boot ROM and geom ROM images, after building
-# lang/mips/boot and lang/c/geom).
+# tools/mips_inits.py (the boot ROM's image, after building lang/mips/boot,
+# and the path of the RSP's ROM).
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/sdr_phy.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/sdr_ctrl.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/psram.sv"]
@@ -10,7 +10,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path)
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/afifo.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/fifo_fwft.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_video.sv"]
-set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_bus.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/mirlo_regs.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/mon_ram.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/rcp_mi.sv"]
@@ -21,19 +20,13 @@ set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path)
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/gb_cart.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_ports.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/cpu_port.sv"]
-set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_geom.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_uart.sv"]
 set_global_assignment -name VERILOG_FILE         [file join $::quartus(qip_path) "soc/jtag_uart_bridge.v"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/mips_sys.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/mirlo_mips.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/fpu_n64.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/mips_core.sv"]
-set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/mips_geom.sv"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "mrdp.qip"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "rsp.qip"]
 set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "rdp.qip"]
-set_global_assignment -name VERILOG_FILE         [file join $::quartus(qip_path) "geom/GeomTcmRam.v"]
-set_global_assignment -name QIP_FILE             [file join $::quartus(qip_path) "vpu/vpu.qip"]
-set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "mips/mips_lite.sv"]
 set_global_assignment -name SEARCH_PATH          [file join $::quartus(qip_path) "soc"]
-set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "video/rgb565_to_rgb888.sv"]

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), rdp (rdp_top), rsp (rsp_top),
-# video (n64_video), regs (mirlo_regs) -- with the project's synthesis settings and the closing macros, in projects_ooc_<tag>/
+# video (n64_video), regs (mirlo_regs) -- with the project's synthesis settings and fit.sh's macros, in projects_ooc_<tag>/
 # of this worktree (the unit of another tree: its path as the third argument). A minute or two, and steady: the
 # whole design's synthesis moves a unit that was not touched by tens of ALUTs (rsp_vu by a hundred) from one run to
 # the next; a unit alone gives the same count for the same source. Prints its ALUTs, registers, memory ALUTs, DSPs.
@@ -57,7 +57,7 @@ esac
   echo "set_global_assignment -name NUM_PARALLEL_PROCESSORS 2"
   echo "set_global_assignment -name SEARCH_PATH rtl/soc"
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
-  for m in RSP=1 RSP_LANES=8 TLB_RAM=1 GB_CART=1 CPU_CLK=32 CPU_IC_LOG2=10 CPU_DC_LOG2=10 CLK_N64=1 MON=1 CPU_64ALU=1 CPU_64SH=1 CPU_64MD=1 MI=1 PI=1 VI=1 AI=1 SI=1 VI_AA=1 PI2=1; do
+  for m in RSP_LANES=8 CPU_IC_LOG2=10 CPU_DC_LOG2=10; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"; } > ooc.qsf

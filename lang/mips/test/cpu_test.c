@@ -59,15 +59,10 @@ int main(void)
     timer0_uptime_latch_write(1); uint64_t t1 = timer0_uptime_cycles_read();
     check("uptime runs", t1 > t0, 1);
     check("bus errors", ctrl_bus_errors_read(), 0);
-    (void)*(volatile uint32_t *)0x30000000u;                    /* nothing there */
+    /* nothing there: just above the SDRAM, physical (0x2000_0000..0x4FFF_FFFF is not the TLB's), and with bit 30
+     * set, so none of the RCP's blocks or the cartridge's, which ignore bits 31:29, answer it */
+    (void)*(volatile uint32_t *)0x44000000u;
     check("bus error counted", ctrl_bus_errors_read(), 1);
-    /* the geom RAM window */
-    volatile uint32_t *gr = (volatile uint32_t *)0x2000BFF0u;
-    gr[0] = 0x0BADF00Du; gr[1] = 0x12345678u;
-    check("geom ram", gr[0], 0x0BADF00Du); check("geom ram 2", gr[1], 0x12345678u);
-    /* the audio core's DMEM window */
-    volatile uint32_t *am = (volatile uint32_t *)0x60002000u;
-    am[5] = 0xFEEDBEEFu; check("audio dmem", am[5], 0xFEEDBEEFu);
     /* the N64 window: KSEG0 (cached), KSEG1 and SDRAM 0x4380_0000 are one RDRAM */
     volatile uint32_t *k0 = (volatile uint32_t *)0x80000100u, *k1 = (volatile uint32_t *)0xA0000100u,
                       *sd = (volatile uint32_t *)0x43800100u;

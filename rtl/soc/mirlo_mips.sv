@@ -1,24 +1,25 @@
-// Mirlo's SoC on MIPS (docs/mips.md): what core_top.sv
-// instantiates under MIRLO_MIPS, as the SoC of the core. Its fabric is Mirlo-N64's (MIRLO64: rtl/soc/sdr_*, n64_bus,
-// n64_ports, n64_video); its three cores are MIPS:
+// Mirlo's SoC on MIPS (docs/mips.md): what core_top.sv instantiates as the
+// SoC of the core. Its fabric is Mirlo-N64's (MIRLO64: rtl/soc/sdr_*,
+// n64_ports, n64_video); the SDRAM's masters:
 //
 //   the game CPU (mips_sys: mips_core, big-endian) -----\
-//   MRDP -----------------------------------------------+-- sdr_arb -- sdr_ctrl -- sdr_phy -- SDRAM
+//   the RDP (rtl/rdp): its pixels, its commands --------+-- sdr_arb -- sdr_ctrl -- sdr_phy -- SDRAM
+//   the RSP's DMA (rtl/rsp) ----------------------------|
 //   the scan-out ---------------------------------------|
-//   n64_bus (the geom core + the audio core) -----------|
 //   the Pocket's bridge --------------------------------/
 //
 //   the bridge's port (a ROM's first 32 MiB) -- psram -- psram_phy -- the two PSRAMs
 //
-// The map is MIRLO's (lang/c keeps its addresses):
-//   0x2000_0000  the geom core's ROM (its own), 0x2000_8000 its RAM (the TCM;
-//                the game CPU reads and writes it through the TCM's port B)
+// The map (the game CPU's device port below has the details):
+//   0x0430_0000.. the RCP's MI, PI, VI, AI and SI registers, the cartridge's
+//                domain 2 and ROM, PIF RAM: the N64's addresses
+//   0x2000_0000  the RSP's and the DPC's registers
+//   0x3000_0000  the runtime's window on the ROM
 //   0x4000_0000  SDRAM, 64 MiB
-//   0x6000_0000  the audio core (IMEM, DMEM, CTRL: the game CPU loads it; its
-//                own view puts them at 0x8000_0000)
 //   0x8000_0000  KSEG0/KSEG1: an N64 game's RDRAM (8 MiB of SDRAM, mips_core's N64WIN)
 //   0xF000_0000  the registers (mirlo_regs, tools/mirlo_regs.py)
-//   0xBFC0_0000  the game CPU's boot ROM (lang/c/boot: waits for the Pocket
+//   0xFFFF_8000  the monitor level's memory (mon_ram)
+//   0xBFC0_0000  the game CPU's boot ROM (lang/mips/boot: waits for the Pocket
 //                to load the game into SDRAM, then jumps to 0x4000_0000)
 // The SDRAM initialises itself; boot_ready tells the Pocket it may load.
 `default_nettype none
