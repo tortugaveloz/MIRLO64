@@ -604,7 +604,10 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   a millisecond ahead of the latch, which is the time the game's retrace handler has to write VI_ORIGIN.
 - **VI_ORIGIN** is the scan-out's base, taken at the frame boundary. For a hi-res picture whose two fields' origins are
   one buffer row apart, a write of the base plus one row leaves the base as it is: a serrated picture is sent woven, its
-  rows in order from the lower origin ([resolution.md](resolution.md)).
+  rows in order from the lower origin ([resolution.md](resolution.md)). An origin a serrated hi-res picture's game
+  writes in the second field (VI_CURRENT's field bit, which libultra's retrace handler picks the field's origin by) is
+  that field's, and the base is the row before it: a game that swaps its buffer every field gives the two fields'
+  origins in different buffers, and the woven frame is the newest buffer's whole, at the same rows every field.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
   origin at which a picture of the mode's size fits in the RDRAM.

@@ -860,10 +860,12 @@ int main(int argc, char **argv)
             }
             // TEAR=1: a tear detector -- the displayed buffer's rows at the scan-out's latch, and, as the scan-out's reads pass each
             // row, whether it still has what it had (a row that changed between the latch and its being read is a mix of two frames
-            // on the screen). One line per scan frame: its base, the rows changed, the first, and when the first was
+            // on the screen). One line per scan frame: its base, the rows changed, the first, and when the first was. A 320-wide
+            // picture's 240 rows, or a woven frame's 480 rows of 640 pixels (n64_video's wv_f, taken a cycle after the latch, when
+            // it holds the frame's); another hi-res picture is not checked
             static const bool tear = getenv("TEAR") != nullptr;
             if (tear) {
-                static bool have; static uint32_t w0, rw = 160; static int rd, nrows = 240, torn, first = -1, lat_n; static long lat_sys, first_sys; static std::vector<uint32_t> h;
+                static bool have, pend; static uint32_t w0, rw = 160; static int rd, nrows = 240, torn, first = -1, lat_n; static long lat_sys, first_sys; static std::vector<uint32_t> h;
                 static uint32_t pv;
                 auto rowhash = [&](int r) { uint32_t x = 2166136261u; for (uint32_t i = 0; i < rw; i++) x = (x ^ rd_word(w0 + (uint32_t)r * rw + i)) * 16777619u; return x; };
                 auto finish = [&](void) {
@@ -876,7 +878,11 @@ int main(int argc, char **argv)
                 static int pl2;
                 if (latp && !pl2) {
                     finish();
-                    have = t->fb_on && t->fb_width < 512; w0 = (t->fb_base & 0x3FFFFFFu) >> 2; rw = 160; nrows = 240; rd = 0; torn = 0; first = -1; lat_sys = sys; lat_n++;
+                    have = false; pend = true; w0 = (t->fb_base & 0x3FFFFFFu) >> 2; rd = 0; torn = 0; first = -1; lat_sys = sys; lat_n++;
+                } else if (pend) {
+                    pend = false;
+                    const bool wv = t->rootp->soc_sim_top__DOT__soc__DOT__video__DOT__wv_f;
+                    have = t->fb_on && (t->fb_width < 512 || wv); rw = wv ? 320 : 160; nrows = wv ? 480 : 240;
                     if (have) { h.assign(nrows, 0); for (int r = 0; r < nrows; r++) h[r] = rowhash(r); }
                 }
                 pl2 = latp;

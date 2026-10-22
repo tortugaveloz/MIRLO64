@@ -18,7 +18,10 @@
 //            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
 //            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
 //            base + one row leaves the base as it is. A serrated picture is sent woven, its 480 rows in order from the
-//            base (rtl/soc/n64_video.sv).
+//            base (rtl/soc/n64_video.sv). A serrated picture's origin written in the second field (VI_CURRENT's field
+//            bit, which libultra's retrace handler reads to pick the field's origin) is that field's: the base is the
+//            row before it, the first field's of the same buffer -- a game that swaps its buffer every field gives
+//            each field's origin in a buffer the other field's is not in, and the frame is the newest buffer whole.
 //   STATUS   GAMMA (bit 3), taken at the latch, is the scan-out's gamma correction; AA_MODE (bits 9:8, 0 or 1:
 //            anti-alias) and DIVOT_ENABLE (bit 4) its filters (MIRLO_VI_AA).
 //   H_START  0: black (osViBlack) -- the scan-out reads nothing from the next frame on -- and so is an origin that has
@@ -79,6 +82,7 @@ logic [11:0] wid;
 logic [8:0]  vint;
 logic        st_gamma, st_serr, hs_zero, gm_f;
 logic        st_aa, st_dv, st_dd;
+logic        st_px32;                   // STATUS' TYPE 3: 32-bit pixels (a row is twice the bytes)
 logic        vs_set, vs_pal;            // V_SYNC has been written; and it names 625 lines (576 or more)
 assign vi_pal = vs_set ? vs_pal : tv_def;
 // a hi-res picture's second field's origin: the base + one row of the 640-pixel picture (1280 bytes), which the base does not follow: with
@@ -88,12 +92,21 @@ wire         row_up = |wid[11:9] && (wd[22:0] == org_b + {10'd0, wid, 1'b0} || (
 logic [8:0]  nl;
 logic [1:0]  hold;
 logic        field;
+// An origin written in a serrated hi-res picture's second field (the field bit as the game reads it) is the second field's:
+// the base is one row of the buffer before it -- WIDTH * 2 bytes, WIDTH bytes for a pitch of two rows, twice either for
+// 32-bit pixels. libultra writes each field's origin from the field bit, and a game that swaps its buffer every field
+// (Rogue Squadron's 640 x 480 screens, 50 a second) writes the first field's origin of one buffer and the second field's of
+// the next: the base is then every field's buffer's first row, and the woven frame stays at the same rows. Not when it is
+// the base or a row on (row_up): the same buffer, or the same origin for both fields.
+wire [13:0]  rowb   = (|wid[11:10] ? {2'd0, wid} : {1'd0, wid, 1'b0}) << st_px32;
+wire         org_f2 = field && st_serr && |wid[11:9];
 assign vi_clr = wr_s && a == 4'd4;
 always_ff @(posedge clk) begin
-    if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
+    if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; st_px32 <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
     else if (wr_s) case (a)
-    4'd0: begin st_gamma <= wd[3]; st_serr <= wd[6]; st_aa <= !wd[9]; st_dv <= wd[4]; st_dd <= wd[16]; end
-    4'd1: if (!row_up) org_b <= wd[22:0];
+    4'd0: begin st_gamma <= wd[3]; st_serr <= wd[6]; st_aa <= !wd[9]; st_dv <= wd[4]; st_dd <= wd[16]; st_px32 <= wd[1:0] == 2'd3; end
+    4'd1: if (org_f2) begin if (!row_up && wd[22:0] != org_b) org_b <= wd[22:0] - {9'd0, rowb}; end
+          else if (!row_up) org_b <= wd[22:0];
     4'd2: wid <= wd[11:0];
     4'd3: vint <= wd[9:1];
     4'd6: begin                                      // a value that names a TV system sets it; any other (0, noise) leaves it as it was
