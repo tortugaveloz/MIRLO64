@@ -1,5 +1,5 @@
-/* Screen-space triangle state shared by the geom pipeline and MRDP's
- * triangle setup (geom_mrdp.h): fixed-point vertices, the edge set of a
+/* Screen-space triangle state shared by the geom pipeline and RDP's
+ * triangle setup (geom_rdp.h): fixed-point vertices, the edge set of a
  * triangle, the scissor, and back-face culling. */
 #ifndef GEOM_TRIANGLE_H
 #define GEOM_TRIANGLE_H

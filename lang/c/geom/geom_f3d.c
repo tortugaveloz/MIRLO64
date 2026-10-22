@@ -6,7 +6,7 @@
  * translator (f3d_emit.h's interface, linked from F3D_EMIT=<f3d_emit.c>)
  * writes its GDL into a small buffer in this core's own RAM, and every few
  * hundred words, at a command boundary (f3d_cmd_boundary), that piece is
- * walked (geom_walk_chunk) -- T&L, triangle setup, MRDP -- and the buffer is
+ * walked (geom_walk_chunk) -- T&L, triangle setup, RDP -- and the buffer is
  * used again. Nothing of the frame's translation goes through SDRAM: an
  * earlier version wrote it all to SDRAM and walked it after, and was slower
  * than the game CPU translating.

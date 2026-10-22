@@ -14,7 +14,7 @@ MEMORY {
     ram (rwx)  : ORIGIN = 0x20008000, LENGTH = 0x00004000
     rom_b (rx) : ORIGIN = 0x20010000, LENGTH = 0x00010000
     /* SDRAM the geom core owns for its big tables (GDL_F3D's translator,
-     * geom_f3d.c): past the texture cache (geom_mrdp.h), below n64rt's ROM */
+     * geom_f3d.c): past the texture cache (geom_rdp.h), below n64rt's ROM */
     sdram (rw) : ORIGIN = 0x41610000, LENGTH = 0x00010000
 }
 
@@ -26,7 +26,7 @@ SECTIONS
         *libcrt.a:*(.text .text.*)
         *nolibc.o(.text .text.*)
         *main.o(.text .text.*)
-        *geom_mrdp_hw.o(.text .text.*)
+        *geom_rdp_hw.o(.text .text.*)
         *geom_fixed.o(.text .text.*)
         *geom_vecmath.o(.text .text.*)
         . = ALIGN(8);

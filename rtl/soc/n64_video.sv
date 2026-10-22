@@ -1,5 +1,5 @@
 // Mirlo-N64's scan-out: the N64's VI_ORIGIN framebuffer (RGBA5551 as the RDP writes it, two pixels a word, the
-// left one in the high half; or MRDP's RGB565) to the Pocket's video pads, as the N64's VI sends it: a 640-wide
+// left one in the high half; or RDP's RGB565) to the Pocket's video pads, as the N64's VI sends it: a 640-wide
 // line (the VI's 640 pixel clocks between H_START 108 and H_END 748), 240 lines a field, progressive, 59.94 Hz
 // (PAL: 400 x 313 at 50 Hz), a pixel each two clocks of clk_vid, 25 MHz (sys / 2.5): 12.5 MHz; a serrated picture's two
 // fields woven, 480 lines a frame, a pixel a clock (below).
@@ -52,7 +52,7 @@
 module n64_video #(
     parameter logic [23:0] ORIGIN_MASK = 24'h1FFFFF,   // word address: the N64's 8 MiB RDRAM
     // the framebuffer is the N64's own -- RGBA5551, the left pixel in the
-    // word's high half (rtl/rdp) -- not MRDP's RGB565 with it in the low half
+    // word's high half (rtl/rdp) -- not RDP's RGB565 with it in the low half
     parameter bit N64FB = 1'b0
 ) (
     input  wire         clk,            // sys
@@ -277,7 +277,7 @@ wire  [23:0] rowp_n = rowp + (w2nd ? (px32_f ? 24'd640 : 24'd320) : yan[11] ? {1
 // takes it so).
 wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // MIRLO_VI_AA: each word goes with its pixels' hidden coverage bits (the RDP's
-// plane, 1 MiB below the RDRAM: lang/c/mrdp/mrdp.h, layout.h) -- a group's
+// plane, 1 MiB below the RDRAM: lang/c/rdp/rdp.h, layout.h) -- a group's
 // word (16 pixels) is read before the group's first colour word (and at each
 // row's start), and a tag a read tells the words back apart: the hidden
 // word is held, a colour word takes its pair's four bits (the even pixel's in

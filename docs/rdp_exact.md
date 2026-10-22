@@ -1,6 +1,6 @@
 # MIRLO 64: the console's RDP rules (RDP_EXACT)
 
-The RDP's reference model, `lang/c/mrdp/mrdp.c` (built with `MRDP_N64`), was
+The RDP's reference model, `lang/c/rdp/rdp.c` (built with `RDP_N64`), was
 compared pixel for pixel with an independent, pixel-exact software RDP (the
 oracle: `sim/rdp_oracle/`, its README and RESULTS.md). Where the two
 disagree, the model follows a rule of its own. This page lists each rule the
@@ -12,14 +12,14 @@ benches keep passing until the RTL follows them:
 
 | what | where |
 |---|---|
-| the switch | `RDP_EXACT`, with `MRDP_N64`. Off by default |
-| the console's perspective divide | rule 1, the model's whatever the switch, as `rtl/rdp` has it: `mrdp_n64_div` in `mrdp.c` (declared in `mrdp.h`), and `n64_persp` (static) for the texel |
+| the switch | `RDP_EXACT`, with `RDP_N64`. Off by default |
+| the console's perspective divide | rule 1, the model's whatever the switch, as `rtl/rdp` has it: `rdp_n64_div` in `rdp.c` (declared in `rdp.h`), and `n64_persp` (static) for the texel |
 | a frame | `make rdp_task EXACT=1` in `sim/rdp` |
 | the comparison | `sim/rdp_oracle`: `make` builds `build/rdpo_exact` (`RDP_EXACT`), `./run.sh 50` runs it on every suite, the minimal streams and the captured dumps |
-| tests | `test_lod.c` checks `mrdp_n64_div`; `test_cvg.c` (two checks take the console's values with the switch) and `test_cimg32.c` pass with and without it |
+| tests | `test_lod.c` checks `rdp_n64_div`; `test_cvg.c` (two checks take the console's values with the switch) and `test_cimg32.c` pass with and without it |
 
-Without the switch the model is unchanged, byte for byte: `mrdp.o` (`-O2`,
-`MRDP_N64`, and with no define) is the same object code with and without the
+Without the switch the model is unchanged, byte for byte: `rdp.o` (`-O2`,
+`RDP_N64`, and with no define) is the same object code with and without the
 switch's code.
 
 ## In short
@@ -59,15 +59,15 @@ negative is over whatever S is. The texel takes the 17 bits saturated to 16
 the range flag (out of range: the far level).
 
 **Before** this rule was the model's own, it divided S >> 4 by all of W with
-its own reciprocal (`mrdp_rcp`, `mrdp_persp`, and a `lod_persp` for the LOD's
+its own reciprocal (`rdp_rcp`, `rdp_persp`, and a `lod_persp` for the LOD's
 points). S and T differed by up to 69 subtexels at a floor's far end.
 
-**Now**, with or without the switch: `mrdp_n64_div` and `n64_persp`, for the
+**Now**, with or without the switch: `rdp_n64_div` and `n64_persp`, for the
 pixel's S, T (`draw_pixel_cvg`) and every point the LOD takes (`lod_pixel`,
 `x_div`).
 
 **RTL**: `rdp_pix.v` P1 to P4. Done (its P1 to P4 cite `n64_div` and
-`n64_persp`: they are `mrdp_n64_div` and `n64_persp` in `mrdp.c`). A 15-bit normaliser, the two tables in one ROM, a 16 x 15 product:
+`n64_persp`: they are `rdp_n64_div` and `n64_persp` in `rdp.c`). A 15-bit normaliser, the two tables in one ROM, a 16 x 15 product:
 smaller than the former 27 x 27 products.
 
 ### 2. A texture rectangle's next line for the LOD
@@ -109,7 +109,7 @@ pixels after the first plus those the scissor took off at its start:
 
 The LOD is the larger step of S and T from N to F (ones' complement, sticky
 bit as in 2-cycle mode); level, far, magnified and the fraction as
-`mrdp_lod`. With TEX_LOD, TEXEL0's tile is the tile plus the level (far: the
+`rdp_lod`. With TEX_LOD, TEXEL0's tile is the tile plus the level (far: the
 level count), plus 1 with DETAIL when not magnified (so DETAIL moves the tile
 at a level count of 0); TEXEL1 is not moved. The one cycle reads
 LOD_FRACTION (and the LOD is computed for it without TEX_LOD).
@@ -123,7 +123,7 @@ more.
 **Without the switch** the model computes no LOD in 1-cycle or copy mode.
 
 **With it**: `lod1_wanted`, `lod1_pts`, `lod1_pixel` (the LOD section of
-`mrdp.c`), used by `draw_pixel_cvg` for a 1-cycle pixel; the copy-mode LOD
+`rdp.c`), used by `draw_pixel_cvg` for a 1-cycle pixel; the copy-mode LOD
 there too. The walk (`draw_triangle_x`) gives each pixel its place in the span
 and the next row's start (`prim_t` `xj`, `xlen`, `xlodlen`, `xnvalid`,
 `xnrow`).
@@ -254,7 +254,7 @@ field mode.
 
 **With it**: `x_edge`, `x_row` and `draw_triangle_x` (the walk), `draw_rect_x`
 (rectangles; `draw_texrect` and `fill_rect` call it), `x_copy_texel` (copy
-mode), `sc_field` and `sc_odd` in `mrdp_t`.
+mode), `sc_field` and `sc_odd` in `rdp_t`.
 
 **RTL**:
 
@@ -382,7 +382,7 @@ pixel's dz and that memory dz (the memory's doubled and no less than 16 >>
 exponent for exponents under 3, coplanar when it is 0x8000), times 8; and when
 the blender's B is the memory coverage, its two weights are shifted by the
 difference of the two dz codes (up to 4). The model keeps no memory dz (its
-own documented simplification, `mrdp.h`): its tolerance is the pixel's step
+own documented simplification, `rdp.h`): its tolerance is the pixel's step
 alone and the shifts 0 with Z_CMP. On those pixels the two disagree on the
 blend. The model does not follow it under the switch either: following it, the RDP would write the depth image's hidden bits and read them back
 (`rtl/rdp/rdp_mem.v` and the hidden plane), a change of the memory traffic

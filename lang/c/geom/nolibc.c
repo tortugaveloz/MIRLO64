@@ -81,7 +81,7 @@ long long __divdi3(long long a, long long b) {
     return neg ? -(long long)q : (long long)q;
 }
 
-/* MRDP triangle setup (lang/c/mrdp/mrdp_setup.h): one unsigned 64-bit divide
+/* RDP triangle setup (lang/c/rdp/rdp_setup.h): one unsigned 64-bit divide
  * per triangle (the area reciprocal) and count-leading-zeros; rv32im has no
  * clz instruction, so GCC calls these. */
 unsigned long long __udivdi3(unsigned long long a, unsigned long long b) {

@@ -363,7 +363,7 @@ F3D_COLD static void tri_pick(uint32_t sum, uint32_t nv) {
     if (want != s_sem.cc_force) { s_sem.cc_force = want; cc_resolve(); s_tri_state_ok = 0; }
 }
 /* the texels a rectangle samples (emit_texrect: tile-relative, set around
- * its bind), so a tile larger than MRDP's TMEM can be cut down to them */
+ * its bind), so a tile larger than RDP's TMEM can be cut down to them */
 static int32_t s_rect_u0 = -1, s_rect_v0, s_rect_u1, s_rect_v1;
 /* n / d, small n (no divider on the Mirlo-N64 geom core) */
 F3D_COLD static uint32_t udiv_small(uint32_t n, uint32_t d) {
@@ -433,7 +433,7 @@ F3D_COLD static void emit_texbind_if_needed(gdl_cur_t *out) {
         if (rows > 0 && h > rows) h = rows;
         break;
     }
-    /* Too large for MRDP's TMEM and drawn by a rectangle (a font, a
+    /* Too large for RDP's TMEM and drawn by a rectangle (a font, a
      * backdrop): only the texels it samples, rather than the whole tile at a
      * fraction of its resolution */
     if (s_rect_u0 >= 0 && w * h > 4096 && !masks && !maskt) {
@@ -782,7 +782,7 @@ F3D_COLD static void cc_resolve(void) {
     s_texenv = combine_to_texenv(n0, n1);
 }
 #ifdef F3D_RAW_CC
-/* F3D_RAW_CC (n64rt): MRDP has the N64's combiner, so the combine goes to it
+/* F3D_RAW_CC (n64rt): RDP has the N64's combiner, so the combine goes to it
  * as written (GDL_COMBINE), PRIMITIVE and ENVIRONMENT with it, instead of
  * being reduced to a GDL_TEXENV mode with the constants folded into the
  * vertex colours -- which cannot draw (ENV - PRIM) * TEXEL0 + PRIM, a lerp
@@ -829,7 +829,7 @@ static void emit_ccolor_if_changed(gdl_cur_t *out) {
      * logo's fade: (TEXEL0 - 0) * PRIM on untextured triangles), where the
      * reduction below draws what it always did */
     if (!texgen_shade_only() && (!cc_reads_texel() || (s_tex_on && s_tex_render_size > 0))) {
-        if (s_cc_emitted >> 32) { gdl_ccolor(out, 0, 0); s_cc_emitted = 0; }   /* MRDP applies them */
+        if (s_cc_emitted >> 32) { gdl_ccolor(out, 0, 0); s_cc_emitted = 0; }   /* RDP applies them */
         emit_rawcc(out, 1);
         return;
     }
@@ -861,7 +861,7 @@ static void emit_geomode_if_changed(gdl_cur_t *out) {
     if (gm != s_lighting_emitted) { gdl_geomode(out, gm); s_lighting_emitted = gm; }
 }
 static void emit_texnorm(gdl_cur_t *out) {
-    /* only whether texturing is on matters to the geom core's MRDP path
+    /* only whether texturing is on matters to the geom core's RDP path
      * (GDL_TEXBIND carries the scale): no float divide */
     gdl_w(out, GDL_HDR(GDL_TEXNORM, 0)); gdl_w(out, (s_tex_on && s_tex_render_size > 0) ? 0x10000u : 0u);
 }
@@ -1149,7 +1149,7 @@ static void emit_texrect(gdl_cur_t *out, const f3d_word_t *dl, uint32_t w0, uint
     /* (only for a rectangle drawn 1:1 on the pixel grid -- see `keep` below;
      * a squeezed one samples between texels anyway) */
     int keep = s_keep_2d && (s_vp_crop || (yh - yl) <= 16 * 4);   /* 16: the HUD font (file select's NEW) */
-    /* F3D_PIXEL_CENTRES (MRDP): the rasterizer samples at pixel centres, as
+    /* F3D_PIXEL_CENTRES (RDP): the rasterizer samples at pixel centres, as
      * the N64 does, so a 1:1 rectangle's pixels already land mid-texel; this
      * half-texel shift then moved every pixel to the NEXT texel and the last
      * column onto the texel past the glyph ("PRESS START" grew a ':' and a
@@ -1285,7 +1285,7 @@ F3D_COLD static void emit_bg(gdl_cur_t *out, int copy, uint32_t w1) {
     if (sx + tw > W) tw = W - sx;
     if (sy + th > H) th = H - sy;
     if (tw > 1024u) return;
-    /* rows a strip can hold: 4096 texels, and MRDP's TMEM line limit */
+    /* rows a strip can hold: 4096 texels, and RDP's TMEM line limit */
     uint32_t rows = udiv_small(4096u, tw);
     while (rows > 1u && ((rows + 1u) >> 1) * ((tw + 3u) >> 2) * 2u > 1024u) rows--;
     if (!rows) return;
@@ -1616,10 +1616,10 @@ static void call_dl(const f3d_word_t *tgt, gdl_cur_t *out, int depth) {
     gdl_w(out, GDL_PTR(e->words));
 }
 
-/* The game's RDP commands that set where and how it draws go to MRDP as they
- * are -- MRDP speaks the RDP's command format -- in order with the geometry
+/* The game's RDP commands that set where and how it draws go to RDP as they
+ * are -- RDP speaks the RDP's command format -- in order with the geometry
  * (GDL_RAW): colour/depth image, fill colour, fill rectangle, scissor.
- * Addresses are the RDRAM's on MRDP's bus; MRDP's colour is RGB565, so a
+ * Addresses are the RDRAM's on RDP's bus; RDP's colour is RGB565, so a
  * fill of the colour image takes its 5551 pixels to 565 (a depth fill keeps
  * its value). */
 static void rdp_raw(gdl_cur_t *out, uint32_t hi, uint32_t lo)

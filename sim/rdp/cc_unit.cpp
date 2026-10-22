@@ -3,7 +3,7 @@
 #include "verilated.h"
 #include <cstdio>
 #include <cstdint>
-#include "mrdp.c"      // (built as C++, as tb_rdp does)
+#include "rdp.c"      // (built as C++, as tb_rdp does)
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);

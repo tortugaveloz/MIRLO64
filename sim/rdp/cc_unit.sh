@@ -1,6 +1,6 @@
 #!/bin/bash
 # The combiner's arithmetic functions of rtl/rdp/rdp_pix.v (between its cc_begin / cc_end) against the model's
-# (lang/c/mrdp/mrdp.c cc_eval, cc_color_res, cc_alpha_res): operands of 0..511 (the shade's range; COMBINED, as A / B / C
+# (lang/c/rdp/rdp.c cc_eval, cc_color_res, cc_alpha_res): operands of 0..511 (the shade's range; COMBINED, as A / B / C
 # read as signed numbers from 0x180 / 0x180 / 0x100, is the other kind: flags ka kb kc) for cycle 1, and the cycle-0 domain
 # (all plain 0..511) -- 2^36 would take a day, so a stride over A/B/D plus 200 million random operands.   ./cc_unit.sh
 set -eu
@@ -17,5 +17,5 @@ rm -rf "$OBJ"; mkdir -p "$OBJ"
   echo "endmodule"
 } > "$OBJ/cc_unit.v"
 "$V" --cc --exe --build -j 8 -O2 -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME --top-module cc_unit --Mdir "$OBJ/m" \
-    "$OBJ/cc_unit.v" "$HERE/cc_unit.cpp" -CFLAGS "-O2 -DMRDP_N64 -I$HERE/../../lang/c/mrdp" -o cc_unit > "$OBJ/build.log" 2>&1 || { tail -20 "$OBJ/build.log"; exit 1; }
+    "$OBJ/cc_unit.v" "$HERE/cc_unit.cpp" -CFLAGS "-O2 -DRDP_N64 -I$HERE/../../lang/c/rdp" -o cc_unit > "$OBJ/build.log" 2>&1 || { tail -20 "$OBJ/build.log"; exit 1; }
 "$OBJ/m/cc_unit"

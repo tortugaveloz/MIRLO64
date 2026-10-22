@@ -1,13 +1,13 @@
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
-// lang/c/mrdp/mrdp.c built with MRDP_N64: for the same command stream the RTL
-// writes the same memory. From MRDP (rtl/mrdp), which draws the
+// lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
+// writes the same memory. From RDP (rtl/rdp), which draws the
 // geometry core's triangles: here the triangles are the N64's (0x08..0x0F),
 // TMEM is the N64's 4 KiB loaded by LOAD BLOCK / LOAD TILE / LOAD TLUT and
 // decoded by the tile's format when sampled, texture rectangles, 2-cycle and
 // copy mode are in, and the images are the game's (RGBA5551, the N64's byte
-// order). The coverage (anti-aliasing) is the N64's (lang/c/mrdp/mrdp.h,
-// MRDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
+// order). The coverage (anti-aliasing) is the N64's (lang/c/rdp/rdp.h,
+// RDP_CVG): with AA_EN a triangle is walked four subscanlines a row, and its
 // pixels carry their 8-sample masks. YUV textures are converted (SET_CONVERT).
 // The texture LOD of a 2-cycle primitive is the model's (docs/lod.md): rdp_pix
 // computes it; this module issues the pixels in the walk's order, with the
@@ -16,7 +16,7 @@
 //
 // Commands are executed one at a time. A primitive is drawn row by row: the
 // row's Z and color spans are read into on-chip line buffers, the pixels run
-// through mrdp_pix at one a clock, then the span is written back (only the
+// through rdp_pix at one a clock, then the span is written back (only the
 // pixels that passed). State commands wait for the previous primitive to
 // finish, so the pixel pipeline never sees a state change mid-flight.
 module rdp_top (
@@ -49,7 +49,7 @@ module rdp_top (
     output wire        idle             // no command in progress, nothing pending
 );
     // ======================================================================
-    // state (lang/c/mrdp/mrdp.h mrdp_t)
+    // state (lang/c/rdp/rdp.h rdp_t)
     // ======================================================================
     reg [23:0] other_h;
     reg [31:0] other_l;
@@ -65,13 +65,13 @@ module rdp_top (
     reg [10:0] cimg_width, timg_width;
     reg [1:0]  timg_size;
     reg        cimg_ok;             // the colour image is a 16-bit, an 8-bit or a 32-bit one (what is drawn to)
-    // An 8-bit colour image (lang/c/mrdp/mrdp.c wr8): a pixel is a byte at cimg + y * width + x, the blender's red as it
+    // An 8-bit colour image (lang/c/rdp/rdp.c wr8): a pixel is a byte at cimg + y * width + x, the blender's red as it
     // is (copy: the texel's; fill: the fill colour's byte for the address). Written only: the pixels read neither it nor
     // a depth, and no hidden coverage goes with it. The pixel pipe's results go through the new buffers as for a 16-bit
     // image, the byte in a pixel's colour bits 15:8; the write engine puts a word's two pixels in their half of the
     // memory word (rdp_mem wr_c8). The rows must start on a 4-byte boundary, as a 16-bit image's.
     reg        cimg8;
-    // A 32-bit colour image (docs/cimg32.md; lang/c/mrdp/mrdp.c draw_pixel_cvg): a pixel is a word at cimg + (y * width + x)
+    // A 32-bit colour image (docs/cimg32.md; lang/c/rdp/rdp.c draw_pixel_cvg): a pixel is a word at cimg + (y * width + x)
     // * 4, R G B and the coverage in the alpha byte's top three bits; the depth image keeps its 16-bit layout, and no
     // hidden coverage goes with it. The line buffers keep their blocks: the old colour buffer holds a pixel a word, the
     // new one {R8 G8 B8 cvg3} an entry (rdp_mem, rdp_pix), so a set holds 512 pixels of a row and a longer span is drawn
@@ -194,8 +194,8 @@ module rdp_top (
     wire [31:0] mw_data;
     wire [9:0]  pix_lb_ra, pix_clb_ra;      // (the depth's and the colour's: a 32-bit image's colour word is the pixel's)
     wire [31:0] zlb_rd, clb_rd;
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_clb_ra), .rdata(clb_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_clb_ra), .rdata(clb_rd));
     reg         zn_we, cn_we, msk_we;
     reg  [9:0]  nb_wa;                  // the depth buffers' {set, word}
     reg         nb_x0;                  // the pixel's x[0]: the new colour buffer's address, a 32-bit image's {set, x[8:0]}
@@ -209,25 +209,25 @@ module rdp_top (
     wire [35:0] cnew_rd;
     wire [1:0]  zm_rd, cm_rd;
     wire [9:0]  zn_ra = mem_lb_ra;
-    mrdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
-    mrdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(cn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
+    rdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(cn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
     // the raw hidden-bit buffers (rdp_mem): the span's groups' words, by {set,
     // group mod 128}, a copy for the pixels and one for the write engine
     wire        hl_we;
     wire [7:0]  hl_wa, pix_hl_ra, mem_hl_ra;
     wire [31:0] pix_hl_rd, mem_hl_rd;
-    mrdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
-    mrdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
     reg  [9:0]  rwb [0:1];              // the rows' colour word base (bits 9:0), by set
     // (a 32-bit image's pass bits are in cnew's entries, so that cmsk keeps zmsk's addresses: the fit packs the two)
-    mrdp_sdpram #(.AW(10), .DW(2), .NB(2)) zmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(zm_wd), .wbe(msk_be), .raddr(zn_ra), .rdata(zm_rd));
-    mrdp_sdpram #(.AW(10), .DW(2), .NB(2)) cmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(cm_wd), .wbe(msk_be), .raddr(mem_lb_ra), .rdata(cm_rd));
+    rdp_sdpram #(.AW(10), .DW(2), .NB(2)) zmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(zm_wd), .wbe(msk_be), .raddr(zn_ra), .rdata(zm_rd));
+    rdp_sdpram #(.AW(10), .DW(2), .NB(2)) cmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(cm_wd), .wbe(msk_be), .raddr(mem_lb_ra), .rdata(cm_rd));
     // a triangle's attribute words: word 8 + k of the command at k
     wire        vr_we = cmd_valid && cmd_ready && collecting && is_tri && widx >= 6'd8;
     wire [5:0]  vr_wa6 = widx - 6'd8;
     reg  [5:0]  vr_ra;
     wire [31:0] vr_q;
-    mrdp_sdpram #(.AW(6), .DW(32), .NB(1)) vram (.clk(clk), .we(vr_we), .waddr(vr_wa6),
+    rdp_sdpram #(.AW(6), .DW(32), .NB(1)) vram (.clk(clk), .we(vr_we), .waddr(vr_wa6),
                                                  .wdata(cmd_data), .wbe(1'b1), .raddr(vr_ra), .rdata(vr_q));
 
     // ======================================================================
@@ -246,7 +246,7 @@ module rdp_top (
     reg  [2:0]  shS;
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
     // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
-    // affine path, take the integer halves (lang/c/mrdp/mrdp.c draw_pixel_cvg)
+    // affine path, take the integer halves (lang/c/rdp/rdp.c draw_pixel_cvg)
     // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
     // 0 in an alpha, either cycle). (Registered: the modes are set many clocks before a primitive's first pixel.)
     reg         lod_on;
@@ -462,7 +462,7 @@ module rdp_top (
             default: voff = 6'd12;
         endcase
     endfunction
-    function automatic attr_on;             // mrdp_attr_on()
+    function automatic attr_on;             // rdp_attr_on()
         input [2:0] fl;
         input [2:0] a;
         attr_on = a < 3'd4 ? fl[2] : a < 3'd7 ? fl[1] : fl[0];
@@ -471,7 +471,7 @@ module rdp_top (
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
     reg [9:0]  px_cnt;
-    // loads (lang/c/mrdp/mrdp.c load_block, load_tlut, load_tile_n64)
+    // loads (lang/c/rdp/rdp.c load_block, load_tlut, load_tile_n64)
     reg [9:0]  tt, tt1;             // LOAD TILE's rows
     reg [22:0] l_ti;                // the row's first texel in the image (t * width + s)
     reg [10:0] l_dst;               // its 16-bit word of TMEM
@@ -498,7 +498,7 @@ module rdp_top (
     wire signed [13:0] yl_end_aa = ($signed(t_yl) + 14'sd3) >>> 2;
     wire signed [11:0] yb_aa = (yl_end_aa < $signed({2'b0, sc_y1})) ? yl_end_aa[11:0] : $signed({1'b0, sc_y1});
 
-    // ---- AA_EN: the N64's walker (lang/c/mrdp/mrdp.c draw_triangle_aa). The
+    // ---- AA_EN: the N64's walker (lang/c/rdp/rdp.c draw_triangle_aa). The
     // edges at subscanline aa_j: three running edges, set up at the first
     // row's top (S_AAINIT) and stepped (DxDy >> 2) & ~1 a subscanline. A
     // subscanline a clock (S_AASUB): its edges in eighths with the sticky

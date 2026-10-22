@@ -1,5 +1,5 @@
 // MIRLO's MIPS SoC (rtl/soc/mirlo_mips.sv) under Verilator: the game CPU,
-// the geom core, the audio core, MRDP, the scan-out, the SDRAM controller +
+// the geom core, the audio core, RDP, the scan-out, the SDRAM controller +
 // PHY -- all RTL -- against the SDR chip model of tb_sdr.cpp (with its
 // protocol checks). The program is put where the Pocket loads data slot 0
 // (SDRAM 0x4000_0000); the Pocket's reset exit comes LOAD_AT sys cycles in
@@ -1166,9 +1166,9 @@ int main(int argc, char **argv)
             g_win++; if (t->geom_msg != 0xB0000040u) g_busy++;
             long ev = getenv("EVERY") ? atol(getenv("EVERY")) : 0;
             if (ev && sys % ev == 0) {
-                printf("[%ld M cycles, %lds] frame %ld cpu pc %08x geom pc %08x hb %08x audio pc %08x st %08x words %ld mrdp syncs %u geom busy %.1f%%\n",
+                printf("[%ld M cycles, %lds] frame %ld cpu pc %08x geom pc %08x hb %08x audio pc %08x st %08x words %ld rdp syncs %u geom busy %.1f%%\n",
                        sys / 1000000, (long)(time(nullptr) - t0), frames, t->cpu_pc, t->geom_pc, t->geom_msg,
-                       t->audio_pc, t->audio_state, audio_words, t->mrdp_sync, g_win ? 100.0 * g_busy / g_win : 0.0);
+                       t->audio_pc, t->audio_state, audio_words, t->rdp_sync, g_win ? 100.0 * g_busy / g_win : 0.0);
                 g_busy = g_win = 0;
                 fflush(stdout);
             }
@@ -1190,7 +1190,7 @@ int main(int argc, char **argv)
             // scratch register: rsp_replay's runs).
             static const bool mstat = getenv("MEMSTAT") != nullptr;
             if (mstat) {
-                static long mp[6], mact, mact_idle, mwords, mwait, mrow, mturn, mrdp, mrsp, mn, last_use[4], last_dir = -1, mswitch;
+                static long mp[6], mact, mact_idle, mwords, mwait, mrow, mturn, rdp, mrsp, mn, last_use[4], last_dir = -1, mswitch;
                 static bool marks;
                 unsigned m = t->mem_stat;
                 unsigned c = (m >> 6) & 7, ba = (m >> 9) & 3;
@@ -1203,17 +1203,17 @@ int main(int argc, char **argv)
                 if (c == 5 || c == 4) { mwords++; last_use[ba] = sys; if (last_dir >= 0 && last_dir != (long)c) mswitch++; last_dir = c; }
                 if (m & 0x2000) mwait++;
                 if ((m & 0x1000) && !(m & 0x800)) { if (c == 7 && t->mem_hit) mturn++; else mrow++; }
-                if (m & 0x4000) mrdp++;
+                if (m & 0x4000) rdp++;
                 if (m & 0x8000) mrsp++;
                 mn++;
                 if (out) {
                     printf("[memstat %.1f ms: words scan-out %ld, CPU %ld, RDP %ld, RSP %ld, bridge %ld, command fetch %ld; %ld rows opened (%ld in an idle bank); "
                            "a word moved %.0f %% of the cycles, the controller on a row %.0f %%, on the bus's turn %.0f %% (%ld turns), a port asking %.0f %%; "
                            "RDP at work %.1f ms, RSP running %.1f ms]\n", mn / TB_SYS_KHZ, mp[0], mp[1], mp[2], mp[3], mp[4], mp[5],
-                           mact, mact_idle, 100.0 * mwords / mn, 100.0 * mrow / mn, 100.0 * mturn / mn, mswitch, 100.0 * mwait / mn, mrdp / TB_SYS_KHZ, mrsp / TB_SYS_KHZ);
+                           mact, mact_idle, 100.0 * mwords / mn, 100.0 * mrow / mn, 100.0 * mturn / mn, mswitch, 100.0 * mwait / mn, rdp / TB_SYS_KHZ, mrsp / TB_SYS_KHZ);
                     fflush(stdout);
                 }
-                if (out || mark0) { for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = mrdp = mrsp = mn = mswitch = 0; }
+                if (out || mark0) { for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = rdp = mrsp = mn = mswitch = 0; }
             }
             // CPUSTAT=1 [CPUSTAT_IDLE=lo,hi]: where the game CPU's cycles go, a
             // line a second or between a program's marks (as MEMSTAT's): the
@@ -1232,13 +1232,13 @@ int main(int argc, char **argv)
                 static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
                 n_cyc++;
                 if (t->rsp_stat & 1) rsp_run++;
-                if (!t->rootp->soc_sim_top__DOT__soc__DOT__mrdp_idle) rdp_busy++;
+                if (!t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle) rdp_busy++;
                 if (o_rcp_ihi && t->cpu_pc >= o_rcp_ilo && t->cpu_pc < o_rcp_ihi) cpu_idle++;
                 if (frames != f_last && frames % o_rcpstat == 0) {
                     if (f_last >= 0)
                         printf("[rcpstat field %ld: %.2f ms; RSP running %.2f ms, RDP busy %.2f ms, %u full syncs, CPU busy %.2f ms]\n", frames, n_cyc / TB_SYS_KHZ,
-                               rsp_run / TB_SYS_KHZ, rdp_busy / TB_SYS_KHZ, (unsigned)(t->mrdp_sync - sync_last), (n_cyc - cpu_idle) / TB_SYS_KHZ);
-                    rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->mrdp_sync;
+                               rsp_run / TB_SYS_KHZ, rdp_busy / TB_SYS_KHZ, (unsigned)(t->rdp_sync - sync_last), (n_cyc - cpu_idle) / TB_SYS_KHZ);
+                    rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->rdp_sync;
                 }
                 f_last = frames;
             }

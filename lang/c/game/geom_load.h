@@ -12,7 +12,7 @@
  * only, while the core is in reset; they do not read back) */
 #define GEOM_ROM_A_BASE 0x20000000u        /* 16 KiB: code + read-only data + .data's image */
 #define GEOM_ROM_B_BASE 0x20010000u        /* 64 KiB: code */
-/* the triangles the last display list sent to MRDP (lang/c/geom: the first
+/* the triangles the last display list sent to RDP (lang/c/geom: the first
  * word of its RAM, geom_mips.ld .shared) */
 #define GEOM_TRIS_EMITTED_ADDR 0x20008000u
 

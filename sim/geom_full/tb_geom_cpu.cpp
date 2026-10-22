@@ -17,7 +17,7 @@
 //   0x41000000, matching real hardware's GDL_RING_BASE), rings the mailbox
 //   doorbell with that address once the CPU signals it's waiting (heartbeat
 //   0xB0000040), and watches for the "DL walk complete" heartbeat (0xB0000070)
-//   or a timeout. Every word sent to MRDP's command FIFO is captured to
+//   or a timeout. Every word sent to RDP's command FIFO is captured to
 //   geom_cmd_stream.bin (check_host_vs_rtl.sh compares it with the host's).
 #include <verilated.h>
 #include "Vgeom_cpu_top.h"
@@ -49,11 +49,11 @@ static vluint64_t g_cycle = 0;
 constexpr uint32_t GEOM_ROM_BASE = 0x20000000u, GEOM_ROM_SIZE = TB_ROM_SIZE;
 constexpr uint32_t GEOM_RAM_BASE = TB_RAM_BASE, GEOM_RAM_SIZE = 0x4000u;
 constexpr uint32_t CSR_BASE = 0xf0000000u;
-// Mailbox / MRDP CSR offsets come from the generated csr.h (build.sh
+// Mailbox / RDP CSR offsets come from the generated csr.h (build.sh
 // greps them into -D flags): removing a peripheral shifts the whole CSR
 // map, and a stale copy here makes the tb silently drop every mailbox write.
-#if !defined(TB_MB_OFS) || !defined(TB_MRDP_OFS)
-#error "build with build.sh (TB_MB_OFS/TB_MRDP_OFS from csr.h)"
+#if !defined(TB_MB_OFS) || !defined(TB_RDP_OFS)
+#error "build with build.sh (TB_MB_OFS/TB_RDP_OFS from csr.h)"
 #endif
 constexpr uint32_t MB_GAME_MSG  = CSR_BASE + TB_MB_OFS + 0x00u;
 constexpr uint32_t MB_GAME_KICK = CSR_BASE + TB_MB_OFS + 0x04u;
@@ -62,19 +62,19 @@ constexpr uint32_t MB_GEOM_MSG  = CSR_BASE + TB_MB_OFS + 0x0cu;
 constexpr uint32_t MB_GEOM_KICK = CSR_BASE + TB_MB_OFS + 0x10u;
 constexpr uint32_t MB_GAME_ACK  = CSR_BASE + TB_MB_OFS + 0x14u;
 constexpr uint32_t MB_STATUS    = CSR_BASE + TB_MB_OFS + 0x18u;
-constexpr uint32_t MRDP_CMD_DATA   = CSR_BASE + TB_MRDP_OFS + 0x00u;
-// MRDP: the stream runs through the bit-exact C model as the
+constexpr uint32_t RDP_CMD_DATA   = CSR_BASE + TB_RDP_OFS + 0x00u;
+// RDP: the stream runs through the bit-exact C model as the
 // core writes it, so load_count/sync_count are what the hardware would show
 // (the geom's texture staging ring waits on load_count) and TB_FB=<file>
 // dumps the frame the real geom CPU drew.
-#include "../../lang/c/mrdp/mrdp.h"
-#include "../../lang/c/mrdp/mrdp_frame.h"
-constexpr uint32_t MRDP_CMD_STATUS  = CSR_BASE + TB_MRDP_OFS + 0x04u;
-constexpr uint32_t MRDP_SYNC_COUNT = CSR_BASE + TB_MRDP_OFS + 0x0cu;
-constexpr uint32_t MRDP_LOAD_COUNT = CSR_BASE + TB_MRDP_OFS + 0x10u;
-constexpr uint32_t MRDP_STATUS     = CSR_BASE + TB_MRDP_OFS + 0x14u;
+#include "../../lang/c/rdp/rdp.h"
+#include "../../lang/c/rdp/rdp_frame.h"
+constexpr uint32_t RDP_CMD_STATUS  = CSR_BASE + TB_RDP_OFS + 0x04u;
+constexpr uint32_t RDP_SYNC_COUNT = CSR_BASE + TB_RDP_OFS + 0x0cu;
+constexpr uint32_t RDP_LOAD_COUNT = CSR_BASE + TB_RDP_OFS + 0x10u;
+constexpr uint32_t RDP_STATUS     = CSR_BASE + TB_RDP_OFS + 0x14u;
 constexpr uint32_t TB_FB = 0x40C00000u, TB_ZB = 0x40D01000u;
-static mrdp_t s_mrdp;
+static rdp_t s_rdp;
 
 static std::vector<uint8_t> s_rom(GEOM_ROM_SIZE, 0);
 static std::vector<uint8_t> s_ram(GEOM_RAM_SIZE, 0);
@@ -102,9 +102,9 @@ static uint64_t s_bc[2][2][4];   // [ibus/dbus][read/write][rom, ram, sdram, oth
 // Texture-content checks. TEXFILL=1: an unmapped read returns a hash of its
 // address instead of 0, so a GDL dumped on the host (texture pointers that
 // mean nothing here) still decodes to distinct, repeatable texels.
-// TEXHASH=<file>: every word written to MRDP_CMD_DATA that is a staging-ring
+// TEXHASH=<file>: every word written to RDP_CMD_DATA that is a staging-ring
 // or texture-cache page address logs a hash of the 2 KB there at that moment
-// -- what MRDP would read. Two builds that must stream the same
+// -- what RDP would read. Two builds that must stream the same
 // textures must log the same hashes, whatever pages they used.
 static bool s_texfill; static FILE *s_texhash;
 // SDRAM_JUNK=1: the real boot. The geom core leaves reset with the FPGA,
@@ -121,7 +121,7 @@ static uint32_t s_mb_game_msg = 0;
 static uint32_t s_mb_geom_msg = 0;
 static bool s_geom_kicked_done = false;
 
-static std::vector<uint32_t> s_cmd_stream; // words written to MRDP_CMD_DATA, in order
+static std::vector<uint32_t> s_cmd_stream; // words written to RDP_CMD_DATA, in order
 
 static uint32_t last_heartbeat = 0;
 
@@ -226,13 +226,13 @@ static void wb_access(bool cyc, bool stb, bool we, uint32_t adr_word, uint32_t d
         ack = 1; return;
     }
     if (addr == MB_GEOM_KICK) { if (we && (dat_w & 1)) s_geom_kicked_done = true; ack = 1; return; }
-    if (addr == MRDP_CMD_STATUS) { if (!we) dat_r = 0; ack = 1; return; } // never "full"
-    if (addr == MRDP_SYNC_COUNT) { if (!we) dat_r = s_mrdp.sync_count; ack = 1; return; }
-    if (addr == MRDP_LOAD_COUNT) { if (!we) dat_r = s_mrdp.load_count; ack = 1; return; }
-    if (addr == MRDP_STATUS)     { if (!we) dat_r = 1u | (s_mrdp.unknown_ops << 1); ack = 1; return; }
-    if (addr == MRDP_CMD_DATA) {
+    if (addr == RDP_CMD_STATUS) { if (!we) dat_r = 0; ack = 1; return; } // never "full"
+    if (addr == RDP_SYNC_COUNT) { if (!we) dat_r = s_rdp.sync_count; ack = 1; return; }
+    if (addr == RDP_LOAD_COUNT) { if (!we) dat_r = s_rdp.load_count; ack = 1; return; }
+    if (addr == RDP_STATUS)     { if (!we) dat_r = 1u | (s_rdp.unknown_ops << 1); ack = 1; return; }
+    if (addr == RDP_CMD_DATA) {
         if (we) s_cmd_stream.push_back(dat_w);
-        if (we) mrdp_push(&s_mrdp, dat_w);
+        if (we) rdp_push(&s_rdp, dat_w);
         if (we && s_texhash && ((dat_w >= 0x41200000u && dat_w < 0x41300000u) ||
                                 (dat_w >= 0x41400000u && dat_w < 0x41600000u)) && (dat_w & 0x7FFu) == 0) {
             uint64_t h = 1469598103934665603ull;
@@ -295,13 +295,13 @@ static void tick() {
         }
     }
 
-    /* the CFU's PUSH port writes into MRDP's command FIFO exactly like
+    /* the CFU's PUSH port writes into RDP's command FIFO exactly like
      * the core's CSR stores did: into the same captured stream, in order */
     dut->su_out_ready = 1;
     dut->clk = 0; dut->eval();
     if (dut->su_out_valid && dut->su_out_ready) {
         s_cmd_stream.push_back(dut->su_out_data);
-        mrdp_push(&s_mrdp, dut->su_out_data);
+        rdp_push(&s_rdp, dut->su_out_data);
     }
     ib_pend = dut->iBus_cmd_valid;               // accepted at this edge (ready = 1)
     if (ib_pend) {
@@ -328,7 +328,7 @@ static void tick() {
 static uint16_t tb_rd16(void *, uint32_t a) { uint16_t v; memcpy(&v, &s_sdram[a - SDRAM_BASE], 2); return v; }
 static void tb_wr16(void *, uint32_t a, uint16_t v) { memcpy(&s_sdram[a - SDRAM_BASE], &v, 2); }
 int main(int argc, char **argv) {
-    mrdp_init(&s_mrdp, nullptr, tb_rd16, tb_wr16);
+    rdp_init(&s_rdp, nullptr, tb_rd16, tb_wr16);
     Verilated::commandArgs(argc, argv);
     g_prof = getenv("PCPROF") != nullptr;
     g_retprof = getenv("RETPROF") != nullptr;
@@ -397,9 +397,9 @@ int main(int argc, char **argv) {
             }
             s_cmd_stream.clear();
             {   // the frame's clears, as the game CPU's GDL / hostreplay put them
-                uint32_t w[MRDP_FRAME_CLEAR_WORDS];
-                unsigned nw = mrdp_frame_clear(w, TB_FB, TB_ZB, 268, 240, 0x404040u);
-                for (unsigned i = 0; i < nw; i++) mrdp_push(&s_mrdp, w[i]);
+                uint32_t w[RDP_FRAME_CLEAR_WORDS];
+                unsigned nw = rdp_frame_clear(w, TB_FB, TB_ZB, 268, 240, 0x404040u);
+                for (unsigned i = 0; i < nw; i++) rdp_push(&s_rdp, w[i]);
             }
         }
         if (s_geom_kicked_done) {
@@ -424,7 +424,7 @@ int main(int argc, char **argv) {
 
     printf("\ngeom core signalled done after %llu cycles. last heartbeat 0x%08X\n",
            (unsigned long long)g_cycle, last_heartbeat);
-    printf("captured %zu words written to MRDP_CMD_DATA\n", s_cmd_stream.size());
+    printf("captured %zu words written to RDP_CMD_DATA\n", s_cmd_stream.size());
 
     // SDRAM_DUMP=<file>: 0x41200000..0x41608000 (texture staging ring,
     // texture cache pages and table), so a replay of the captured stream
@@ -433,8 +433,8 @@ int main(int argc, char **argv) {
         FILE *df = fopen(sd, "wb");
         if (df) { fwrite(&s_sdram[0x01200000], 1, 0x00408000, df); fclose(df); }
     }
-    printf("mrdp: %llu pixels, %u loads, %u unknown ops\n",
-           (unsigned long long)s_mrdp.pixels_drawn, s_mrdp.load_count, s_mrdp.unknown_ops);
+    printf("rdp: %llu pixels, %u loads, %u unknown ops\n",
+           (unsigned long long)s_rdp.pixels_drawn, s_rdp.load_count, s_rdp.unknown_ops);
     if (const char *fbp = getenv("TB_FB")) {
         FILE *ff = fopen(fbp, "wb");
         if (ff) { fwrite(&s_sdram[TB_FB - SDRAM_BASE], 2, 268 * 240, ff); fclose(ff); }

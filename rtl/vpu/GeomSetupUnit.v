@@ -65,7 +65,7 @@
 //   0x60  out[rs2[5:0]] = rs1
 //   0x61  PUSH: out[0 .. rs1-1] to out_valid/out_data, a word per cycle
 //         while out_ready; answers once the last word is taken, so the
-//         core's later CSR writes to MRDP stay behind it.
+//         core's later CSR writes to RDP stay behind it.
 //   0x62  edge-setup config: rs2 = 0..3 the scissor start x, start y, end x,
 //         end y in edge units (x << 5, 0 <= v < 2^16), 4 the cull flag
 //         (rs1[0]: 1 = drop back faces, g_geom_cull), 5 the crack grow
@@ -104,7 +104,7 @@ module GeomSetupUnit (
     output reg         bg,
     // the MATVEC4 outputs of the enclosing Vpu4DFixed, sign-extended (0x59)
     input  wire signed [31:0] vo0, vo1, vo2, vo3,
-    // PUSH (0x61): the output buffer, word by word, to MRDP's command FIFO
+    // PUSH (0x61): the output buffer, word by word, to RDP's command FIFO
     output reg         out_valid,
     input  wire        out_ready,
     output wire [31:0] out_data
@@ -179,7 +179,7 @@ module GeomSetupUnit (
         p2 <= mxb * my2;
     end
 `else
-    // SU_NO_BLEND (MRDP firmware: MRDP does the attribute setup): lane 0 only
+    // SU_NO_BLEND (RDP firmware: RDP does the attribute setup): lane 0 only
     always @(posedge clk) p0 <= mx * mm_b;
 `endif
     function signed [32:0] sx33;

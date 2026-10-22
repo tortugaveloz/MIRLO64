@@ -1,6 +1,6 @@
 """host_<g>.txt (tools/hostreplay, one command word per line) vs
 rtl_<g>.bin (tb_geom_cpu's captured stream) must match word for word, and the
-frames the MRDP model drew from each (hostfb_/rtlfb_<g>.bin) byte for byte."""
+frames the RDP model drew from each (hostfb_/rtlfb_<g>.bin) byte for byte."""
 import struct, sys
 g = sys.argv[1]
 host = [int(l, 16) for l in open('host_%s.txt' % g) if l.strip()]

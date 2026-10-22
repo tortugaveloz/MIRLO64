@@ -98,7 +98,7 @@ static void rsp_start(OSTask *tp)
     h->output_buff_size = (u64 *)(uintptr_t)N64RT_PHYS(tp->t.output_buff_size);
     h->data_ptr    = (u64 *)(uintptr_t)N64RT_PHYS(tp->t.data_ptr);
     h->yield_data_ptr = (u64 *)(uintptr_t)N64RT_PHYS(tp->t.yield_data_ptr);
-    if (tp->t.type == M_GFXTASK && !(h->flags & OS_TASK_YIELDED)) s_sync_seen = mrdp_sync_count_read();
+    if (tp->t.type == M_GFXTASK && !(h->flags & OS_TASK_YIELDED)) s_sync_seen = rdp_sync_count_read();
     if (h->flags & OS_TASK_YIELDED) {                /* a yielded task goes on from its yield data */
         h->ucode_data = h->yield_data_ptr;
         h->ucode_data_size = tp->t.yield_data_size;
@@ -148,11 +148,11 @@ static void rsp_start(OSTask *tp)
 static u32 rsp_poll(void)
 {
     u32 ev = 0;
-    if (s_dp_wait && mrdp_sync_count_read() != s_sync_seen) {     /* the frame is in memory */
+    if (s_dp_wait && rdp_sync_count_read() != s_sync_seen) {     /* the frame is in memory */
         s_dp_wait = 0;
         ev |= 1u << OS_EVENT_DP;
 #ifdef N64RT_DEBUG
-        { static u32 s_n; if (s_n++ < 6u) n64rt_log("n64rt: the RDP's SYNC FULL (%lu), after its task\n", (unsigned long)mrdp_sync_count_read()); }
+        { static u32 s_n; if (s_n++ < 6u) n64rt_log("n64rt: the RDP's SYNC FULL (%lu), after its task\n", (unsigned long)rdp_sync_count_read()); }
 #endif
     }
     if (!s_running) return ev;
@@ -171,11 +171,11 @@ static u32 rsp_poll(void)
     { static u32 s_n; if (s_running == M_GFXTASK && s_n++ < 6u)
         n64rt_log("n64rt: gfx task ends: SP_STATUS %04lx, DPC start %06lx end %06lx current %06lx status %04lx, SYNC FULLs %lu (were %lu)\n",
                   (unsigned long)st, (unsigned long)SP_REG_DBG(0x40), (unsigned long)SP_REG_DBG(0x44), (unsigned long)SP_REG_DBG(0x48), (unsigned long)SP_REG_DBG(0x4C),
-                  (unsigned long)mrdp_sync_count_read(), (unsigned long)s_sync_seen); }
+                  (unsigned long)rdp_sync_count_read(), (unsigned long)s_sync_seen); }
 #endif
     /* a graphics task that ran to its end: the RDP's SYNC FULL is its DP event */
     if (s_running == M_GFXTASK && !(st & SP_ST_YIELDED)) {
-        if (mrdp_sync_count_read() != s_sync_seen) ev |= 1u << OS_EVENT_DP;
+        if (rdp_sync_count_read() != s_sync_seen) ev |= 1u << OS_EVENT_DP;
         else s_dp_wait = 1;
     }
     s_running = 0;
@@ -331,7 +331,7 @@ static int gfx_pending(void)
      * phase) left them set for ever, and every PI DMA into the frame buffers waited its 50 ms. What the RDP draws is the
      * line below's. */
     if (SP_REG_DBG(0x4C) & 0x300u) return 1;
-    return !mrdp_status_idle_read();                                         /* the RDP draws */
+    return !rdp_status_idle_read();                                         /* the RDP draws */
 }
 void n64rt_gfx_quiesce(void)
 {

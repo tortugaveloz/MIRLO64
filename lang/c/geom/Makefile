@@ -32,7 +32,7 @@ CFLAGS    = $(MIPS_LITE_CFLAGS) -I../mips -fsigned-char -O2 -g -fno-jump-tables 
 
 OBJS = $(B)/start_mips.o $(B)/nolibc.o $(B)/main.o \
        $(B)/geom_pipeline.o $(B)/geom_triangle.o \
-       $(B)/geom_fixed.o $(B)/geom_vecmath.o $(B)/geom_mrdp_hw.o
+       $(B)/geom_fixed.o $(B)/geom_vecmath.o $(B)/geom_rdp_hw.o
 
 # F3D_EMIT=<path to an f3d_emit.c>: the geom core processes F3DEX2 display
 # lists itself (GDL_F3D, geom_f3d.c) with that translator (its f3d_emit.h next
@@ -41,7 +41,7 @@ OBJS = $(B)/start_mips.o $(B)/nolibc.o $(B)/main.o \
 # (F3D_ON_GEOM: the game CPU's frame clear cannot learn the colour).
 ifneq ($(F3D_EMIT),)
 F3D_DIR  := $(dir $(F3D_EMIT))
-CFLAGS   += -I. -I$(F3D_DIR) -I../game -I../mrdp -DGEOM_F3D -DGDL_NO_DIVIDE -DF3D_ON_GEOM \
+CFLAGS   += -I. -I$(F3D_DIR) -I../game -I../rdp -DGEOM_F3D -DGDL_NO_DIVIDE -DF3D_ON_GEOM \
             -DF3D_BIG='__attribute__((section(".sdram_bss")))'
 OBJS     += $(B)/f3d_emit.o $(B)/geom_f3d.o
 $(B)/f3d_emit.o: $(F3D_EMIT) $(B)/generated_csr_addrs.h | $(B)
@@ -72,7 +72,7 @@ $(B)/generated_csr_addrs.h: $(GEN_CSR) | $(B)
 	@echo "#ifndef GEOM_GENERATED_CSR_ADDRS_H" >> $@
 	@echo "#define GEOM_GENERATED_CSR_ADDRS_H" >> $@
 	@echo "#define CSR_BASE 0xf0000000L" >> $@
-	@grep -E '#define CSR_(MAILBOX|MRDP)_' $(GEN_CSR) >> $@
+	@grep -E '#define CSR_(MAILBOX|RDP)_' $(GEN_CSR) >> $@
 	@echo "#endif" >> $@
 
 $(B)/%.o: %.S $(B)/generated_csr_addrs.h | $(B)

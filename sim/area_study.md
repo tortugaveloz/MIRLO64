@@ -645,7 +645,7 @@ Synthesis, each unit alone, before and after (ALUTs, registers, DSP blocks, bloc
 | `cpu_port` | 166 to 121 | 251 | 0 | 1,072 | 311 / 311 / 311 to 288 / 289 / 289 | -22 |
 | `mirlo_mips` itself (`glue`) | 570 to 536 | 113 | | | | |
 | `glue` (all of the above in place) | 5,034 to 4,729 | 4,021 to 3,959 | 5 | 816,227 to 824,419 | | |
-| unchanged: `sdr_arb`, `rdp_dpc` with `rcp_dpc_view`, `port_mrdp` and `port_apf`, `psram`, `gb_cart` | 282, 199, 56, 81, 49 | 99, 160, 73, 62, 75 | | | | |
+| unchanged: `sdr_arb`, `rdp_dpc` with `rcp_dpc_view`, `port_rdp` and `port_apf`, `psram`, `gb_cart` | 282, 199, 56, 81, 49 | 99, 160, 73, 62, 75 | | | | |
 
 `mirlo_mips` whole (`soc`) measures 25,236 ALUTs, 14,661 registers before these changes.
 

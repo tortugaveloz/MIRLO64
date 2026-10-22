@@ -1,7 +1,7 @@
-/* 32-bit colour images in the model (mrdp.h, docs/cimg32.md): worked cases against the rules the
+/* 32-bit colour images in the model (rdp.h, docs/cimg32.md): worked cases against the rules the
  * N64 programming manual gives for them, and one scene drawn into a 16-bit image and a 32-bit one, compared pixel by
  * pixel.
- *   cc -O2 -DMRDP_N64 -I. test_cimg32.c mrdp.c -o test_cimg32 && ./test_cimg32
+ *   cc -O2 -DRDP_N64 -I. test_cimg32.c rdp.c -o test_cimg32 && ./test_cimg32
  * The rules checked:
  *   - a pixel is a 32-bit word, R G B A from its lowest byte; the depth image stays 16-bit at the same pixel offset
  *   - fill writes the fill colour whole at each pixel and no hidden bits
@@ -11,16 +11,16 @@
  * and that the same scene's 16-bit image is the 32-bit one's channels truncated to five bits, with the same coverage,
  * wherever the memory colours the scene reads are multiples of 8 (where both images read the same memory colour).
  */
-#include "mrdp.h"
+#include "rdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: mrdp.h) */
+#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: rdp.h) */
 static uint8_t mem[MEM];
 static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM - 2; return (uint16_t)(mem[a] << 8 | mem[a + 1]); }
 static void wr16(void *c, uint32_t a, uint16_t v) { (void)c; a &= MEM - 2; mem[a] = (uint8_t)(v >> 8); mem[a + 1] = (uint8_t)v; }
-static mrdp_t R;
+static rdp_t R;
 static int fails, checks;
 
 #define W 64u                           /* the colour image's width, 32 rows used */
@@ -29,7 +29,7 @@ static int fails, checks;
 #define IMG32  0x20000u
 #define ZIMG   0x40000u
 #define TIMG   0x50000u
-static void cmd(uint32_t w0, uint32_t w1) { mrdp_push(&R, w0); mrdp_push(&R, w1); }
+static void cmd(uint32_t w0, uint32_t w1) { rdp_push(&R, w0); rdp_push(&R, w1); }
 static uint32_t px32(int x, int y)
 {
     uint32_t a = IMG32 + ((uint32_t)y * W + (uint32_t)x) * 4u;
@@ -38,7 +38,7 @@ static uint32_t px32(int x, int y)
 static uint16_t px16(int x, int y) { return rd16(0, IMG16 + ((uint32_t)y * W + (uint32_t)x) * 2u); }
 static unsigned hid16(uint32_t a)
 {
-    uint32_t k = (a >> 1) & 15u, ha = MRDP_HID_BASE + ((a >> 5) << 2) + (k < 8u ? 2u : 0u);
+    uint32_t k = (a >> 1) & 15u, ha = RDP_HID_BASE + ((a >> 5) << 2) + (k < 8u ? 2u : 0u);
     return (rd16(0, ha) >> (2u * (k & 7u))) & 3u;
 }
 static unsigned cvg16(int x, int y) { uint32_t a = IMG16 + ((uint32_t)y * W + (uint32_t)x) * 2u; return (px16(x, y) & 1u) << 2 | hid16(a); }
@@ -70,7 +70,7 @@ static void cimg(unsigned size) { cmd(0x3F000000u | size << 19 | (W - 1), size =
 /* the frame: memory cleared, the depth image at the far plane, the colour image filled with a complete background */
 static void frame(unsigned size, uint32_t bg32, uint32_t bg16x2)
 {
-    mrdp_init(&R, 0, rd16, wr16);
+    rdp_init(&R, 0, rd16, wr16);
     cmd(0x3E000000u, ZIMG);
     cmd(0x2D000000u, (W << 2) << 12 | (H << 2));                               /* scissor 64 x 32 */
     cmd(0x3F000000u | 2u << 19 | (W - 1), ZIMG);
@@ -169,7 +169,7 @@ int main(void)
     check32("fill: the last pixel", (int)W - 1, (int)H - 1, 0x12345678u);
     {
         uint32_t nz = 0;
-        for (uint32_t a = MRDP_HID_BASE; a < MRDP_HID_BASE + 0x100000u; a += 2) nz += rd16(0, a) != 0;
+        for (uint32_t a = RDP_HID_BASE; a < RDP_HID_BASE + 0x100000u; a += 2) nz += rd16(0, a) != 0;
         ok(nz == 0, "%u hidden words written, want %u", "fill: no hidden bits written", 0, 0, nz, 0);
         ok(px32((int)W, (int)H - 1) == 0, "%08x past the image, want %08x", "fill: the word past the image untouched", (int)W, (int)H - 1, px32((int)W, (int)H - 1), 0);
     }

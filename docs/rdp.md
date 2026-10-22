@@ -248,7 +248,7 @@ row as an even one.
   17 bits kept. A product whose bits above those are not all its sign is out
   of range, and so is any coordinate when W's integer half is zero or
   negative; the texel takes the 17 bits saturated to 16, an out-of-range one
-  at the end it went past (the model's `mrdp_n64_div`). Without
+  at the end it went past (the model's `rdp_n64_div`). Without
   perspective S and T are taken as they are, their integer halves.
 * **The tile**: the shift, then the tile's origin is subtracted, then clamp
   (with the clamp bit, or a mask of 0), mirror and mask. Each axis gives two

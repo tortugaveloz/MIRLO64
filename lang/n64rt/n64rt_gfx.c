@@ -3,7 +3,7 @@
  * at boot from GEOM_FW_HEADER) carries this runtime's translator (f3d_emit.c,
  * Mirlo-N64's: F3DEX2 and the other microcodes, the N64's texture formats,
  * combiners and render modes), which it runs a piece at a time and walks
- * (GDL_F3D), and MRDP draws -- into the colour image the game set, in its own
+ * (GDL_F3D), and RDP draws -- into the colour image the game set, in its own
  * RDRAM, as the RDP would. The game CPU only tells which microcode it is.
  *
  * Pipelined, as on the N64, where the RSP's done (SP) only means the display
@@ -14,14 +14,14 @@
  * its next frame while the geom core walks this one. Two GDL buffers: one
  * the geom core walks, one translated and queued behind it; the timer's tick
  * polls (n64rt_gfx_poll), kicks the queued one and posts each task's DP
- * event, in order, when MRDP has drawn it. */
+ * event, in order, when RDP has drawn it. */
 #include <stdio.h>
 #include <generated/csr.h>
 #include <generated/soc.h>
 #include <system.h>
 #include "n64rt.h"
 #include "gdl_build.h"
-#include "geom_mrdp.h"
+#include "geom_rdp.h"
 #include "f3d_emit.h"
 #include "geom_load.h"
 #include "geom_cfg.h"
@@ -39,9 +39,9 @@ void n64rt_gfx_init(void)
 }
 
 /* two buffers of 1 MiB (a frame's GDL is ~100 KiB): 0x4120_0000 on is the
- * geom core's (geom_mrdp.h's texture staging ring, geom_cfg.h at
+ * geom core's (geom_rdp.h's texture staging ring, geom_cfg.h at
  * 0x4130_0000) -- a second buffer there had the staged textures overwrite
- * the list, and MRDP drew over the game's code */
+ * the list, and RDP drew over the game's code */
 #define GDL_BUF   0x41000000u
 #define GDL_BYTES 0x00100000u
 #define GDL_WORDS (GDL_BYTES / 4u)
@@ -50,7 +50,7 @@ void n64rt_gfx_init(void)
 static u32 s_ud = ~0u;
 static int s_walk = -1;                     /* the buffer the geom core walks */
 static int s_queued = -1;                   /* translated, waiting for the geom core */
-static u32 s_kicked, s_dp_posted, s_sync0;  /* tasks given to the geom core; DP events; MRDP's syncs at the first */
+static u32 s_kicked, s_dp_posted, s_sync0;  /* tasks given to the geom core; DP events; RDP's syncs at the first */
 /* each stage's time (sys cycles), summed over 64 tasks */
 static inline u32 cyc(void) { timer0_uptime_latch_write(1); return (u32)timer0_uptime_cycles_read(); }
 static u32 s_t_start, s_t_kick, s_n, s_sum_tr, s_sum_geom, s_sum_wait, s_sum_period, s_words;
@@ -59,7 +59,7 @@ static u32 s_t_dp, s_sum_dp2next, s_n_dp2next, s_overlap;   /* the game's time f
 
 static void kick(int b)
 {
-    if (s_kicked == 0) s_sync0 = mrdp_sync_count_read();
+    if (s_kicked == 0) s_sync0 = rdp_sync_count_read();
     s_kicked++;
     s_walk = b;
     s_t_kick = cyc();
@@ -87,7 +87,7 @@ u32 n64rt_gfx_poll(void)
     }
     /* one full sync per task, at its end: one DP event each, in order (one
      * per poll: the next tick posts the next) */
-    if (s_dp_posted < s_kicked && mrdp_sync_count_read() - s_sync0 > s_dp_posted) {
+    if (s_dp_posted < s_kicked && rdp_sync_count_read() - s_sync0 > s_dp_posted) {
         s_dp_posted++;
         s_t_dp = cyc();
         ev |= 1u << OS_EVENT_DP;
@@ -134,7 +134,7 @@ void n64rt_gfx_task(OSTask *t)
                 (u32)f3d_gbi1 | (u32)(f3d_statelog != 0) << 8 | 320u << 16, N64RT_RDRAM_SDRAM, 8u << 20,
                 0, 0, 0, 0);
     gdl_w(&c, GDL_HDR(GDL_RAW, 2));          /* the RDP's full sync: every write before it is in DRAM */
-    gdl_w(&c, (uint32_t)MRDP_OP_SYNC_FULL << 24);
+    gdl_w(&c, (uint32_t)RDP_OP_SYNC_FULL << 24);
     gdl_w(&c, 0);
     gdl_end(&c);
     if (c.p > c.end) n64rt_log("n64rt: GDL overflow (%lu words)\n", (unsigned long)(c.p - gdl));

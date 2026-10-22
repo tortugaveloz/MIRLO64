@@ -1,7 +1,7 @@
 {
     "name": "Mirlo",
     "displayName": "Mirlo",
-    "description": "A MIPS computer for the Analogue Pocket with MRDP, an N64-style rasterizer (experimental)",
+    "description": "A MIPS computer for the Analogue Pocket with an N64-style RDP (experimental)",
     "author": "tortuga",
     "version": "0.1",
     "license": "Apache-2.0",

@@ -1,6 +1,6 @@
 /* Geometry-core vertex pipeline: walks a GDL display list, runs the matrix
  * stack / vertex transform / viewport map / lighting / fog (via the VPU),
- * clips, and streams N64 triangle commands to MRDP. */
+ * clips, and streams N64 triangle commands to RDP. */
 #ifndef GEOM_PIPELINE_H
 #define GEOM_PIPELINE_H
 
@@ -16,7 +16,7 @@
 
 void geom_reset(void);
 
-/* Walk the GDL at `dl` (word array in shared RAM). Emits triangles to MRDP
+/* Walk the GDL at `dl` (word array in shared RAM). Emits triangles to RDP
  * as a side effect. */
 void geom_run_display_list(const uint32_t *dl);
 

@@ -3,7 +3,7 @@
 Verilator simulation of the **real** `rtl/mips/mips_geom.sv` CPU wired to
 the **real** `rtl/vpu/Vpu4DFixed.v` CFU (`geom_cpu_top.v`), executing the
 **real** `lang/c/geom/build/geom.bin`. Only memory, the mailbox and the
-MRDP command port are C++ models (`tb_geom_cpu.cpp`, zero-wait-state, so
+RDP command port are C++ models (`tb_geom_cpu.cpp`, zero-wait-state, so
 cycle counts are a lower bound for hardware -- use them for A/B comparisons).
 
 This is the only test that exercises the CPU -> CFU instruction encoding.
@@ -16,13 +16,13 @@ the host build uses a C model, so neither could see that the firmware packed
 ```bash
 ./build.sh                 # Verilator model + host tools (tools/)
 cd ../../lang/c/geom && make clean && make && cd -   # Makefile ignores header deps
-./check_host_vs_rtl.sh     # host vs RTL: MRDP command streams and frames bit-identical
+./check_host_vs_rtl.sh     # host vs RTL: RDP command streams and frames bit-identical
 ```
 
 `check_host_vs_rtl.sh` generates GDLs with `tools/mkgdl` (lit/unlit, 1-5
 lights, fog), runs each through `tools/hostreplay` (host build of
-`geom_pipeline.c`) and through the RTL, and compares the MRDP command streams
-and the frames the MRDP C model draws from them (`tools/cmp_mrdp.py`). It
+`geom_pipeline.c`) and through the RTL, and compares the RDP command streams
+and the frames the RDP C model draws from them (`tools/cmp_rdp.py`). It
 also prints cycles per GDL.
 
 `./build.sh` simulates the MIPS geom core (`rtl/mips/mips_geom.sv`) -- run it
@@ -48,7 +48,7 @@ Profiling and tracing, on any `obj_dir/tb_geom_cpu <geom.bin> <gdl.bin>` run:
   is plain memory now; it used to read 0 and drop writes.
 - `TEXFILL=1` + `TEXHASH=<file>` -- unmapped reads return address-derived
   data (so a host-dumped GDL's texture pointers decode to distinct texels),
-  and every texture page streamed to MRDP logs a hash of its 2 KB. Two
+  and every texture page streamed to RDP logs a hash of its 2 KB. Two
   builds that must stream the same textures must log the same hashes.
 
 Any GDL can be run here: `tools/mkgdl` makes synthetic ones, and a program

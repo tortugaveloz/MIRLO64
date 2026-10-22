@@ -1,29 +1,29 @@
-/* The N64's coverage in the model (MRDP_N64, MRDP_CVG; mrdp.h): constructed
+/* The N64's coverage in the model (RDP_N64, RDP_CVG; rdp.h): constructed
  * triangles against the console's documented behaviour (Angrylion's RDP model).
- *   cc -O2 -DMRDP_N64 -I. test_cvg.c mrdp.c -o test_cvg && ./test_cvg
+ *   cc -O2 -DRDP_N64 -I. test_cvg.c rdp.c -o test_cvg && ./test_cvg
  * With -DRDP_EXACT (docs/rdp_exact.md) two checks take the console's values: a shade's 9 bits, a Z's 19.
  */
-#include "mrdp.h"
+#include "rdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: mrdp.h) */
+#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: rdp.h) */
 static uint8_t mem[MEM];
 static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM - 2; return (uint16_t)(mem[a] << 8 | mem[a + 1]); }
 static void wr16(void *c, uint32_t a, uint16_t v) { (void)c; a &= MEM - 2; mem[a] = (uint8_t)(v >> 8); mem[a + 1] = (uint8_t)v; }
-static mrdp_t R;
+static rdp_t R;
 static int fails;
 
 #define CIMG 0x10000u
 #define W 64u
-static void cmd(uint32_t w0, uint32_t w1) { mrdp_push(&R, w0); mrdp_push(&R, w1); }
+static void cmd(uint32_t w0, uint32_t w1) { rdp_push(&R, w0); rdp_push(&R, w1); }
 static uint16_t px(int x, int y) { return rd16(0, CIMG + ((uint32_t)y * W + (uint32_t)x) * 2); }
-/* the stored coverage: bit 0 and the hidden plane's two (mrdp.h) */
+/* the stored coverage: bit 0 and the hidden plane's two (rdp.h) */
 static unsigned cvg_at(int x, int y)
 {
     uint32_t a = CIMG + ((uint32_t)y * W + (uint32_t)x) * 2, k = (a >> 1) & 15u;
-    uint32_t ha = MRDP_HID_BASE + ((a >> 5) << 2) + (k < 8u ? 2u : 0u);
+    uint32_t ha = RDP_HID_BASE + ((a >> 5) << 2) + (k < 8u ? 2u : 0u);
     return (rd16(0, a) & 1u) << 2 | ((rd16(0, ha) >> (2u * (k & 7u))) & 3u);
 }
 static void check_cvg(const char *what, int x, int y, unsigned want)
@@ -41,7 +41,7 @@ static void check(const char *what, int x, int y, uint16_t want)
 #define ZIMG 0x20000u
 static void setup(uint32_t other_l)
 {
-    mrdp_init(&R, 0, rd16, wr16);
+    rdp_init(&R, 0, rd16, wr16);
     memset(mem, 0, sizeof mem);
     cmd(0x3E000000u, ZIMG);
     cmd(0x3F000000u | 2u << 19 | (W - 1), ZIMG);                              /* the depth image cleared to the far plane */

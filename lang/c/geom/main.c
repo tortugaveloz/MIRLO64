@@ -2,7 +2,7 @@
  *
  * Boot: run a VPU self-test, then loop: wait for the game CPU's doorbell (the
  * message word is the address, in shared RAM, of a GDL display list), walk it
- * (transform + triangle setup via the VPU, N64 triangle commands to MRDP),
+ * (transform + triangle setup via the VPU, N64 triangle commands to RDP),
  * signal done.
  *
  * BRING-UP: heartbeat progress codes are written to the geom->game mailbox
@@ -64,7 +64,7 @@ int main(void)
         geom_run_display_list((const uint32_t *)(uintptr_t)dl_base);
         HB(0xB0000070);                    /* DL walk complete */
 
-        /* Report triangles actually streamed to MRDP this frame (tagged
+        /* Report triangles actually streamed to RDP this frame (tagged
          * 0xB1xxxxxx) instead of the constant selftest word, so the game CPU
          * can tell an empty frame caused by the geom side (0 triangles) from
          * one caused by the rasterizer (triangles emitted, nothing drawn). */

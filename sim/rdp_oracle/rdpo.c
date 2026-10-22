@@ -1,4 +1,4 @@
-/* rdpo: the RDP reference model (lang/c/mrdp, built with MRDP_N64; RDP_EXACT
+/* rdpo: the RDP reference model (lang/c/rdp, built with RDP_N64; RDP_EXACT
  * for rdpo_exact) against an independent pixel-exact software RDP (the oracle,
  * oracle_glue.c), on the same command words and the same initial RDRAM.
  *
@@ -13,7 +13,7 @@
  * Every pixel's LOD is compared too (hooks on both sides: the
  * model's copy is patched at build time, the oracle's by oracle_hooks.patch):
  * the S, T of the three points each side took, and what each made of them. And
- * every LOD the oracle computes is put through the model's mrdp_lod with the
+ * every LOD the oracle computes is put through the model's rdp_lod with the
  * oracle's own inputs (the "unit" check: the LOD logic alone).
  *
  * Options:
@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "mrdp.h"
+#include "rdp.h"
 
 /* oracle_glue.c */
 void orc_init(uint8_t *rdram);
@@ -40,10 +40,10 @@ unsigned orc_hidden(uint32_t a);
 void orc_set_hidden(uint32_t a, unsigned v);
 
 #define RSIZE (8u << 20)
-#define MSIZE (16u << 20)            /* the model's: the hidden plane at 8 MiB (mrdp.h) */
+#define MSIZE (16u << 20)            /* the model's: the hidden plane at 8 MiB (rdp.h) */
 static uint8_t *mmem;                /* the model's memory, big-endian bytes */
 static uint8_t *omem;                /* the oracle's, 32-bit words in host order */
-static mrdp_t mdl;
+static rdp_t mdl;
 
 static uint16_t mdl_rd(void *c, uint32_t a) { (void)c; a &= MSIZE - 2; return (uint16_t)(mmem[a] << 8 | mmem[a + 1]); }
 static void mdl_wr(void *c, uint32_t a, uint16_t v) { (void)c; a &= MSIZE - 2; mmem[a] = (uint8_t)(v >> 8); mmem[a + 1] = (uint8_t)v; }
@@ -52,17 +52,17 @@ static inline void obw(uint32_t a, uint8_t v) { omem[(a & (RSIZE - 1)) ^ 3u] = v
 static inline uint16_t o16(uint32_t a) { return (uint16_t)(ob(a) << 8 | ob(a + 1)); }
 static inline uint16_t m16(uint32_t a) { return (uint16_t)(mmem[a & (RSIZE - 2)] << 8 | mmem[(a & (RSIZE - 2)) + 1]); }
 
-/* the model's hidden plane (mrdp.c hid_get / hid_set, MRDP_HID_BASE) */
+/* the model's hidden plane (rdp.c hid_get / hid_set, RDP_HID_BASE) */
 static unsigned m_hid(uint32_t a)
 {
     unsigned k = (a >> 1) & 15u;
-    uint32_t ha = MRDP_HID_BASE + (((a & 0x7FFFFFu) >> 5) << 2) + (k < 8u ? 2u : 0u);
+    uint32_t ha = RDP_HID_BASE + (((a & 0x7FFFFFu) >> 5) << 2) + (k < 8u ? 2u : 0u);
     return (mdl_rd(0, ha) >> (2u * (k & 7u))) & 3u;
 }
 static void m_hid_set(uint32_t a, unsigned v)
 {
     unsigned k = (a >> 1) & 15u;
-    uint32_t ha = MRDP_HID_BASE + (((a & 0x7FFFFFu) >> 5) << 2) + (k < 8u ? 2u : 0u);
+    uint32_t ha = RDP_HID_BASE + (((a & 0x7FFFFFu) >> 5) << 2) + (k < 8u ? 2u : 0u);
     uint16_t h = mdl_rd(0, ha);
     h = (uint16_t)((h & ~(3u << (2u * (k & 7u)))) | ((v & 3u) << (2u * (k & 7u))));
     mdl_wr(0, ha, h);
@@ -170,7 +170,7 @@ void orc_lod_hook(int kind, int x, int y, int s0, int t0, int s1, int t1, int s2
         o->clamp = clamp; o->lod = lod; o->mag = mag; o->dis = dis; o->lf = lf; o->t1 = tile1; o->t2 = tile2;
     }
     /* the unit check: the oracle's inputs through the model's LOD logic */
-    mrdp_lod_t L = mrdp_lod(cur_h, cur_minl, cur_maxl, cur_tile, s, t, clamp != 0);
+    rdp_lod_t L = rdp_lod(cur_h, cur_minl, cur_maxl, cur_tile, s, t, clamp != 0);
     ust.n++;
     int bf = (int)L.frac != lf, bt = (int)L.tile0 != tile1 || (tile2 >= 0 && (int)L.tile1 != tile2);
     int bl = !clamp && (int)L.lod != lod, bm = (int)L.magnify != mag || (int)L.distant != dis;
@@ -184,13 +184,13 @@ void orc_lod_hook(int kind, int x, int y, int s0, int t0, int s1, int t1, int s2
     }
 }
 
-/* the model's hooks (the build's patched copy of mrdp.c: lod_pixel's inputs, then draw_pixel_cvg's result) */
+/* the model's hooks (the build's patched copy of rdp.c: lod_pixel's inputs, then draw_pixel_cvg's result) */
 static int32_t mh_s[3], mh_t[3]; static int mh_oob;
 void mdl_lod_inputs(const int32_t *s, const int32_t *t, int oob) { memcpy(mh_s, s, sizeof mh_s); memcpy(mh_t, t, sizeof mh_t); mh_oob = oob; }
 typedef struct { uint64_t n, same, in_diff, in_diff_out_same, logic, no_orc; uint64_t in_s0, in_pt1, in_pt2, in_oob; uint64_t only1, only2, steps_same, hist[5]; int maxd; } pstat_t;
 static pstat_t pst;
 static int pix_shown, logic_shown;
-void mdl_lod_hook(int x, int y, const mrdp_lod_t *L)
+void mdl_lod_hook(int x, int y, const rdp_lod_t *L)
 {
     pst.n++;
     if (x < 0 || x >= GW || y < 0 || y >= GH || orec[y][x].gen != cur_gen) { pst.no_orc++; return; }
@@ -320,7 +320,7 @@ int main(int argc, char **argv)
         if (load_stream(argv[ai])) return 2;
         init_memory();
         orc_init(omem);
-        mrdp_init(&mdl, 0, mdl_rd, mdl_wr);
+        rdp_init(&mdl, 0, mdl_rd, mdl_wr);
         cimg = 0; cwidth = 320; csize = 2; zimg = 0; have_z = 0; img_h = 240;
         cur_h = 0; cur_minl = 0; cur_maxl = 0; cur_tile = 0; cur_texrect = 0;
         memset(&ust, 0, sizeof ust); unit_shown = 0;
@@ -331,7 +331,7 @@ int main(int argc, char **argv)
         for (uint32_t k = 0; k < 8; k++) {
             const uint32_t st[2] = { 0x35000000u, k << 24 };
             orc_cmd(st, 2);
-            mrdp_push(&mdl, st[0]); mrdp_push(&mdl, st[1]);
+            rdp_push(&mdl, st[0]); rdp_push(&mdl, st[1]);
         }
         uint64_t tot_c = 0, tot_h = 0, tot_z = 0; int nprim = 0, bad_prims = 0, first_bad = -1;
         if (!quiet) printf("%s: %d commands\n", argv[ai], ncmds);
@@ -347,7 +347,7 @@ int main(int argc, char **argv)
             if (op == 0x24 || op == 0x25) { cur_maxl = 0; cur_tile = (c->w[1] >> 24) & 7; cur_texrect = 1; }
             cur_gen = i + 1;
             orc_cmd(c->w, c->n);            /* (the oracle first: the model's LOD hook looks up its pixel) */
-            for (int k = 0; k < c->n; k++) mrdp_push(&mdl, c->w[k]);
+            for (int k = 0; k < c->n; k++) rdp_push(&mdl, c->w[k]);
             if (mdl.ncmd != 0) { fprintf(stderr, "%s line %d: the command's length is not the model's (%d words given)\n", argv[ai], c->line, c->n); return 2; }
             if (!is_prim(c->w[0])) continue;
             nprim++;
@@ -379,7 +379,7 @@ int main(int argc, char **argv)
                bad_stream ? "DIFF" : "SAME", argv[ai], nprim, (unsigned long long)mdl.pixels_drawn, bad_prims, (unsigned long long)tot_c, (unsigned long long)tot_h, (unsigned long long)tot_z);
         if (first_bad >= 0) printf(", first: command #%d line %d", first_bad, cmds[first_bad].line);
         printf("\n");
-        if (ust.n) printf("  LOD unit: %llu oracle LODs through mrdp_lod, %llu differ (frac %llu, tiles %llu, lod %llu, magnify/far %llu)\n",
+        if (ust.n) printf("  LOD unit: %llu oracle LODs through rdp_lod, %llu differ (frac %llu, tiles %llu, lod %llu, magnify/far %llu)\n",
                           (unsigned long long)ust.n, (unsigned long long)ust.bad, (unsigned long long)ust.bad_frac, (unsigned long long)ust.bad_tile,
                           (unsigned long long)ust.bad_lod, (unsigned long long)ust.bad_mag);
         if (pst.n) printf("  LOD pixels: %llu drawn with an LOD, %llu agree, %llu took other inputs (%llu of them the same result; point 0 %llu, next pixel %llu, next line %llu, range %llu), %llu same inputs but another result, %llu with no oracle LOD\n",

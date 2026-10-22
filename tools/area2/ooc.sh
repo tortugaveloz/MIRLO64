@@ -3,7 +3,7 @@
 # video (n64_video), regs (mirlo_regs), and the SoC's smaller blocks -- soc (mirlo_mips whole: its entity table), glue
 # (mirlo_mips with the three cores as stubs), ai, si, vi
 # (rcp_ai, rcp_si, rcp_vi), arb (sdr_arb, six ports), sdr (sdr_ctrl), dpc (rdp_dpc with rcp_dpc_view), cport (cpu_port),
-# ports (port_mrdp and port_apf), psram, gbc (gb_cart) -- with the project's synthesis settings and fit.sh's macros, in
+# ports (port_rdp and port_apf), psram, gbc (gb_cart) -- with the project's synthesis settings and fit.sh's macros, in
 # projects_ooc_<tag>/ of this worktree (OOC_ROOT=<dir>: under that directory instead; the unit of another tree: its path as
 # the third argument). FIT="1 2 3": then the unit fitted alone, every pin virtual, once a seed (fit_<seed>.rpt, its
 # ALMs). A minute or two, and steady: the
@@ -84,7 +84,7 @@ module ooc_ports (input wire clk, rst,
     input wire cyc, stb, we, input wire [29:0] adr, input wire [31:0] dat_w, input wire [3:0] sel, output wire ack, output wire [31:0] dat_r,
     input wire x_sel, output wire x_valid, input wire x_ack, input wire [31:0] x_rdata, output wire a_valid, a_we, output wire [23:0] a_addr,
     output wire [31:0] a_wdata, output wire [3:0] a_be, input wire a_ready, a_rvalid);
-    port_mrdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we, .m_wdata_ready, .m_rdata_valid,
+    port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we, .m_wdata_ready, .m_rdata_valid,
         .m_rdata, .p_valid, .p_we, .p_addr, .p_wdata, .p_be, .p_ready, .p_rvalid, .p_rdata);
     port_apf pa (.clk, .rst, .cyc, .stb, .we, .adr, .dat_w, .sel, .ack, .dat_r, .x_sel, .x_valid, .x_ack, .x_rdata,
         .p_valid(a_valid), .p_we(a_we), .p_addr(a_addr), .p_wdata(a_wdata), .p_be(a_be), .p_ready(a_ready), .p_rvalid(a_rvalid), .p_rdata);

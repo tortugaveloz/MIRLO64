@@ -72,13 +72,13 @@ always_ff @(posedge clk) begin
 end
 endmodule
 
-// ---- MRDP's memory port (LiteDRAM-native-like: a command, and a write's data
-// on its own channel after it). Commands queue here (4) so MRDP is not held
+// ---- RDP's memory port (LiteDRAM-native-like: a command, and a write's data
+// on its own channel after it). Commands queue here (4) so RDP is not held
 // to one in flight; a write goes to the arbiter with its data.
-module port_mrdp (
+module port_rdp (
     input  wire         clk, rst,
     input  wire         m_cmd_valid, m_cmd_we,
-    input  wire  [31:0] m_cmd_addr,         // byte address on MRDP's bus (SDRAM at 0x4000_0000)
+    input  wire  [31:0] m_cmd_addr,         // byte address on RDP's bus (SDRAM at 0x4000_0000)
     output logic        m_cmd_ready,
     input  wire         m_wdata_valid,
     input  wire  [31:0] m_wdata,

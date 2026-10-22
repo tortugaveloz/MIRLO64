@@ -1,4 +1,4 @@
-# Game-CPU programs that draw through the geometry core and MRDP: frame.c
+# Game-CPU programs that draw through the geometry core and RDP: frame.c
 # (framebuffers, GDL submission, flips) + one program, for the MIPS game CPU
 # (lang/mips/program.mk; libraries: make -f ../../mips/lib.mk VARIANT=game).
 #   make                  the spinning cube (cube_main.c)

@@ -36,7 +36,7 @@ module soc_sim_top (
     output wire         boot_ready,
     output wire         uart_we,
     output wire  [7:0]  uart_byte,
-    output wire  [31:0] cpu_pc, cpu_cause, cpu_epc, geom_pc, geom_msg, fb_base, mrdp_sync, audio_pc, audio_state,
+    output wire  [31:0] cpu_pc, cpu_cause, cpu_epc, geom_pc, geom_msg, fb_base, rdp_sync, audio_pc, audio_state,
     output wire         fb_mode, fb_on, fb_gamma, vblank, audio_wr,
     // (RSPSTAT) the RSP this cycle: 0 running, 1 a DMA under way, 2 its request
     // not taken, 3 an instruction leaves E, 4 a command run waits for the one
@@ -160,7 +160,7 @@ assign fb_y0     = soc.fb_y0;
 assign fb_rows   = soc.fb_rows;
 assign fb_gamma  = soc.fb_gamma;                              // (the scan-out's gamma correction is on)
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
-assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.mrdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
+assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.rdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
                     soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
 assign rsp_sig   = soc.rsp.st_sig;
 assign rsp_stat  = {soc.dpc_status[3], soc.dpc.end_valid, soc.rsp.tr_e, soc.rsp_r_valid && !soc.p_ready[3],
@@ -172,7 +172,7 @@ assign tr_retire = soc.sys.cpu.tr_retire; assign tr_wr = soc.sys.cpu.tr_wr; assi
 assign tr_pc = soc.sys.cpu.tr_pc; assign tr_insn = soc.sys.cpu.tr_insn; assign tr_val = soc.sys.cpu.tr_val[31:0];
 assign tr_rd = soc.sys.cpu.tr_rd; assign tr_exc_pc = soc.sys.cpu.tr_exc_pc; assign tr_exc_code = soc.sys.cpu.tr_exc_code;
 assign vblank    = soc.vblank;
-assign mrdp_sync = soc.mrdp_sync;
+assign rdp_sync = soc.rdp_sync;
 assign audio_pc  = soc.dbg_aud_pc;
 assign x_req = soc.x_req; assign x_we = soc.x_we; assign x_ack = soc.x_ack;
 assign x_addr = soc.x_addr; assign x_rdata = soc.x_rdata; assign x_wdata = soc.x_wdata;

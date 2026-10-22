@@ -1,6 +1,6 @@
 # sim/rdp_oracle: the RDP model against an independent software RDP
 
-`lang/c/mrdp` (the RDP's reference model, built with `MRDP_N64`, the texture
+`lang/c/rdp` (the RDP's reference model, built with `RDP_N64`, the texture
 level of detail of [docs/lod.md](../../docs/lod.md) included) is written from documentation. This directory runs it, command for command,
 next to an independent, pixel-exact, cycle-agnostic software RDP (the oracle)
 on the same command words and the same initial RDRAM, and compares the colour
@@ -86,12 +86,12 @@ cmd 3f10013f 00100000           # a command, its 32-bit words, high word first
 ```
 
 Both sides start from the same 8 MiB. The model's memory is big-endian bytes
-with its hidden coverage plane at 8 MiB (`mrdp.h`, `MRDP_HID_BASE`); the
+with its hidden coverage plane at 8 MiB (`rdp.h`, `RDP_HID_BASE`); the
 oracle's is its own (32-bit words in host order and a byte of hidden bits a
 16-bit word). The hidden bits start as the oracle's do: a word never written
 has its bit 0 twice. Each command goes whole to the oracle first (through its
 DMEM path, so its RDRAM holds only images and textures), then word by word to
-the model (`mrdp_push`, as `sim/rdp/tb_rdp.cpp` does). After a primitive
+the model (`rdp_push`, as `sim/rdp/tb_rdp.cpp` does). After a primitive
 (triangle, texture rectangle, fill rectangle) the current colour image (the
 last `SET_COLOR_IMAGE`, its width, as many rows as the scissor has), its hidden
 bits and the depth image (when it is not the colour image) are compared word by
@@ -103,13 +103,13 @@ tiles: the oracle keeps flags it derives from a tile's fields at SET_TILE
 unclamped there, which no console state matches (a zero tile clamps).
 
 The LOD comparison (`rdpo`, `rdpo_exact`): the Makefile writes a copy of
-`mrdp.c` under `build/` with two calls added (the inputs `lod_pixel` gives
-`mrdp_lod`, and the result `draw_pixel_cvg` takes; the build checks both were
+`rdp.c` under `build/` with two calls added (the inputs `lod_pixel` gives
+`rdp_lod`, and the result `draw_pixel_cvg` takes; the build checks both were
 added). The oracle's hook reports each 2-cycle LOD with its pixel. For every
 pixel the model draws with an LOD, the two are compared: the same inputs and
 result, other inputs (S, T at the pixel, the next pixel, the next line, or the
 range flag), or the same inputs and another result (the LOD logic itself).
-And every LOD the oracle computes is also put through the model's `mrdp_lod`
+And every LOD the oracle computes is also put through the model's `rdp_lod`
 with the oracle's own inputs (the "unit" line): the logic alone, on every
 pixel of every primitive, drawn or not.
 

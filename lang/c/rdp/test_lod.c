@@ -1,31 +1,31 @@
-/* The texture LOD in the model (mrdp.c, the LOD section; docs/lod.md): the
- * console's perspective divide (mrdp_n64_div) and mrdp_lod against values
+/* The texture LOD in the model (rdp.c, the LOD section; docs/lod.md): the
+ * console's perspective divide (rdp_n64_div) and rdp_lod against values
  * worked out by hand, then a perspective floor drawn in 2-cycle mode with a mip
  * chain of six levels, each a checker of its own colour, through the
  * combiner's (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0, to test_lod.ppm: the
  * levels follow the distance.
- *   cc -O2 -DMRDP_N64 -I. test_lod.c mrdp.c -o test_lod && ./test_lod
+ *   cc -O2 -DRDP_N64 -I. test_lod.c rdp.c -o test_lod && ./test_lod
  */
-#include "mrdp.h"
+#include "rdp.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: mrdp.h) */
+#define MEM (16u << 20)                 /* (the hidden plane at 8 MiB: rdp.h) */
 static uint8_t mem[MEM];
 static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM - 2; return (uint16_t)(mem[a] << 8 | mem[a + 1]); }
 static void wr16(void *c, uint32_t a, uint16_t v) { (void)c; a &= MEM - 2; mem[a] = (uint8_t)(v >> 8); mem[a + 1] = (uint8_t)v; }
-static mrdp_t R;
+static rdp_t R;
 static int fails;
-static void cmd(uint32_t w0, uint32_t w1) { mrdp_push(&R, w0); mrdp_push(&R, w1); }
+static void cmd(uint32_t w0, uint32_t w1) { rdp_push(&R, w0); rdp_push(&R, w1); }
 
-/* ---- mrdp_lod alone ---------------------------------------------------------- */
+/* ---- rdp_lod alone ---------------------------------------------------------- */
 static void lod_case(const char *what, uint32_t h, unsigned minl, unsigned maxl, int32_t ds, int32_t dt,
                      unsigned want_t0, unsigned want_t1, unsigned want_frac, unsigned want_level)
 {
     const int32_t s[3] = { 1000, 1000 + ds, 1000 }, t[3] = { 2000, 2000, 2000 + dt };
-    mrdp_lod_t L = mrdp_lod(h, minl, maxl, 2, s, t, 0);
+    rdp_lod_t L = rdp_lod(h, minl, maxl, 2, s, t, 0);
     int ok = L.tile0 == want_t0 && L.tile1 == want_t1 && L.frac == want_frac && L.level == want_level;
     printf("%s %-44s lod %5u level %u tiles %u %u frac %03x\n", ok ? "ok  " : "FAIL", what, L.lod, L.level, L.tile0, L.tile1, L.frac);
     if (!ok) { printf("     want level %u tiles %u %u frac %03x\n", want_level, want_t0, want_t1, want_frac); fails++; }
@@ -60,18 +60,18 @@ static void lod_units(void)
     /* a coordinate out of range: the far level */
     {
         const int32_t s[3] = { 0, 0, 0 }, t[3] = { 0, 0, 0 };
-        mrdp_lod_t o = mrdp_lod(L, 0, 3, 1, s, t, 1);
+        rdp_lod_t o = rdp_lod(L, 0, 3, 1, s, t, 1);
         int ok = o.tile0 == 4 && o.tile1 == 4 && o.frac == 0xFF && o.distant;
         printf("%s %-44s level %u tiles %u %u frac %03x\n", ok ? "ok  " : "FAIL", "out of range: the far level", o.level, o.tile0, o.tile1, o.frac);
         fails += !ok;
     }
 }
 
-/* ---- the console's perspective divide (mrdp_n64_div) ----------------------------- */
+/* ---- the console's perspective divide (rdp_n64_div) ----------------------------- */
 static void div_case(const char *what, int32_t s16, int32_t w16, int32_t want, int want_range)
 {
     int range;
-    const int32_t v = mrdp_n64_div((int32_t)((uint32_t)s16 << 16), (int32_t)((uint32_t)w16 << 16), &range);
+    const int32_t v = rdp_n64_div((int32_t)((uint32_t)s16 << 16), (int32_t)((uint32_t)w16 << 16), &range);
     const int ok = range == want_range && (want_range || v == want);
     printf("%s %-44s S %6d / W %04x: %6d range %d\n", ok ? "ok  " : "FAIL", what, (int)s16, (unsigned)(w16 & 0xFFFF), (int)v, range);
     fails += !ok;
@@ -100,7 +100,7 @@ static const unsigned lvl_rgb[LEVELS][3] = { { 31, 0, 0 }, { 31, 16, 0 }, { 28, 
 static unsigned lvl_tmem[LEVELS];        /* 64-bit words */
 
 /* the mip chain straight into TMEM (RGBA5551, the N64's layout: an odd row's 64-bit words with their halves changed
- * places, mrdp.c tmem_fetch), and a tile for each level: tile k is level k, its S, T shifted down by k */
+ * places, rdp.c tmem_fetch), and a tile for each level: tile k is level k, its S, T shifted down by k */
 static void textures(void)
 {
     unsigned at = 0;
@@ -194,7 +194,7 @@ int main(void)
 {
     lod_units();
     div_units();
-    mrdp_init(&R, 0, rd16, wr16);
+    rdp_init(&R, 0, rd16, wr16);
     cmd(0x3F000000u | 2u << 19 | (W - 1), CIMG);                              /* 16-bit colour image */
     cmd(0x2D000000u, (W << 2) << 12 | (H << 2));
     cmd(0x37000000u, 0x00010001u);                                            /* clear: black */
@@ -205,7 +205,7 @@ int main(void)
     cmd(0x3C000000u | 2u << 20 | 13u << 15 | 7u << 12 | 7u << 9 | 15u << 5 | 31u,
         1u << 28 | 15u << 24 | 7u << 21 | 7u << 18 | 1u << 15 | 7u << 12 | 6u << 9 | 0u << 6 | 7u << 3 | 0u);
     /* 2-cycle, perspective, TEX_LOD, the 3-point filter (BI_LERP both), no dithers; the blender passes the pixel */
-    cmd(0x2F000000u | 1u << 20 | MRDP_H_PERSP | RDP_H_TEX_LOD | 2u << 12 | MRDP_H_BILERP0 | MRDP_H_BILERP1 | 3u << 6 | 3u << 4, 0);
+    cmd(0x2F000000u | 1u << 20 | RDP_H_PERSP | RDP_H_TEX_LOD | 2u << 12 | RDP_H_BILERP0 | RDP_H_BILERP1 | 3u << 6 | 3u << 4, 0);
     vtx_t a = floor_pt(-10, 0.7), b = floor_pt(10, 0.7), c = floor_pt(10, 60), d = floor_pt(-10, 60);
     tri(a, b, c, LEVELS - 1);
     tri(a, c, d, LEVELS - 1);

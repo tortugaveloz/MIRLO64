@@ -1,10 +1,10 @@
-// RDP pixel pipeline: lang/c/mrdp/mrdp.c draw_pixel() built with MRDP_N64, one
+// RDP pixel pipeline: lang/c/rdp/rdp.c draw_pixel() built with RDP_N64, one
 // pixel per clock, no stalls (every operand is on chip: TMEM and the span's
 // line buffers). Stage by stage the arithmetic is the model's; the model is
-// the contract. (From rtl/mrdp/mrdp_pix.v: the texture unit reads the N64's
-// TMEM and decodes its formats, the colour image is RGBA5551.)
+// the contract. (From an earlier rasterizer's pixel pipeline: the texture unit
+// reads the N64's TMEM and decodes its formats, the colour image is RGBA5551.)
 //
-// The N64's coverage (the model's MRDP_CVG, lang/c/mrdp/mrdp.h): each pixel
+// The N64's coverage (the model's RDP_CVG, lang/c/rdp/rdp.h): each pixel
 // comes with its 8-sample mask (rdp_top's walker; all eight for a rectangle
 // or a triangle without AA_EN); the alpha, the depth test, the blender and the
 // coverage written (the colour image's bit 0, "complete") are the N64's.
@@ -22,7 +22,7 @@
 // the tile a clock before P5, rdp_top's tile RAMs answer in t_*), and each
 // stage takes them from the pass's own read, carried down with it.
 //
-// LOD (lod_on; lang/c/mrdp/mrdp.c mrdp_lod, docs/lod.md): a 2-cycle primitive
+// LOD (lod_on; lang/c/rdp/rdp.c rdp_lod, docs/lod.md): a 2-cycle primitive
 // with TEX_LOD, or whose combiner reads LOD_FRACTION. Its pixels take two
 // clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
 // W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
@@ -102,7 +102,7 @@ module rdp_pix (
     output reg  [9:0]  clb_raddr,         // the colour buffer's: a 32-bit image's {set, x[8:0]}, a 16-bit one's as lb_raddr
     input  wire [31:0] zlb_rdata,
     input  wire [31:0] clb_rdata,
-    // the raw hidden-bit buffer (rdp_mem, lang/c/mrdp/mrdp.h: the N64's other two
+    // the raw hidden-bit buffer (rdp_mem, lang/c/rdp/rdp.h: the N64's other two
     // coverage bits, a 32-bit word a 16-pixel group, by group mod 128), read
     // as the line buffers: its group's word; the rows' word base bits, by set
     output reg  [7:0]  hl_raddr,
@@ -178,7 +178,7 @@ module rdp_pix (
     // the colour image's RGBA5551 -> RGBA8888 (memory alpha reads as 1)
     function automatic [31:0] un565;
         input [15:0] v;
-        un565 = { v[15:11], 3'd0, v[10:6], 3'd0, v[5:1], 3'd0, 8'hFF };   // (the N64's: zeros below, not the top bits again -- lang/c/mrdp/mrdp.c unrgb565)
+        un565 = { v[15:11], 3'd0, v[10:6], 3'd0, v[5:1], 3'd0, 8'hFF };   // (the N64's: zeros below, not the top bits again -- lang/c/rdp/rdp.c unrgb565)
     endfunction
 
     // a 16-bit texel: RGBA5551, or IA 8 8
@@ -217,11 +217,11 @@ module rdp_pix (
     wire [1:0] cyc      = other_h[21:20];
     wire       persp    = other_h[19];
     wire       tlut_ia  = other_h[14];
-    // TEXEL1 read by the first combiner cycle (mrdp.c cc0_uses_texel1: the same fields)
+    // TEXEL1 read by the first combiner cycle (rdp.c cc0_uses_texel1: the same fields)
     wire       cc0_t1   = cc_hi[23:20] == 4'd2 || cc_lo[31:28] == 4'd2 || cc_hi[19:15] == 5'd2 || cc_hi[19:15] == 5'd9 ||
                           cc_lo[17:15] == 3'd2 || cc_hi[14:12] == 3'd2 || cc_lo[14:12] == 3'd2 || cc_hi[11:9] == 3'd2 ||
                           cc_lo[11:9] == 3'd2;
-    // TEXEL0 read by the second combiner cycle (mrdp.c cc1_uses_texel0): the N64's second cycle takes the first cycle's TEXEL1 there,
+    // TEXEL0 read by the second combiner cycle (rdp.c cc1_uses_texel0): the N64's second cycle takes the first cycle's TEXEL1 there,
     // the next tile's sample
     wire       cc1_t0   = cc_hi[8:5] == 4'd1 || cc_lo[27:24] == 4'd1 || cc_hi[4:0] == 5'd1 || cc_hi[4:0] == 5'd8 ||
                           cc_lo[8:6] == 3'd1 || cc_lo[23:21] == 3'd1 || cc_lo[5:3] == 3'd1 || cc_lo[20:18] == 3'd1 ||
@@ -358,7 +358,7 @@ module rdp_pix (
     // ======================================================================
     // P1: normalise W, the reciprocal's table
     // ======================================================================
-    // The console's perspective divide (lang/c/mrdp/mrdp.c n64_div): the 16-bit integer halves of S, T (s10.5) and W
+    // The console's perspective divide (lang/c/rdp/rdp.c n64_div): the 16-bit integer halves of S, T (s10.5) and W
     // (s.15). W's leading zeros, up to 14, are shifted out of its low 15 bits; its next 6 bits pick a point of the
     // reciprocal and a slope, the 8 after them step along it (rdp_div_rom: the console's two tables)
     wire [14:0] wi0 = w0r[30:16];
@@ -385,7 +385,7 @@ module rdp_pix (
     reg [3:0]  c5_pal, c6_pal, c7_pal;
     reg [2:0]  c5_fmt, c6_fmt, c7_fmt, c8_fmt;
     reg        c5_yuv, u6_yuv;             // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
-    // the pass converts YUV instead of filtering (mrdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
+    // the pass converts YUV instead of filtering (rdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
     // tile's pass, 10 for the next tile's) off; the texel a YUV tile's -- the pass's own, or with CONVERT_ONE (other_h 9) the
     // second pass converts the first's texel (texA9), and the tile checked is the one before the pass's (the first pass's
     // without the LOD; with it, as the model, the tile before TEXEL1's whatever TEXEL0's is)
@@ -525,7 +525,7 @@ module rdp_pix (
     end
 
     // ======================================================================
-    // The LOD (lang/c/mrdp/mrdp.c mrdp_lod, lod_dist): L1 the steps, L2 the
+    // The LOD (lang/c/rdp/rdp.c rdp_lod, lod_dist): L1 the steps, L2 the
     // distance and its level, L3 the tiles (the first pass's read) and the
     // fraction
     // ======================================================================
@@ -827,7 +827,7 @@ module rdp_pix (
     // the pixel's group in the raw hidden buffer: its word's address (the
     // row's word base + x / 2) by 8; its place there, k
     wire [9:0]  hw8b = (bs8b ? rwb1 : rwb0) + {1'b0, x8b[9:1]};
-    // YUV -> RGB (mrdp.c yuv_convert): from a texel (U, V, Y, Y), U and V less 128, the K's as 2K + 1 in 1/256ths --
+    // YUV -> RGB (rdp.c yuv_convert): from a texel (U, V, Y, Y), U and V less 128, the K's as 2K + 1 in 1/256ths --
     // R = Y + K0 V, G = Y + K1 U + K2 V, B = Y + K3 U, each clamped to a byte; A = Y. Beside the filter, from the corner
     // (a converted pass's is (s0, t0)), or with CONVERT_ONE the first pass's texel in the second (texA9).
     function automatic [7:0] cv_ch;
@@ -1091,7 +1091,7 @@ module rdp_pix (
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
-        // a 16-bit one has its bit 0 and the hidden two; lang/c/mrdp/mrdp.c draw_pixel_cvg)
+        // a 16-bit one has its bit 0 and the hidden two; lang/c/rdp/rdp.c draw_pixel_cvg)
         mem10 <= c32 ? {clb_rdata[31:8], 8'hFF} : un565(c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16]);
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
@@ -1154,7 +1154,7 @@ module rdp_pix (
     wire [1:0] dy13 = y13b;
 
     // ======================================================================
-    // the N64's alpha, coverage and depth (lang/c/mrdp/mrdp.c draw_pixel_cvg)
+    // the N64's alpha, coverage and depth (lang/c/rdp/rdp.c draw_pixel_cvg)
     // ======================================================================
     // the alpha dither: the matrix the RGB dither's RGB_DITHER_SEL names for
     // the alpha (the Bayer matrix for 1 and 3, the magic square for 0 and 2:
@@ -1162,7 +1162,7 @@ module rdp_pix (
     // ALPHA_DITHER_SEL takes it -- the pattern, its inverse, noise (three
     // random bits), none. Copy mode: none.
     // The noise: a 23-bit LFSR (the console's taps), one step for each pixel
-    // with coverage that passes this stage (lang/c/mrdp/mrdp.c steps it at the
+    // with coverage that passes this stage (lang/c/rdp/rdp.c steps it at the
     // same pixels): the alpha dither's noise and the alpha compare's random
     // threshold (DITHER_ALPHA_EN: the N64 compares with a random 8-bit
     // number, not with a pattern -- a pattern drew a regular grid of a
@@ -1200,7 +1200,7 @@ module rdp_pix (
     wire [7:0]  sha11 = (sha_s[9] | sha_s[8]) ? 8'hFF : sha_s[7:0];
     wire [7:0]  athr  = (cyc == 2'd2) ? 8'd128 : a_dith ? lfsr[7:0] : blend[7:0];   // (copy: the texel's alpha bit)
     // the memory's coverage: 6 where the colour image's pixel is complete, 7
-    // where it is not read, else what this pixel leaves uncovered (mrdp.h: storage)
+    // where it is not read, else what this pixel leaves uncovered (rdp.h: storage)
     wire [2:0]  memcvg = !(im_rd && need_mem) ? 3'd7 : {memb11, hid11};
     wire        ovf    = ({1'b0, memcvg} + cvg_s) >= 4'd8;
     // depth: in front; within the primitive's step nearer / farther; the far plane
@@ -1559,7 +1559,7 @@ module rdp_dither_add (
     assign o = (d < lo && c != 5'd31) ? c + 5'd1 : c;
 endmodule
 
-// The console's reciprocal for the perspective divide (lang/c/mrdp/mrdp.c n64_div, its two 64-entry tables): the point
+// The console's reciprocal for the perspective divide (lang/c/rdp/rdp.c n64_div, its two 64-entry tables): the point
 // (15 bits) and the slope's low 10 bits (its upper ones are all ones). In logic, a LUT for each bit of the 25 (as a
 // ROM block its read is on P2's path, and it takes an M10K).
 (* altera_attribute = "-name AUTO_ROM_RECOGNITION OFF" *)

@@ -6,7 +6,7 @@
 set -e
 cd "$(dirname "$0")"
 n=${1:-10}
-model=${MODEL_DIR:-../../lang/c/mrdp}    # (the model: MODEL_DIR=<dir> for another copy, as the Makefile takes it)
+model=${MODEL_DIR:-../../lang/c/rdp}    # (the model: MODEL_DIR=<dir> for another copy, as the Makefile takes it)
 export MODEL_DIR="$(cd "$model" && pwd)"
 model=$MODEL_DIR
 make -s all
@@ -55,9 +55,9 @@ for m in "dy:s/^#define LOD_DY_MASK   (~0x7FFF)/#define LOD_DY_MASK   (~0)/" \
          "dir:s/pr->ddx\[k\] = lft ? at\[AS + k\].dx : /pr->ddx[k] = !lft ? at[AS + k].dx : /" \
          "frac:s/^#define LOD_FRAC_USED 1/#define LOD_FRAC_USED 0/"; do
     n=${m%%:*}
-    sed -e "${m#*:}" build/mrdp_hooked.c > build/mut/$n.c
-    if cmp -s build/mut/$n.c build/mrdp_hooked.c; then echo "$n: the model's text has changed, no mutation made"; continue; fi
-    ${CC:-cc} -O2 -w -DMRDP_N64 -I"$model" rdpo.c build/mut/$n.c build/oracle.o -o build/mut/rdpo_$n
+    sed -e "${m#*:}" build/rdp_hooked.c > build/mut/$n.c
+    if cmp -s build/mut/$n.c build/rdp_hooked.c; then echo "$n: the model's text has changed, no mutation made"; continue; fi
+    ${CC:-cc} -O2 -w -DRDP_N64 -I"$model" rdpo.c build/mut/$n.c build/oracle.o -o build/mut/rdpo_$n
     printf '%-9s %-19s %s\n' "mutant" "$n" "$(./build/mut/rdpo_$n build/streams/units_cc[0-9]_*.rdps | sed -n 's/^TOTAL //p')"
 done
 echo "== the minimal streams (streams/): colour, coverage and depth words that differ; without RDP_EXACT | with it"
