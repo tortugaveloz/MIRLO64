@@ -1,0 +1,67 @@
+# A release, when it is published, is announced on Discord: one embed with its name, its link, its notes and the
+# links to its files. Pre-releases too: every release here is one. The webhook is the repository secret
+# DISCORD_WEBHOOK; without it the job does nothing and succeeds.
+#
+# The release's text is never part of a command: jq reads it from the event's file and writes the JSON, curl sends
+# that file. Discord's limits for an embed: a title of 256 characters, a description of 4096, a field of 1024, 6000
+# in all. Notes longer than that are cut, with "…" and the link to the release.
+name: Release on Discord
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Post the release
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_API: ${{ github.event.release.url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "::notice::DISCORD_WEBHOOK is not set: nothing posted"
+            exit 0
+          fi
+          release="$RUNNER_TEMP/release.json"
+          jq '.release' "$GITHUB_EVENT_PATH" > "$release"
+          # a release published before its files are uploaded has none in the event: the release as it is a minute later
+          if [ "$(jq '.assets | length' "$release")" = 0 ]; then
+            sleep 60
+            curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                 "$RELEASE_API" > "$release.new" && mv "$release.new" "$release" || echo "the release's files: not read"
+          fi
+          jq -f /dev/stdin "$release" > "$RUNNER_TEMP/discord.json" <<'JQ'
+            def cut($n): if length > $n then .[0:$n-1] + "…" else . end;
+            .html_url as $url
+            | ((.body // "") | gsub("\r\n"; "\n") | gsub("^\\s+|\\s+$"; "")) as $notes
+            | ("\n\n[The whole notes](" + $url + ")") as $more
+            | (if ($notes | length) > 3800 then ($notes[0:3800] | sub("\\s+\\S*$"; "")) + " …" + $more
+               else $notes end) as $desc
+            | ([.assets[]? | "[" + .name + "](" + .browser_download_url + ")"]) as $files
+            | (reduce $files[] as $f (""; if (. + "\n" + $f | length) <= 900 then (if . == "" then $f else . + "\n" + $f end) else . end)) as $list
+            | (if ($list | split("\n") | length) < ($files | length) then $list + "\n[and more](" + $url + ")" else $list end) as $list
+            | {
+                allowed_mentions: {parse: []},
+                embeds: [{
+                  title: ((.name // "" | if . == "" then null else . end) // .tag_name | cut(256)),
+                  url: $url,
+                  description: (if $desc == "" then null else $desc end),
+                  color: 3447003,
+                  timestamp: .published_at,
+                  footer: {text: ((.tag_name | cut(100)) + (if .prerelease then " · pre-release" else "" end))},
+                  fields: (if $list == "" then [] else [{name: "Download", value: $list}] end)
+                }]
+              }
+          JQ
+          jq -r '.embeds[0] | "\(.title): description \(.description // "" | length), \(.fields | length) field(s)"' "$RUNNER_TEMP/discord.json"
+          curl -fsS --retry 3 -H "Content-Type: application/json" --data-binary "@$RUNNER_TEMP/discord.json" \
+               "$DISCORD_WEBHOOK" > /dev/null
+          echo "posted"
