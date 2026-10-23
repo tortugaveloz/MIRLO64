@@ -192,6 +192,100 @@ static void ll_patch(u32 vram, u32 len)
     }
     (void)patched;
 }
+
+/* ---- libultra's envelope rate, done here ------------------------------------------
+ * The audio library's envelope mixer turns each volume ramp into a rate, a 16.16 factor the microcode applies every
+ * eight samples: (target / volume)^(8 / samples). Its function for it takes the power as (1 + l) to the n, squared three
+ * times, with l = ln(target / volume) / 2^30 and n = 2^30 / samples, in double precision. This FPU computes a double as a
+ * float (docs/mips.md, "The FPU"), and there 1 + l is 1.0 (|l| is at most 1e-8, a float's step at 1 is 1.2e-7): every
+ * rate came out as 1.0 and no volume ever moved -- a note that starts from silence stayed silent, one that starts loud
+ * never faded and stopped dead (music of drum hits with silence between).
+ * The rate itself needs no double: (1 + l)^(8 n) is 2^y with y = (log2 of the ratio) * n * 2^-27, the library's own
+ * logarithm (its table of the mantissa's top three bits, and the exponent) and its own n, and ul_getrate takes 2^y in
+ * floats: 2^k by the exponent, the rest by a polynomial. Against the double steps, a rate under 2 (a ramp of more than
+ * eight samples) is the same 16.16 value or one 2^-16 off; above that, a float's 24 bits leave a relative 1e-6.
+ * The function is found by its words, those that a link relocates masked (lui, and the loads and the address made off
+ * it: ul_mask), through a hash; its arguments are the O32 ABI's, the two doubles in $f12 / $f14 (ulw_getrate takes them
+ * to floats in $f12 / $f13, where this single-float build passes two floats), the count and the rate's lower half's
+ * address in the caller's fifth and sixth words. It is replaced as the 64-bit helpers are, and runs as they do. */
+static const float s_ul_log2[8] = { -0.912537f, -0.752072f, -0.607683f, -0.476438f, -0.356144f, -0.245112f, -0.142019f, -0.045804f };
+static s32 ul_trunc(float f) { return (s32)f; }                           /* (trunc.w.s) */
+s32 ul_getrate(float vol, float tgt, s32 count, u16 *ratel)
+{
+    if (count == 0) {
+        if (vol <= tgt) { *ratel = 0xFFFFu; return 0x7FFF; }
+        *ratel = 0; return 0;
+    }
+    if (tgt < 1.0f) tgt = 1.0f;
+    if (vol <= 0.0f) vol = 1.0f;
+    union { float f; u32 u; } a = { tgt / vol };                          /* the mantissa's top bits and the exponent */
+    const s32 ex = (s32)((a.u >> 23) & 0xFFu) - 126, n = 0x40000000 / count;
+    const float y = (s_ul_log2[(a.u >> 20) & 7u] + (float)ex) * ((float)n * (1.0f / 134217728.0f));
+    if (y >= 15.0f) { *ratel = 0xFFFFu; return 0x7FFF; }                 /* (past the 16.16 range) */
+    if (y < -24.0f) { *ratel = 0; return 0; }
+    const s32 k = ul_trunc(y < 0.0f ? y - 0.5f : y + 0.5f);
+    const float f = (y - (float)k) * 0.6931472f;                          /* 2^(y - k) = e^f, |f| <= 0.35 */
+    const float p = 1.0f + f * (1.0f + f * (0.5f + f * (1.0f / 6 + f * (1.0f / 24 + f * (1.0f / 120 + f * (1.0f / 720 + f * (1.0f / 5040)))))));
+    const union { u32 u; float f; } sc = { (u32)(127 + k) << 23 };
+    const float r = p * sc.f;
+    const s32 s = (s16)ul_trunc(r);
+    *ratel = (u16)ul_trunc((r - (float)s) * 65535.0f);
+    return s;
+}
+__asm__(".text\n.set push\n.set noreorder\n.set noat\n.set mips3\n.set doublefloat\n.set oddspreg\n"
+        ".globl ulw_getrate\n"
+        "ulw_getrate:\n"
+        "    addiu   $sp, $sp, -24\n"
+        "    sw      $ra, 20($sp)\n"
+        "    sw      $t7, 16($sp)\n"            /* (the game's Status: the patch has it there) */
+        "    cvt.s.d $f12, $f12\n"              /* vol, tgt: to floats, where this runtime's ABI has them */
+        "    cvt.s.d $f13, $f14\n"
+        "    lw      $a2, 40($sp)\n"            /* (the caller's fifth and sixth words: count, ratel) */
+        "    jal     ul_getrate\n"
+        "    lw      $a3, 44($sp)\n"
+        "    lw      $ra, 20($sp)\n"
+        "    lw      $t7, 16($sp)\n"
+        "    addiu   $sp, $sp, 24\n"
+        "    jr      $ra\n"
+        "    mtc0    $t7, $12\n"
+        ".set pop\n");
+void ulw_getrate(void);
+static u32 ul_mask(u32 w)
+{
+    const u32 op = w >> 26, rs = (w >> 21) & 31u;
+    if (op == 0x0Fu) return w & 0xFFFF0000u;                               /* lui */
+    if ((op == 0x35u || op == 0x31u || op == 0x09u) && rs == 1u) return w & 0xFFFF0000u;   /* ldc1 / lwc1 / addiu off $at */
+    if (op == 0x09u && rs == 6u) return w & 0xFFFF0000u;                  /* addiu a2, a2, %lo(the table) */
+    if (op == 0x02u || op == 0x03u) return w & 0xFC000000u;               /* j, jal */
+    return w;
+}
+#define UL_GETRATE_WORDS 160u
+#define UL_GETRATE_HASH  0xED6C70ECu            /* FNV-1a of the masked words, big-endian */
+static void ul_patch(u32 vram, u32 len)
+{
+    for (u32 a = vram; a + 4u * UL_GETRATE_WORDS <= vram + len; a += 4u) {
+        const u32 *w = rd32(a);
+        if (w[0] != 0x27BDFFB8u || w[UL_GETRATE_WORDS - 2] != 0x03E00008u || w[UL_GETRATE_WORDS - 1] != 0x27BD0048u) continue;
+        u32 h = 0x811C9DC5u;
+        for (u32 i = 0; i < UL_GETRATE_WORDS; i++) {
+            const u32 m = ul_mask(w[i]);
+            for (int b = 24; b >= 0; b -= 8) h = (h ^ ((m >> b) & 0xFFu)) * 0x01000193u;
+        }
+        if (h != UL_GETRATE_HASH) continue;
+        const u32 f = (u32)(uintptr_t)ulw_getrate;
+        u32 *d = rd32(a);
+        d[0] = 0x400F6000u;                      /* mfc0 t7, Status                  (as ll_patch) */
+        d[1] = 0x35EE0001u;                      /* ori  t6, t7, 1 */
+        d[2] = 0x39CE0001u;                      /* xori t6, t6, 1 */
+        d[3] = 0x408E6000u;                      /* mtc0 t6, Status */
+        d[4] = 0;
+        d[5] = 0x3C190000u | (f >> 16);          /* lui  t9, hi */
+        d[6] = 0x37390000u | (f & 0xFFFFu);      /* ori  t9, t9, lo */
+        d[7] = 0x03200008u;                      /* jr   t9 */
+        d[8] = 0;
+        printf("n64rt: the audio library's envelope rate at %08lx done in the runtime\n", (unsigned long)a);
+    }
+}
 #endif
 void n64rt_run(const n64rt_game_t *g)
 {
@@ -338,6 +432,7 @@ void n64rt_run(const n64rt_game_t *g)
 #ifdef N64RT_OWN
     /* (after the CPU is probed: what it does itself stays the game's) */
     ll_patch(g->boot_vram, g->boot_len);               /* (but the compiler's 64-bit helpers: n64rt_llsigs.h) */
+    ul_patch(g->boot_vram, g->boot_len);               /* (and the audio library's envelope rate) */
     flush_cpu_dcache();
     flush_cpu_icache();
 #endif
