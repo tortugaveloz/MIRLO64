@@ -4,6 +4,7 @@ bench (sim/mips_soc/obj_soc/tb_soc) and judge each run from its evidence.
 
   tools/sweep/sweep.py roms/ --seconds 8 -j 16
   tools/sweep/sweep.py roms/game.z64 --pad 300-320:8000
+  tools/sweep/sweep.py roms/game.z64 --seconds 40 --pad-file tools/sweep/pads/<ID>.txt
 
 Writes <out>/report.json, <out>/report.md, <out>/sheet.png and, per game,
 <out>/<game>/ with run.txt, rsp.log, the frames (PPM and PNG) and report.json.
@@ -746,6 +747,12 @@ def compare(base, cand):
     print("\n".join(lines))
 
 
+def read_pad_file(path):
+    """A pad script as a --pad spec: "#" to the end of a line dropped, blank lines dropped, the rest joined with commas."""
+    lines = (re.sub(r"\s*#.*", "", line).strip() for line in Path(path).read_text().splitlines())
+    return ",".join(line for line in lines if line)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run N64 ROMs through the whole-SoC Verilator bench and judge each boot.")
     ap.add_argument("roms", nargs="*", type=Path, help="ROM files or folders (.z64, .v64, .n64)")
@@ -758,7 +765,10 @@ def main():
                     help="start each game with the save an earlier sweep left in OUT/<game>/slot1.bin (SLOT1)")
     ap.add_argument("--fb", action="store_true",
                     help="judge and show the framebuffer dumps instead of the scan-out's video (both are captured)")
-    ap.add_argument("--pad", help="controller 1 keys, passed as PAD= (from-to:keys[/joy],...)")
+    pad = ap.add_mutually_exclusive_group()
+    pad.add_argument("--pad", help="controller 1 keys, passed as PAD= (from-to:keys[/joy],...)")
+    pad.add_argument("--pad-file", type=Path, metavar="FILE",
+                     help="read the --pad spec from FILE, one segment a line, # comments (tools/sweep/pads/)")
     ap.add_argument("--timeout", type=float, help="wall seconds a game may go without progress (default seconds*90+120; 4x that in all)")
     ap.add_argument("--force", action="store_true", help="re-run games that already have a report")
     ap.add_argument("--rejudge", action="store_true", help="recompute the verdicts of games already run, without the bench")
@@ -779,6 +789,13 @@ def main():
         return
     if not args.roms:
         ap.error("give ROM files or folders (or --status <out>)")
+    if args.pad_file:
+        try:
+            args.pad = read_pad_file(args.pad_file)
+        except OSError as e:
+            sys.exit("cannot read the pad file: %s" % e)
+        if not args.pad:
+            sys.exit("no PAD segment in %s (run without --pad-file)" % args.pad_file)
 
     args.tb_soc = os.environ.get("TB_SOC", str(REPO / "sim/mips_soc/obj_soc/tb_soc"))
     args.n64rt = os.environ.get("N64RT", str(REPO / "lang/n64rt/build/n64rt.bin"))
@@ -817,7 +834,8 @@ def main():
         git = "unknown"
     settings = {"started": stamp, "seconds": args.seconds, "mcycles": args.mcycles, "frame_every": args.frame_every,
                 "jobs": args.jobs, "timeout_s": args.timeout, "saves": str(args.saves) if args.saves else None,
-                "picture": "fb" if args.fb else "video", "pad": args.pad, "dumps": args.dumps,
+                "picture": "fb" if args.fb else "video", "pad": args.pad,
+                "pad_file": str(args.pad_file) if args.pad_file else None, "dumps": args.dumps,
                 "tb_soc": args.tb_soc, "n64rt": args.n64rt, "savedb": str(SAVEDB), "git": git, "out": str(out)}
     print("sweep: %d ROMs, -c %d, %d at a time, into %s" % (len(roms), args.mcycles, args.jobs, out), flush=True)
 

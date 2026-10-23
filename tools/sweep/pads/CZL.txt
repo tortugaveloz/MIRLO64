@@ -1,0 +1,72 @@
+# Legend of Zelda, The - Ocarina of Time (U) (V1.2): a new file named "A" and the game
+# started. Needs a SoC with the D-cache snoop (SNOOP, docs/mips.md) or a runtime that
+# writes the SI replies through the D-cache: without either, the game reads every
+# button as held and runs to the file select by itself.
+# Title ~660; A at 680 opens the file select (~780), A on File 1 (empty) gives the name
+# entry (~840), A types "A", Start jumps to END, A ends it (back to the file select ~960),
+# A on File 1, A on "Yes" (~1060): the game starts (black from ~1100). The opening
+# narration then types over a dark Link's house (the camera above it at ~2550: "Each
+# Kokiri has his or her own guardian fairy"); the Deku Tree and the flight through the
+# forest come after field 2600. The run this was written from had extra A presses from
+# ~1650 on, so the fields given past that point are approximate.
+# Format as in NKT.txt; run with:
+#   tools/sweep/sweep.py "roms/Legend of Zelda, The - Ocarina of Time (U) (V1.2) [!].z64" --seconds 44 --pad-file tools/sweep/pads/CZL.txt
+610-613:10
+680-683:10
+710-713:8000
+740-743:10
+820-823:10
+880-883:10
+910-913:8000
+940-943:10
+1010-1013:10
+1060-1063:10
+1150-1153:10
+1180-1183:10
+1210-1213:10
+1240-1243:10
+1270-1273:10
+1300-1303:10
+1330-1333:10
+1360-1363:10
+1390-1393:10
+1420-1423:10
+1450-1453:10
+1480-1483:10
+1510-1513:10
+1540-1543:10
+1570-1573:10
+1600-1603:10
+1630-1633:10
+1660-1663:10
+1690-1693:10
+1720-1723:10
+1750-1753:10
+1780-1783:10
+1810-1813:10
+1840-1843:10
+1870-1873:10
+1900-1903:10
+1930-1933:10
+1960-1963:10
+1990-1993:10
+2020-2023:10
+2050-2053:10
+2080-2083:10
+2110-2113:10
+2140-2143:10
+2170-2173:10
+2200-2203:10
+2230-2233:10
+2260-2263:10
+2290-2293:10
+2320-2323:10
+2350-2353:10
+2380-2383:10
+2410-2413:10
+2440-2443:10
+2470-2473:10
+2500-2503:10
+2530-2533:10
+2560-2563:10
+2590-2593:10

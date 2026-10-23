@@ -1,0 +1,27 @@
+# Mario Kart 64 (U) [!]: the title, Start, then A every 40 fields through the menus
+# (1P game, Mario GP, 50cc, OK, Mario, OK, Mushroom Cup, OK), then A held from the
+# grid on: Luigi Raceway, the pre-race camera from ~1650, the kart on the grid ~1740.
+# Timed for a first boot with no save (a blank EEPROM: the game spends ~225 fields
+# writing it); a run with a save (--saves) reaches the menus at other fields.
+# Format (every file in tools/sweep/pads): one PAD segment a line, "from-to:keys[/joy]",
+# in fields of the bench (its vblank count, a few fields behind the vNNNNNN frame
+# numbers), keys in hex as APF_INPUT has them (8000 Start, 0010 A, 0020 B, 0001/2/4/8
+# the D-pad, which is the stick with no INTERACT); overlapping segments add their keys.
+# "#" starts a comment. sweep.py --pad-file joins the lines with commas into a --pad spec:
+#   tools/sweep/sweep.py "roms/Mario Kart 64 (U) [!].z64" --seconds 32 --pad-file tools/sweep/pads/NKT.txt
+1090-1094:8000
+1150-1153:10
+1190-1193:10
+1230-1233:10
+1270-1273:10
+1310-1313:10
+1350-1353:10
+1390-1393:10
+1430-1433:10
+1470-1473:10
+1510-1513:10
+1550-1553:10
+1590-1593:10
+1630-1633:10
+1670-1673:10
+1720-3000:10

@@ -1,0 +1,5 @@
+# Pilotwings 64 (U) [!]: no input needed. The attract flight zooms in on Holiday Island
+# from high above (~300-420) and flies along its coast (~480 on); the title comes at
+# ~1280. The terrain is drawn with texture LOD (2-cycle, TEX_LOD, detail and sharpen).
+# Format as in NKT.txt. No segment: run without --pad:
+#   tools/sweep/sweep.py "roms/Pilotwings 64 (U) [!].z64" --seconds 12

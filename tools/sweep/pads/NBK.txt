@@ -1,0 +1,5 @@
+# Banjo-Kazooie (U) [!]: no input needed. The attract intro (N64 logo, Rareware logo
+# ~720-900) fades in on Spiral Mountain at ~1320 (waterfall, trees, the ground) and
+# stays there past field 1500. (Start in the intro skips to the game select instead.)
+# Format as in NKT.txt. No segment: run without --pad:
+#   tools/sweep/sweep.py "roms/Banjo-Kazooie (U) [!].z64" --seconds 26

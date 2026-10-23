@@ -8,6 +8,7 @@ workstation instead of on the Pocket. Python 3, standard library only.
 tools/sweep/sweep.py roms/                          # every .z64 / .v64 / .n64 in roms/, 8 console seconds each
 tools/sweep/sweep.py roms/ --seconds 4 -j 5 --out build/sweep/quick
 tools/sweep/sweep.py roms/game.z64 --seconds 12 --pad 300-320:8000   # one ROM, Start pressed at fields 300..320
+tools/sweep/sweep.py roms/game.z64 --seconds 40 --pad-file tools/sweep/pads/<ID>.txt   # a pad script (below)
 ```
 
 Build the bench (`sim/mips_soc/build.sh soc`, single-threaded) and the runtime (`make -C lang/n64rt`, README.md has
@@ -27,6 +28,7 @@ name another bench and another runtime.
 | `--fb` | off | judge and show the framebuffer dumps instead of the scan-out's video (both are always captured) |
 | `--dumps` | off | also `RSPDUMP=<out>/<game>/dumps` for the RSP / RDP lockstep benches (8 MiB a task) |
 | `--pad <spec>` | none | controller 1, passed as `PAD=` (`from-to:keys[/joy],...`, the Pocket's key bits: Start is `8000`, A `10`) |
+| `--pad-file <file>` | none | the `--pad` spec read from a file, one segment a line: `#` to the end of a line and blank lines are dropped, the rest joined with commas (the scripts in `pads/`, below); not with `--pad` |
 | `--timeout <s>` | `seconds*90+120` | wall seconds a bench may go without progress (`run.txt`, `rsp.log` and the frames not growing) before it is killed; 4 times that in all |
 | `--force` | off | re-run games that already have `<out>/<game>/report.json` |
 | `--rejudge` | off | recompute the verdicts and reports of games already run, from their files, without the bench (games not run yet are run) |
@@ -39,6 +41,40 @@ every run leave its save there as `slot1.bin` (the save slot read back as the Po
 `--saves` feeds to a later sweep. No `INTERACT` is given, so the core's settings keep their reset values (the
 runtime's defaults: Start on the Pocket's Start, the stick on the D-pad), which are not the Pocket's own defaults from
 `interact.json` (there "Start" is Select+Start). Bear that in mind when writing a `--pad` spec.
+
+## Controller scripts: `pads/`
+
+Without input most games stop at their title. `pads/` has one script a game that presses through the title and the
+menus to gameplay or an attract mode, for `--pad-file`. Each line is one `PAD` segment, `from-to:keys[/joy]`. The
+fields are the bench's (its vblank count, a few fields behind the `vNNNNNN` frame numbers; 60 a second), the keys are
+hex as `APF_INPUT` has them (`8000` Start, `0010` A, `0020` B, `0001` / `0002` / `0004` / `0008` the D-pad, which is
+the stick when no `INTERACT` is given), segments that overlap add their keys, and `#` starts a comment. The top of
+each file says what the script reaches, at which fields, and the command line with its `--seconds`. The scripts are
+timed for a first boot with no save; a run with `--saves`, or another runtime build, can move the screens, and the
+presses repeat or keep a margin for small shifts. A script is named after the cartridge's ID, the three characters
+at ROM 0x3B..0x3D, as the save-type database (`n64savedb.txt`) has them.
+
+| Game | Script | What it reaches | Field |
+|---|---|---|---|
+| Super Mario 64 (USA) | `NSM.txt` | file A, Peach's letter, the intro's flight with Lakitu, the castle grounds (Mario not yet out of the pipe) | ~2300 |
+| Mario Kart 64 (U) | `NKT.txt` | 1P, Mario GP, 50cc, Mario, Mushroom Cup: Luigi Raceway, the pre-race camera, then the kart on the grid | ~1650, ~1740 |
+| Ocarina of Time (U) 1.2 | `CZL.txt` | a new file, the game started, the opening narration over Link's house | ~2550 |
+| GoldenEye 007 (U) | `NGE.txt` | a new file, Mission 1: the Dam's opening, then Bond on the dam | ~1530, ~1700 on |
+| Perfect Dark (U) 1.1 | `NPD.txt` | a new agent, the Perfect Menu, the Carrington Institute's room | ~1680 on |
+| Banjo-Kazooie (U) | `NBK.txt` | no input: Spiral Mountain in the attract intro | ~1320 on |
+| Banjo-Tooie (U) | `NB7.txt` | no input: Banjo's house on its cliff, then the title over it | ~600, ~1140 |
+| Pilotwings 64 (U) | `NPW.txt` | no input: the attract flight over Holiday Island, then the title | ~300, ~1280 |
+
+The three "no input" files hold no segment, only what the run shows: run those games without `--pad-file`, which
+refuses a file with no segment.
+
+`--dumps` keeps the first 16 tasks of each kind, which are the boot's. The environment reaches the bench unchanged, so
+its own switches take later ones: `RSPDUMP_FRAME_FROM=<field>` starts the dumps at that field (the bench's count, as in
+the scripts) and `RSPDUMP_MAX=<n>` keeps n tasks of each kind instead of 16. Four graphics tasks from field 1700 on:
+
+```
+env RSPDUMP_FRAME_FROM=1700 RSPDUMP_MAX=4 tools/sweep/sweep.py roms/game.z64 --seconds 30 --dumps --pad-file tools/sweep/pads/<ID>.txt
+```
 
 ## Two pictures: the video and the framebuffer
 
@@ -161,7 +197,7 @@ plus the words panic, unhandled and unexpected.
   that reason; keep `-j` at or below the number of fast cores when timing matters.
 - 8 console seconds take about 8 to 9 wall minutes a game on an idle machine (4 seconds took 6 to 8 minutes with
   10 to 14 benches running at once). Most games are still in their intro or on the title screen
-  by then; `--pad` can press Start to go further.
+  by then; `--pad` can press Start to go further, and the scripts in `pads/` reach gameplay.
 - `frozen` and `crash` read the picture only every `--frame-every` fields; a short `--frame-every` makes them sharper
   at the cost of disk (225 KiB a PPM).
 - The final `cause` register is sampled once; an interrupt pending there is normal and does not count.

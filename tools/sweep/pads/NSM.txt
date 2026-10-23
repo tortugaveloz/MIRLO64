@@ -1,0 +1,53 @@
+# Super Mario 64 (USA): Start on the "Press Start" Mario head (from ~500), A on Mario A
+# (the hand starts on it) once the file select is up (~680), then A every 30 fields
+# from 1100 and A+B held over 1323-1378 to get through Peach's letter (on screen ~990
+# to ~1450). Then the intro's camera flight with Lakitu (sky ~1600, Lakitu ~1800, the
+# castle's tower ~2000-2100) ends on the castle grounds (castle, grass, trees: ~2300;
+# Mario not yet out of the pipe). All of it is drawn in 1-cycle: no texture LOD.
+# Format as in NKT.txt; run with:
+#   tools/sweep/sweep.py "roms/Super Mario 64 (USA).z64" --seconds 40 --pad-file tools/sweep/pads/NSM.txt
+610-615:8000
+720-724:10
+1100-1103:10
+1130-1133:10
+1160-1163:10
+1190-1193:10
+1220-1223:10
+1250-1253:10
+1280-1283:10
+1310-1313:10
+1323-1378:30
+1400-1403:10
+1430-1433:10
+1460-1463:10
+1490-1493:10
+1520-1523:10
+1550-1553:10
+1580-1583:10
+1610-1613:10
+1640-1643:10
+1670-1673:10
+1700-1703:10
+1730-1733:10
+1760-1763:10
+1790-1793:10
+1820-1823:10
+1850-1853:10
+1880-1883:10
+1910-1913:10
+1940-1943:10
+1970-1973:10
+2000-2003:10
+2030-2033:10
+2060-2063:10
+2090-2093:10
+2120-2123:10
+2150-2153:10
+2180-2183:10
+2210-2213:10
+2240-2243:10
+2270-2273:10
+2300-2303:10
+2330-2333:10
+2360-2363:10
+2390-2393:10
