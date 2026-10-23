@@ -626,7 +626,7 @@ static void dump_frame(const std::string &dir, long n)
 }
 
 // the save state's block (lang/mips/include/layout.h LAYOUT_STATE; target/pocket/core_top.sv SS_ADDR, SS_SIZE)
-static const uint32_t SS_SDRAM = 0x02100000u, SS_BRIDGE_ADDR = 0x06100000u, SS_BYTES = 0x00970000u;
+static const uint32_t SS_SDRAM = 0x02300000u, SS_BRIDGE_ADDR = 0x06300000u, SS_BYTES = 0x00970000u;
 static int ss_req;                  // 1 a save asked, 2 a load asked, 3 a load's copy under way, 4 a save's read-out under way
 static long ss_req_sys;
 static bool ss_done_was;

@@ -406,14 +406,14 @@ module core_top (
   wire savestate_load_err;
 
   // Sleep and Memories: the Pocket's save states (docs/mips.md, "Save states"). The state is one block of the SDRAM that
-  // the runtime writes and reads (lang/n64rt/n64rt_state.c): at the bridge's 0x0610_0000 -- the SDRAM's 0x0210_0000, above
+  // the runtime writes and reads (lang/n64rt/n64rt_state.c): at the bridge's 0x0630_0000 -- the SDRAM's 0x0230_0000, above
   // the last byte of a ROM of 64 MiB, which the bridge reads and writes there as it is (rtl/soc/mirlo_mips.sv) -- and of
   // a fixed size. A start or a load (core_bridge_cmd holds it until its ack, and then polls the result) is acknowledged
   // at once and is busy from then on; it turns a toggle the SoC takes into its own clock (mirlo_regs.sv: it wakes the
   // runtime), and the runtime's answer comes back as the turn of another, with its outcome (ss_err) settled before it.
   // A save is ready to be read out, and a load done, when the runtime has answered; the Pocket copies a state in before
   // it asks for its load. Whether the core takes a state at all (SUPPORTED) is the runtime's to say.
-  localparam [31:0] SS_ADDR = 32'h0610_0000;
+  localparam [31:0] SS_ADDR = 32'h0630_0000;
   localparam [31:0] SS_SIZE = 32'h0097_0000;            // (lang/n64rt/n64rt_state.c: SS_BYTES)
   wire ss_done_t, ss_err, ss_sup;
   reg  ss_save_t = 0, ss_load_t = 0, ss_ack = 0, ss_st_d = 0, ss_ld_d = 0, ss_op = 0, ss_busy = 0;
