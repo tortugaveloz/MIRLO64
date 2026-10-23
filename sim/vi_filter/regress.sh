@@ -50,6 +50,8 @@ TB_SEQ=0,1,1,0,0 TB_Y0=0 TB_ROWS=240 TB_YS=3FD run $T 6 0 30 320       # (NTSC <
 TB_PX32=1 run $T 1 0 30 320; TB_PX32=1 run $T 2 1 40 320; TB_PX32=1 run $T 5 1 30 320 1; TB_PX32=1 run $T 3 1 30 440 1
 TB_PX32=1 run $T 3 0 30 640p; TB_PX32=1 run $T 4 0 30 640s; TB_PX32=1 TB_CROPV=3 TB_CROPR=2 TB_PAL=1 run $T 8 1 30 320
 TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_PX32=1 TB_LOAD=5 run $T 7 0 30 640p; TB_PX32=1 TB_LOAD=2 run $T 4 0 30 640s
+# the VI blanked (H_START 0, an origin out of the RDRAM: the DMA reads nothing) after a picture: black, not the last row read on every line
+TB_BLANK=1 run $T 1 0 30 320; TB_BLANK=1 run $T 3 0 30 640p; TB_BLANK=1 run $T 3 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
 cc -O1 -o obj_vi/vifit_test vifit_test.c && n=$((n+1)) && { out=$(./obj_vi/vifit_test 2>&1); case "$out" in *"vifit: PASS"*) ;; *) echo "FAIL: vifit_test"; echo "$out" | tail -4; fail=$((fail+1));; esac; }
 echo "vi_filter regress: $n runs, $fail failed"

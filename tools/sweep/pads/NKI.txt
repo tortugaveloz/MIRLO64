@@ -1,0 +1,25 @@
+# Killer Instinct Gold (U) (V1.2) [!]: Start + A every 40 fields from field 200 (the logos do not skip; the
+# title's "Arcade" ~640), Jago's select screen ~660, Jago chosen ~740, the CPU's opponent rolling, the VS screen ~860,
+# then the game blanks the VI (H_START 0) every field from ~912 while it loads the arena: black, as on the console (the
+# scan-out once showed the VS screen's last row on every line there, vertical bars); the arena ~960, READY ~1000.
+# Timed for a first boot with no save; the presses stop at 920, inside the blank.
+#   tools/sweep/sweep.py "roms/Killer Instinct Gold (U) (V1.2) [!].z64" --seconds 17 --frame-every 10 --pad-file tools/sweep/pads/NKI.txt
+200-203:8010
+240-243:8010
+280-283:8010
+320-323:8010
+360-363:8010
+400-403:8010
+440-443:8010
+480-483:8010
+520-523:8010
+560-563:8010
+600-603:8010
+640-643:8010
+680-683:8010
+720-723:8010
+760-763:8010
+800-803:8010
+840-843:8010
+880-883:8010
+920-923:8010

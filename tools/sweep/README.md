@@ -64,6 +64,7 @@ at ROM 0x3B..0x3D, as the save-type database (`n64savedb.txt`) has them.
 | Banjo-Kazooie (U) | `NBK.txt` | no input: Spiral Mountain in the attract intro | ~1320 on |
 | Banjo-Tooie (U) | `NB7.txt` | no input: Banjo's house on its cliff, then the title over it | ~600, ~1140 |
 | Pilotwings 64 (U) | `NPW.txt` | no input: the attract flight over Holiday Island, then the title | ~300, ~1280 |
+| Killer Instinct Gold (U) 1.2 | `NKI.txt` | arcade, Jago against the CPU: the VS screen, the VI blanked while the arena loads (black), the arena and READY | ~860, ~912, ~960 |
 
 The three "no input" files hold no segment, only what the run shows: run those games without `--pad-file`, which
 refuses a file with no segment.
