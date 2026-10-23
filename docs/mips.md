@@ -545,6 +545,9 @@ the game's. This is the only change the runtime makes to the game's code, and it
   as on those consoles. The busy counters read 0.
 - **PI**: PI_DRAM_ADDR is 24 bits and PI_CART_ADDR 32, both even; a DMA leaves them past what it moved; PI_RD_LEN
   reads `0x7F`, and PI_WR_LEN `0x7F` after a DMA into the RDRAM. The other registers read back what was written.
+  A DMA into the RDRAM from where nothing answers (past the ROM's end, or outside the ROM and domain 2) gets the open
+  bus, each half word the low half of its own address (`0x1FFF_E000` reads `E000 E002 E004 ...`): the RDRAM is written,
+  not left as it was.
 - **RI**: eight registers that read back what was written.
 - **What the console does not have** reads as on the console, and a store there goes nowhere. The 64DD's registers
   and ROM (`0x0500_0000` - `0x07FF_FFFF`): nothing answers on the cartridge's bus, and a read gets the address's low

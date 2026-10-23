@@ -457,11 +457,23 @@ static s32 pi_copy(u32 dev, void *dram, u32 size, s32 dir)
         n64rt_log("n64rt: PI %s %lu (field %lu): dev %08lx -> %08lx, %lu bytes\n", dir == OS_READ ? "read" : "write", (unsigned long)s_n,
                   (unsigned long)n64rt_fields(), (unsigned long)dev, (unsigned long)(uintptr_t)dram, (unsigned long)size); }
 #endif
-    /* (a size that wraps the sum is no part of the ROM either) */
-    if (dir != OS_READ || size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) {
-        n64rt_log("n64rt: PI %s dev %08lx size %lu: not the ROM -- ignored\n", dir == OS_READ ? "read" : "write",
-                  (unsigned long)dev, (unsigned long)size);
+    if (dir != OS_READ) {
+        n64rt_log("n64rt: PI write dev %08lx size %lu: not the ROM -- ignored\n", (unsigned long)dev, (unsigned long)size);
         return -1;
+    }
+    /* (a size that wraps the sum is no part of the ROM either) */
+    if (size > n64rt_game->rom_size || off > n64rt_game->rom_size - size) {
+        /* What is not the ROM -- past its end, or no device's at all -- the RDRAM still gets: the PI's open bus, as on the
+         * console, each half word the low half of its own address (what the PI put on the bus, which nothing drives over).
+         * A game that reads a save slot it found no copy of from page -1 (the cartridge's 0x1FFF_E000 on) finds that is no
+         * save, not the last one it read still in its buffer. */
+        const u32 in = off < n64rt_game->rom_size ? n64rt_game->rom_size - off : 0u;
+        if (in) n64rt_rom_copy(d, off, in);
+        for (u32 i = in; i < size; i++) { const u32 a = dev + i; d[i] = (u8)((a & 0xFFFEu) >> (a & 1u ? 0 : 8)); }
+        { static u32 s_n; if (s_n++ < 8u) n64rt_log("n64rt: PI read dev %08lx size %lu: %lu bytes of it not the ROM -- the open bus\n",
+                                                    (unsigned long)dev, (unsigned long)size, (unsigned long)(size - in)); }
+        n64rt_late_poll();
+        return 0;
     }
     n64rt_rom_copy(d, off, size);                    /* (through the window: the PSRAM's part and the SDRAM's) */
     n64rt_late_poll();
