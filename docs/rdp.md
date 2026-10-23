@@ -534,9 +534,9 @@ before the VI's scale ([resolution.md](resolution.md)):
 A picture 512 wide or more is shown with the filters off.
 
 A 32-bit picture (`VI_STATUS` type 3: RGBA8888, a pixel a word) goes through
-the same filters: each pixel is taken as its channels' top five bits, with
-the alpha byte's top three bits as its coverage, so the filters see what a
-16-bit pixel would give them and the picture is shown at five bits a channel
+the same filters on its eight bits a channel, with the alpha byte's top three
+bits as its coverage, as the VI's 32-bit path does, and is shown at the VI's
+seven bits a channel, or eight with the core's "32-bit colour" setting
 ([cimg32.md](cimg32.md)).
 
 ## Not implemented, or approximated
@@ -549,7 +549,7 @@ needs); the RTL, and the model as its benches build it, do not.
 * **Colour images**: an 8-bit one is written only (no image read, no depth,
   no hidden coverage). A 32-bit one is drawn as the model draws it, from
   the programming manual's rules ([cimg32.md](cimg32.md),
-  "Choices"); a 32-bit picture is shown at five bits a channel.
+  "Choices").
 * **Depth**: the memory's dz is kept to its top two bits, as the word has
   room for, and the blender's coverage weight does not use it.
 * **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and

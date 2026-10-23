@@ -82,23 +82,39 @@ test_cimg32: 31 checks, 0 failed
   the runtime, so a 16-bit game runs cycle for cycle as before), so a switch of pixel size is seen like a switch of width, and the
   scan-out takes the type and the pitch together at its frame boundary.
 - **The pixels.** The DMA reads a word a pixel and no hidden plane. The FIFO keeps its 38-bit words. Its read side takes
-  a word a step and turns the pixel into what a 16-bit picture's pixel carries: each channel's top five bits, and the
-  alpha byte's top three bits as the coverage (bit 7 where a 16-bit pixel's bit 0 is, bits 6:5 where its hidden bits
-  are). The line buffers and the filters are the 16-bit picture's, unchanged.
+  a word a step and gives the pipeline the pixel as every picture's pixel now is there: R, G and B at eight bits and
+  a coverage of three. A 32-bit pixel's are its bytes and the alpha byte's top three bits; a 16-bit pixel's are its
+  five bits with three zeros below (the VI's own base for a 16-bit pixel, `& 0xF8`) and `{bit 0, the hidden two}`.
+- **The filters, at eight bits.** The line buffers hold that pixel and its valid bit, 1024 x 28 bits (three M10K
+  each: the row just fetched, the centre's, and the row above). So the VI's filters see a 32-bit picture as the VI's
+  32-bit path does:
+  - the anti-alias filter: the six taps (a tap not complete, or off the picture, is the centre) and the centre with
+    all eight bits, the second smallest and second largest of the taps by channel, widened to take the centre in, and
+    `c + ((min + max - 2c) * (7 - cvg) + 4) >> 3` (the shift arithmetic);
+  - the dither filter (VI_CTRL bit 16): its compares on the ring's and the centre's top five bits, the +1 / -1 added
+    to the centre's eight. A neighbour above the centre's top five leaves the centre 247 at most, one below 8 at least,
+    so it never wraps. libultra's 32-bit modes have the bit off; a game that sets it gets the filter, as on the
+    console;
+  - the divot filter: the median of three on the filtered eight bits; the gamma: its table on the eight bits.
+
+  A 16-bit pixel's three low zeros carry through all of it to the same results as before, bit for bit: the order of
+  the taps is their five bits', the anti-alias filter's `(8 (min + max - 2c) w + 4) >> 3` is `(min + max - 2c) w`
+  exactly, the dither filter compares the same five bits.
+- **The pads.** The VI's digital output is seven bits a channel: a 32-bit picture's channels go to the pads with their
+  low bit 0. The core's "32-bit colour" setting (`interact.json`, `INTERACT1[25]`, `0x1000_013C`: Console (7-bit), the
+  default, or Full (8-bit)) sends all eight; it reaches the scan-out as `px32_full` (`mirlo_regs.sv` `ia_px32_full`),
+  a multiplexer on the low bit after the filters. A 16-bit picture's eight bits go to the pads as they did, either way.
+  (With the gamma on, the table's values are even already.)
 
 ### What is approximated
-
-- **The picture is shown at five bits a channel.** The VI's own 32-bit path works on eight bits; the line buffers
-  (1024 x 19 bits, two M10K each) have no room for the three low bits of each channel, and the device has no block to
-  spare, so they are dropped where the FIFO is read. The anti-alias, divot, dither filter and gamma then do exactly
-  what they do for a 16-bit picture. Keeping the low bits would cost one M10K more (the centre row's buffer at 28 bits)
-  and three bits more in the filters' adders; done once, the filters are exact for the centre pixel with the taps' low
-  bits taken to be the centre's.
 - **A serrated 32-bit hi-res picture** (640 x 480 interlaced at 4 bytes a pixel): the woven frame's rows are read at the
   right pitch, but the hardware VI's test for "the second field's origin is the first's plus a row" (`rcp_vi.sv`
   `row_up`) knows 2-byte rows only, so the base would follow the game's two origins. The runtime's software VI knows
   4-byte rows. No game is known to need it.
 - **`VI_STATUS` type 0** (blank) is still not read.
+- **The gamma dither** (`VI_CTRL` bit 2, noise in the low bit before the gamma) is not done, for either picture.
+- **A 16-bit picture's eight bits go to the pads**, its low bit included, as before: the anti-alias filter's result
+  can be odd. The VI's seven-bit output applies to it too; it is kept so that 16-bit pictures stay as they were.
 
 ### Bandwidth
 
@@ -109,17 +125,25 @@ of a 320-wide 32-bit picture.
 
 ### Verification
 
-- `sim/vi_filter/regress.sh`: 55 runs, 0 failed. The 44 runs of 16-bit pictures give the same pad hash (an FNV of every
-  pad word and sync of the run) as before the change; the ten 32-bit runs (`TB_PX32=1`: the filters at 320, a scaled
-  440, hi-res, woven, crop and PAL, under the SDRAM's load) match the bench's model pixel for pixel, with no read of the
-  hidden plane.
+- `sim/vi_filter/regress.sh`: 60 runs, 0 failed. The 44 runs of 16-bit pictures give the same pad hash (an FNV of every
+  pad word and sync of the run) as before the eight-bit filters; the ten 32-bit runs (`TB_PX32=1`: the filters at 320, a
+  scaled 440, hi-res, woven, crop and PAL, under the SDRAM's load) match the bench's model pixel for pixel at seven bits
+  out, with no read of the hidden plane; three more (`TB_FULL=1`: the setting at full; the dither filter, a scaled 440,
+  woven) at eight bits out, and two 16-bit runs with `TB_FULL=1` as without it. The model (`tb_vi.cpp`) filters every
+  picture at eight bits a channel: its 32-bit buffer's channels have random low bits, in patches whose top five bits
+  agree.
 - `lang/mips/test/vi32_test.c` on the whole SoC (`sim/mips_soc`): the CPU fills a 320 x 240
   RGBA8888 picture with partial coverage in alpha, the game sets `VI_STATUS` 0x3013 (type 3, anti-alias, divot);
-  `sim/vi_filter/vi32_check.py` compares the pads' frame (`VGA=1`) with the model, pure Python:
-  `PASS: 0 of 153600 pad pixels differ from the model (11088 partial pixels in the picture, ...)`.
+  `sim/vi_filter/vi32_check.py` compares the pads' frame (`VGA=1`) with the model at eight bits a channel, pure Python:
+  `PASS: 0 of 153600 pad pixels differ from the model (11088 partial pixels in the picture, 76800 with low bits under
+  the top five; seven bits out)`; with `INTERACT=0x1000013C:1` and `--full`, the same at eight bits out.
 - Area, Quartus 23.1 Analysis & Synthesis of the scan-out alone (`tools/area2/ooc.sh video`): 1,581 ALUTs and 1,104
   registers before, 1,614 and 1,106 after (+33 ALUTs, +2 registers); block memory bits 666,272 both; DSP 4 both.
   `rcp_vi.sv`'s change event gains one term (a few ALUTs).
+- The filters at eight bits and the "32-bit colour" setting, Quartus 25.1, the scan-out alone (`ooc.sh video`, `FIT=1`):
+  1,583 ALUTs, 1,106 registers and 1,044 fitted ALMs before; 1,845, 1,234 and 1,205 after (+161 ALMs: the window's
+  registers, the eight-bit compares of the tap ranking, the taps' multiplexers). RAM blocks 84 to 86 (the two line
+  buffers at 28 bits), block memory bits 666,272 to 684,704; DSP 3 both.
 
 ### The wire
 

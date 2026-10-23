@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """lang/mips/test/vi32_test.c's 32-bit picture against a frame the pads sent (sim/mips_soc VGA=1: vNNNNNN.ppm, 640 x 240:
-each of the 320 pixels two clocks). The scan-out shows a 32-bit picture as its 16-bit view -- each channel's top five
-bits, the alpha byte's top three bits as the coverage (rtl/soc/n64_video.sv) -- through the VI's anti-alias and divot
-filters, by tb_vi.cpp's model of them. Pure Python.   vi32_check.py <pads frame .ppm> [out.png]"""
+each of the 320 pixels two clocks). The scan-out filters a 32-bit picture on its eight bits a channel, the alpha byte's top
+three bits the coverage (rtl/soc/n64_video.sv), through the VI's anti-alias and divot filters, by tb_vi.cpp's model of
+them; the pads take the VI's seven bits a channel (the low bit 0), or all eight with --full (the core's "32-bit colour"
+setting, INTERACT=0x1000013C:1). Pure Python.   vi32_check.py <pads frame .ppm> [out.png] [--full]"""
 import sys, zlib, struct
 
 W, H = 320, 240
@@ -19,7 +20,7 @@ def pixel(x, y):                      # vi32_test.c's word: R G B, then the cove
     return r << 24 | g << 16 | b << 8 | cvg(x, y) << 5 | (x & 31)
 
 
-# the 16-bit view, row-major, with the rows read on past their end (the scan-out's reads are contiguous); past the
+# the picture, row-major, with the rows read on past their end (the scan-out's reads are contiguous); past the
 # buffer, memory the test never wrote: 0
 FB = [pixel(i % W, i // W) for i in range(W * H)]
 
@@ -29,8 +30,8 @@ def word(x, j):
     return FB[i] if 0 <= i < len(FB) else 0
 
 
-def ch5(x, j, k):
-    return (word(x, j) >> (27 - 8 * k)) & 31
+def ch8(x, j, k):
+    return (word(x, j) >> (24 - 8 * k)) & 255
 
 
 def cv(x, j):
@@ -47,16 +48,16 @@ def complete(x, j):
 
 def aa_px(x, j):
     if complete(x, j):
-        return [ch5(x, j, k) << 3 for k in range(3)]
+        return [ch8(x, j, k) for k in range(3)]
     out = []
     taps = [(-1, -1), (1, -1), (-2, 0), (2, 0), (-1, 1), (1, 1)]
     for k in range(3):
-        c = ch5(x, j, k)
-        v = [ch5(x + dx, j + dy, k) if intap(x + dx, j + dy) and complete(x + dx, j + dy) else c for dx, dy in taps]
+        c = ch8(x, j, k)
+        v = [ch8(x + dx, j + dy, k) if intap(x + dx, j + dy) and complete(x + dx, j + dy) else c for dx, dy in taps]
         s = sorted(v)
         mn, mx = min(s[1], c), max(s[4], c)
         w = 7 - cv(x, j)
-        out.append((c << 3) + (((mn << 3) + (mx << 3) - 2 * (c << 3)) * w + 4) // 8)
+        out.append(c + ((mn + mx - 2 * c) * w + 4) // 8)
     return out
 
 
@@ -66,7 +67,7 @@ def model(x, j):
         l = aa_px(x - 1, j) if x > 0 else e
         r = aa_px(x + 1, j)
         e = [sorted([l[k], e[k], r[k]])[1] for k in range(3)]
-    return e
+    return e if FULL else [v & ~1 for v in e]
 
 
 def read_ppm(p):
@@ -89,9 +90,11 @@ def write_png(p, w, h, px):
                         + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
 
 
-w, h, px = read_ppm(sys.argv[1])
-if len(sys.argv) > 2:
-    write_png(sys.argv[2], w, h, px)
+FULL = '--full' in sys.argv
+args = [a for a in sys.argv[1:] if a != '--full']
+w, h, px = read_ppm(args[0])
+if len(args) > 1:
+    write_png(args[1], w, h, px)
 if (w, h) != (2 * W, H):
     print('FAIL: pads frame %d x %d, want %d x %d' % (w, h, 2 * W, H)); sys.exit(1)
 bad, first, partial, lowbits = 0, [], 0, 0
@@ -108,8 +111,8 @@ for y in range(H):
     for x in range(W):
         partial += cvg(x, y) != 7
         lowbits += ((pixel(x, y) >> 8) & 0x070707) != 0
-print('%s: %d of %d pad pixels differ from the model (%d partial pixels in the picture, %d with low bits the scan-out drops)'
-      % ('PASS' if not bad else 'FAIL', bad, 2 * W * H, partial, lowbits))
+print('%s: %d of %d pad pixels differ from the model (%d partial pixels in the picture, %d with low bits under the top five; %s)'
+      % ('PASS' if not bad else 'FAIL', bad, 2 * W * H, partial, lowbits, 'eight bits out' if FULL else 'seven bits out'))
 if bad:
     print('first:', first)
 sys.exit(1 if bad else 0)

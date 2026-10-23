@@ -61,6 +61,7 @@ module mirlo_regs (
     output logic [31:0] ia_q,
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,
+    output wire         ia_px32_full,       // interact: "32-bit colour" (field 15): a 32-bit picture's eight bits a channel
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
@@ -191,12 +192,13 @@ always_ff @(posedge clk) begin
 end
 
 // ---- APF interact (slot 0: A, B, Z, Start, L, R at 5 bits each; slot 1:
-// C-up/down/left/right at 5 bits, stick [21:20], D-pad [23:22], Show FPS
-// [24], Start = Select+Start [25]) -- docs/control.md, Interact API
+// C-up/down/left/right at 5 bits, stick [21:20], D-pad [23:22], Expansion Pak
+// [24], 32-bit colour [25]) -- docs/control.md, Interact API
 logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
+assign ia_px32_full = ia1[25];
 always_ff @(posedge clk) begin
     if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin

@@ -63,9 +63,9 @@ Three cases are not the plain rule:
   through the rows, so its first and last lines show the same rows as the VI's (`lang/n64rt/n64rt_vifit.h`).
 
 A **32-bit picture** (`VI_STATUS` type 3, RGBA8888) is read a word a pixel: `VI_WIDTH` is still its pitch in pixels,
-and a row reads twice the words of a 16-bit one (a 320-wide picture what a 640-wide 16-bit one does). Its pixels are
-shown at five bits a channel, the coverage the VI's filters use taken from the alpha byte's top three bits
-([cimg32.md](cimg32.md)). The runtime gives the scan-out the type with the width (`VIDEO_FRAMEBUFFER.WIDTH` bit 17).
+and a row reads twice the words of a 16-bit one (a 320-wide picture what a 640-wide 16-bit one does). Its pixels go
+through the VI's filters at eight bits a channel, the coverage they use taken from the alpha byte's top three bits, and
+are shown at the VI's seven bits a channel, or eight with the core's "32-bit colour" setting ([cimg32.md](cimg32.md)). The runtime gives the scan-out the type with the width (`VIDEO_FRAMEBUFFER.WIDTH` bit 17).
 
 The runtime works the window, the scales and the words to read for a row out of the VI's registers
 (`lang/n64rt/n64rt_io.c`, `vi_width_gamma`) and writes them to `VIDEO_FRAMEBUFFER`.

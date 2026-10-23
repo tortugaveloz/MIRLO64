@@ -23,7 +23,7 @@
  *                        2 (or 3) none
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
- *          [25]     n=15 free (was "Start = Select+Start")
+ *          [25]     n=15 "32-bit colour" (the video: rtl/soc/mirlo_regs.sv; was "Start = Select+Start")
  *
  * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
  * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
