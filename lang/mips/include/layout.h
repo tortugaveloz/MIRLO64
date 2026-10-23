@@ -56,5 +56,10 @@
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000
+/* a save state (the Pocket's Sleep and Memories: lang/n64rt/n64rt_state.c), 0x4210_0000 - 0x42A6_FFFF: above the last byte of a
+ * ROM of 64 MiB (0x4010_0000 + 32 MiB), which the bridge reads and writes at its address with bit 26 set (target/pocket/core_top.sv
+ * gives the Pocket 0x0610_0000 and the size) */
+#define LAYOUT_STATE        0x42100000
+#define LAYOUT_STATE_BYTES  0x00970000
 
 #endif

@@ -811,6 +811,7 @@ static void tr_flush(void)
     __asm__ volatile("mtc0 %0, $10" : : "r"(hi));
     ints_on(m);
 }
+void n64rt_tr_flush(void) { tr_flush(); }     /* (n64rt_state.c: a save state put back) */
 /* the pages of [va, va + bytes) emptied in both tables (a big range: all of them) */
 static void tr_inval(u32 va, u32 bytes)
 {
@@ -1877,7 +1878,9 @@ void n64rt_os_start(u32 entry, u32 sp)
         extern void n64rt_vi_hw_event(void);
         n64rt_mi_init();
         monitor_pend_write(0x1Fu);
-        monitor_mask_write((n64rt_mi_hw() ? (n64rt_ai_hw() ? 0xEu : 0x6u) : 0xFu) | (n64rt_si_hw() ? 0x10u : 0u));   /* (the SI in hardware: the PIF's commands wake the monitor) */
+        monitor_mask_write((n64rt_mi_hw() ? (n64rt_ai_hw() ? 0xEu : 0x6u) : 0xFu) | (n64rt_si_hw() ? 0x10u : 0u)   /* (the SI in hardware: the PIF's commands wake the monitor) */
+                           | (n64rt_mi_hw() && n64rt_vi_hw() && n64rt_ai_hw() && n64rt_si_hw() ? 0x20u : 0u));   /* (and the Pocket's save states: n64rt_state.c) */
+        if (!(n64rt_mi_hw() && n64rt_vi_hw() && n64rt_ai_hw() && n64rt_si_hw())) apf_bridge_savestate_write(0);
         /* (the VI in hardware, if the core has it: MONITOR.CTL bit 3, with the scan-out's window and size from the registers'
          * reset values; the field's wake-up is then the registers' change) */
         monitor_ctl_write((n64rt_mi_hw() ? (n64rt_vi_hw() ? 13u : 5u) : 1u) | (n64rt_ai_hw() ? 16u : 0u));
