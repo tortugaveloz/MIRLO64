@@ -327,6 +327,81 @@ static void ul_patch(u32 vram, u32 len)
         }
     }
 }
+
+/* ---- a float matrix to the RSP's fixed point by a double's mantissa -------------------------------------------------
+ * A hand-written guMtxF2L (a leaf: $a0 the 16 floats, $a1 the Mtx) converts each float with no conversion instruction:
+ * cvt.d.s, then add.d of 1.5 * 2^36, whose step is 2^-16, so that the sum's lower word -- mfc1 of the even register --
+ * is the 16.16 value, rounded to nearest, in two's complement. This FPU computes a double as a float widened (docs/mips.md,
+ * "The FPU"): that lower word is always 0 and every matrix it makes is all zeros. Models drawn through one of them are
+ * transformed onto a single point and cover no pixel: the scenes' 3D is missing, the 2D over it and the clear colour
+ * stay. Its 47 words are written over with mf_f2l's (below), the same conversion in integers: a float M * 2^(E - 150) is
+ * M * 2^(E - 134) in 16.16, shifted left (mod 2^32, as the lower word wraps) or right, rounded to nearest with ties to
+ * even (FCR31's mode, which games keep), 0 when below a half; the halves stored as the Mtx has them, the integer parts'
+ * 16 halfwords then the fractions'. It writes only registers the original writes ($t0 - $t7, $a0, $a1), so callers that
+ * keep values in the others see no difference, and it needs no 64-bit instruction (the original's ld, sd and dsll trap to
+ * the monitor). Found as ul_patch finds its functions. */
+__asm__(".text\n.set push\n.set noreorder\n.set noat\n"
+        ".globl mf_f2l\n.globl mf_f2l_end\n"
+        "mf_f2l:\n"
+        "    addiu   $t6, $a0, 64\n"
+        "1:  lw      $t0, 0($a0)\n"
+        "    srl     $t1, $t0, 23\n"
+        "    andi    $t1, $t1, 0xFF\n"            /* E */
+        "    sll     $t2, $t0, 9\n"
+        "    srl     $t2, $t2, 9\n"
+        "    lui     $t3, 0x80\n"
+        "    or      $t2, $t2, $t3\n"             /* M, the hidden bit set (E = 0 lands below a half: 0) */
+        "    addiu   $t3, $t1, -134\n"            /* sh: the 16.16 value is M * 2^sh */
+        "    bltz    $t3, 2f\n"
+        "    subu    $t4, $zero, $t3\n"           /* n = -sh */
+        "    sltiu   $t5, $t3, 32\n"              /* (a shift of 32 or more leaves 0 in the word) */
+        "    b       3f\n"
+        "    sllv    $t2, $t2, $t3\n"
+        "2:  sltiu   $t5, $t4, 25\n"              /* (n of 25 or more: below a half) */
+        "    srlv    $t1, $t2, $t4\n"             /* r = M >> n */
+        "    sllv    $t3, $t1, $t4\n"
+        "    subu    $t3, $t2, $t3\n"             /* the bits shifted out */
+        "    andi    $t2, $t1, 1\n"
+        "    addu    $t3, $t3, $t2\n"
+        "    addiu   $t2, $t4, -1\n"
+        "    addiu   $t7, $zero, 1\n"
+        "    sllv    $t7, $t7, $t2\n"             /* a half */
+        "    sltu    $t7, $t7, $t3\n"             /* above it, or at it with r odd: up */
+        "    addu    $t2, $t1, $t7\n"
+        "3:  subu    $t5, $zero, $t5\n"
+        "    and     $t2, $t2, $t5\n"
+        "    sra     $t1, $t0, 31\n"
+        "    xor     $t2, $t2, $t1\n"
+        "    subu    $t2, $t2, $t1\n"             /* the sign */
+        "    sh      $t2, 32($a1)\n"              /* the fraction */
+        "    srl     $t2, $t2, 16\n"
+        "    sh      $t2, 0($a1)\n"               /* the integer part */
+        "    addiu   $a0, $a0, 4\n"
+        "    bne     $a0, $t6, 1b\n"
+        "    addiu   $a1, $a1, 2\n"
+        "    jr      $ra\n"
+        "    nop\n"
+        "mf_f2l_end:\n"
+        ".set pop\n");
+extern const u32 mf_f2l[], mf_f2l_end[];
+static void mf_patch(u32 vram, u32 len)
+{
+    enum { N = 47 };                             /* (lui at / lwc1 the constant ... jr ra / nop) */
+    for (u32 a = vram; a + 4u * N <= vram + len; a += 4u) {
+        const u32 *w = rd32(a);
+        if (w[0] != 0x3C010000u + (w[0] & 0xFFFFu) || w[N - 2] != 0x03E00008u || w[N - 1] != 0) continue;
+        u32 h = 0x811C9DC5u, hi = 0;
+        for (u32 i = 0; i < N; i++) {
+            const u32 m = ul_mask(w[i], &hi);
+            for (int b = 24; b >= 0; b -= 8) h = (h ^ ((m >> b) & 0xFFu)) * 0x01000193u;
+        }
+        if (h != 0x21588392u) continue;
+        u32 *d = rd32(a);
+        const u32 n = (u32)(mf_f2l_end - mf_f2l);
+        for (u32 i = 0; i < N; i++) d[i] = i < n ? mf_f2l[i] : 0;
+        printf("n64rt: a float matrix's conversion by a double's mantissa at %08lx done in integers\n", (unsigned long)a);
+    }
+}
 #endif
 void n64rt_run(const n64rt_game_t *g)
 {
@@ -474,6 +549,7 @@ void n64rt_run(const n64rt_game_t *g)
     /* (after the CPU is probed: what it does itself stays the game's) */
     ll_patch(g->boot_vram, g->boot_len);               /* (but the compiler's 64-bit helpers: n64rt_llsigs.h) */
     ul_patch(g->boot_vram, g->boot_len);               /* (and the audio library's envelope rate) */
+    mf_patch(g->boot_vram, g->boot_len);               /* (and a matrix conversion through a double's mantissa) */
     flush_cpu_dcache();
     flush_cpu_icache();
 #endif

@@ -1,0 +1,37 @@
+# Buck Bumble (U) [!]: A and Start in turns every 40 fields (A on the controller-pak notice ~200, then
+# through the Ubi Soft and Argonaut logos, which take no input, to the title ~560), none over 860-1100
+# so that the intro plays (the village: ~880-1080), then A and Start in turns again: the main menu
+# ~1140 ("Start 1P Game"), the controller-pak and rumble-pak notices ~1220-1380, the mission's
+# briefing over the level ~1400-1540, then the first level, Buck over the bridge, ~1580 on.
+# Format as in NKT.txt; run with:
+#   tools/sweep/sweep.py "roms/Buck Bumble (U) [!].z64" --seconds 28 --pad-file tools/sweep/pads/NBL.txt
+210-214:10
+250-254:8000
+290-294:10
+330-334:8000
+370-374:10
+410-414:8000
+450-454:10
+490-494:8000
+530-534:10
+570-574:8000
+610-614:10
+650-654:8000
+690-694:10
+730-734:8000
+770-774:10
+810-814:8000
+850-854:10
+1100-1104:10
+1140-1144:8000
+1180-1184:10
+1220-1224:8000
+1260-1264:10
+1300-1304:8000
+1340-1344:10
+1380-1384:8000
+1420-1424:10
+1460-1464:8000
+1500-1504:10
+1540-1544:8000
+1580-1584:10
