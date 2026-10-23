@@ -4,7 +4,7 @@
 #
 # The release's text is never part of a command: jq reads it from the event's file and writes the JSON, curl sends
 # that file. Discord's limits for an embed: a title of 256 characters, a description of 4096, a field of 1024, 6000
-# in all. Notes longer than that are cut, with "…" and the link to the release.
+# in all. The notes are cut after their 200th word (and within 3800 characters), with "…" and the link to the release.
 name: Release on Discord
 
 on:
@@ -43,8 +43,10 @@ jobs:
             .html_url as $url
             | ((.body // "") | gsub("\r\n"; "\n") | gsub("^\\s+|\\s+$"; "")) as $notes
             | ("\n\n[The whole notes](" + $url + ")") as $more
-            | (if ($notes | length) > 3800 then ($notes[0:3800] | sub("\\s+\\S*$"; "")) + " …" + $more
-               else $notes end) as $desc
+            | ([$notes | match("\\S+"; "g")]) as $words
+            | (if ($words | length) > 200 then $notes[0:($words[199] | .offset + .length)] else $notes end) as $short
+            | (if ($short | length) > 3800 then ($short[0:3800] | sub("\\s+\\S*$"; "")) else $short end) as $short
+            | (if $short != $notes then $short + " …" + $more else $notes end) as $desc
             | ([.assets[]? | "[" + .name + "](" + .browser_download_url + ")"]) as $files
             | (reduce $files[] as $f (""; if (. + "\n" + $f | length) <= 900 then (if . == "" then $f else . + "\n" + $f end) else . end)) as $list
             | (if ($list | split("\n") | length) < ($files | length) then $list + "\n[and more](" + $url + ")" else $list end) as $list
