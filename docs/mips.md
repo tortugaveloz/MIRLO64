@@ -964,3 +964,12 @@ SoC's levels) and `gen_rand_fpu_rom.py` random FPU programs.
 
 `pak_test` and `si_test` compile libultra's own sources, which are not in this repository: `ULTRALIB=<dir>` names a
 checkout. The commands to run each test are in the header of its makefile.
+
+### Boot sweep: `tools/sweep`
+
+`tools/sweep/sweep.py <rom folder> [--seconds 8] [-j n] [--pad spec]` runs every ROM in a folder through `tb_soc`
+with the runtime, several at a time, and judges each boot from its evidence: the runtime's entry and fatal lines, the
+scan-out's video (`VGA=1`), `RSPLOG`, `EXCSTAT` and the final summary line. Each game gets a verdict (`alive`,
+`frozen`, `black`, `crash`, `no-boot`, `timeout`), and the run a `report.md`, a `report.json` and a contact sheet of
+the last frames. `--status <out>` shows a sweep under way, `--compare <baseline> <candidate>` checks an RTL change
+frame by frame against an earlier sweep, and `tools/sweep/README.md` has the options and the rules.
