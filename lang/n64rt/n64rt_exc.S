@@ -629,8 +629,6 @@ n64rt_mon_slow:
     la      $sp, n64rt_exc_stack_top
     jal     n64rt_mon_exception
     nop
-    .globl  n64rt_mon_exit
-n64rt_mon_exit:                     # (n64rt_state_resume: a save state's game goes on from here)
     lui     $k0, %hi(n64rt_mon_ctx)
     addiu   $k0, $k0, %lo(n64rt_mon_ctx)
     .irp    n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
@@ -679,29 +677,6 @@ n64rt_mon_exit:                     # (n64rt_state_resume: a save state's game g
     ld      $k1, 8*27($k0)          # the game's $k0 and $k1, as the runtime left them: 64 bits each, k0 last
     ld      $k0, 8*26($k0)          # (its own base)
     eret
-    nop
-# void n64rt_state_resume(const void *src, void *dst, u32 words, const void *arg): a save state's last step (n64rt_state.c).
-# The runtime's .data and .bss are copied over with the state's -- the stack this was called on among them, so registers
-# only -- and the monitor is left as from any entry, with the context, now the state's: on the exception stack,
-# n64rt_state_resumed(arg) first, then the full path's exit. Never returns.
-    .globl  n64rt_state_resume
-n64rt_state_resume:
-1:  lw      $t0, 0($a0)
-    lw      $t1, 4($a0)
-    lw      $t2, 8($a0)
-    lw      $t3, 12($a0)
-    sw      $t0, 0($a1)
-    sw      $t1, 4($a1)
-    sw      $t2, 8($a1)
-    sw      $t3, 12($a1)
-    addiu   $a0, $a0, 16
-    addiu   $a2, $a2, -4
-    bnez    $a2, 1b
-    addiu   $a1, $a1, 16
-    la      $sp, n64rt_exc_stack_top
-    jal     n64rt_state_resumed
-    move    $a0, $a3
-    j       n64rt_mon_exit
     nop
 n64rt_mon_stray:                    # (the vector without the monitor level: a fault of the runtime's own)
     lui     $sp, %hi(n64rt_exc_stack_top)

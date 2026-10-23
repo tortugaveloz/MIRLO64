@@ -52,10 +52,6 @@ module mirlo_regs (
     input  wire  [31:0] br_current_address,
     input  wire  [2:0]  br_command_result_code,
     input  wire         br_host_reset_n, br_host_loaded,
-    // the Pocket's save states (core_top.sv: Savestate Start and Load, in its clock): a request is a turn of its toggle;
-    // the runtime's answer a turn of ss_done_t, ss_err stable from before it; ss_sup what the Pocket's query is told
-    input  wire         ss_save_t, ss_load_t,
-    output logic        ss_done_t, ss_err, ss_sup,
     // APF input
     input  wire  [3:0][31:0] cont_key, cont_joy, cont_trig,
     // APF interact
@@ -194,26 +190,6 @@ always_ff @(posedge clk) begin
     end
 end
 
-// ---- the Pocket's save states (APF_BRIDGE.SAVESTATE): each request is a turn of a toggle in the bridge's clock, taken here
-// through three flip-flops; it stays asked (and wakes the monitor: PEND bit 5) until the runtime writes SAVESTATE_DONE, which
-// turns ss_done_t with the outcome in ss_err. SUPPORTED is 1 from reset, so the Pocket's first query of a Sleep's wake -- it may
-// come before the runtime has started the game -- finds it; the runtime clears it for what it cannot keep (a Game Boy cartridge
-// in the Transfer Pak, a program that is not a game)
-logic [2:0] ss_sv_s, ss_ld_s;
-logic       ss_save, ss_load;
-wire        ss_ask = ss_sv_s[2] != ss_sv_s[1] || ss_ld_s[2] != ss_ld_s[1];
-always_ff @(posedge clk) begin
-    ss_sv_s <= {ss_sv_s[1:0], ss_save_t};
-    ss_ld_s <= {ss_ld_s[1:0], ss_load_t};
-    if (rst) begin ss_save <= 1'b0; ss_load <= 1'b0; ss_sup <= 1'b1; ss_done_t <= 1'b0; ss_err <= 1'b0; end
-    else begin
-        if (wr && a == R_APF_BRIDGE_SAVESTATE) ss_sup <= r_wdata[0];
-        if (wr && a == R_APF_BRIDGE_SAVESTATE_DONE) begin ss_save <= 1'b0; ss_load <= 1'b0; ss_err <= r_wdata[0]; ss_done_t <= !ss_done_t; end
-        if (ss_sv_s[2] != ss_sv_s[1]) ss_save <= 1'b1;
-        if (ss_ld_s[2] != ss_ld_s[1]) ss_load <= 1'b1;
-    end
-end
-
 // ---- APF interact (slot 0: A, B, Z, Start, L, R at 5 bits each; slot 1:
 // C-up/down/left/right at 5 bits, stick [21:20], D-pad [23:22], Show FPS
 // [24], Start = Select+Start [25]) -- docs/control.md, Interact API
@@ -314,7 +290,7 @@ always_ff @(posedge clk) begin
 end
 
 // ---- MONITOR: what the monitor level of a game that runs its own libultra is woken by
-logic [5:0] mon_pend, mon_mask;
+logic [4:0] mon_pend, mon_mask;
 logic [5:0]  mi_intr, mi_mask;
 logic        pi_busy;
 logic [20:0] pi_cnt;
@@ -334,15 +310,14 @@ always_ff @(posedge clk) begin
     if (rst) begin d2_flash <= 1'b0; mon_pend <= 0; mon_mask <= 0; mon_own <= 0; mon_rcp <= 0; mon_mi <= 0; mon_vi <= 0; mon_ai <= 0; vi_thr <= '1; end
     else begin
         // (a set of the same bit by hardware and by a clear in one cycle: it stays set)
-        if (wr && a == R_MONITOR_PEND) mon_pend <= mon_pend & ~r_wdata[5:0];
-        if (wr && a == R_MONITOR_KICK) mon_pend <= mon_pend | r_wdata[5:0];
+        if (wr && a == R_MONITOR_PEND) mon_pend <= mon_pend & ~r_wdata[4:0];
+        if (wr && a == R_MONITOR_KICK) mon_pend <= mon_pend | r_wdata[4:0];
         if (mon_sp && !sp_d) mon_pend[0] <= 1'b1;
         if (mon_vi ? vi_chg : mon_field) mon_pend[1] <= 1'b1;         // (the VI in hardware: a field is the VI's change of a register)
         if (uptime[18] != tick_d) mon_pend[2] <= 1'b1;                  // a tick every 4.2 ms
         if (mon_ai ? ai_chg : mon_dp) mon_pend[3] <= 1'b1;             // (the AI in hardware: bit 3 is DACRATE's change)
         if (si_ev) mon_pend[4] <= 1'b1;                                 // (the SI in hardware: the PIF has commands to run)
-        if (ss_ask) mon_pend[5] <= 1'b1;                                // the Pocket asks for a save state, or for its load
-        if (wr && a == R_MONITOR_MASK) mon_mask <= r_wdata[5:0];
+        if (wr && a == R_MONITOR_MASK) mon_mask <= r_wdata[4:0];
         if (wr && a == R_MONITOR_CTL) begin mon_own <= r_wdata[0]; mon_rcp <= r_wdata[1]; mon_mi <= MI_PRESENT && r_wdata[2]; mon_vi <= VI_PRESENT && r_wdata[3]; mon_ai <= AI_PRESENT && r_wdata[4]; end
         if (wr && a == R_MONITOR_VITHR) vi_thr <= r_wdata[16:0];
         if (wr && a == R_MONITOR_PI2) d2_flash <= PI2_PRESENT && r_wdata[0];
@@ -409,8 +384,7 @@ function automatic logic [31:0] smask(input logic [15:0] ad);     // a shadowed 
     R_VIDEO_FRAMEBUFFER_SCALE:                                                         return 32'h0FFF_07FF;
     R_VIDEO_FRAMEBUFFER_ROWWORDS:                                                      return 32'h0000_07FF;
     R_GB_CART_CTRL:                                                                    return 32'h0000_0003;
-    R_MONITOR_CTL:                                                                     return 32'h0000_001F;
-    R_MONITOR_MASK:                                                                    return 32'h0000_003F;
+    R_MONITOR_CTL, R_MONITOR_MASK:                                                     return 32'h0000_001F;
     default:                                                                           return 32'd0;
     endcase
 endfunction
@@ -444,7 +418,6 @@ always_comb begin
     R_APF_BRIDGE_CURRENT_ADDRESS[5:2]:     rb[1] = br_current_address;
     R_APF_BRIDGE_COMMAND_RESULT_CODE[5:2]: rb[1] = {29'd0, br_command_result_code};
     R_APF_BRIDGE_HOST_STATE[5:2]:          rb[1] = {30'd0, br_host_loaded, br_host_reset_n};
-    R_APF_BRIDGE_SAVESTATE[5:2]:           rb[1] = {29'd0, ss_load, ss_save, ss_sup};
     default: ;
     endcase
     case (a[5:2])                                               // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4
@@ -516,7 +489,7 @@ always_comb begin
     case (a[5:2])                                               // MONITOR
     R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};
-    R_MONITOR_PEND[5:2]:                   rb[13] = {26'd0, mon_pend};
+    R_MONITOR_PEND[5:2]:                   rb[13] = {27'd0, mon_pend};
     R_MONITOR_LEVEL[5:2]:                  rb[13] = {31'd0, mon_sp};
     R_MONITOR_MIINTR[5:2]:                 rb[13] = {15'd0, pi_busy, 2'd0, mi_mask, 2'd0, mi_intr};
     R_MONITOR_PILEN[5:2]:                  rb[13] = {pi_busy, 10'd0, pi_cnt};

@@ -100,7 +100,6 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 |---|---|---|
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
 | `0x4010_0000` | 32 MiB | A ROM's bytes from 32 MiB on (its first 32 MiB are in the PSRAM: [The ROM](#the-rom)). It is never moved |
-| `0x4210_0000` | 9.4 MiB | A save state ([Save states](#save-states)) |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4330_8000` | 32 KiB | The Controller Pak |
 | `0x4332_0000` | 128 KiB | The cartridge's save: EEPROM, SRAM or FlashRAM |
@@ -449,7 +448,7 @@ game takes real time. The exception is an entry while the game has its interrupt
 which is where it is when it sets a timer: there Count is put back to its value at the entry, so that an entry the game
 did not ask for cannot carry Count past a Compare the game is about to write.
 
-The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in five events:
+The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in four events:
 
 | PEND bit | Event | What the runtime does |
 |---|---|---|
@@ -457,7 +456,6 @@ The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in f
 | 2 | a tick, every 2^18 system clocks (4.2 ms) | keeps its field count; notes the frame buffer's origin |
 | 3 | AI_DACRATE was written | computes the resampler's step |
 | 4 | the PIF has commands to run | runs them (SI, below) |
-| 5 | the Pocket asks for a save state, or for its load | makes it or puts it back ([Save states](#save-states)) |
 
 ### TLB instructions and exceptions
 
@@ -634,9 +632,6 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   nothing and sends black, every line, whatever its line buffers held of the picture before.
 - **VI_V_SYNC** names the TV system once written: 512 - 575 is 525 lines (NTSC, MPAL and a PAL console's 60 Hz modes),
   576 - 703 is 625 lines (PAL, 50 Hz); another value changes nothing. The change is taken at a frame boundary.
-- **`0x0440_0038`**, not a register of the console's: the runtime's, for a save state. It reads the base the scan-out
-  takes, which a read of VI_ORIGIN does not give (the origin of a hi-res picture's second field leaves the base where it
-  was), and in bit 31 the field bit; a write sets both.
 
 The runtime computes what the scan-out needs -- the rows' pitch, the picture's window in the line and in the field,
 and the two scales -- from VI_WIDTH, VI_H_START, VI_V_START, VI_X_SCALE and VI_Y_SCALE when one of them changes
@@ -783,45 +778,6 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
   data at 58. A write has /WR low from clock 16 to 48; the data bank's level translator is turned outward only inside a
   write, when /RD is high, so the translator and the cartridge never drive the data pins together.
 
-### Save states
-
-The Pocket's Sleep and its Memories are save states (`core.json`'s `sleep_supported`). To make one the Pocket sends the
-core its Savestate Start command; when the core says the state is ready, it reads the core's block of 9,895,936 bytes
-(`0x0097_0000`) at the bridge's `0x0610_0000` -- the SDRAM's `0x4210_0000`, above the last byte of a ROM of 64 MiB --
-into a file. To put one back (the wake from a Sleep, a Memory chosen) it starts the core as for any launch, the game
-booting afresh, copies the file in at the same address and sends Savestate Load. `target/pocket/core_top.sv` answers
-both commands at once and reports them busy until the runtime is done; `APF_BRIDGE.SAVESTATE` and `SAVESTATE_DONE`
-([control.md](control.md)) are the runtime's side, and `MONITOR.PEND` bit 5 its wake-up. The block is no memory the game
-or the runtime uses, so a game goes on while the Pocket reads a Memory out, and the booted game runs while the Pocket
-copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped in the monitor wherever it was:
-
-1. **The hardware at rest.** The monitor waits for the RSP to halt and its DMA, the RDP, the PI's engine and the SI to
-   be idle, and for the AI to have played its buffers (some 0.2 s, most of it the AI's), answering the other wake-ups as
-   they come. The game's tasks end and their interrupts are pending in the state. A state that cannot be made so in
-   half a second is refused (the Pocket's error), and the game goes on.
-2. **A state** is the runtime's own `.data` and `.bss` (the game's registers in the monitor's context, the game's TLB
-   entries and the kept ones, the PI's and the RI's registers, the saves' kinds and sizes); the RDRAM and the RDP's hidden
-   coverage plane; the cartridge's save, a FlashRAM's page buffer and status, the Controller Pak; and the hardware's
-   registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits) and the FPU's condition bit, the MI's
-   mode, interrupts and mask, the VI's registers, base, field and line, the AI's rate and its DMA enable, the PIF RAM, the
-   SI's address and whether the PIF has run commands, DMEM, the RSP's status, PC and semaphore, the DPC's registers, and
-   the sizes the Pocket's table has for the save's and the pak's slots. Its header names the runtime (a sum of its code)
-   and the ROM (its header's check words, title and ID): a state is refused by another `n64rt.sys` or another game.
-   The game then goes on (a Memory) as from the moment the hardware came to rest: the VI's line is waited for and Count,
-   Compare and the MI's interrupts are put back, so the copies' time is none of the game's.
-3. **A load** quiets the booted game's hardware the same way (its RSP halted where it is if it does not stop), puts back
-   the RSP (DMEM through the RDRAM; BROKE by a BREAK it runs), the DPC (CURRENT and END; a SYNC FULL through the RDP's
-   command port clears what END's write set), the PIF RAM, the AI, the VI, the MI and COP0, then the memories, waits for
-   the VI's line to be the state's (the game's next VI interrupt is as far ahead as it was), puts back Count, copies the
-   runtime's memory over its own and leaves the monitor through its exit, into the game where it was.
-
-Not in a state, because the hardware is at rest when it is made: IMEM and the RSP's registers (every task loads its
-microcode and sets its registers), the AI's queue and the SI's DMA. Nor the RDP's modes and TMEM, which nothing reads
-back: a game sets what it draws with in every frame's display list. A state is refused while controller 1 has the
-Transfer Pak (the Game Boy cartridge's RAM and clock are its own), and the core says it takes none when no game runs.
-`sim/mips_soc`'s `SS_SAVE`, `SS_LOAD` and `sim/mips_soc/state_compare.py` make a state, load it into another run and
-compare the two runs' pictures and sound.
-
 ## Controllers and settings
 
 The Pocket writes each setting of `pkg/pocket/Cores/tortuga.Mirlo64/interact.json` to a field of the two
@@ -965,8 +921,6 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
 | `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
-| `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
-| `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
 
 ### Programs for the SoC: `lang/mips/test`
