@@ -778,13 +778,14 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
 
 The Pocket writes each setting of `pkg/pocket/Cores/tortuga.Mirlo64/interact.json` to a field of the two
 `APF_INTERACT` words ([control.md](control.md)); the runtime reads the words at every poll of a controller and maps
-the Pocket's keys with `n64rt_pad_map()` (`lang/n64rt/n64rt_pad.h`), a pure function. The two crop settings go to the
-scan-out instead.
+the Pocket's keys with `n64rt_pad_map()` (`lang/n64rt/n64rt_pad.h`), a pure function. The two crop settings and "32-bit
+colour" go to the scan-out instead.
 
 | Setting | Address | Field | Options (value); the default in bold |
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1) |
+| 32-bit colour | `0x1000_013C` | `interact1[25]` | **Console (7-bit)** (0), Full (8-bit) (1): a 32-bit picture's channels at the VI's seven bits or all eight; a 16-bit picture is the same either way |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |

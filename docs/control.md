@@ -129,7 +129,7 @@ each setting has an address of its own and needs no mask.
 | 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
-| 15 | `0x1000_013C` | `INTERACT1[25]` | not used |
+| 15 | `0x1000_013C` | `INTERACT1[25]` | 32-bit colour (1: full, the scan-out reads it) |
 
 ## APF_VIDEO
 

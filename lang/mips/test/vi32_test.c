@@ -1,12 +1,13 @@
 /* A 32-bit frame buffer in the scan-out (rtl/soc/n64_video.sv vi_px32; docs/cimg32.md) with the VI in hardware (MIRLO_MON,
  * MIRLO_MI, MIRLO_VI; MONITOR.CTL's VI bit: the scan-out's base and filters are the VI registers'). The CPU fills a
- * 320 x 240 RGBA8888 picture: R a ramp across, G bands, B a ramp down, each with low bits the scan-out drops; the
+ * 320 x 240 RGBA8888 picture: R a ramp across, G bands, B a ramp down, each with low bits under the top five; the
  * coverage in the alpha byte's top three bits -- partial where (x ^ y) % 7 == 0 (coverage (x + y) % 7), complete (7)
  * elsewhere -- and noise in its low five, which nothing reads. The game (MCTL.GAME, as viaa_test) writes VI_STATUS type 3
  * with AA_MODE 0 (anti-alias) and DIVOT_ENABLE, VI_WIDTH 320 (pixels), ORIGIN and H_START; the program writes what the
  * runtime would (n64rt_io.c vi_width_gamma): VIDEO_FRAMEBUFFER.WIDTH 320 with bit 17 (32-bit pixels) and ROWWORDS 328 (a
  * word a pixel: 319 + 8 + 1). sim/mips_soc's VGA=1 writes the pads' frames; sim/vi_filter/vi32_check.py compares the last
- * with vi_model.py's filters on the picture's 16-bit view (each channel's top five bits, the alpha's coverage). */
+ * with tb_vi.cpp's filters on the picture's eight bits a channel and the alpha's coverage, at the VI's seven bits out (with
+ * INTERACT=0x1000013C:1, the core's "32-bit colour" at full: vi32_check.py --full, eight). */
 #include <stdint.h>
 #include <generated/csr.h>
 #include <generated/soc.h>

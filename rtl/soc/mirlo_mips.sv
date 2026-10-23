@@ -288,6 +288,7 @@ logic        vi_line, vi_latch, vi_irq, vi_chg, vi_clr, vi_blk, vi_gm, mon_vi;
 logic        vi_aa, vi_dv, vi_dd;
 wire  [4:0]  vid_crop_v;           // the core's video options (interact.json): crop lines at the top and bottom,
 wire  [1:0]  vid_crop_r;           // and pixels at the right (n64_video.sv)
+wire         vid_px32_full;        // and "32-bit colour": a 32-bit picture's eight bits a channel (else the VI's seven)
 logic [25:0] vi_base;
 logic        vi_il;
 logic [31:0] vi_rd, ai_rd;
@@ -420,7 +421,7 @@ mirlo_regs regs (.clk, .rst,
     .cont_joy('{apf_input_cont4_joy, apf_input_cont3_joy, apf_input_cont2_joy, apf_input_cont1_joy}),
     .cont_trig('{apf_input_cont4_trig, apf_input_cont3_trig, apf_input_cont2_trig, apf_input_cont1_trig}),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
-    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r),
+    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_px32_full(vid_px32_full),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
@@ -680,7 +681,7 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
     .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_il(mon_vi && vi_il), .vblank,
-    .vi_width(fb_width), .vi_px32(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
+    .vi_width(fb_width), .vi_px32(fb_tall), .px32_full(vid_px32_full), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

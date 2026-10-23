@@ -18,8 +18,10 @@
 //   clocks a field), TB_SEQ=0,1,1,0,...: vi_pal set to the n-th value at the n-th vsync (the TV system changes at the
 //   end of the field: the fields are checked line by line), TB_DUMP=prefix, TB_V.
 //   TB_PX32=1: a 32-bit picture (VI_STATUS type 3, vi_px32): RGBA8888, a pixel a word, the coverage in the alpha byte's
-//   top three bits, a row twice the words. The scan-out shows it as the 16-bit picture of each channel's top five bits
-//   and that coverage (rtl/soc/n64_video.sv): the model is the 16-bit one on that picture, made from the 32-bit buffer.
+//   top three bits, a row twice the words. The model's filters work on eight bits a channel for every picture (a 16-bit
+//   pixel's five << 3): a 32-bit pixel's taps and centre with all eight, the dedither's compares on the top five; the pads
+//   then show the VI's seven bits a channel of a 32-bit picture (the low bit 0), or all eight with TB_FULL=1 (px32_full,
+//   the core's "32-bit colour" setting).
 // A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out through the DMA port; a frame is taken off
 // the pads and every pixel compared (a serrated picture's field has a black line of DE before its 240). Outside DE the pads are 0
 // but for a serrated picture's words for the Pocket: the slot of
@@ -46,6 +48,7 @@ static std::vector<uint16_t> fbw;                 // the buffer
 static std::vector<uint8_t> hidw;                 // each pixel's hidden two coverage bits (the RDP's plane)
 static bool px32;                                 // TB_PX32: a 32-bit picture
 static std::vector<uint32_t> fb32;                // its buffer: RGBA8888, R the top byte (the word as the SDRAM gives it); fbw / hidw its 16-bit view
+static bool full;                                 // TB_FULL: px32_full
 static long hid_reads;                            // reads of the hidden plane (none for a 32-bit picture)
 static unsigned rng = 1;
 static int pal0;                                  // TB_PAL
@@ -70,23 +73,29 @@ static unsigned hidv(int x, unsigned r) { size_t i = (size_t)r * (wov ? 640 : WB
 static bool intap(int x, int j) { return x >= 0 && j >= 0 && j < (int)R; }
 static unsigned cvg(int x, int j) { return (pxv(x, frow(j)) & 1u) << 2 | hidv(x, frow(j)); }
 static bool complete(int x, int j) { return cvg(x, j) == 7u; }
+// a channel's eight bits: a 16-bit pixel's five << 3, a 32-bit pixel's byte (R the word's top one)
+static int ch8(int x, unsigned r, int k)
+{
+    if (!px32) return ch(pxv(x, r), k) << 3;
+    size_t i = (size_t)r * (wov ? 640 : WB) + (size_t)x;
+    return i < fb32.size() ? (int)(fb32[i] >> (24 - 8 * k)) & 255 : 0;
+}
 static int dedither;                                // the VI's dither filter (argument 5)
 static P6 aa_px(int x, int j)
 {
-    uint16_t c = pxv(x, frow(j));
     P6 o;
     int *po[3] = { &o.r, &o.g, &o.b };
-    if (complete(x, j)) {                            // complete: as it is (8 bits: c << 3, the N64's), or dedithered
+    if (complete(x, j)) {                            // complete: as it is (8 bits), or dedithered
         for (int k = 0; k < 3; k++) {
-            int cc = ch(c, k), v = cc << 3;
-            if (dedither) {
+            int c8 = ch8(x, frow(j), k), cc = c8 >> 3, v = c8;
+            if (dedither) {                          // (the ring's top five bits against the centre's; added to its eight)
                 int add = 0;
                 for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
                     if ((!dx && !dy) || !intap(x + dx, j + dy)) continue;
-                    int n = ch(pxv(x + dx, frow(j + dy)), k);
+                    int n = ch8(x + dx, frow(j + dy), k) >> 3;
                     add += n > cc ? 1 : n < cc ? -1 : 0;
                 }
-                v = (cc << 3) + add; if (v > 255) v = 255;
+                v = c8 + add; if (v > 255) v = 255;
             }
             *po[k] = v;
         }
@@ -94,18 +103,18 @@ static P6 aa_px(int x, int j)
     }
     static const int dx[6] = { -1, 1, -2, 2, -1, 1 }, dy[6] = { -1, -1, 0, 0, 1, 1 };
     for (int k = 0; k < 3; k++) {
-        int v[6], cc = ch(c, k);
+        int v[6], cc = ch8(x, frow(j), k);
         for (int i = 0; i < 6; i++) {
             int xx = x + dx[i], yy = j + dy[i];
-            v[i] = (intap(xx, yy) && complete(xx, yy)) ? ch(pxv(xx, frow(yy)), k) : cc;
+            v[i] = (intap(xx, yy) && complete(xx, yy)) ? ch8(xx, frow(yy), k) : cc;
         }
         // second smallest, second largest
         int s[6]; for (int i = 0; i < 6; i++) s[i] = v[i];
         for (int i = 0; i < 6; i++) for (int jj = i + 1; jj < 6; jj++) if (s[jj] < s[i]) { int q = s[i]; s[i] = s[jj]; s[jj] = q; }
         int mn = s[1] < cc ? s[1] : cc, mx = s[4] > cc ? s[4] : cc;
-        // the N64's, on 8-bit channels (c << 3): c8 + ((mn8 + mx8 - 2 c8) * (7 - cvg) + 4) >> 3; its top six bits
-        int c8 = cc << 3, w = 7 - (int)cvg(x, j);
-        int o8 = c8 + (int)floor(((double)(((mn << 3) + (mx << 3) - 2 * c8) * w) + 4.0) / 8.0);
+        // the N64's, on 8-bit channels: c8 + ((mn8 + mx8 - 2 c8) * (7 - cvg) + 4) >> 3
+        int c8 = cc, w = 7 - (int)cvg(x, j);
+        int o8 = c8 + (int)floor(((double)((mn + mx - 2 * c8) * w) + 4.0) / 8.0);
         *po[k] = o8;
     }
     return o;
@@ -114,7 +123,7 @@ static int med3(int a, int b, int c) { int s[3] = { a, b, c }; for (int i = 0; i
 // the pixel the pads show: window pixel i of line j (the source pixel (i X_SCALE) >> 10)
 static P6 model(int sx, int j, bool divot)
 {
-    if (nofilt) { uint16_t c = pxv(sx, frow(j)); return P6{ ch(c, 0) << 3, ch(c, 1) << 3, ch(c, 2) << 3 }; }
+    if (nofilt) return P6{ ch8(sx, frow(j), 0), ch8(sx, frow(j), 1), ch8(sx, frow(j), 2) };
     P6 e = aa_px(sx, j);
     if (divot) {
         bool part = !complete(sx, j) || (sx > 0 && !complete(sx - 1, j)) || !complete(sx + 1, j);
@@ -125,6 +134,8 @@ static P6 model(int sx, int j, bool divot)
     }
     return e;
 }
+// the pads: a 32-bit picture at the VI's seven bits a channel unless TB_FULL
+static P6 pads(P6 e) { if (px32 && !full) { e.r &= ~1; e.g &= ~1; e.b &= ~1; } return e; }
 
 static uint64_t sys_cyc;
 static uint64_t pad_hash = 1469598103934665603ull;      // FNV over every pad word and sync of the run (NTSC: the same before and after the PAL change)
@@ -181,6 +192,7 @@ int main(int argc, char **argv)
     if (const char *e = getenv("TB_LOAD")) LOAD = (unsigned)atoi(e);
     if (const char *e = getenv("TB_RDY")) RDY = (unsigned)atoi(e);
     px32 = getenv("TB_PX32") && atoi(getenv("TB_PX32"));
+    full = getenv("TB_FULL") && atoi(getenv("TB_FULL"));
     rng = seed * 2654435761u + 7;
     pal0 = getenv("TB_PAL") ? atoi(getenv("TB_PAL")) : 0;
     if (const char *q = getenv("TB_SEQ")) for (; *q; q++) if (*q == '0' || *q == '1') seq.push_back(*q - '0');
@@ -210,7 +222,7 @@ int main(int argc, char **argv)
         }
     }
     t = new Vn64_video;
-    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0; t->vi_px32 = px32;
+    t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0; t->vi_px32 = px32; t->px32_full = full;
     t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->vi_lines = 240;
     t->vi_px0 = PX0; t->vi_pw = PW; t->vi_y0 = Y0; t->vi_rows = R == 240 ? 0 : R; t->vi_xs = XS; t->vi_ys = YS; t->vi_nw = NW;
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
@@ -288,8 +300,8 @@ int main(int argc, char **argv)
                         const bool inw = j >= 0 && j < (int)R * WV && i >= 0 && i < (int)PW;
                         const bool crop = !inw || (unsigned)j < CV * WV || (unsigned)j >= (R - CV) * WV || (unsigned)i >= PW - 2 * CR;
                         int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
-                        P6 e = crop ? P6{ 0, 0, 0 } : model((int)((unsigned)i * XS >> 10), j, divot && !nofilt);
-                        if (!crop && frames == 3 && ((e.r & 7) != 0 || (e.g & 7) != 0 || (e.b & 7) != 0 || true)) changed += (e.r != ch(pxv((int)((unsigned)i * XS >> 10), frow(j)), 0) << 3);
+                        P6 e = crop ? P6{ 0, 0, 0 } : pads(model((int)((unsigned)i * XS >> 10), j, divot && !nofilt));
+                        if (!crop && frames == 3 && ((e.r & 7) != 0 || (e.g & 7) != 0 || (e.b & 7) != 0 || true)) changed += (e.r != (ch8((int)((unsigned)i * XS >> 10), frow(j), 0) & (px32 && !full ? ~1 : ~0)));
                         if (gr != e.r || gg != e.g || gb != e.b) {
                             if (errs < 10) printf("[frame %d] (%u,%u) window (%d,%d): pads %d %d %d, model %d %d %d\n", frames, x, ys, i, j, gr, gg, gb, e.r, e.g, e.b);
                             errs++; if (getenv("TB_V")) rowerr[ys]++;
@@ -318,6 +330,6 @@ int main(int argc, char **argv)
     if (fields_ok < (unsigned)(seq.empty() ? (pal0 ? 3 : nfr - 1 - (wov ? 1 : 0)) : seq.size())) { printf("field timing: not seen\n"); errs++; }
     printf("pad hash %016llx\n", (unsigned long long)pad_hash);
     printf("seed %u divot %d dedither %d partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
-           seed, divot, dedither, pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
+           seed, divot, dedither, pct, WB, px32 ? (full ? " 32-bit, 8 bits out" : " 32-bit") : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
     return errs != 0;
 }
