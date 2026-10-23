@@ -204,10 +204,16 @@ static void ll_patch(u32 vram, u32 len)
  * logarithm (its table of the mantissa's top three bits, and the exponent) and its own n, and ul_getrate takes 2^y in
  * floats: 2^k by the exponent, the rest by a polynomial. Against the double steps, a rate under 2 (a ramp of more than
  * eight samples) is the same 16.16 value or one 2^-16 off; above that, a float's 24 bits leave a relative 1e-6.
- * The function is found by its words, those that a link relocates masked (lui, and the loads and the address made off
- * it: ul_mask), through a hash; its arguments are the O32 ABI's, the two doubles in $f12 / $f14 (ulw_getrate takes them
- * to floats in $f12 / $f13, where this single-float build passes two floats), the count and the rate's lower half's
- * address in the caller's fifth and sixth words. It is replaced as the 64-bit helpers are, and runs as they do. */
+ * The function is found by its words, those that a link relocates masked (a lui's half, the offsets and immediates
+ * off a register a lui set, a jump's target: ul_mask), through a hash. Three builds of it are known (s_ul_fns), and
+ * ul_patch puts the 64-bit helpers' jump over each, so it runs as they do:
+ *  - two take the O32 ABI's arguments, the two doubles in $f12 / $f14, the count and the rate's lower half's address in
+ *    the caller's fifth and sixth words;
+ *  - one, from a compiler that allocates registers across a module, takes the count in $a0, the volume in $f16, the
+ *    target in $f14 and the address in $s1, and its callers keep values in what it leaves alone.
+ * So the wrappers keep every register but $v0 (the rate's upper half) as it was -- the patch's own $t6 / $t7 / $t9
+ * aside, which each build writes too -- and pass ul_getrate two floats in $f12 / $f13, as this single-float build
+ * takes them. */
 static const float s_ul_log2[8] = { -0.912537f, -0.752072f, -0.607683f, -0.476438f, -0.356144f, -0.245112f, -0.142019f, -0.045804f };
 static s32 ul_trunc(float f) { return (s32)f; }                           /* (trunc.w.s) */
 s32 ul_getrate(float vol, float tgt, s32 count, u16 *ratel)
@@ -232,58 +238,93 @@ s32 ul_getrate(float vol, float tgt, s32 count, u16 *ratel)
     *ratel = (u16)ul_trunc((r - (float)s) * 65535.0f);
     return s;
 }
+/* the wrappers' frame: ul_getrate's argument words, then $ra, the game's Status ($t7), the GPRs it may change, HI, LO,
+ * FCR31 and $f0 - $f19 */
+#define UL_SAVE(r, o) "    sw      $" #r ", " #o "($sp)\n"
+#define UL_LOAD(r, o) "    lw      $" #r ", " #o "($sp)\n"
+#define UL_REGS(op) op(ra, 16) op(t7, 20) op(at, 24) op(v1, 28) op(a0, 32) op(a1, 36) op(a2, 40) op(a3, 44) op(t0, 48) \
+                    op(t1, 52) op(t2, 56) op(t3, 60) op(t4, 64) op(t5, 68) op(t8, 72)
+#define UL_FREGS(op) op(0, 96) op(1, 100) op(2, 104) op(3, 108) op(4, 112) op(5, 116) op(6, 120) op(7, 124) op(8, 128) \
+                     op(9, 132) op(10, 136) op(11, 140) op(12, 144) op(13, 148) op(14, 152) op(15, 156) op(16, 160) \
+                     op(17, 164) op(18, 168) op(19, 172)
+#define UL_FSAVE(r, o) "    swc1    $f" #r ", " #o "($sp)\n"
+#define UL_FLOAD(r, o) "    lwc1    $f" #r ", " #o "($sp)\n"
+#define UL_ENTER "    addiu   $sp, $sp, -176\n" UL_REGS(UL_SAVE) UL_FREGS(UL_FSAVE) \
+                 "    mfhi    $t0\n    mflo    $t1\n    cfc1    $t2, $31\n    sw      $t0, 76($sp)\n    sw      $t1, 80($sp)\n" \
+                 "    sw      $t2, 84($sp)\n"
 __asm__(".text\n.set push\n.set noreorder\n.set noat\n.set mips3\n.set doublefloat\n.set oddspreg\n"
         ".globl ulw_getrate\n"
-        "ulw_getrate:\n"
-        "    addiu   $sp, $sp, -24\n"
-        "    sw      $ra, 20($sp)\n"
-        "    sw      $t7, 16($sp)\n"            /* (the game's Status: the patch has it there) */
-        "    cvt.s.d $f12, $f12\n"              /* vol, tgt: to floats, where this runtime's ABI has them */
+        "ulw_getrate:\n"                         /* (O32: the doubles in $f12 / $f14, the caller's fifth and sixth words) */
+        UL_ENTER
+        "    lw      $a2, 192($sp)\n"
+        "    lw      $a3, 196($sp)\n"
+        "    cvt.s.d $f12, $f12\n"
+        "    b       1f\n"
         "    cvt.s.d $f13, $f14\n"
-        "    lw      $a2, 40($sp)\n"            /* (the caller's fifth and sixth words: count, ratel) */
-        "    jal     ul_getrate\n"
-        "    lw      $a3, 44($sp)\n"
-        "    lw      $ra, 20($sp)\n"
-        "    lw      $t7, 16($sp)\n"
-        "    addiu   $sp, $sp, 24\n"
+        ".globl ulw_getrate_r\n"
+        "ulw_getrate_r:\n"                       /* (count $a0, volume $f16, target $f14, the address $s1) */
+        UL_ENTER
+        "    move    $a2, $a0\n"
+        "    move    $a3, $s1\n"
+        "    cvt.s.d $f12, $f16\n"
+        "    cvt.s.d $f13, $f14\n"
+        "1:  jal     ul_getrate\n"
+        "    nop\n"
+        "    lw      $t0, 76($sp)\n    lw      $t1, 80($sp)\n    lw      $t2, 84($sp)\n"
+        "    mthi    $t0\n    mtlo    $t1\n    ctc1    $t2, $31\n"
+        UL_FREGS(UL_FLOAD) UL_REGS(UL_LOAD)
+        "    addiu   $sp, $sp, 176\n"
         "    jr      $ra\n"
         "    mtc0    $t7, $12\n"
         ".set pop\n");
 void ulw_getrate(void);
-static u32 ul_mask(u32 w)
+void ulw_getrate_r(void);
+/* a word as the hash takes it: what a link relocates masked -- `hi` the registers a lui set so far */
+static u32 ul_mask(u32 w, u32 *hi)
 {
-    const u32 op = w >> 26, rs = (w >> 21) & 31u;
-    if (op == 0x0Fu) return w & 0xFFFF0000u;                               /* lui */
-    if ((op == 0x35u || op == 0x31u || op == 0x09u) && rs == 1u) return w & 0xFFFF0000u;   /* ldc1 / lwc1 / addiu off $at */
-    if (op == 0x09u && rs == 6u) return w & 0xFFFF0000u;                  /* addiu a2, a2, %lo(the table) */
+    const u32 op = w >> 26, rs = (w >> 21) & 31u, rt = (w >> 16) & 31u;
+    /* addiu, lb, lh, lw, lbu, lhu, sb, sh, sw, lwc1, ldc1, ld, swc1, sdc1, sd */
+    static const u32 s_imm_lo = 1u << 0x09, s_imm_hi = 1u << (0x20 - 32) | 1u << (0x21 - 32) | 1u << (0x23 - 32) |
+        1u << (0x24 - 32) | 1u << (0x25 - 32) | 1u << (0x28 - 32) | 1u << (0x29 - 32) | 1u << (0x2B - 32) |
+        1u << (0x31 - 32) | 1u << (0x35 - 32) | 1u << (0x37 - 32) | 1u << (0x39 - 32) | 1u << (0x3D - 32) | 1u << (0x3F - 32);
+    if (op == 0x0Fu) { *hi |= 1u << rt; return w & 0xFFFF0000u; }         /* lui */
     if (op == 0x02u || op == 0x03u) return w & 0xFC000000u;               /* j, jal */
+    if ((*hi >> rs & 1u) && ((op < 32u ? s_imm_lo >> op : s_imm_hi >> (op - 32u)) & 1u)) return w & 0xFFFF0000u;
     return w;
 }
-#define UL_GETRATE_WORDS 160u
-#define UL_GETRATE_HASH  0xED6C70ECu            /* FNV-1a of the masked words, big-endian */
+static const struct { u32 first, last2, last1, words, hash; void (*fn)(void); } s_ul_fns[] = {
+    { 0x27BDFFB8u, 0x03E00008u, 0x27BD0048u, 160u, 0x97830ABCu, ulw_getrate },     /* (FNV-1a of the masked words) */
+    { 0x27BDFF48u, 0x03E00008u, 0x27BD00B8u, 121u, 0xB31A06F9u, ulw_getrate },
+    { 0x27BDFF18u, 0x03E00008u, 0x00000000u, 116u, 0x23CA9D96u, ulw_getrate_r },
+};
 static void ul_patch(u32 vram, u32 len)
 {
-    for (u32 a = vram; a + 4u * UL_GETRATE_WORDS <= vram + len; a += 4u) {
+    for (u32 a = vram; a + 4u * 116u <= vram + len; a += 4u) {
         const u32 *w = rd32(a);
-        if (w[0] != 0x27BDFFB8u || w[UL_GETRATE_WORDS - 2] != 0x03E00008u || w[UL_GETRATE_WORDS - 1] != 0x27BD0048u) continue;
-        u32 h = 0x811C9DC5u;
-        for (u32 i = 0; i < UL_GETRATE_WORDS; i++) {
-            const u32 m = ul_mask(w[i]);
-            for (int b = 24; b >= 0; b -= 8) h = (h ^ ((m >> b) & 0xFFu)) * 0x01000193u;
+        for (u32 k = 0; k < sizeof s_ul_fns / sizeof s_ul_fns[0]; k++) {
+            const u32 n = s_ul_fns[k].words;
+            if (a + 4u * n > vram + len || w[0] != s_ul_fns[k].first || w[n - 2] != s_ul_fns[k].last2 || w[n - 1] != s_ul_fns[k].last1) continue;
+            u32 h = 0x811C9DC5u, hi = 0;
+            for (u32 i = 0; i < n; i++) {
+                const u32 m = ul_mask(w[i], &hi);
+                for (int b = 24; b >= 0; b -= 8) h = (h ^ ((m >> b) & 0xFFu)) * 0x01000193u;
+            }
+            if (h != s_ul_fns[k].hash) continue;
+            const u32 f = (u32)(uintptr_t)s_ul_fns[k].fn;
+            u32 *d = rd32(a);
+            d[0] = 0x400F6000u;                  /* mfc0 t7, Status                  (as ll_patch) */
+            d[1] = 0x35EE0001u;                  /* ori  t6, t7, 1 */
+            d[2] = 0x39CE0001u;                  /* xori t6, t6, 1 */
+            d[3] = 0x408E6000u;                  /* mtc0 t6, Status */
+            d[4] = 0;
+            d[5] = 0x3C190000u | (f >> 16);      /* lui  t9, hi */
+            d[6] = 0x37390000u | (f & 0xFFFFu);  /* ori  t9, t9, lo */
+            d[7] = 0x03200008u;                  /* jr   t9 */
+            d[8] = 0;
+            printf("n64rt: the audio library's envelope rate at %08lx done in the runtime (build %lu)\n", (unsigned long)a,
+                   (unsigned long)k);
+            break;
         }
-        if (h != UL_GETRATE_HASH) continue;
-        const u32 f = (u32)(uintptr_t)ulw_getrate;
-        u32 *d = rd32(a);
-        d[0] = 0x400F6000u;                      /* mfc0 t7, Status                  (as ll_patch) */
-        d[1] = 0x35EE0001u;                      /* ori  t6, t7, 1 */
-        d[2] = 0x39CE0001u;                      /* xori t6, t6, 1 */
-        d[3] = 0x408E6000u;                      /* mtc0 t6, Status */
-        d[4] = 0;
-        d[5] = 0x3C190000u | (f >> 16);          /* lui  t9, hi */
-        d[6] = 0x37390000u | (f & 0xFFFFu);      /* ori  t9, t9, lo */
-        d[7] = 0x03200008u;                      /* jr   t9 */
-        d[8] = 0;
-        printf("n64rt: the audio library's envelope rate at %08lx done in the runtime\n", (unsigned long)a);
     }
 }
 #endif

@@ -532,7 +532,10 @@ eight samples, `(target / volume)^(8 / samples)` in 16.16, which it takes as `(1
 `2^30 / samples`, squared three times, in double precision. With this FPU's doubles (floats, above) `1 + ln(x) / 2^30` is
 1.0, so every rate was 1.0 and no volume moved: notes that start from silence stayed silent, the others never faded and
 stopped dead. `ul_patch` finds the function by its words (the ones a link relocates masked, through a hash) and puts the
-same jump over it, to `ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
+same jump over it. Three builds of the function are known: two take the O32 ABI's arguments, and one, from a compiler
+that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`) and is
+called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
+`ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
 of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. These
 two are the only changes the runtime makes to the game's code, and they are made in the RDRAM's copy.
 
