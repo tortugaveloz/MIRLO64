@@ -62,9 +62,12 @@ result codes). A data slot is one of the entries of the core's `data.json`.
 | `COMMAND_RESULT_CODE` | `0x2C` | R | The last command's result (3 bits) |
 | `BOOT_READY` | `0x30` | RW | A bit the software can set and read; the Pocket is told the core is ready by the SDRAM's controller, not by this |
 | `HOST_STATE` | `0x34` | R | Bit 0 `RESET_N`: the Pocket has released the core's reset. Bit 1 `LOADED`: it has loaded the data slots |
+| `SAVESTATE` | `0x38` | RW | The Pocket's save states ([mips.md](mips.md), "Save states"). Bit 0 `SUPPORTED` (RW, 1 after reset): what the Pocket's query is told. Bit 1 `SAVE` (R): the Pocket asks for a state. Bit 2 `LOAD` (R): it has copied one in and asks for its load. Each stays set until `SAVESTATE_DONE` |
+| `SAVESTATE_DONE` | `0x3C` | W | A write ends the request: bit 0 set, it failed (the Pocket's error); clear, it is done |
 
 The Pocket loads the ROM, the runtime and the saves by itself before the core starts, and reads the nonvolatile slots
-back when the core is quit: the runtime only sets a save's size (`FILE_SIZE`).
+back when the core is quit: the runtime only sets a save's size (`FILE_SIZE`). A save state's request (the Pocket's
+Savestate Start or Load, `target/pocket/core_top.sv`) wakes the monitor through `MONITOR.PEND` bit 5.
 
 ## APF_INPUT
 
@@ -227,7 +230,7 @@ The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's 
 |---|---|---|---|
 | `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads |
 | `CTL` | `0x04` | RW | Bit 0 `OWN`: the game's interrupt line is the one below, not the RSP's own. Bit 1 `RCP`: that line. Bit 2 `MI`: the game's interrupt is the MI's line. Bit 3 `VI`: the VI is the hardware's. Bit 4 `AI`: the AI is the hardware's |
-| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run |
+| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run; bit 5 the Pocket asks for a save state or for its load (`APF_BRIDGE.SAVESTATE`) |
 | `MASK` | `0x0C` | RW | Which of them interrupt the monitor |
 | `KICK` | `0x10` | RW | A write of 1s sets `PEND`'s bits |
 | `LEVEL` | `0x14` | R | Bit 0: the RSP's interrupt, as it is |

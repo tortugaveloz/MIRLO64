@@ -43,6 +43,12 @@ BLOCKS = [
         ("COMMAND_RESULT_CODE", 0x2C, R,  1, []),
         ("BOOT_READY",          0x30, RW, 1, []),   # (kept for the name: the SDRAM tells the Pocket)
         ("HOST_STATE",          0x34, R,  1, [("RESET_N", 0, 1), ("LOADED", 1, 1)]),
+        # the Pocket's save states (Sleep, Memories: core_top's Savestate Start and Load). Read: [0] SUPPORTED as written (1
+        # after reset), [1] SAVE: the Pocket asks for a state, [2] LOAD: it has written one and asks for it to be loaded -- each
+        # until SAVESTATE_DONE; write: [0] SUPPORTED, what the Pocket's query is told
+        ("SAVESTATE",           0x38, RW, 1, [("SUPPORTED", 0, 1), ("SAVE", 1, 1), ("LOAD", 2, 1)]),
+        # write: the request is over -- [0] 1: it failed (the Pocket's error), 0: done
+        ("SAVESTATE_DONE",      0x3C, W,  1, []),
     ]),
     ("APF_INPUT", 0x0200, [
         (f"CONT{i}_{k}", 0x00 + 4 * (4 * j + i - 1), R, 1, [])
@@ -124,8 +130,8 @@ BLOCKS = [
         # (ID bit 5, MIRLO_SI: the SI and the PIF RAM are the hardware's; no CTL bit: the game's window is MCTL bit 8's)
         ("CTL",   0x04, RW, 1, [("OWN", 0, 1), ("RCP", 1, 1), ("MI", 2, 1), ("VI", 3, 1), ("AI", 4, 1)]),
         # what has happened (write 1s to clear): [0] the RSP's interrupt rose, [1] a field began, [2] a
-        # tick of 4.2 ms, [3] the RDP completed a SYNC FULL, [4] (MIRLO_SI) the PIF has commands to run; the mask is those that
-        # interrupt the monitor
+        # tick of 4.2 ms, [3] the RDP completed a SYNC FULL, [4] (MIRLO_SI) the PIF has commands to run, [5] the Pocket asks for a
+        # save state or for its load (APF_BRIDGE.SAVESTATE); the mask is those that interrupt the monitor
         ("PEND",  0x08, RW, 1, []),
         ("MASK",  0x0C, RW, 1, []),
         ("KICK",  0x10, RW, 1, []),                # write 1s to set PEND's bits

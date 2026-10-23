@@ -36,6 +36,15 @@
 //                    the program's megabyte and the saves), the chips'
 //                    models are compared with the files, each byte where
 //                    docs/mips.md says it is
+// The Pocket's save states (Sleep, Memories: target/pocket/core_top.sv, lang/n64rt/n64rt_state.c):
+//   SS_SAVE=<field>  the Pocket asks for a state at that field; when the core
+//                    answers, the state's block is read out into SS_OUT
+//                    (default <-o dir>/state.bin). SS_EXIT=1: the run ends then
+//   SS_LOAD=<file>   a state the Pocket copies in at the field SS_LOAD_AT
+//                    (default 60) and then asks the core to load
+//   SS_BRIDGE=1      the state read out and copied in through the bridge's
+//                    port, a word at a time, as the Pocket does (else straight
+//                    to and from the chip model)
 #include "Vsoc_sim_top.h"
 #include "Vsoc_sim_top___024root.h"
 #include "verilated.h"
@@ -316,9 +325,14 @@ static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
 static bool o_pad_load = true;          // PAD.., PAD_MASH are to be read (at the start, and again by a run from a checkpoint)
 static FILE *o_ailog; static bool o_ailog_load = true;   // AILOG likewise (a run from a checkpoint: its own file, or none)
+static long o_ss_save, o_ss_load_at;    // SS_SAVE, SS_LOAD_AT (SS_LOAD, SS_OUT, SS_EXIT are read at their use): a run from a checkpoint's too
+static bool ss_bridge;
 static void opts_load()
 {
     o_cmodel = getenv("CONMODEL") != nullptr;
+    o_ss_save = getenv("SS_SAVE") ? atol(getenv("SS_SAVE")) : -1;
+    o_ss_load_at = getenv("SS_LOAD_AT") ? atol(getenv("SS_LOAD_AT")) : 60;
+    ss_bridge = getenv("SS_BRIDGE") != nullptr;
     o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
     ct_from = -1; ct_n = 0;
     o_exc_per = o_excstat && atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
@@ -611,6 +625,21 @@ static void dump_frame(const std::string &dir, long n)
     fclose(f);
 }
 
+// the save state's block (lang/mips/include/layout.h LAYOUT_STATE; target/pocket/core_top.sv SS_ADDR, SS_SIZE)
+static const uint32_t SS_SDRAM = 0x02100000u, SS_BRIDGE_ADDR = 0x06100000u, SS_BYTES = 0x00970000u;
+static int ss_req;                  // 1 a save asked, 2 a load asked, 3 a load's copy under way, 4 a save's read-out under way
+static long ss_req_sys;
+static bool ss_done_was;
+static std::string ss_out;
+static void ss_write(const std::string &path, const std::vector<uint8_t> &d)
+{
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f || fwrite(d.data(), 1, d.size(), f) != d.size()) printf("[state: cannot write %s]\n", path.c_str());
+    else printf("[state: %zu bytes into %s]\n", d.size(), path.c_str());
+    if (f) fclose(f);
+    fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
@@ -716,6 +745,7 @@ int main(int argc, char **argv)
     std::vector<std::pair<int, uint32_t>> ia_list;
     if (const char *e = getenv("INTERACT")) for (const char *q = e; *q; ) { int a = (int)strtol(q, (char **)&q, 0); if (*q == ':') q++; uint32_t v = (uint32_t)strtoul(q, (char **)&q, 0); ia_list.push_back({a, v}); if (*q == ',') q++; }
     t->file_size = slots[0].size; t->br_complete = 0;
+    t->ss_save_t = 0; t->ss_load_t = 0;
     long br_done_at = -1;                           // the bridge's read completes then (sys cycles)
     t->reset = 1;
     t->wbm_cyc = 0; t->wbm_we = 0; t->wbm_adr = 0; t->wbm_dat_w = 0;
@@ -790,6 +820,30 @@ int main(int argc, char **argv)
                     t->host_reset_n = 1; t->host_loaded = !noload;
                 }
             }
+            // the save states: a load asked for once its copy through the bridge is done; the core's answer, and a state read out
+            if (ss_req == 3 && br_jobs.empty() && !t->wbm_cyc) { ss_req = 2; ss_req_sys = sys; t->ss_load_t = !t->ss_load_t; }
+            if (t->ss_done_t != ss_done_was) {
+                ss_done_was = t->ss_done_t;
+                printf("[state: the core answers the %s at field %ld: %s, %.1f ms after the request]\n", ss_req == 1 ? "save" : "load", frames,
+                       t->ss_err ? "FAILED" : "done", (sys - ss_req_sys) / TB_SYS_KHZ);
+                fflush(stdout);
+                if (o_ailog) fprintf(o_ailog, "M %s\n", ss_req == 1 ? "save" : "load");     // (state_compare.py --audio: where it was)
+                if (ss_req == 1 && !t->ss_err) {
+                    ss_out = getenv("SS_OUT") ? getenv("SS_OUT") : (outdir.empty() ? std::string(".") : outdir) + "/state.bin";
+                    if (ss_bridge) {
+                        slots[7].back.assign(SS_BYTES, 0); slots[7].size = SS_BYTES;
+                        br_jobs.push_back({7, false, SS_BRIDGE_ADDR, 0, SS_BYTES});
+                        ss_req = 4;
+                    } else {
+                        std::vector<uint8_t> d(SS_BYTES);
+                        for (uint32_t i = 0; i < SS_BYTES; i += 4) { uint32_t v = rd_word((SS_SDRAM + i) / 4); d[i] = v >> 24; d[i + 1] = v >> 16; d[i + 2] = v >> 8; d[i + 3] = v; }
+                        ss_write(ss_out, d);
+                        ss_req = 0;
+                        if (getenv("SS_EXIT")) done = true;
+                    }
+                } else ss_req = 0;
+            }
+            if (ss_req == 4 && br_jobs.empty() && !t->wbm_cyc) { ss_write(ss_out, slots[7].back); ss_req = 0; if (getenv("SS_EXIT")) done = true; }
             // PAD="from-to:keys[/joy],...": controller 1's keys (hex, the Pocket's: 0010 A, 0020 B,
             // 8000 Start, 0001/2/4/8 the D-pad; KEY_TYPE in the top nibble: 30000000 a dock pad with
             // analog) held over those fields, and optionally its four stick bytes (hex: LX, LY, RX, RY from
@@ -1114,6 +1168,26 @@ int main(int argc, char **argv)
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
                 frames++;
+                // SS_SAVE / SS_LOAD (the header): the Pocket's request, at its field -- a load once the state is in
+                {
+                    if (frames == o_ss_save) {
+                        printf("[state: the Pocket asks for a save state at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                        ss_req = 1; ss_req_sys = sys; t->ss_save_t = !t->ss_save_t;
+                    }
+                    if (frames == o_ss_load_at && getenv("SS_LOAD")) {
+                        std::vector<uint8_t> d;
+                        if (!read_file(getenv("SS_LOAD"), d) || d.size() != SS_BYTES) { printf("[state: %s is no state]\n", getenv("SS_LOAD")); return 2; }
+                        printf("[state: the Pocket copies a state in at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
+                        if (ss_bridge) {
+                            slots[7].data = d; slots[7].size = (uint32_t)d.size();
+                            br_jobs.push_back({7, true, SS_BRIDGE_ADDR, 0, d.size()});
+                            ss_req = 3;             // (the load is asked for when the bridge is done)
+                        } else {
+                            for (size_t i = 0; i < d.size(); i += 4) wr_word((SS_SDRAM + (uint32_t)i) / 4, be32(d, i));
+                            ss_req = 2; ss_req_sys = sys; t->ss_load_t = !t->ss_load_t;
+                        }
+                    }
+                }
                 // CKPT=<dir>,<n>: every n fields a copy of the run is left waiting (a process forked from it, asleep). A file
                 // <dir>/go_<field> starts a run from that copy, as many times as wanted: its lines are NAME=value -- LOG (its
                 // output), OUT and EVERY (-o, -e), MCYCLES (how many more million cycles), and any of the options read again

@@ -405,6 +405,52 @@ module core_top (
   wire savestate_load_ok;
   wire savestate_load_err;
 
+  // Sleep and Memories: the Pocket's save states (docs/mips.md, "Save states"). The state is one block of the SDRAM that
+  // the runtime writes and reads (lang/n64rt/n64rt_state.c): at the bridge's 0x0610_0000 -- the SDRAM's 0x0210_0000, above
+  // the last byte of a ROM of 64 MiB, which the bridge reads and writes there as it is (rtl/soc/mirlo_mips.sv) -- and of
+  // a fixed size. A start or a load (core_bridge_cmd holds it until its ack, and then polls the result) is acknowledged
+  // at once and is busy from then on; it turns a toggle the SoC takes into its own clock (mirlo_regs.sv: it wakes the
+  // runtime), and the runtime's answer comes back as the turn of another, with its outcome (ss_err) settled before it.
+  // A save is ready to be read out, and a load done, when the runtime has answered; the Pocket copies a state in before
+  // it asks for its load. Whether the core takes a state at all (SUPPORTED) is the runtime's to say.
+  localparam [31:0] SS_ADDR = 32'h0610_0000;
+  localparam [31:0] SS_SIZE = 32'h0097_0000;            // (lang/n64rt/n64rt_state.c: SS_BYTES)
+  wire ss_done_t, ss_err, ss_sup;
+  reg  ss_save_t = 0, ss_load_t = 0, ss_ack = 0, ss_st_d = 0, ss_ld_d = 0, ss_op = 0, ss_busy = 0;
+  reg  ss_st_ok = 0, ss_st_err = 0, ss_ld_ok = 0, ss_ld_err = 0, ss_sup_s1 = 0, ss_sup_s2 = 0;
+  reg  [2:0] ss_done_s = 0;
+  always @(posedge clk_74a) begin
+    ss_st_d <= savestate_start;
+    ss_ld_d <= savestate_load;
+    ss_done_s <= {ss_done_s[1:0], ss_done_t};
+    ss_sup_s1 <= ss_sup;
+    ss_sup_s2 <= ss_sup_s1;
+    ss_ack <= 0;
+    if (savestate_start && !ss_st_d) begin
+      ss_save_t <= ~ss_save_t; ss_op <= 0; ss_busy <= 1; ss_st_ok <= 0; ss_st_err <= 0; ss_ack <= 1;
+    end
+    if (savestate_load && !ss_ld_d) begin
+      ss_load_t <= ~ss_load_t; ss_op <= 1; ss_busy <= 1; ss_ld_ok <= 0; ss_ld_err <= 0; ss_ack <= 1;
+    end
+    if (ss_done_s[2] != ss_done_s[1] && ss_busy) begin
+      ss_busy <= 0;
+      if (ss_op) begin ss_ld_ok <= !ss_err; ss_ld_err <= ss_err; end
+      else begin ss_st_ok <= !ss_err; ss_st_err <= ss_err; end
+    end
+  end
+  assign savestate_supported   = ss_sup_s2;
+  assign savestate_addr        = SS_ADDR;
+  assign savestate_size        = SS_SIZE;
+  assign savestate_maxloadsize = SS_SIZE;
+  assign savestate_start_ack   = ss_ack;
+  assign savestate_start_busy  = ss_busy && !ss_op;
+  assign savestate_start_ok    = ss_st_ok;
+  assign savestate_start_err   = ss_st_err;
+  assign savestate_load_ack    = ss_ack;
+  assign savestate_load_busy   = ss_busy && ss_op;
+  assign savestate_load_ok     = ss_ld_ok;
+  assign savestate_load_err    = ss_ld_err;
+
   wire osnotify_inmenu;
 
   // bridge target commands
@@ -954,6 +1000,12 @@ module core_top (
       .apf_bridge_boot_ready(boot_ready),
       .apf_bridge_host_reset_n(reset_n_s),
       .apf_bridge_host_loaded(host_loaded_s2),
+
+      .apf_ss_save_t(ss_save_t),
+      .apf_ss_load_t(ss_load_t),
+      .apf_ss_done_t(ss_done_t),
+      .apf_ss_err(ss_err),
+      .apf_ss_sup(ss_sup),
 
       .apf_id_chip_id(chip_id),
 

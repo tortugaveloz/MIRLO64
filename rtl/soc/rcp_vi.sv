@@ -36,6 +36,9 @@
 //            half-line 95) where the NTSC modes' is 18.
 //   WIDTH, H_START, V_START, X_SCALE, Y_SCALE, and STATUS' TYPE   what the scan-out's window, size and pixel size come from (the runtime computes them: n64rt_io.c, and
 //            is told when one of them has changed -- `chg`, a pulse -- reading the registers back).
+//   0x38     (not the console's: the runtime's, for a save state) read {field, 0, the base}: the origin the scan-out takes,
+//            which ORIGIN's read does not give (a hi-res picture's second field's origin leaves it as it was), and the field
+//            bit as CURRENT has it with SERRATE; a write sets both
 // The accesses are sequenced by mirlo_mips.sv: the address is held while the access lasts; for a read, `rd` is the answer
 // in the cycle after the address (rd_s); a write is done in the cycle `wr_s` is up.
 `default_nettype none
@@ -117,6 +120,7 @@ always_ff @(posedge clk) begin
         else if (wd[9:6] == 4'b1001 || wd[9:6] == 4'b1010) begin vs_set <= 1'b1; vs_pal <= 1'b1; end      // 576..703: 625 lines
     end
     4'd9: hs_zero <= wd == 32'd0;
+    4'd14: org_b <= wd[22:0];                        // (a save state's base, put back)
     default: ;
     endcase
 end
@@ -150,6 +154,7 @@ always_ff @(posedge clk) begin
             if (hold != 2'd0) hold <= hold - 2'd1;
             else if (nl == NL_LAST) begin hold <= tv_pal ? 2'd1 : 2'd2; field <= ~field; end
         end
+        if (wr_s && a == 4'd14) field <= wd[31];         // (a save state's field, put back)
         irq <= nl_n != nl && nl_n == vint;
     end
 end
@@ -167,6 +172,7 @@ assign gamma = gm_f;
 always_comb begin
     rd = q;
     if (a == 4'd4) rd = {22'd0, nl, field & st_serr};
+    else if (a == 4'd14) rd = {field, 8'd0, org_b};
     else if (a > 4'd13) rd = 32'd0;
 end
 
