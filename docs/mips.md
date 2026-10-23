@@ -625,7 +625,8 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
   origins in different buffers, and the woven frame is the newest buffer's whole, at the same rows every field.
 - **VI_STATUS**: GAMMA, AA_MODE, DIVOT and the dither filter bit go to the scan-out at the latch.
 - **VI_H_START** written 0 (`osViBlack`) blanks the picture, and so does an origin beyond `MONITOR.VITHR`, the last
-  origin at which a picture of the mode's size fits in the RDRAM.
+  origin at which a picture of the mode's size fits in the RDRAM: from the next frame boundary the scan-out reads
+  nothing and sends black, every line, whatever its line buffers held of the picture before.
 - **VI_V_SYNC** names the TV system once written: 512 - 575 is 525 lines (NTSC, MPAL and a PAL console's 60 Hz modes),
   576 - 703 is 625 lines (PAL, 50 Hz); another value changes nothing. The change is taken at a frame boundary.
 

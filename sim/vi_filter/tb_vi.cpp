@@ -20,6 +20,9 @@
 //   TB_PX32=1: a 32-bit picture (VI_STATUS type 3, vi_px32): RGBA8888, a pixel a word, the coverage in the alpha byte's
 //   top three bits, a row twice the words. The scan-out shows it as the 16-bit picture of each channel's top five bits
 //   and that coverage (rtl/soc/n64_video.sv): the model is the 16-bit one on that picture, made from the 32-bit buffer.
+//   TB_BLANK=1: the VI blanked after the first frame checked (`enable` low: H_START 0, an origin out of the RDRAM): one
+//   frame more, not checked (the boundary that takes it), then one that must be black all over -- not the last row read
+//   on every line.
 // A random RGBA5551 framebuffer (bit 0: the pixel is complete) is scanned out through the DMA port; a frame is taken off
 // the pads and every pixel compared (a serrated picture's field has a black line of DE before its 240). Outside DE the pads are 0
 // but for a serrated picture's words for the Pocket: the slot of
@@ -225,7 +228,8 @@ int main(int argc, char **argv)
     long vs_at = -1, hs_at = -1, tim_errs = 0; int hs_n = 0, hs_short = 0; unsigned fields_ok = 0;
     int phs = 0;
     // (a woven picture: the first frame is a progressive one, the second the change of timing -- one more)
-    const int nfr = (seq.empty() ? (pal0 ? 5 : 4) : (int)seq.size() + 3) + (ser && ((WB == 640 && !strstr(argc > 4 ? argv[4] : "", "640p")) || WB == 1280) ? 1 : 0);
+    const bool blank = getenv("TB_BLANK") && atoi(getenv("TB_BLANK"));
+    const int nfr = (blank ? 2 : 0) + (seq.empty() ? (pal0 ? 5 : 4) : (int)seq.size() + 3) + (ser && ((WB == 640 && !strstr(argc > 4 ? argv[4] : "", "640p")) || WB == 1280) ? 1 : 0);
     // the lines of the two systems (sys clocks): NTSC 790 clk_vid x 5 = 3950, nine 788 x 5 = 3940; PAL 800 x 5 = 4000, fifty 792 x 5 = 3960
     // (a woven frame: lines half as long, twice as many, twice as many short: 1975 / 1970 and 2000 / 1980, 528 and 626, 18 and 100)
     const int WV = wov ? 2 : 1;
@@ -277,7 +281,8 @@ int main(int argc, char **argv)
             }
             if (!seq.empty()) t->vi_pal = sys_of(frames);       // (V_j asks for F_j's system)
             vs_at = sys_cyc; hs_n = 0; hs_short = 0; hs_ds.clear();
-            if (frames >= 3) {
+            const bool blanked = blank && frames >= 5;
+            if (frames >= 3 && !(blank && frames == 4)) {
                 if (rows.size() != 240u * WV) { printf("frame %d: %zu rows\n", frames, rows.size()); errs++; }
                 for (unsigned ys = 0; ys < rows.size() && ys < 240u * WV; ys++) {
                     if (rows[ys].size() != 640 * 3) { printf("row %u: %zu px\n", ys, rows[ys].size() / 3); errs++; continue; }
@@ -286,7 +291,7 @@ int main(int argc, char **argv)
                     for (unsigned x = 0; x < 640; x++) {
                         const int i = (int)x - (int)PX0;
                         const bool inw = j >= 0 && j < (int)R * WV && i >= 0 && i < (int)PW;
-                        const bool crop = !inw || (unsigned)j < CV * WV || (unsigned)j >= (R - CV) * WV || (unsigned)i >= PW - 2 * CR;
+                        const bool crop = blanked || !inw || (unsigned)j < CV * WV || (unsigned)j >= (R - CV) * WV || (unsigned)i >= PW - 2 * CR;
                         int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
                         P6 e = crop ? P6{ 0, 0, 0 } : model((int)((unsigned)i * XS >> 10), j, divot && !nofilt);
                         if (!crop && frames == 3 && ((e.r & 7) != 0 || (e.g & 7) != 0 || (e.b & 7) != 0 || true)) changed += (e.r != ch(pxv((int)((unsigned)i * XS >> 10), frow(j)), 0) << 3);
@@ -307,6 +312,7 @@ int main(int argc, char **argv)
                     fclose(f);
                 }
             }
+            if (blank && frames == 3) t->enable = 0;
             rows.clear(); row.clear();
         }
         pvs = t->vga_vsync;

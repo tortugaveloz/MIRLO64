@@ -594,9 +594,13 @@ always_ff @(posedge clk_vid) if (ce && adv)
 // libultra's osViBlack, the game's level changes, when the framebuffer is
 // being rewritten -- and below its last line (V_START..V_END: SM64 shows
 // 237 lines from its origin, one line into the framebuffer: the 240th
-// would be the next framebuffer's first, or the memory past the last one)
+// would be the next framebuffer's first, or the memory past the last one).
+// And a frame the DMA does not read (`running` low: not `enable` -- the VI's H_START 0 or its origin out of the RDRAM --,
+// or the first of a mode) is black, as the console's blanked VI: its FIFO stays empty, the line buffers are not written
+// (lwe) and would show the last row read on every line, the picture before the blank as vertical bars. (`running` is
+// taken at the frame boundary, in vblank: static for the frame's lines.)
 logic [1:0] blk_s; logic [8:0] lin_s1, lin_s2;
-always_ff @(posedge clk_vid) begin blk_s <= {blk_s[0], vi_black}; lin_s1 <= vi_lines; lin_s2 <= lin_s1; end
+always_ff @(posedge clk_vid) begin blk_s <= {blk_s[0], vi_black || !running}; lin_s1 <= vi_lines; lin_s2 <= lin_s1; end
 // The core's video options: the picture's first and last crop_v lines and its last crop_r columns (of the 320-wide
 // frame this was: two clocks each), blanked -- relative to the picture (a window too), the frame and its timing unchanged. Thresholds
 // in the timing's own counts, registered: static.
