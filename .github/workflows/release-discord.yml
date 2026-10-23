@@ -1,0 +1,33 @@
+# A release, when it is published, is announced on Discord: a message that is only the release's link (Discord
+# shows its preview). Pre-releases too: every release here is one. The webhook is the repository secret
+# DISCORD_WEBHOOK; without it the job does nothing and succeeds.
+#
+# The link is never part of a command: jq reads it from the event's file and writes the JSON, curl sends that file.
+name: Release on Discord
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Post the release's link
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "::notice::DISCORD_WEBHOOK is not set: nothing posted"
+            exit 0
+          fi
+          jq '{content: .release.html_url, allowed_mentions: {parse: []}}' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/discord.json"
+          jq -r .content "$RUNNER_TEMP/discord.json"
+          curl -fsS --retry 3 -H "Content-Type: application/json" --data-binary "@$RUNNER_TEMP/discord.json" \
+               "$DISCORD_WEBHOOK" > /dev/null
+          echo "posted"
