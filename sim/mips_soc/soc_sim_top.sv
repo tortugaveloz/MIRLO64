@@ -9,6 +9,8 @@ module soc_sim_top (
     output wire         file_size_wr,       // the program sets the selected slot's size (what the Pocket writes back)
     output wire  [31:0] file_size_new,
     input  wire         br_complete,
+    input  wire         ss_save_t, ss_load_t,   // the Pocket's save states (SS_SAVE, SS_LOAD): a request is a turn of one
+    output wire         ss_done_t, ss_err, ss_sup,
     output wire         br_req_read,
     output wire  [15:0] br_slot,
     output wire  [31:0] br_offset, br_length, br_addr,
@@ -108,6 +110,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .apf_bridge_length(br_length), .apf_bridge_new_file_size_data(file_size_new), .apf_bridge_ram_data_address(br_addr),
     .apf_bridge_request_getfile(), .apf_bridge_request_openfile(), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(),
     .apf_bridge_slot_id(br_slot), .apf_id_chip_id(64'd0),
+    .apf_ss_save_t(ss_save_t), .apf_ss_load_t(ss_load_t), .apf_ss_done_t(ss_done_t), .apf_ss_err(ss_err), .apf_ss_sup(ss_sup),
     .apf_input_cont1_joy(cont1_joy), .apf_input_cont1_key(cont1_key), .apf_input_cont1_trig(32'd0),
     .apf_input_cont2_joy(cont2_joy), .apf_input_cont2_key(cont2_key), .apf_input_cont2_trig(32'd0),
     .apf_input_cont3_joy(cont3_joy), .apf_input_cont3_key(cont3_key), .apf_input_cont3_trig(32'd0),

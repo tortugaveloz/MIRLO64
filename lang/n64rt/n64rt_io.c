@@ -1315,13 +1315,14 @@ u32 n64rt_si_hw(void) { return s_si_hw; }
  * joybus commands on the copy (pif_run, as the software SI's) or answer the challenge, write back the words that changed, and say
  * the PIF is done: IO busy clears, and an RD64B that waited goes on once the console's time for those commands is over (SIDONE's
  * value: a game whose controller thread polls in a loop must leave its other threads that time; a challenge, 0). */
+u32 n64rt_si_joy;                       /* the PIF has run a block's commands: rcp_si.sv's `joy` is set (a save state keeps it) */
 void n64rt_si_hw_event(void)
 {
     u32 orig[16];
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
     u32 t = 0;
     if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
-    else t = pif_run();
+    else { t = pif_run(); n64rt_si_joy = 1; }
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }
@@ -1388,6 +1389,8 @@ static inline u32 rsp_rd(u32 off) { return *(volatile u32 *)(uintptr_t)(0x200000
  * view of it, from the SoC's uptime counter. */
 static u32 s_dpc_clk0;
 static u32 s_pi_wr_len;                 /* PI_WR_LEN as a read gives it (pi_advance, below) */
+/* (n64rt_state.c) a save state put back: the SoC's clock is that much further on than the state's runtime had it */
+void n64rt_io_rebase(u32 cycles) { s_dpc_clk0 += cycles; }
 static u32 dpc_clock(void)
 {
     if (n64rt_game && n64rt_game->cic == 6105u) return 0u;
@@ -1431,6 +1434,8 @@ static void mon_field_log(void)
 void n64rt_vi_hw_event(void);
 void n64rt_ai_hw_event(void);
 void n64rt_si_hw_event(void);
+void n64rt_state_event(void);
+void n64rt_state_poll(void);
 void n64rt_rcp_events(void)
 {
     u32 pend = monitor_pend_read();
@@ -1476,6 +1481,8 @@ void n64rt_rcp_events(void)
         if (s_ai_hw) n64rt_ai_hw_event();             /* (the AI in hardware: bit 3 is a write of AI_DACRATE, not a SYNC FULL) */
         else if (!s_mi_hw) s_mi_sw |= MI_DP;          /* SYNC FULL */
     }
+    if (pend & 4u) n64rt_state_poll();                /* (whether the Pocket may ask for a save state) */
+    if (pend & 32u) n64rt_state_event();              /* the Pocket asks for a save state, or for its load (n64rt_state.c) */
 }
 static u32 vi_current(void)
 {
