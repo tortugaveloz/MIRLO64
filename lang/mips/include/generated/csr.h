@@ -73,18 +73,6 @@
 #define CSR_APF_BRIDGE_HOST_STATE_RESET_N_SIZE 1
 #define CSR_APF_BRIDGE_HOST_STATE_LOADED_OFFSET 1
 #define CSR_APF_BRIDGE_HOST_STATE_LOADED_SIZE 1
-#define CSR_APF_BRIDGE_SAVESTATE_OFS 0x138
-#define CSR_APF_BRIDGE_SAVESTATE_ADDR (CSR_BASE + 0x138)
-#define CSR_APF_BRIDGE_SAVESTATE_SIZE 1
-#define CSR_APF_BRIDGE_SAVESTATE_SUPPORTED_OFFSET 0
-#define CSR_APF_BRIDGE_SAVESTATE_SUPPORTED_SIZE 1
-#define CSR_APF_BRIDGE_SAVESTATE_SAVE_OFFSET 1
-#define CSR_APF_BRIDGE_SAVESTATE_SAVE_SIZE 1
-#define CSR_APF_BRIDGE_SAVESTATE_LOAD_OFFSET 2
-#define CSR_APF_BRIDGE_SAVESTATE_LOAD_SIZE 1
-#define CSR_APF_BRIDGE_SAVESTATE_DONE_OFS 0x13c
-#define CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR (CSR_BASE + 0x13c)
-#define CSR_APF_BRIDGE_SAVESTATE_DONE_SIZE 1
 
 /* APF_INPUT */
 #define CSR_APF_INPUT_BASE (CSR_BASE + 0x200)
@@ -419,22 +407,6 @@ static inline uint32_t apf_bridge_host_state_reset_n_extract(uint32_t r) { retur
 static inline uint32_t apf_bridge_host_state_reset_n_read(void) { return apf_bridge_host_state_reset_n_extract(apf_bridge_host_state_read()); }
 static inline uint32_t apf_bridge_host_state_loaded_extract(uint32_t r) { return (r >> 1) & 0x1u; }
 static inline uint32_t apf_bridge_host_state_loaded_read(void) { return apf_bridge_host_state_loaded_extract(apf_bridge_host_state_read()); }
-static inline uint32_t apf_bridge_savestate_read(void) { return csr_read_simple(CSR_APF_BRIDGE_SAVESTATE_ADDR); }
-static inline void apf_bridge_savestate_write(uint32_t v) { csr_write_simple(v, CSR_APF_BRIDGE_SAVESTATE_ADDR); }
-static inline uint32_t apf_bridge_savestate_supported_extract(uint32_t r) { return (r >> 0) & 0x1u; }
-static inline uint32_t apf_bridge_savestate_supported_read(void) { return apf_bridge_savestate_supported_extract(apf_bridge_savestate_read()); }
-static inline uint32_t apf_bridge_savestate_supported_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 0)) | ((v & 0x1u) << 0); }
-static inline void apf_bridge_savestate_supported_write(uint32_t v) { apf_bridge_savestate_write(apf_bridge_savestate_supported_replace(apf_bridge_savestate_read(), v)); }
-static inline uint32_t apf_bridge_savestate_save_extract(uint32_t r) { return (r >> 1) & 0x1u; }
-static inline uint32_t apf_bridge_savestate_save_read(void) { return apf_bridge_savestate_save_extract(apf_bridge_savestate_read()); }
-static inline uint32_t apf_bridge_savestate_save_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 1)) | ((v & 0x1u) << 1); }
-static inline void apf_bridge_savestate_save_write(uint32_t v) { apf_bridge_savestate_write(apf_bridge_savestate_save_replace(apf_bridge_savestate_read(), v)); }
-static inline uint32_t apf_bridge_savestate_load_extract(uint32_t r) { return (r >> 2) & 0x1u; }
-static inline uint32_t apf_bridge_savestate_load_read(void) { return apf_bridge_savestate_load_extract(apf_bridge_savestate_read()); }
-static inline uint32_t apf_bridge_savestate_load_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 2)) | ((v & 0x1u) << 2); }
-static inline void apf_bridge_savestate_load_write(uint32_t v) { apf_bridge_savestate_write(apf_bridge_savestate_load_replace(apf_bridge_savestate_read(), v)); }
-static inline uint32_t apf_bridge_savestate_done_read(void) { return csr_read_simple(CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR); }
-static inline void apf_bridge_savestate_done_write(uint32_t v) { csr_write_simple(v, CSR_APF_BRIDGE_SAVESTATE_DONE_ADDR); }
 
 /* APF_INPUT */
 static inline uint32_t apf_input_cont1_key_read(void) { return csr_read_simple(CSR_APF_INPUT_CONT1_KEY_ADDR); }

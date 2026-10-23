@@ -21,7 +21,6 @@
 static void stop(const char *why, u16 colour) __attribute__((noreturn));
 static void stop(const char *why, u16 colour)
 {
-    apf_bridge_savestate_write(0);              /* (no game: no save state, n64rt_state.c) */
     printf("loader: %s\n", why);
     volatile u16 *fb = (volatile u16 *)(uintptr_t)0x40C00000u;
     for (u32 i = 0; i < 320u * 240u; i++) fb[i] = colour;
@@ -75,7 +74,6 @@ int main(void)
     while ((monitor_id_read() & 0x180u) != 0x180u) ;          /* (the PSRAM set up: the window answers) */
     if (size >= 64u && size < 0x100000u && ROM[0] != 0x80371240u) {
         printf("loader: a program of %lu bytes at 1 MiB\n", (unsigned long)size);
-        apf_bridge_savestate_write(0);
         volatile u32 *to = (volatile u32 *)(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF);
         for (u32 i = 0; i < (size + 3u) / 4u; i++) to[i] = ROM[i];
         flush_cpu_dcache(); flush_cpu_icache();

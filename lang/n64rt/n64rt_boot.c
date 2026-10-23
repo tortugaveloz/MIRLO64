@@ -655,7 +655,6 @@ static void late_apply(int all)
 static void no_rom(const char *msg) __attribute__((noreturn));
 static void no_rom(const char *msg)
 {
-    apf_bridge_savestate_write(0);          /* (no game: no save state, n64rt_state.c) */
     printf("n64rt: %s\n", msg);
     notice(N64RT_RDRAM_SDRAM, msg);         /* (on the screen too: nothing of the game's is in the RDRAM yet) */
     for (;;) ;
