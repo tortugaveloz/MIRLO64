@@ -6,7 +6,8 @@
 //    float normals 0, above them infinity) and a double result is the float
 //    widened back (f2d) -- doubles are computed as floats.
 //  - Inputs and results below the normals are 0 (the VR4300 with FCR31.FS,
-//    as libultra sets it); a NaN result is 0x7FBFFFFF; arithmetic rounds to
+//    as libultra sets it) -- but a single's compare, which orders them
+//    exactly; a NaN result is 0x7FBFFFFF; arithmetic rounds to
 //    nearest even with an unbounded exponent, then flushes.
 //  - cvt.w / round / trunc / ceil / floor .w saturate (NaN: INT32_MAX).
 //  - dmfc1 / dmtc1 move a 64-bit register through an even/odd pair; cvt.s.l /
@@ -189,7 +190,10 @@ assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
 wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
 wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
 fbits_t up;
-assign up = (sel_w || sel_l) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
+// (a single's compare takes its operands as they are: the VR4300 orders a denormal exactly there, and does not trap on
+// it -- software tests a pointer kept in a float register against 0.0, and KSEG0's below 8 MiB are all denormals)
+wire cmp_s = !sel_d && fn[5:4] == 2'b11;
+assign up = (sel_w || sel_l || cmp_s) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
 
 // (FAST: without `live` -- the core asks only for an instruction in M, and
 // one that is not live is flushed)
@@ -259,7 +263,7 @@ endfunction
 localparam logic [31:0] QNAN = 32'h7FBFFFFF;
 function automatic logic isnan(input fbits_t x); return x.e == 8'hFF && x.f != 0; endfunction
 function automatic logic isinf(input fbits_t x); return x.e == 8'hFF && x.f == 0; endfunction
-function automatic logic iszero(input fbits_t x); return x.e == 8'd0; endfunction
+function automatic logic iszero(input fbits_t x); return {x.e, x.f} == 31'd0; endfunction   // (operands are flushed but a compare's)
 
 // ============================================================ the FSM
 always_ff @(posedge clk) begin
