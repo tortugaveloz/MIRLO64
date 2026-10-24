@@ -950,8 +950,8 @@ compares the output sample for sample.
 
 ### The CPU alone: `sim/mips`
 
-`build.sh` verilates `mips_core` and `fpu_n64` in lockstep with a reference model of the N64's CPU, given as
-`N64_MODEL=<dir>`; the model is not in this repository. Both run the same ROM and must agree on every retired
+`build.sh` verilates `mips_core` and `fpu_n64` in lockstep with a reference model of the N64's CPU, `sim/n64` (or
+another copy given as `N64_MODEL=<dir>`). Both run the same ROM and must agree on every retired
 instruction's address, word and written register (64 bits), on every exception and on the FPU's registers.
 `GEN="-GFAST=1 -GXWB=1 -GW64_ALU=1 ..."` passes the core's parameters. `gen_rand_rom.py` writes random integer programs
 (every instruction on registers full of 64-bit values, through the cache and around it; its mode `nodiv` matches the
