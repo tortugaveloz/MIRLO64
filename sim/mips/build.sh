@@ -6,8 +6,8 @@
 #
 # The core and the model run the same ROM and must agree on every retired
 # instruction's pc, word and written register (64 bits), on every exception
-# and on the FPU's registers. The model is MIRLO64's (sim/n64 there) and is
-# not in this repository. GEN passes Verilator parameters ("-GW64_MD=1": an
+# and on the FPU's registers. The model is sim/n64 (N64_MODEL names another
+# copy). GEN passes Verilator parameters ("-GW64_MD=1": an
 # original ROM needs dmult and ddiv, which the default leaves to the
 # runtime), OBJ names the build directory.
 #
@@ -15,7 +15,7 @@
 # a ROM ("nomd": without dmult and ddiv, for the default build).
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"; R="$HERE/../../rtl/mips"
-M="${N64_MODEL:-$HOME/projects/MIRLO64/sim/n64}"
+M="${N64_MODEL:-$HERE/../n64}"
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
 VL="${VERILATOR:-$HOME/local/usr/bin/verilator}"
 O="$HERE/${OBJ:-obj_dir}"; mkdir -p "$O"
