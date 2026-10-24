@@ -263,7 +263,9 @@ of a 64-bit operand and `ldl` / `ldr` / `sdl` / `sdr`. A trap instruction on a 6
 
 `fpu_n64.sv` is the VR4300's COP1 in single precision: 32 registers of 32 bits, a double being an even / odd pair. A
 double operand is converted to a float and a double result is the float widened back. Results and inputs below the
-normals are 0 (as the VR4300 with FCR31's FS bit set), a NaN result is `0x7FBFFFFF`, and the conversions to an integer
+normals are 0 (as the VR4300 with FCR31's FS bit set), but for a single's compare, which orders them exactly as the
+VR4300 does (it neither flushes nor traps them there; software keeps pointers in float registers and tests them against
+0.0, and every KSEG0 address below 8 MiB is a denormal); a NaN result is `0x7FBFFFFF`, and the conversions to an integer
 saturate. There are no FPU exceptions and no cause or flag bits in FCR31. The moves, single and double arithmetic,
 `sqrt`, the conversions between S, D and W, and the compares are implemented, each over several cycles on one datapath
 (M waits): a 24 x 24 multiply on a DSP block, divide and square root by 28 restoring iterations. `dmfc1` and `dmtc1`
