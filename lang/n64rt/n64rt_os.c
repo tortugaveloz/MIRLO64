@@ -17,6 +17,7 @@
 #include <generated/csr.h>
 #include <generated/soc.h>
 #include "n64rt.h"
+#include "n64rt_div64.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
  * bits, upper word first; register 0's place holds EPC and Status, k0's and
@@ -1592,8 +1593,11 @@ static int emulate_64(n64rt_ctx_t *x, u32 cause)
             } else if (b == 0) {                      /* (what the VR4300 leaves) */
                 lo = fn == 0x1E && (s64)a < 0 ? 1ull : ~0ull; hi = a;
             } else {
-                if (fn == 0x1F) { lo = a / b; hi = a % b; }
-                else if (!(a == 0x8000000000000000ull && b == ~0ull)) { lo = (u64)((s64)a / (s64)b); hi = (u64)((s64)a % (s64)b); }
+                if (fn == 0x1F) lo = udiv64(a, b, &hi);
+                else if (!(a == 0x8000000000000000ull && b == ~0ull)) {     /* (on the magnitudes: the remainder has the dividend's sign) */
+                    u64 ur, q = udiv64((s64)a < 0 ? -a : a, (s64)b < 0 ? -b : b, &ur);
+                    lo = ((s64)a < 0) != ((s64)b < 0) ? -q : q; hi = (s64)a < 0 ? -ur : ur;
+                }
                 else { lo = a; hi = 0; }
             }
             x->lo.l = (u32)lo; x->lo.h = (u32)(lo >> 32); x->hi.l = (u32)hi; x->hi.h = (u32)(hi >> 32);
