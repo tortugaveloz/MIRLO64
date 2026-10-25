@@ -745,8 +745,11 @@ n64rt_resume:                       # (also how the first thread starts)
     ctc1    $k1, $31
     lw      $k1, 0x00($k0)
     mtc0    $k1, $14
-    lw      $k1, 0x04($k0)          # (EXL set: still at exception level until eret)
-    mtc0    $k1, $12
+#ifdef N64RT_OWN
+    mtc0    $k1, $30                # (and ErrorEPC: the game starts from ERL, below)
+#endif
+    lw      $k1, 0x04($k0)          # (EXL set: still at exception level until eret; OWN: ERL, as the monitor's own exit --
+    mtc0    $k1, $12                #  with MCTL.GAME and ERL clear, 0x2000_0000 - 0x4FFF_FFFF are the game's: mips_core)
     lui     $k1, %hi(n64rt_cpu64)
     lw      $k1, %lo(n64rt_cpu64)($k1)
     beqz    $k1, 1f

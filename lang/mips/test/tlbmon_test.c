@@ -362,6 +362,44 @@ int main(void)
         check("code in the page's last 4 KiB", ((fn_t)0x0810F000u)(), 0x700F);
     }
 
+    /* the game's view (MCTL bit 12, written with bit 13): 0x2000_0000 - 0x4FFF_FFFF are mapped while GAME is set and ERL and
+     * Status bit 4 are clear. This program's code is in the SDRAM there, so it runs with bit 4 set, as the runtime's helpers
+     * do, and clears it only in code of the game's, from a mapped page (0x0450_0000): that loads and stores through a pair
+     * mapped at 0x4000_0000 and calls code from it (at 0x4000_0180, where this program has its exception vector), then puts
+     * Status back. The monitor entry that follows (a tlbr) fetches the vector from the SDRAM, not the mapped page's line */
+    {
+        static const uint32_t g[] = {
+            0x40086000u,                        /* mfc0  t0, Status */
+            0x2409FFEFu, 0x01094824u,           /* li    t1, ~0x10 / and t1, t0, t1 */
+            0x40896000u, 0,                     /* mtc0  t1, Status (bit 4 clear: the game's view) */
+            0x3C0A4000u,                        /* lui   t2, 0x4000 */
+            0x8D420010u, 0xAD420014u,           /* lw    v0, 16(t2) / sw v0, 20(t2) */
+            0x254A0180u,                        /* addiu t2, t2, 0x180 */
+            0x03E05825u, 0x0140F809u, 0,        /* move  t3, ra / jalr t2 */
+            0x0160F825u,                        /* move  ra, t3 */
+            0x40886000u, 0,                     /* mtc0  t0, Status */
+            0x03E00008u, 0 };                   /* jr    ra */
+        for (uint32_t i = 0; i < sizeof g / 4; i++) K1(0x63000)[i] = g[i];
+        K1(0x64180)[0] = 0x24420001u; K1(0x64180)[1] = 0x03E00008u; K1(0x64180)[2] = 0;   /* addiu v0, v0, 1 / jr ra / nop */
+        K1(0x64000)[4] = 0x12340000u; K1(0x64000)[5] = 0;
+        MTC0(12, MFC0(12) | 0x10u);
+        MTC0(7, 0x3002u);
+        check("MCTL bit 12 reads back", (MFC0(7) >> 12) & 1u, 1);
+        tlb_wi(12, 0, 0x40000000u, LO(0x64000, LV | LD | LG), LO(0x65000, LV | LD | LG));
+        tlb_wi(13, 0, 0x04500000u, LO(0x63000, LV | LD | LG), LO(0x66000, LV | LD | LG));
+        typedef uint32_t (*fn_t)(void);
+        uint32_t f0 = m_fills;
+        check("game's view: a load and a call at 0x4000_0000", ((fn_t)0x04500000u)(), 0x12340001u);
+        check("game's view: the store went to the RDRAM", K1(0x64000)[5], 0x12340000u);
+        check("game's view: the fills (code, data, code at 0x4000_0000)", m_fills, f0 + 3);
+        check("game's view: Status bit 4 back", (MFC0(12) >> 4) & 1u, 1);
+        MTC0(0, 12); TLBR();
+        check("game's view: the monitor's vector after it (tlbr)", MFC0(10) & ~0xFFu, 0x40000000u);
+        MTC0(7, 0x2002u);
+        MTC0(12, MFC0(12) & ~0x10u);
+        check("MCTL bit 12 cleared", (MFC0(7) >> 12) & 1u, 0);
+    }
+
     /* with GAME off the instructions are the core's own: no monitor entry, tlbp finds nothing */
     MTC0(7, 0);
     uint32_t ops = m_tlbops;

@@ -646,10 +646,18 @@ static void w64(n64rt_ctx_t *x, u32 r, u64 v);
 /* the instruction at pc: in KSEG0 (the game's) or the runtime's own memory,
  * or in a page the game mapped -- read through what it maps to, not through
  * the CPU's tables: this is the exception handler */
+#ifdef N64RT_OWN
+extern n64rt_ctx_t n64rt_mon_ctx;
+/* pc is the runtime's own code: the SDRAM, from a helper the game's code called (n64rt_boot.c, ll_patch: the game's Status
+ * has bit 4 then). Otherwise, while the game runs, 0x2000_0000 - 0x4FFF_FFFF are addresses it maps (mips_core, game_view). */
+static int rt_code(u32 pc) { return (pc >> 28) == 0x4u && (n64rt_mon_ctx.status & 0x10u); }
+#else
+static int rt_code(u32 pc) { return (pc >> 28) == 0x4u; }
+#endif
 static int insn_at(u32 pc, u32 *insn)
 {
     u32 pa;
-    if ((pc >> 28) == 0x8u || (pc >> 28) == 0x4u) { *insn = *(volatile u32 *)(uintptr_t)pc; return 1; }
+    if ((pc >> 28) == 0x8u || rt_code(pc)) { *insn = *(volatile u32 *)(uintptr_t)pc; return 1; }
     if (!n64rt_tlb_phys(pc, &pa)) return 0;
     *insn = *(volatile u32 *)(uintptr_t)(0x80000000u | (pa & ~3u));
     return 1;
@@ -1502,7 +1510,7 @@ static int emulate_64(n64rt_ctx_t *x, u32 cause)
 {
     u32 bd = cause >> 31, pc = x->epc + (bd ? 4u : 0u), next = pc + 4u;
     u32 insn;
-    if ((pc >> 28) == 0x4u || !insn_at(pc, &insn)) return 0;    /* (the game's code only) */
+    if (rt_code(pc) || !insn_at(pc, &insn)) return 0;           /* (the game's code only) */
     u32 op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u, rd = (insn >> 11) & 31u, sa = (insn >> 6) & 31u, fn = insn & 63u;
     s32 imm = (s16)insn;
     u32 ea = g32(x, rs) + (u32)imm;
@@ -1776,8 +1784,8 @@ void n64rt_mon_exception(void)
     } else if (code == 10 && emulate_64(x, cause)) {
         /* a 64-bit instruction */
     } else {
-        u32 epc = x->epc + (bd ? 4u : 0u);
-        u32 insn = (epc >> 28) == 0x8u || (epc >> 28) == 0x4u ? *(volatile u32 *)(uintptr_t)epc : 0;
+        u32 epc = x->epc + (bd ? 4u : 0u), insn;
+        if (!insn_at(epc, &insn)) insn = 0;
 #ifdef N64RT_DEBUG
         {   u32 cs, st, ep;
             __asm__ volatile("mfc0 %0, $13" : "=r"(cs)); __asm__ volatile("mfc0 %0, $12" : "=r"(st)); __asm__ volatile("mfc0 %0, $14" : "=r"(ep));
@@ -1870,8 +1878,9 @@ void n64rt_os_start(u32 entry, u32 sp)
     n64rt_cur = &s_main;
 #ifdef N64RT_OWN
     /* the game starts as IPL3 leaves it: CU0, CU1, FR, interrupts off; the monitor is
-     * woken by what the hardware sees (n64rt_resume sets MCTL.GAME on its way) */
-    CTX(&s_main)->status = 0x34000002u;
+     * woken by what the hardware sees (n64rt_resume sets MCTL.GAME on its way, and erets from ERL: the runtime's code
+     * up to the eret must not be in the game's view, where 0x2000_0000 - 0x4FFF_FFFF are its mapped addresses) */
+    CTX(&s_main)->status = 0x34000004u;
     {   /* (the MI in hardware, if the core has it: then the SP and DP wake-ups the monitor needed only for the MI's line are not) */
         extern void n64rt_mi_init(void); extern u32 n64rt_mi_hw(void), n64rt_vi_hw(void), n64rt_ai_hw(void), n64rt_si_hw(void);
         extern void n64rt_vi_hw_event(void);
