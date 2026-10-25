@@ -29,8 +29,9 @@ def spec(keys, joy, s0, s1):
                 out.add(c)
         held -= {'A', 'B', 'X', 'Y'}
     scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
-    if scode in (12, 13, 14):                     # a Start macro: Select+Start, C-left+C-right (Y, X), C-down+C-up (Select, ZR)
-        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}}[scode]
+    if 12 <= scode <= 18:                         # a Start macro: Select+Start, or two C buttons (C-left Y, C-right X, C-down Select, C-up ZR)
+        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}, 15: {'select', 'Y'}, 16: {'select', 'X'},
+                 17: {'R2', 'Y'}, 18: {'R2', 'X'}}[scode]
         if chord <= held:
             out.add('START')
             held -= chord
@@ -122,7 +123,7 @@ def settings():
             (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        sc = (0, 1, 13, 14, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
+        sc = (0, 15, 13, 14, 16, 12, 17, 18)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
         s1 = sc | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (start: "C-Up button"; the free bits)
         yield s0, s1
 

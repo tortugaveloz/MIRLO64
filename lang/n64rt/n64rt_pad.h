@@ -14,8 +14,9 @@
  *          [24:20]  n=6  free
  *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
- *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, 13 C-left+C-right,
- *                        14 C-down+C-up; the key is the Start only
+ *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, and the C buttons' pairs:
+ *                        13 C-left+C-right, 14 C-down+C-up, 15 C-down+C-left, 16 C-down+C-right, 17 C-up+C-left, 18 C-up+C-right
+ *                        (C-left Y, C-right X, C-down Select, C-up ZR); the key is the Start only
  *          [9:5]    n=9  "L stick dead zone": as the R stick's
  *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick, 3 also the
  *                        D-pad
@@ -137,8 +138,10 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
     }
     const uint32_t scode = set1 & 31u;                                /* Start (and C-up on the Start key it leaves) */
-    if (scode >= 12u && scode <= 14u) {       /* a Start macro: 12 Select+Start, 13 C-left+C-right (Y, X), 14 C-down+C-up (Select, ZR) */
-        const uint32_t chord = scode == 12u ? KEY_SELECT | KEY_START : scode == 13u ? KEY_Y | KEY_X : KEY_SELECT | KEY_R2;
+    if (scode >= 12u && scode <= 18u) {       /* a Start macro: Select+Start, or two C buttons' keys */
+        static const uint16_t chords[7] = { KEY_SELECT | KEY_START, KEY_Y | KEY_X, KEY_SELECT | KEY_R2, KEY_SELECT | KEY_Y,
+                                            KEY_SELECT | KEY_X, KEY_R2 | KEY_Y, KEY_R2 | KEY_X };
+        const uint32_t chord = chords[scode - 12u];
         if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
         else if (k & KEY_START) b |= CONT_E;
     } else {
