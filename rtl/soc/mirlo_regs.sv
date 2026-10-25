@@ -60,7 +60,8 @@ module mirlo_regs (
     input  wire         ia_wr,
     output logic [31:0] ia_q,
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
-    output wire  [1:0]  ia_crop_r,
+    output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
+    output wire  [1:0]  ia_crop_l,
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
@@ -197,6 +198,7 @@ logic [31:0] ia0, ia1;
 logic        ia_ch0, ia_ch1;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
+assign ia_crop_l = ia0[18:17];
 always_ff @(posedge clk) begin
     if (rst) begin ia0 <= 0; ia1 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin

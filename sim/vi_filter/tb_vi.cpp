@@ -55,7 +55,7 @@ static int pal0;                                  // TB_PAL
 static std::vector<int> seq;                      // TB_SEQ
 static int sys_of(int j) { return j <= 0 ? 0 : seq.empty() ? 0 : seq[(size_t)j < seq.size() ? j : seq.size() - 1]; }   // the system of the field F_j
 static unsigned rnd() { rng = rng * 1103515245u + 12345u; return rng >> 16; }
-static unsigned CV = 0, CR = 0;                   // TB_CROPV, TB_CROPR: the core's crop options (lines at top and bottom; right pixels, two clocks each)
+static unsigned CV = 0, CR = 0, CL = 0;           // TB_CROPV, TB_CROPR, TB_CROPL: the core's crop options (lines at top and bottom; right pixels, two clocks each)
 
 // the model: R8 G8 B8
 struct P6 { int r, g, b; };
@@ -179,7 +179,7 @@ int main(int argc, char **argv)
     nofilt = WB >= 512;
     auto env = [](const char *n, unsigned &v, int base) { if (const char *e = getenv(n)) v = (unsigned)strtoul(e, 0, base); };
     env("TB_XS", XS, 16); env("TB_YS", YS, 16); env("TB_PX0", PX0, 10); env("TB_PW", PW, 10); env("TB_Y0", Y0, 10); env("TB_ROWS", R, 10);
-    env("TB_CROPV", CV, 10); env("TB_CROPR", CR, 10);
+    env("TB_CROPV", CV, 10); env("TB_CROPR", CR, 10); env("TB_CROPL", CL, 10);
     dedither = argc > 5 ? atoi(argv[5]) : 0;
     if (const char *e = getenv("TB_LOAD")) LOAD = (unsigned)atoi(e);
     if (const char *e = getenv("TB_RDY")) RDY = (unsigned)atoi(e);
@@ -214,7 +214,7 @@ int main(int argc, char **argv)
     }
     t = new Vn64_video;
     t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0; t->vi_px32 = px32;
-    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->vi_lines = 240;
+    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->crop_l = CL; t->vi_lines = 240;
     t->vi_px0 = PX0; t->vi_pw = PW; t->vi_y0 = Y0; t->vi_rows = R == 240 ? 0 : R; t->vi_xs = XS; t->vi_ys = YS; t->vi_nw = NW;
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
     for (int i = 0; i < 200; i++) tick();
@@ -291,7 +291,7 @@ int main(int argc, char **argv)
                     for (unsigned x = 0; x < 640; x++) {
                         const int i = (int)x - (int)PX0;
                         const bool inw = j >= 0 && j < (int)R * WV && i >= 0 && i < (int)PW;
-                        const bool crop = blanked || !inw || (unsigned)j < CV * WV || (unsigned)j >= (R - CV) * WV || (unsigned)i >= PW - 2 * CR;
+                        const bool crop = blanked || !inw || (unsigned)j < CV * WV || (unsigned)j >= (R - CV) * WV || (unsigned)i >= PW - 2 * CR || (unsigned)i < 2 * CL;
                         int gr = rows[ys][3 * x], gg = rows[ys][3 * x + 1], gb = rows[ys][3 * x + 2];
                         P6 e = crop ? P6{ 0, 0, 0 } : model((int)((unsigned)i * XS >> 10), j, divot && !nofilt);
                         if (!crop && frames == 3 && ((e.r & 7) != 0 || (e.g & 7) != 0 || (e.b & 7) != 0 || true)) changed += (e.r != ch(pxv((int)((unsigned)i * XS >> 10), frow(j)), 0) << 3);

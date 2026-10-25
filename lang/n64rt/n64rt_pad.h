@@ -10,7 +10,7 @@
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
  *          [14:10]  n=4  "R as modifier": 0 none, 1 face C buttons (R held turns X, B, Y, A into C-up, C-down, C-left, C-right
  *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
- *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
+ *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..2 each)
  *          [24:20]  n=6  free
  *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12

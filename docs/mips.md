@@ -806,7 +806,7 @@ scan-out instead.
 | Setting | Address | Field | Options (value); the default in bold |
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
-| Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1), 2 columns (2) |
+| Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left: None (0), 1 column (5), 2 columns (10), 1 column left (4), 2 columns left (8), **1 column right** (1), 2 columns right (2) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
