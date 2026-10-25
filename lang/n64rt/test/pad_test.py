@@ -30,9 +30,9 @@ def spec(keys, joy, s0, s1):
         held -= {'A', 'B', 'X', 'Y'}
     scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
     if scode == 12:
-        if {'select', 'start'} <= held:
+        if 'select' in held and held & {'start', 'R2'}:    # Select with Start, or with C-Up's key (ZR)
             out.add('START')
-            held -= {'select', 'start'}
+            held -= {'select', 'start', 'R2'}
         elif 'start' in held:
             out.add('CUP')                        # the Start key the chord leaves: C-up
     else:

@@ -135,9 +135,8 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
     }
     const uint32_t scode = set1 & 31u;                                /* Start (and C-up on the Start key it leaves) */
-    if (scode == 12u) {
-        const uint32_t chord = KEY_SELECT | KEY_START;
-        if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
+    if (scode == 12u) {                       /* (Select with Start, or with C-Up's key: C-Up may be moved onto the Start button) */
+        if ((k & KEY_SELECT) && (k & (KEY_START | KEY_R2))) { b |= CONT_START; k &= ~(KEY_SELECT | KEY_START | KEY_R2); }
         else if (k & KEY_START) b |= CONT_E;
     } else {
         const uint32_t skey = n64rt_pad_key(scode, KEY_START);

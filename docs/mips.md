@@ -813,13 +813,13 @@ scan-out instead.
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | L stick dead zone | `0x1000_0124` | `interact1[9:5]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
-| Start = Select+Start | `0x1000_0120` | `interact1[4:0]` | **off** (0), on (12): Select and Start together are the Start, the Start key alone C-up |
-| R = Face C buttons | `0x1000_0110` | `interact0[14:10]` | **off** (0), on (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right |
-| R = Joystick half press | `0x1000_0118` | `interact0[24:20]` | **off** (0), on (1): R held makes the D-pad's stick 60 % |
+| Start = Select+Start | `0x1000_0120` | `interact1[4:0]` | **off** (0), on (12): Select with Start (or with C-Up's key) is the Start, the Start key alone C-up |
+| R as modifier: Face C buttons | `0x1000_0110` | `interact0[14:10]` | **off** (0), on (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right |
+| R as modifier: Joystick half press | `0x1000_0118` | `interact0[24:20]` | **off** (0), on (1): R held makes the D-pad's stick 60 % |
 | D-pad double tap | `0x1000_0130` | `interact1[21:20]` | **off** (0), on (1): the D-pad's stick 60 %, 100 % on a press within 300 ms of its last release |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), L (ZL, `pad_trig_l2`), R (R), C-Down (Select), C-Left (Y), C-Right (X), Start and C-Up (ZR, `pad_trig_r2`: a key the documentation does not list); it remaps what
+The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X), C-Up, L (ZL, `pad_trig_l2`), R (R), Z (L) and Start; C-Up is on ZR (`pad_trig_r2`: a key the documentation does not list); it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
 - **Z, L and R** are the Pocket's L, ZL and R keys; the Controls menu moves them.
