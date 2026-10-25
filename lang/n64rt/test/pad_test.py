@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The N64 controller mapping (../n64rt_pad.h) against the spec, written here independently as tables, over every combination of
 the core's settings and many key words / stick bytes.   python3 pad_test.py   (needs gcc)"""
-import itertools, os, random, subprocess, sys, tempfile
+import itertools, math, os, random, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -73,14 +73,14 @@ def spec(keys, joy, s0, s1):
         for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
             if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
-    def ax(v, flip, dzc):                         # dead zone: code 1..11 = 0 %..50 % in 5 % steps, others 10 %; linear past it
-        a = v - 128
-        if flip: a = -a
+    def stick(bx, by, dzc):                       # radial dead zone: code 1..11 = 0 %..50 % in 5 % steps, others 10 %; linear past it
+        ax, ay = bx - 128, 128 - by
         pct = (dzc - 1) * 5 if 1 <= dzc <= 11 else 10
         t = pct * 128 // 100
-        if abs(a) <= t: return 0
-        o = min(80, (abs(a) - t) * 80 // (127 - t))
-        return -o if a < 0 else o
+        r = math.isqrt(ax * ax + ay * ay)
+        if r <= t: return 0, 0
+        q = lambda a: max(-80, min(80, int(a * (r - t) * 80 / (r * (127 - t)))))   # (C: truncates toward zero)
+        return q(ax), q(ay)
     def dpad_stick():
         part = rmod and half                      # R as modifier: half press
         full = 48 if part else 80
@@ -93,7 +93,7 @@ def spec(keys, joy, s0, s1):
     sx = sy = 0
     if smode in (1, 2):
         dl, dr = (s1 >> 5) & 31, (s0 >> 25) & 31          # "L stick dead zone" interact1[9:5], "R stick dead zone" interact0[29:25]
-        use = (ax(lx, False, dl), ax(ly, True, dl)) if smode == 1 else (ax(rx, False, dr), ax(ry, True, dr))
+        use = stick(lx, ly, dl) if smode == 1 else stick(rx, ry, dr)
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
