@@ -83,7 +83,7 @@ def spec(keys, joy, s0, s1):
         o = min(80, (abs(a) - t) * 80 // (127 - t))
         return -o if a < 0 else o
     def dpad_stick():
-        part = (rmod and half) or (((s1 >> 20) & 3) == 1 and not (keys >> 16 & 1))   # half press; "D-pad double tap" a single tap
+        part = rmod and half                      # R as modifier: half press
         full = 48 if part else 80
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
         dy = (1 if 'up' in held else 0) + (-1 if 'down' in held else 0)

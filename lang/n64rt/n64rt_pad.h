@@ -22,8 +22,7 @@
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
  *                        (the stick stays centred); any other value is the D-pad
- *          [21:20]  n=12 "D-pad double tap" (1): the D-pad's stick is 60 %, 100 % on a press within 300 ms of the last release
- *                        (dfull: the caller keeps that state)
+ *          [21:20]  n=12 free
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")
@@ -117,8 +116,7 @@ static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
     default: return 0;
     }
 }
-static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, int dfull, uint16_t *button, int8_t *stick_x,
-                                 int8_t *stick_y)
+static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
 {
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
@@ -189,7 +187,7 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
     }
     if (from_dpad) {
-        const int part = (rmod && half) || (((set1 >> 20) & 3u) == 1u && !dfull);   /* (half press; a single tap) */
+        const int part = rmod && half;                                             /* (R as modifier: half press) */
         const int8_t d = part ? 48 : 80;
         if (k & KEY_DPAD_LEFT) sx -= d;
         if (k & KEY_DPAD_RIGHT) sx += d;
