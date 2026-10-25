@@ -3,12 +3,6 @@
   "sources": "273d2a004bcb34a2952c58eaefd4d652ec999c5f3a3477c6369060b7618e5789",
   "fits": [
     {
-      "seed": 2,
-      "worst_slack_ns": 0.1,
-      "alms": 18226,
-      "date": "2026-10-25"
-    },
-    {
       "seed": 13,
       "worst_slack_ns": 0.026,
       "alms": 18021,
@@ -18,6 +12,12 @@
       "seed": 7,
       "worst_slack_ns": 0.024,
       "alms": 18196,
+      "date": "2026-10-25"
+    },
+    {
+      "seed": 2,
+      "worst_slack_ns": 0.012,
+      "alms": 18226,
       "date": "2026-10-25"
     }
   ]
