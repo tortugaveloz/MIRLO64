@@ -47,7 +47,9 @@ def spec(keys, joy, s0, s1):
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
     # Z, L, R: (setting, its own default for code 0)
-    for name, code, dflt in (('Z', (s1 >> 5) & 31, 'L1'), ('L', (s0 >> 20) & 31, 'L2'), ('R', (s0 >> 25) & 31, 'R1')):
+    if 'L1' in held: out.add('Z')                 # Z and R: the Pocket's L and R keys (the Controls menu moves them)
+    if 'R1' in held: out.add('R')
+    for name, code, dflt in (('L', (s0 >> 20) & 31, 'L2'),):
         key = dflt if code == 0 else CODE.get(code)
         if key and key in held:
             out.add(name)
@@ -69,12 +71,14 @@ def spec(keys, joy, s0, s1):
         for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
             if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
-    def ax(v, flip):
+    def ax(v, flip, dzc):                         # dead zone: code 1..11 = 0 %..50 % in 5 % steps, others 10 %; linear past it
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)                     # (C: truncates toward zero)
-        return max(-80, min(80, a))
+        pct = (dzc - 1) * 5 if 1 <= dzc <= 11 else 10
+        t = pct * 128 // 100
+        if abs(a) <= t: return 0
+        o = min(80, (abs(a) - t) * 80 // (127 - t))
+        return -o if a < 0 else o
     def dpad_stick():
         full = 40 if rmod else 80
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
@@ -85,7 +89,8 @@ def spec(keys, joy, s0, s1):
     smode = (s1 >> 15) & 31
     sx = sy = 0
     if smode in (1, 2):
-        use = (ax(lx, False), ax(ly, True)) if smode == 1 else (ax(rx, False), ax(ry, True))
+        dl, dr = (s1 >> 5) & 31, (s0 >> 25) & 31          # "L stick dead zone" interact1[9:5], "R stick dead zone" interact0[29:25]
+        use = (ax(lx, False, dl), ax(ly, True, dl)) if smode == 1 else (ax(rx, False, dr), ax(ry, True, dr))
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad

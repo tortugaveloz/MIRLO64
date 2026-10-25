@@ -16,6 +16,16 @@
             "key": "pad_btn_b"
           },
           {
+            "id": 2,
+            "name": "Z",
+            "key": "pad_trig_l"
+          },
+          {
+            "id": 3,
+            "name": "R",
+            "key": "pad_trig_r"
+          },
+          {
             "id": 4,
             "name": "C-Down",
             "key": "pad_btn_select"

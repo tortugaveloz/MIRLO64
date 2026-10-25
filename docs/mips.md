@@ -811,18 +811,19 @@ scan-out instead.
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
-| Z button | `0x1000_0124` | `interact1[9:5]` | None (5), **L** (0), R (2), ZL (3), ZR (4) |
+| L stick dead zone | `0x1000_0124` | `interact1[9:5]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | L button | `0x1000_0118` | `interact0[24:20]` | **None** (5), L (1), R (2), ZL (0), ZR (4) |
-| R button | `0x1000_011C` | `interact0[29:25]` | None (5), L (1), **R** (0), ZL (3), ZR (4) |
+| R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 | Start button | `0x1000_0120` | `interact1[4:0]` | A (6), B (7), X (8), Y (9), L (1), R (2), Select (10), **Start** (0), Select+Start (12) |
 | C-Up button | `0x1000_0130` | `interact1[21:20]` | **ZR** (0), ZL (1), None (2) |
 | Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X) and Start; it remaps what
+The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), R (R), C-Down (Select), C-Left (Y), C-Right (X) and Start; it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
-- **Button codes** (Z, L, R, Modifier): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
+- **Z and R** are the Pocket's L and R keys; the Controls menu moves them.
+- **Button codes** (L, Modifier, Start): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
   10 Select, 11 Start, any other value none; 0 is the
   setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
   key may serve two N64 buttons.
@@ -835,7 +836,7 @@ each button sends, and the runtime sees only the resulting key bits (so remappin
 - **Start**: a key (a button code; that key is then the Start only), or Select and Start together, which then count for
   nothing else. The Start key, when the setting leaves it (another key; with Select+Start, Start alone), is C-up.
 - **Stick**: with None, the stick stays centred. With D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
-  stick's two bytes (`0x80` the centre, a dead zone of 12, scaled to 80 at the end of the range). A pad the dock
+  stick's two bytes (`0x80` the centre; nothing within its stick's dead zone, then linear from its edge to 80 at the end of the range). A pad the dock
   reports with analog sticks (type 3) gives the stick alone. A pad reported without (type 2) is believed when its stick
   bytes are not all `0x00` or all `0xFF`, and gives the D-pad keys while its stick is centred. The Pocket's own
   controls give the D-pad keys.

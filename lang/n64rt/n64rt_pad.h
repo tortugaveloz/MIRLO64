@@ -13,10 +13,10 @@
  *                        the game (so not as the Z, L or R button either)
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
  *          [24:20]  n=6  "L button": which Pocket key is the N64's L
- *          [29:25]  n=7  "R button": which Pocket key is the N64's R
+ *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        Select and Start together (neither counts for anything else then); the key is the Start only
- *          [9:5]    n=9  "Z button": which Pocket key is the N64's Z
+ *          [9:5]    n=9  "L stick dead zone": as the R stick's
  *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick, 3 also the
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
@@ -29,7 +29,8 @@
  * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
  * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
  * 9 Y, 10 Select, 11 Start (anything else is none too).
- *   Z button: 0 = L      L button: 0 = ZL      R button: 0 = R      Modifier: 0 = none
+ *   L button: 0 = ZL      Modifier: 0 = none
+ * The N64's Z and R are the Pocket's L and R keys, always: the Controls menu (input.json) is where they move.
  * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
  *
  * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on the "C-Up button" key (ZR),
@@ -83,13 +84,18 @@
 #define KEY_START  (1u << 15)
 #define KEY_TYPE(k) ((k) >> 28)          /* 1 Pocket, 2 dock pad without analog, 3 dock pad with analog */
 
-static inline int8_t n64rt_pad_axis(uint32_t v, int flip)
+/* a stick byte (0x80 centred) as the N64's axis, -80 .. 80: nothing within the dead zone (dzc: the setting's code), linear from
+ * its edge to the end of the range */
+static inline int8_t n64rt_pad_axis(uint32_t v, int flip, uint32_t dzc)
 {
     int a = (int)(v & 0xFFu) - 128;
     if (flip) a = -a;
-    if (a > -12 && a < 12) return 0;
-    a = a * 80 / 127;
-    return (int8_t)(a > 80 ? 80 : a < -80 ? -80 : a);
+    const int pct = (dzc >= 1u && dzc <= 11u) ? (int)(dzc - 1u) * 5 : 10;
+    const int t = pct * 128 / 100, m = a < 0 ? -a : a;
+    if (m <= t) return 0;
+    int o = (m - t) * 80 / (127 - t);
+    if (o > 80) o = 80;
+    return (int8_t)(a < 0 ? -o : o);
 }
 /* the Pocket key a button setting names (0: no key) */
 static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
@@ -141,9 +147,9 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     if (k & (cu == 0u ? KEY_R2 : cu == 1u ? KEY_L2 : 0u)) b |= CONT_E;
     if (k & KEY_A) b |= CONT_A;
     if (k & KEY_B) b |= CONT_B;
-    if (k & n64rt_pad_key((set1 >> 5) & 31u, KEY_L1)) b |= CONT_G;           /* Z button */
+    if (k & KEY_L1) b |= CONT_G;                                              /* Z (the Controls menu's) */
     if (k & n64rt_pad_key((set0 >> 20) & 31u, KEY_L2)) b |= CONT_L;              /* L button */
-    if (k & n64rt_pad_key((set0 >> 25) & 31u, KEY_R1)) b |= CONT_R;          /* R button */
+    if (k & KEY_R1) b |= CONT_R;                                              /* R (the Controls menu's) */
 
     if (k & KEY_SELECT) b |= CONT_D;                     /* C buttons: the face buttons, always */
     if (k & KEY_Y) b |= CONT_C;
@@ -170,7 +176,8 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         int8_t x = 0, y = 0;
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;
-            x = n64rt_pad_axis(j >> sh, 0); y = n64rt_pad_axis(j >> (sh + 8), 1);
+            const uint32_t dzc = mode == 2u ? (set0 >> 25) & 31u : (set1 >> 5) & 31u;   /* (its stick's dead zone) */
+            x = n64rt_pad_axis(j >> sh, 0, dzc); y = n64rt_pad_axis(j >> (sh + 8), 1, dzc);
         }
         sx = x; sy = y;
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
