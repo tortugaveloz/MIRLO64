@@ -504,6 +504,7 @@ void n64_cpu_step(n64_t *n)
             case C0_COMPARE: c->cop0[C0_COMPARE] = rt32; c->cop0[C0_CAUSE] &= ~CAUSE_IP7; break;
             case C0_RANDOM: case C0_PRID: break;
             case C0_WIRED: c->cop0[C0_WIRED] = rt32 & 0x3Fu; c->cop0[C0_RANDOM] = 31; break;
+            case C0_COUNT: c->cop0[C0_COUNT] = rt32; c->count_frac = 0; break;          /* (the half-rate phase starts again) */
             default: {
                 /* the VR4300's writable bits (the rest keep their value: Index's P,
                  * Context's BadVPN2, Config's fixed fields; BadVAddr, XContext,

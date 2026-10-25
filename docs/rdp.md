@@ -68,9 +68,9 @@ from `rcp_dpc_view.sv`, which gives the console's layout:
 |---|---|---|
 | 0, 1, 2 | XBUS, FREEZE, FLUSH | as written |
 | 3 | START_GCLK | set by a write of END (not while frozen) and by an unfreeze; cleared when a SYNC FULL completes |
-| 4 | TMEM busy | always 0 |
+| 4 | TMEM busy | a texture load runs |
 | 5 | PIPE busy | as bit 3; also cleared by bit 7 of a STATUS write |
-| 6 | command busy | always 0 |
+| 6 | command busy | a command waits in the FIFO or is under way |
 | 7 | CBUF ready | always 1 |
 | 8 | DMA busy | CURRENT below END |
 | 9, 10 | END valid, START valid | a pair waiting; a START written and its END not yet |
@@ -109,12 +109,12 @@ change with pixels in flight.
 | 0x24, 0x25 | texture rectangle, flipped | |
 | 0x26-0x28 | sync load, pipe, tile | nothing to do: commands run in order |
 | 0x29 | sync full | completes when every earlier write has been accepted by the memory |
-| 0x2D | set scissor | the four coordinates; the interlace field bits are not read |
+| 0x2D | set scissor | the four coordinates and the field mode: with it only the rows of the field kept (the odd bit) are drawn, and the dither's row is the field's own, y / 2 |
 | 0x2E | set primitive depth | Z (15 bits) and its delta |
 | 0x2F | set other modes | what is read of them: below |
-| 0x30 | load TLUT | |
+| 0x30 | load TLUT | also sets the tile's size, as every load does |
 | 0x32 | set tile size | |
-| 0x33 | load block | |
+| 0x33 | load block | also sets the tile's size (its lrt: the dxt) |
 | 0x34 | load tile | also sets the tile's size |
 | 0x35 | set tile | format, size, line, TMEM address, palette, clamp, mirror, mask, shift |
 | 0x36 | fill rectangle | |
@@ -194,13 +194,17 @@ AA_EN.
   depth's units. The depth test and the blender use it (below).
 
 A triangle whose command has no texture block has S = T = W = 0, and the
-texture stages run all the same: TEXEL0 is the tile's texel (0, 0).
+texture stages run all the same: TEXEL0 is the tile's texel (0, 0), or with
+PERSP, where W = 0 is out of range and S and T saturate to 0x7FFF, its last
+texel (the far corner, clamped). In 2-cycle mode TEXEL1 is the next tile's at
+the same point, as for any primitive.
 
 ### Rectangles
 
 A rectangle's pixels are whole: all eight samples. A texture rectangle in
 copy mode and a fill rectangle in fill mode take the corners' integer parts,
-the lower-right corner inclusive. Otherwise the corners' quarter pixels
+the lower-right corner inclusive, and reach the scissor's right edge itself:
+its column is written too, as the console's. Otherwise the corners' quarter pixels
 count, as for a triangle without AA_EN: a pixel is drawn where its top-left
 sample is inside, `XH <= 4x < XL` and `YH <= 4y < YL`, so a corner with a
 fraction leaves out the pixel it falls in at the upper left and takes it in
@@ -333,7 +337,10 @@ and depth tests, two blender cycles, the dither.
   the blender's first-cycle settings.
 * **2-cycle.** The two combiner cycles one after the other, then the two
   blender cycles; the first blender cycle always blends.
-* **Copy.** The pixel is the texel. The alpha compare's threshold is 128,
+* **Copy.** The pixel is the texel. A 16-bit texel, and a TLUT entry, is
+  copied as it is (an IA or I texel too: the console moves TMEM's words, it
+  does not decode them); a 4-, 8- or 32-bit texel is decoded and written as
+  RGBA 5551. The alpha compare's threshold is 128,
   the texel's alpha bit, not the blend colour's alpha. The depth image is
   neither read nor written, whatever the mode word says. No blender, no
   dither. The coverage written is 7 or 0 by the texel's alpha bit.
@@ -358,7 +365,12 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 * SHADE is saturated to a byte, 0..255, when it enters the pipeline.
 * The primitive LOD fraction is an input, and the LOD fraction (a signed
   9-bit number, as K5) in a 2-cycle primitive with the LOD ([lod.md](lod.md));
-  elsewhere it reads 0. NOISE and the key inputs read 0.
+  in 1-cycle mode all ones for a primitive with a level count of 0 (without
+  sharpen and detail: the console's fraction there whatever the steps);
+  elsewhere it reads 0. The key inputs read 0.
+* **NOISE** (A 7 of a colour) is `(n << 6) | 0x20` for three random bits n, a
+  new n each pixel: the alpha dither's noise bits, as the console's one random
+  number serves both. Read as COMBINED is there (from 0x180 negative).
 * **K4** (as B) and **K5** (as C) are SET CONVERT's, 9 bits each, read as
   COMBINED is in those places: K4 is negative from 0x180, K5 a signed 9-bit
   number. With them `(TEXEL0 - K4) * K5 + TEXEL0` finishes a YUV texel's
@@ -542,7 +554,7 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 ## Not implemented, or approximated
 
 The model built with `RDP_EXACT` follows the console on the LOD, TEXEL1,
-shade and scissor items below, and on edges, spans, rectangles and the
+and shade items below, and on edges, spans, rectangles and the
 attributes' arithmetic ([rdp_exact.md](rdp_exact.md), with the RTL change each
 needs); the RTL, and the model as its benches build it, do not.
 
@@ -554,17 +566,18 @@ needs); the RTL, and the model as its benches build it, do not.
   room for, and the blender's coverage weight does not use it.
 * **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
   copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
-  samples its primitive's tile and the LOD fraction reads 0 there. A texture
+  samples its primitive's tile and the LOD fraction is the console's only at a
+  level count of 0 (all ones), 0 otherwise. A texture
   rectangle's next line is its exact next row, where the console keeps 17
   bits of it ([lod.md](lod.md), "Choices").
 * **TEXEL1** is the next tile at the same coordinates. In the second cycle
   of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
 * **YUV** textures are converted only from 16-bit YUV tiles, each channel
   clamped to a byte (the console keeps 9 bits); a pass that converts takes
-  the texel at the coordinates, unfiltered. SET_KEY is skipped; the key and
-  noise inputs of the combiner read 0.
+  the texel at the coordinates, unfiltered. SET_KEY is skipped; the key
+  inputs of the combiner read 0. The noise is the RDP's own LFSR, not the
+  console's sequence.
 * **Shade** is not corrected to the covered sample; only Z is.
-* **Scissor**: the interlace field bits are not read.
 * **Other modes**: the key enable is not read.
 
 ## How it is verified

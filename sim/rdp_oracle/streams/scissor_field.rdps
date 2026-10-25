@@ -1,0 +1,12 @@
+# (Not the LOD.) The scissor's field mode: SET_SCISSOR with the field bit and the odd bit, a 1-cycle rectangle of a
+# primitive colour whose low bits the RGB dither (the magic square) rounds: only the odd rows are drawn, and the
+# dither's row is the field's own (y / 2). The model drew every row with y's dither before.
+rdram zero
+cmd 3f10013f 00100000
+cmd 2d000000 03100040
+cmd 2f000000 00000000
+cmd 3c000000 00000000
+cmd 3cffffff fffffdf6
+cmd 3a000000 7b5d3fff
+cmd 36100040 00000000
+cmd 29000000 00000000

@@ -245,6 +245,12 @@ wire x_regs  = x_addr[31:16] == 16'hF000;
 // +1C SP_SEMAPHORE, +20 SP_PC; 0x2000_0040 DPC_START, +44 DPC_END,
 // +48 DPC_CURRENT, +4C DPC_STATUS (read).
 wire x_rsp   = x_addr[31:8] == 24'h2000_00;
+// and at the N64's own addresses, for the game's word accesses that mips_core's SPW passes (KSEG0 or KSEG1 as the core's address
+// leaves them): SP_MEM_ADDR .. SP_SEMAPHORE (0x0404_0000 + 0x00..0x1C), SP_PC (0x0408_0000), DPC_START .. DPC_STATUS
+// (0x0410_0000 + 0x0..0xC) -- the same registers, whose host offsets (rx_addr) are 0x00..0x1C, 0x20 and 0x40..0x4C
+wire x_spr   = !x_addr[30] && x_addr[28:5] == 24'h20_2000;
+wire x_sppc  = !x_addr[30] && x_addr[28:2] == 27'h102_0000;
+wire x_dpcr  = !x_addr[30] && x_addr[28:4] == 25'h41_0000;
 wire x_audio = 1'b0;
 wire x_tcm   = 1'b0;
 wire x_grom  = 1'b0;
@@ -342,7 +348,10 @@ always_ff @(posedge clk) begin
         else if (x_pif) xs <= X_PIF;
         else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
         else if (x_grom) x_ack <= 1;
-        else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
+        else if (x_rsp || x_spr || x_sppc || x_dpcr) begin
+            rx_wdata <= x_wdata; rx_we <= x_we; xs <= X_RSP;
+            rx_addr <= x_rsp ? x_addr[6:2] : {x_dpcr, x_sppc, x_dpcr ? 1'b0 : x_addr[4], x_addr[3:2]};
+        end
         else begin x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
@@ -388,7 +397,7 @@ logic [31:0] su_data;
 logic        cmd_valid, cmd_ready;
 logic [31:0] cmd_data, rdp_sync, rdp_load;
 logic [15:0] rdp_unknown;
-logic        rdp_idle;
+logic        rdp_idle, rdp_tmem_busy;
 logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
 logic [7:0]  r_uart_byte, uart_rx_byte;
 logic [31:0] fb_base_csr, dbg_geom_msg;
@@ -511,6 +520,7 @@ assign dpc_end_we    = rsp_dpc_end_we    || (dpc_h_w && rx_addr[1:0] == 2'd1);
 assign dpc_status_we = rsp_dpc_status_we || (dpc_h_w && rx_addr[1:0] == 2'd3);
 assign dpc_wdata     = dpc_h_w ? rx_wdata : rsp_dpc_wdata;
 rcp_dpc_view dpc_view (.clk, .rst, .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata), .sync_full(mon_dp),
+    .cmd_busy(cmd_valid || !rdp_idle), .tmem_busy(rdp_tmem_busy),
     .st_raw(dpc_st_raw), .cur(dpc_current), .end_(dpc_end), .start_ok(dpc_start_ok), .st(dpc_status));
 rdp_dpc dpc (.clk, .rst, .start_we(dpc_start_we), .end_we(dpc_end_we), .status_we(dpc_status_we), .wdata(dpc_wdata),
     .start(dpc_start), .end_(dpc_end), .end_rd(dpc_end_rd), .current(dpc_current), .status(dpc_st_raw),
@@ -549,7 +559,8 @@ rdp_top rdp (.clk, .rst,
     .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
     .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
     .m_rdata_valid, .m_rdata,
-    .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle));
+    .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
+    .tmem_busy(rdp_tmem_busy));
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
 assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,

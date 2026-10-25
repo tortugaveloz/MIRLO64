@@ -1,0 +1,14 @@
+# (Not the LOD.) Copy mode, the scissor's right edge at column 8 (XL 0x020), one row, a texture rectangle 0..15:
+# the oracle writes column 8 (in copy mode, as in fill mode, the scissor's right edge counts); the model stopped at 7.
+rdram zero
+mem 200000 f801f801f801f801f801f801f801f801f801f801f801f801f801f801f801f801
+cmd 3f10013f 00100000
+cmd 2d000000 00020004
+cmd 3d10000f 00200000
+cmd 35100400 00000000
+cmd 34000000 0003c000
+cmd 27000000 00000000
+cmd 32000000 0003c000
+cmd 2f200000 00000000
+cmd 2403c004 00000000 00000000 10000400
+cmd 29000000 00000000

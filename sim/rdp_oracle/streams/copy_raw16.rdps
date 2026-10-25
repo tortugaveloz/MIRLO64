@@ -1,0 +1,15 @@
+# (Not the LOD.) Copy mode copies TMEM's words: a texture rectangle of four IA 16 texels (1234 abcd ff00 00ff) in copy
+# mode writes them as they are; the model decoded IA (to grey) and wrote that back (1084 ...). Fixed in the model and
+# the RTL: a 16-bit texel, or a TLUT entry, is copied unchanged.
+rdram zero
+mem 200000 1234abcdff0000ff
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 3d700003 00200000
+cmd 35700200 00000000
+cmd 34000000 0000c000
+cmd 27000000 00000000
+cmd 32000000 0000c000
+cmd 2f200000 00000000
+cmd 2400c000 00000000 00000000 10000400
+cmd 29000000 00000000

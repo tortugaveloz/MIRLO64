@@ -1,0 +1,21 @@
+# (1-cycle LOD fraction at a level count of 0.) A 1-cycle texture rectangle whose combiner's alpha is TEXEL0 times
+# LOD_FRACTION, blended over the image (FORCE_BL, memory weighed by 1 - alpha): the console's LOD fraction of a
+# primitive with no level after it is all ones (without sharpen and detail), so the texture shows; the model's was 0
+# there and the rectangle left the image as it was. Fixed in the model and the RTL (level count 0 only: the 1-cycle
+# LOD of other level counts is RDP_EXACT's rule 3).
+rdram zero
+mem 200000 ffffffffffffffff
+cmd 2d000000 005003c0
+cmd 2f300000 00000000
+cmd 3f10013f 00100000
+cmd 37000000 ff01ff01
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 2f002830 00404040
+cmd 3c0000c1 0f2001ff
+cmd 3d100003 00200000
+cmd 35100200 00000000
+cmd 34000000 0000c000
+cmd 28000000 00000000
+cmd 24150130 000d00b0 00000000 02000200
+cmd 29000000 00000000

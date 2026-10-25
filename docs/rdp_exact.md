@@ -203,9 +203,11 @@ tile's far corner on the console if it is drawn with PERSP.
 divide whether it has texture coefficients or not (theirs are 0), and the
 second pass too.
 
-**RTL**: `rdp_pix.v` P4: `tx16(dvs, wle3 && p_tex)` becomes `tx16(dvs,
-wle3)` (the comment there says it follows the model's 0); the two-pass test
-without `p_tex`. A few ALUTs.
+**RTL**: done. `rdp_pix.v` P4 saturates S and T when W is out of range
+whether the primitive has texture coefficients or not, and the two-pass test
+does not look at `p_tex`; the model does the same without the switch (a
+triangle's: a fill rectangle outside fill mode keeps S = T = 0 there until
+rule 6 makes rectangles primitives).
 
 ### 6. Edges, rows and rectangles
 
@@ -261,11 +263,14 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
 * `rdp_top.v`, the AA walker (`aa_a8`, `aa_b8`, `aa_clamp`, `aa_cross`): the
   edges' bit tests and the 14-bit crossing compare in place of 19-bit signed
   compares and clamps, 28-bit X: narrower, about 20 ALUTs fewer; the rows'
-  limits and the all-over / all-under flags: about 20 ALUTs; the field mode:
-  about 5.
+  limits and the all-over / all-under flags: about 20 ALUTs; the field mode is done
+  (the model's and the RTL's own, with the dither's row: `streams/`
+  `scissor_field.rdps`).
 * `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
   copy mode, every pixel with a full mask (no cut at the scissor's last
-  column): about 10 ALUTs.
+  column): about 10 ALUTs. A rectangle in fill or copy mode already reaches
+  the scissor's last column (the model's and the RTL's own: `streams/`
+  `fill_scissor_edge.rdps`, `copy_scissor_edge.rdps`).
 * `rdp_top.v`, the rectangle path (S_ROW's fixed columns, S_SETUP's
   `rect_setup`, S_FILL, `kind_fillmode`): rectangles go through the AA walker
   as triangles with vertical edges and their S, T as two attributes through
@@ -393,9 +398,10 @@ and the noise (each side has its own generator), 32-bit colour images,
 the blender beyond passing the pixel in most streams, the alpha compare in
 2-cycle mode (the oracle's structure takes it from the next pixel's first
 cycle, and the blender's shade alpha likewise; no stream turns the compare on
-in 2-cycle mode), copy mode of a texture other than RGBA 16 (the console
-copies the texel's raw bits; the model decodes and re-encodes, the same for
-RGBA 16 and an RGBA TLUT, not for IA 16, an IA TLUT, or 4- and 8-bit texels),
+in 2-cycle mode), copy mode of a 4-, 8- or 32-bit texture without the TLUT (the console
+copies TMEM's raw bits, two 8-bit texels a pixel; the model and the RTL decode
+and re-encode; a 16-bit texel and a TLUT entry are copied raw, as the console's:
+`streams/copy_raw16.rdps`),
 and a texture rectangle drawn with PERSP (with the switch it goes through the
 perspective divide with W = 0, as on the console; untested).
 
@@ -407,7 +413,7 @@ perspective divide with W = 0, as on the console; untested).
 | 2 rectangle next line | `rdp_top.v` `rect_setup`, `rdp_pix.v` L1 | 0 with rule 6, else 20 to 30 ALUTs |
 | 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | 170 to 270 ALUTs, 100 FFs |
 | 4 attributes | `rdp_top.v` S_SETUP, `rdp_pix.v` P0, the dz code | 280 to 380 ALUTs, 80 FFs, 8 more multiplier clocks a row |
-| 5 untextured PERSP | `rdp_pix.v` P4 | a few |
+| 5 untextured PERSP | `rdp_pix.v` P4 | done |
 | 6 edges, rows, rectangles, copy | `rdp_top.v` AA walker, S_AASPAN, S_PIX, the rectangle path; `rdp_pix.v` P5b (the CVG_X_ALPHA write rule: done) | about even |
 | 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | 100 to 200 ALUTs, 80 to 120 FFs |
 | **total** | | **about 550 to 900 ALUTs (360 to 600 ALMs), 260 to 300 FFs, no DSP block** |

@@ -92,35 +92,46 @@ static void hooks_arm(void);
  * runtime is not. The game's Status goes back in the delay slot of the return,
  * where the next instruction is the game's again. */
 #define LL_BREAK(n) ((void)(n))
+#include "n64rt_div64.h"
 u64 ll_ull_rshift(u64 a, u64 b) { return a >> (b & 63u); }
 u64 ll_ll_lshift(u64 a, u64 b)  { return a << (b & 63u); }
 u64 ll_ll_rshift(u64 a, u64 b)  { return (u64)((s64)a >> (b & 63u)); }
 u64 ll_ll_mul(u64 a, u64 b)     { return a * b; }
+/* (the divisions: n64rt_div64.h's, by words on the CPU's divu -- the C library's is a loop of a bit a step) */
+static s64 ll_sdiv(s64 a, s64 b, s64 *r)
+{
+    u64 ur, q = udiv64(a < 0 ? -(u64)a : (u64)a, b < 0 ? -(u64)b : (u64)b, &ur);
+    *r = a < 0 ? -(s64)ur : (s64)ur;                    /* (the remainder has the dividend's sign, as C's) */
+    return (a < 0) != (b < 0) ? -(s64)q : (s64)q;
+}
 u64 ll_ull_div(u64 a, u64 b)
 {
+    u64 r;
     if (!b) { LL_BREAK(7); return 0; }
-    if (!((a | b) >> 32)) return (u32)a / (u32)b;
-    return a / b;
+    return udiv64(a, b, &r);
 }
 u64 ll_ull_rem(u64 a, u64 b)
 {
+    u64 r;
     if (!b) { LL_BREAK(7); return 0; }
-    if (!((a | b) >> 32)) return (u32)a % (u32)b;
-    return a % b;
+    (void)udiv64(a, b, &r);
+    return r;
 }
 u64 ll_ll_rem(u64 a, u64 b) { return ll_ull_rem(a, b); }       /* (libultra's __ll_rem is an unsigned remainder) */
 u64 ll_ll_div(u64 a, u64 b)
 {
     if (!b) { LL_BREAK(7); return 0; }
     if (b == ~0ull && a == 0x8000000000000000ull) { LL_BREAK(6); return 0; }
-    return (u64)((s64)a / (s64)b);
+    s64 r;
+    return (u64)ll_sdiv((s64)a, (s64)b, &r);
 }
 /* the remainder with the divisor's sign: added back when the two differ */
 u64 ll_ll_mod(u64 a, u64 b)
 {
     if (!b) { LL_BREAK(7); return 0; }
     if (b == ~0ull && a == 0x8000000000000000ull) { LL_BREAK(6); return 0; }
-    s64 r = (s64)a % (s64)b;
+    s64 r;
+    (void)ll_sdiv((s64)a, (s64)b, &r);
     if ((r < 0 && (s64)b > 0) || (r > 0 && (s64)b < 0)) r += (s64)b;
     return (u64)r;
 }
@@ -129,8 +140,7 @@ void ll_ull_divremi(u64 *q, u64 *r, u64 a, s32 d)
 {
     u64 b = (u64)(s64)(s16)d;
     if (!b) { LL_BREAK(7); return; }
-    *q = a / b;
-    *r = a % b;
+    *q = udiv64(a, b, r);
 }
 #include "n64rt_llsigs.h"
 

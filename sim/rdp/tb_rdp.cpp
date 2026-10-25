@@ -389,7 +389,9 @@ static void rand_stream(unsigned seed, int n)
         else if (k < 92) cmd2(0x2C000000u | gr(1 << 22), gr() << 8 | gr(256));                // convert: K4, K5 (the combiner's)
         else if (k < 94) {                                                                    // scissor
             unsigned x0 = gr(c32x(4 * 100)), y0 = gr(4 * 80);
-            cmd2(0x2D000000u | x0 << 12 | y0, (x0 + gr(c32x(4 * 320) - x0 + 1)) << 12 | (y0 + gr(4 * 240 - y0 + 1)));
+            // (one in four the field mode, odd or even rows, from the corner's bits: the streams' other values stay)
+            unsigned fld = (y0 & 3) == 1 ? (2u | ((x0 >> 2) & 1)) << 24 : 0;
+            cmd2(0x2D000000u | x0 << 12 | y0, fld | (x0 + gr(c32x(4 * 320) - x0 + 1)) << 12 | (y0 + gr(4 * 240 - y0 + 1)));
         }
         else if (k < 95) cmd2(0x2D000000u, scis);
         else if (k < 96) {                                                                    // (now and then not a 16-bit image)

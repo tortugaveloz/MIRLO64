@@ -233,9 +233,7 @@ typedef struct {
     uint16_t prim_z;                       /* (RDP_N64: SET_PRIM_DEPTH's 15 bits << 1; the 18-bit depth is that << 2) */
     uint16_t prim_dz;                      /* RDP_CVG: SET_PRIM_DEPTH's delta (the blender's shift without Z_CMP) */
     uint16_t sc_xh, sc_yh, sc_xl, sc_yl;   /* u10.2 */
-#ifdef RDP_EXACT
     uint8_t sc_field, sc_odd;              /* SET_SCISSOR's field mode: only the odd rows (sc_odd) or the even ones are drawn */
-#endif
     uint32_t cimg, cimg_width;             /* width in pixels */
     uint32_t zimg;
     uint32_t timg, timg_width;             /* width in texels */

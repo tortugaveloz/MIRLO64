@@ -253,7 +253,10 @@ static rdp_rgba_t tmem_fetch(const rdp_t *r, const rdp_tile_t *t, int s, int tt)
     uint32_t row = (uint32_t)t->tmem * 4u + (uint32_t)tt * (uint32_t)t->line * 4u;
     const uint32_t odd = (tt & 1) ? 2u : 0u;
     rdp_rgba_t c = { 0, 0, 0, 0 };
-    const unsigned tlut = (r->other_h & RDP_H_TLUT_EN) != 0, tlut_fmt = (r->other_h & RDP_H_TLUT_IA) ? 1 : 0;
+    /* (copy mode copies a 16-bit texel's or a TLUT entry's bits as they are -- the console's copy moves TMEM's words, it
+     * does not decode them: read as RGBA 5551 they are written back unchanged, an IA or I texel and an IA entry too) */
+    const int copy = ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2;
+    const unsigned tlut = (r->other_h & RDP_H_TLUT_EN) != 0, tlut_fmt = ((r->other_h & RDP_H_TLUT_IA) && !copy) ? 1 : 0;
     if (t->size == 3) {
         uint32_t i = ((row + (uint32_t)s) ^ odd) & 0x3FF;
         if (tlut) return texel_expand(tlut_fmt, m[0x400 | ((unsigned)(m[i] >> 8) << 2)]);
@@ -276,8 +279,8 @@ static rdp_rgba_t tmem_fetch(const rdp_t *r, const rdp_tile_t *t, int s, int tt)
         return texel_expand(tlut_fmt, m[0x400 | (idx << 2)]);
     }
     if (t->size == 2) {
-        if (t->fmt == 3) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
-        if (t->fmt <= 2) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as the console does) */
+        if (t->fmt == 3 && !copy) return texel_expand(1, (uint16_t)v);     /* IA 8 8 */
+        if (t->fmt <= 2 || copy) return texel_expand(0, (uint16_t)v);     /* RGBA 5551 (CI 16 is read as RGBA, as the console does) */
         c.r = c.g = c.b = c.a = (uint8_t)(v >> 8);                /* I: the first byte */
     } else if (t->size == 1) {
         if (t->fmt == 3) { c.r = c.g = c.b = (uint8_t)((b >> 4) * 17u); c.a = (uint8_t)((b & 15u) * 17u); }   /* IA 4 4 */
@@ -340,7 +343,8 @@ static rdp_rgba_t texture_sample(const rdp_t *r, int tilei, int32_t s105, int32_
     tc_axis(tt, t->ult, t->lrt, t->ct, t->mt, t->maskt, &t0, &t1, &ft);
 
     rdp_rgba_t a = tmem_fetch(r, t, s0, t0);
-    if (point || ((r->other_h >> RDP_H_FILT_SHIFT) & 3) == 0)   /* point */
+    /* (point sampled; copy mode always: it moves TMEM's words, it has no filter) */
+    if (point || ((r->other_h >> RDP_H_FILT_SHIFT) & 3) == 0 || ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2)
         return a;
 
     /* N64 3-point filter: the triangle of the 2x2 the sample falls in */
@@ -433,6 +437,7 @@ typedef struct {
     int cm9[4];                    /* COMBINED (the first cycle's result): r, g, b, a as the 9 raw bits (below) */
     int sh9[4];                    /* SHADE: r, g, b, a saturated to a byte, 0..255 (below; 9 bits wide as the RTL's) */
     int lodf;                      /* LOD_FRACTION: the pixel's, 9 bits (rdp_lod; read as a signed 9-bit, as K5 is) */
+    int noise;                     /* NOISE (the colour's A 7): (three random bits << 6) | 0x20, 9 bits read as COMBINED is */
 #endif
 } cc_in_t;
 #define CC_TEX1(in) ((in)->tex1)
@@ -473,7 +478,10 @@ static int cc_rgb_a(const rdp_t *r, const cc_in_t *in, unsigned sel, int ch)
     case 4: return CC_SH(in, ch);
     case 5: return en[ch];
     case 6: return CC_ONE;
-    default: return 0;           /* 7 noise, 8+ zero */
+#ifdef RDP_CVG
+    case 7: return in->noise;
+#endif
+    default: return 0;           /* 8+ zero (7 noise without RDP_CVG) */
     }
 }
 static int cc_rgb_b(const rdp_t *r, const cc_in_t *in, unsigned sel, int ch)
@@ -622,7 +630,7 @@ static cc_out_t combine_raw(const rdp_t *r, const cc_in_t *in, int cyc)
      * multiplier has to 1: a game's (TEXEL0 - TEXEL1) * K5 + TEXEL1 is TEXEL0, and TEXEL1 with K5 at 0.) */
     for (int ch = 0; ch < 3; ch++) {
         int a = cc_rgb_a(r, in, sa_r, ch), b = cc_rgb_b(r, in, sb_r, ch), c = cc_rgb_c(r, in, mul_r, ch);
-        if (sa_r == 0) a = cc_ext9(a);
+        if (sa_r == 0 || sa_r == 7) a = cc_ext9(a);                       /* (7: NOISE) */
         if (sb_r == 0 || sb_r == 7) b = cc_ext9(b);                       /* (7: K4) */
         if (mul_r == 0 || mul_r == 7 || mul_r == 15) c = cc_sgn9(c);      /* (15: K5) */
         if (mul_r == 13) c = cc_sgn9(c);                                  /* the LOD fraction: sharpen's is negative */
@@ -1214,6 +1222,8 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
     /* inputs */
     cc_in_t in;
     memset(&in, 0, sizeof in);
+    /* NOISE: the alpha dither's three random bits (dither_a), as the console's one random number a pixel serves both */
+    in.noise = (int)(((rnd >> 8) & 7u) << 6 | 0x20u);
     rdp_rgba_t tex_next = { 0, 0, 0, 0 };   /* the next tile's sample (TEXEL1 of the first cycle) */
     int have_next = 0;
 #ifdef RDP_EXACT
@@ -1253,7 +1263,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (h & RDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
 #else
-        if (!pr->tex) { }
+        /* (a triangle without texture coefficients has S = T = W = 0, and with PERSP they go through the perspective
+         * divide all the same: W's integer half is 0, out of range, so S and T saturate to 0x7FFF -- TEXEL0 is the
+         * tile's texel there, its last (clamped), not its first: docs/rdp_exact.md, rule 5) */
+        if (!pr->tex) { if ((h & RDP_H_PERSP) && !pr->fillq) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); } }
         else if (pr->texrect) { s = (int16_t)at[AS]; t = (int16_t)at[AT]; }
         else if (h & RDP_H_PERSP) { s = n64_persp(at[AS], at[AW]); t = n64_persp(at[AT], at[AW]); }
         else { s = s105_noperp(at[AS] >> 5); t = s105_noperp(at[AT] >> 5); }
@@ -1261,6 +1274,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         /* the tiles of TEXEL0 and TEXEL1: the primitive's and the next, or with the LOD the level's */
         int tile0 = pr->tile;
         int tile1 = (pr->tile + 1) & 7;
+        /* 1-cycle mode: the console's LOD fraction of a primitive with a level count of 0 is all ones whatever its
+         * steps (the level after it is never blended: rdp_lod), without sharpen and detail -- what a 1-cycle combiner
+         * that reads LOD_FRACTION gets there (docs/rdp_exact.md, rule 3; other level counts read 0 here) */
+        if (cyc == 0 && pr->level == 0 && !(h & (RDP_H_SHARPEN | RDP_H_DETAIL))) in.lodf = 0xFF;
         if (cyc == 1 && lod_wanted(r)) {
             const rdp_lod_t L = lod_pixel(r, pr, at);
             in.lodf = L.frac;
@@ -1298,13 +1315,13 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         in.tex = texture_pass(r, tile0, s, t, 0, s_no_texel);
         /* TEXEL1 in the first cycle of a 2-cycle pixel: the next tile (tile + 1) at the same S, T -- the N64's
          * second texture (a skybox's day / night blend, a terrain's second layer). Its second cycle still
-         * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients:
-         * TEXEL0 again, one pass.) */
+         * takes TEXEL0 for both: one fetch more per pixel is all rtl/rdp has. (Without texture coefficients too:
+         * the next tile's texel at the same S, T, as the console's.) */
         in.tex1 = in.tex;
 #ifdef RDP_EXACT
         if (cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {      /* (the next tile's texel, coefficients or not) */
 #else
-        if (pr->tex && cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
+        if (cyc == 1 && (cc0_uses_texel1(r) || cc1_uses_texel0(r))) {
 #endif
             tex_next = texture_pass(r, tile1, s, t, 1, in.tex);
             if (cc0_uses_texel1(r)) in.tex1 = tex_next;
@@ -1383,7 +1400,9 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
      * ALPHA_CVG_SEL makes the alpha the coverage; else the alpha dither.
      * (2-cycle: the alpha compare takes the first cycle's alpha, through the
      * same steps.) */
-    const unsigned adith = cyc == 2 ? 0u : dither_a(r, x, y, rnd);                  /* (copy: the texel's alpha as it is) */
+    /* (the dither's row: in the scissor's field mode the field's own, y / 2, as the console's) */
+    const int dyr = y >> r->sc_field;
+    const unsigned adith = cyc == 2 ? 0u : dither_a(r, x, dyr, rnd);                  /* (copy: the texel's alpha as it is) */
     unsigned cvgmul = ar * cvg + 4u;                                           /* 12 bits (an alpha of 255 counts 256) */
     unsigned cvg_sel = (l & RDP_L_CVG_X_ALPHA) ? (cvgmul >> 8) : cvg;
     unsigned pa, ca;
@@ -1507,14 +1526,14 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
     if (c32) {
         /* RGBA8888: the channels whole (no 5-bit truncation), the alpha byte the coverage << 5 and its low five bits 0
          * (the pixel's own alpha is not stored, as in a 16-bit image); no hidden bits (copy mode never gets here) */
-        if (CIMG32_DITHER) out = dither_n64(r, out, x, y, rnd, 1);
+        if (CIMG32_DITHER) out = dither_n64(r, out, x, dyr, rnd, 1);
         r->wr16(r->ctx, caddr, (uint16_t)(out.r << 8 | out.g));
         r->wr16(r->ctx, caddr + 2u, (uint16_t)(out.b << 8 | cvg_out << 5));
         if (l & RDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
         r->pixels_drawn++;
         return;
     }
-    if (cyc != 2) out = dither_n64(r, out, x, y, rnd, 1);
+    if (cyc != 2) out = dither_n64(r, out, x, dyr, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
     if ((l & RDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
@@ -1703,6 +1722,8 @@ static inline int sc_x0(const rdp_t *r) { return r->sc_xh >> 2; }
 static inline int sc_x1(const rdp_t *r) { return r->sc_xl >> 2; }
 static inline int sc_y0(const rdp_t *r) { return r->sc_yh >> 2; }
 static inline int sc_y1(const rdp_t *r) { return r->sc_yl >> 2; }
+/* the scissor's field mode: a row is drawn when it is of the field kept (SET_SCISSOR's odd bit), or always without it */
+static inline int sc_row(const rdp_t *r, int y) { return !r->sc_field || (y & 1) == r->sc_odd; }
 
 /* ---- triangle ------------------------------------------------------------ */
 
@@ -1785,7 +1806,7 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
             fprintf(stderr, " min=%d max=%d\n", xmin, xmax);
         }
 #endif
-        if (!any) continue;
+        if (!any || !sc_row(r, y)) continue;
         if (xmax > sc_x1(r) - 1) xmax = sc_x1(r) - 1;      /* (the pixel at the scissor's end never has a sample) */
         if (xmin > xmax) continue;
         int32_t dx0 = (int32_t)((uint32_t)xmin << 16) - exh;
@@ -2210,12 +2231,14 @@ static void draw_texrect(rdp_t *r, const uint32_t *w, int flip)
     int xa = (xh + up) >> 2, ya = (yh + up) >> 2;
     if (xa < sc_x0(r)) xa = sc_x0(r);
     if (ya < sc_y0(r)) ya = sc_y0(r);
-    int xb = x1 < sc_x1(r) ? x1 : sc_x1(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
+    /* (copy mode writes the scissor's last column too, as fill mode does) */
+    const int sx1 = sc_x1(r) + (cyc == 2 ? 1 : 0);
+    int xb = x1 < sx1 ? x1 : sx1, yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
 #ifdef RDP_CVG
     const texrect_t g = { flip, q, dshift, xh, x0, y0, s, t, dsdx, dtdy };
 #endif
     for (int y = ya; y < yb; y++)
-        for (int x = xa; x < xb; x++) {
+        for (int x = xa; x < xb && sc_row(r, y); x++) {
             int32_t at[NATTR] = { 0 };
             int32_t cq = q ? 4 * x - xh : x - x0;     /* columns from XH: quarters, or whole ones */
             int cs = q ? 2 : 0;
@@ -2245,11 +2268,14 @@ static void fill_rect(rdp_t *r, const uint32_t *w)
     int x1 = (cyc == 3) ? (xl >> 2) + 1 : (xl + up) >> 2;
     int y1 = (cyc == 3) ? (yl >> 2) + 1 : (yl + up) >> 2;
     prim_t pr = { .fillq = 1 };
-    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sc_x1(r) ? x1 : sc_x1(r);
+    /* (fill mode writes the scissor's last column too, as the console's: its span runs to the edge clamped to the
+     * scissor, that pixel included -- docs/rdp_exact.md, rule 6) */
+    const int sx1 = sc_x1(r) + (cyc == 3 ? 1 : 0);
+    int xa = x0 > sc_x0(r) ? x0 : sc_x0(r), xb = x1 < sx1 ? x1 : sx1;
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     int32_t at[NATTR] = { 0 };
     for (int y = ya; y < yb; y++)
-        for (int x = xa; x < xb; x++)
+        for (int x = xa; x < xb && sc_row(r, y); x++)
             draw_pixel(r, &pr, x, y, at, 0xFFu);
 }
 
@@ -2487,9 +2513,7 @@ static void execute(rdp_t *r, const uint32_t *w)
     case RDP_OP_SET_SCISSOR:
         r->sc_xh = (w[0] >> 12) & 0xFFF; r->sc_yh = w[0] & 0xFFF;
         r->sc_xl = (w[1] >> 12) & 0xFFF; r->sc_yl = w[1] & 0xFFF;
-#ifdef RDP_EXACT
         r->sc_field = (uint8_t)((w[1] >> 25) & 1u); r->sc_odd = (uint8_t)((w[1] >> 24) & 1u);
-#endif
         break;
 #ifdef RDP_N64
     case RDP_OP_SET_PRIM_Z: r->prim_z = (uint16_t)((w[1] >> 16) << 1); r->prim_dz = (uint16_t)w[1]; break;   /* the N64's: 15 bits, and its delta */
@@ -2500,8 +2524,9 @@ static void execute(rdp_t *r, const uint32_t *w)
     case RDP_OP_SET_TILESIZE: set_tile_size(r, w); break;
 #ifdef RDP_N64
     case RDP_OP_LOAD_TILE: set_tile_size(r, w); load_tile_n64(r, w); r->load_count++; break;
-    case RDP_OP_LOAD_BLOCK: load_block(r, w); r->load_count++; break;
-    case RDP_OP_LOAD_TLUT: load_tlut(r, w); r->load_count++; break;
+    /* (every load sets its tile's size from its coordinates, as the console's: LOAD BLOCK's lrt is its dxt) */
+    case RDP_OP_LOAD_BLOCK: set_tile_size(r, w); load_block(r, w); r->load_count++; break;
+    case RDP_OP_LOAD_TLUT: set_tile_size(r, w); load_tlut(r, w); r->load_count++; break;
 #else
     case RDP_OP_LOAD_TILE: load_tile(r, w); r->load_count++; break;
 #endif

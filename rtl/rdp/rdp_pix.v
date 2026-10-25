@@ -228,9 +228,10 @@ module rdp_pix (
                           cc_lo[2:0] == 3'd1;
     // (registered: the modes and the combiner are set many clocks before a primitive's first pixel)
     reg        two_pass_q;
-    always @(posedge clk) two_pass_q <= cyc == 2'd1 && p_tex && (cc0_t1 || cc1_t0);
+    // (a primitive without texture coefficients too: the next tile's texel at its S, T, as the console's)
+    always @(posedge clk) two_pass_q <= cyc == 2'd1 && (cc0_t1 || cc1_t0);
     assign two_pass = two_pass_q;
-    wire       point    = other_h[13:12] == 2'd0;
+    wire       point    = other_h[13:12] == 2'd0 || other_h[21:20] == 2'd2;    // (copy mode has no filter)
     wire       a_cmp    = other_l[0];
     wire       z_src_p  = other_l[2];
     wire       z_cmp    = other_l[4] && !cyc[1] && !c8;    // (copy and fill mode have no depth, nor an 8-bit image)
@@ -489,8 +490,8 @@ module rdp_pix (
             dv17 = {mix && !top, mix && top, v};
         end
     endfunction
-    // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a primitive
-    // without texture coefficients: 0, as the model takes it, not the perspective divide's 0 / 0)
+    // S / W for the texel (n64_persp): the 17 bits saturated to 16, out of range to the end it went past (a triangle
+    // without texture coefficients too: its W is 0, out of range, so S and T are 0x7FFF -- the tile's far texel)
     function automatic [15:0] tx16;
         input [18:0] d;
         input        wle;
@@ -498,8 +499,8 @@ module rdp_pix (
     endfunction
     wire [18:0] dvs = dv17(ps3, rq3, rm3, rk3), dvt = dv17(pt3, rq3, rm3, rk3);
     // the coordinates P5 takes: without the LOD this pass's, from P3; with it a pass's from st_ram, D clocks on (below)
-    wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3 && p_tex);
-    wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3 && p_tex);
+    wire [15:0] s4n = (p_direct || !persp) ? s3r : tx16(dvs, wle3);
+    wire [15:0] t4n = (p_direct || !persp) ? t3r : tx16(dvt, wle3);
     // (the LOD's: the perspective divide, but a texture rectangle's S, T are its own s10.5, never out of range, as are an
     // affine triangle's S >> 16; a rectangle without texture is a triangle without coefficients: S = T = W = 0)
     wire        lod_pp = persp && !(p_direct && p_tex);
@@ -774,7 +775,11 @@ module rdp_pix (
         sl0_t <= sl0_8; sl1_t <= sl1_8; sl2_t <= sl2_8;
         fs8t <= fs8; ft8t <= ft8; up8t <= up8;
     end
-    wire [31:0] tx0 = tlut_on ? tex16(tlut_ia, tl_q0) : texel(u8t_fmt, u8t_size, q0t, h0t, sl0_t);
+    // (copy mode copies a 16-bit texel's or a TLUT entry's bits as they are: read as RGBA 5551 they are written back
+    // unchanged, an IA or I texel and an IA entry too -- the corner, the one texel copy mode takes)
+    wire        cp_raw = cyc == 2'd2;
+    wire [31:0] tx0 = tlut_on ? tex16(tlut_ia && !cp_raw, tl_q0)
+                              : texel((cp_raw && u8t_size == 2'd2 && u8t_fmt != 3'd1) ? 3'd0 : u8t_fmt, u8t_size, q0t, h0t, sl0_t);
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 
@@ -1017,6 +1022,7 @@ module rdp_pix (
         input [35:0] sh;                  // SHADE: 9 bits a channel
         input [35:0] cm;
         input [8:0]  lf;                  // the LOD fraction (a signed 9-bit as C, as K5; 0 without the LOD)
+        input [8:0]  nz;                  // NOISE (the colour's A 7), read as COMBINED is there
         reg [3:0] sa_r, sb_r;
         reg [4:0] mul_r;
         reg [2:0] sa_a, mul_a, sb_a, add_a, add_r;
@@ -1031,11 +1037,13 @@ module rdp_pix (
             end
             // (C's two fractions, the colour's 13 and 14, the alpha's 0 and 6, are one input of each C select: which of the
             // two is chosen here, once for the three channels)
-            lfx = lod_on ? {lf[8], lf} : 10'd0;
+            // (1-cycle mode: a level count of 0, without sharpen and detail, gives all ones whatever the steps)
+            lfx = lod_on ? {lf[8], lf} : (cyc == 2'd0 && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             cc_sel = {
-                rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), rgb_a(sa_r, 2'd1, tex, tex1, sh, cm), rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
+                (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd1, tex, tex1, sh, cm),
+                (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
                 rgb_b(sb_r, 2'd0, tex, tex1, sh, cm), rgb_b(sb_r, 2'd1, tex, tex1, sh, cm), rgb_b(sb_r, 2'd2, tex, tex1, sh, cm), al_abd(sb_a, tex, tex1, sh, cm),
                 rgb_c(mul_r, 2'd0, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm, fr_c), al_c(mul_a, tex, tex1, sh, fr_a),
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
@@ -1063,7 +1071,19 @@ module rdp_pix (
     // 2-cycle, 0 in 1-cycle); copy mode takes the texel. The line-buffer
     // words addressed at P9 are captured at P10b.
     // ======================================================================
-    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9);
+    // NOISE, the colour combiner's A 7: ((three random bits) << 6) | 0x20 for each pixel, the bits the alpha dither's
+    // noise takes (as the console's, Angrylion's get_dither_noise: the one random number serves both). From a second
+    // copy of the LFSR, stepped here at P9 for the same pixels as the first at P11, so that a pixel's value is the one
+    // the model takes for it (the state before its own step); the second cycle's a stage on.
+    reg  [22:0] nlfsr;
+    reg  [8:0]  nz10;
+    wire [8:0]  nz9 = {nlfsr[10:8], 6'h20};
+    always @(posedge clk) begin
+        if (rst) nlfsr <= 23'd0;
+        else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
+        nz10 <= nz9;
+    end
+    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9, nz9);
     reg         v10a;
     reg [9:0]   x10a;
     reg [155:0] o10a;
@@ -1097,7 +1117,7 @@ module rdp_pix (
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
     wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
-    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
+    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
     reg [155:0] o11a;
