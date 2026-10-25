@@ -70,6 +70,7 @@ level**, a privilege level of the CPU in which the runtime does the access on th
 | `0xF000_0000` | The registers ([control.md](control.md)) |
 | `0xFFFF_8000`, 2 KiB | The monitor RAM: a store with `$zero` as its base reaches it |
 | `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
+| `0x2000_0000` - `0x4FFF_FFFF`, in the game's view | Mapped addresses too (below) |
 
 The caches are physically tagged, so the runtime at `0x438x_xxxx` and the game through KSEG0 see one copy of the RDRAM.
 
@@ -316,7 +317,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 
 | Register | Bits |
 |---|---|
-| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
+| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
 | 22 | Read only: the address of the last translation fault the monitor level took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
 | 23 | Write: stores a table entry for EntryHi's page pair and ASID. `[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid. Read: `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's |
@@ -507,7 +508,13 @@ refill handler of its own that checks each rule.
 
 A game can map `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF` and `0xC000_0000` - `0xEFFF_FFFF` (the VR4300's
 KSSEG and most of KSEG3) onto the RDRAM, and run code from them. `0x2000_0000` - `0x4FFF_FFFF` holds the SoC's own devices and
-the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers and the monitor's RAM: those are not mapped.
+the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers and the monitor's RAM: those are not mapped,
+but for the **game's view**. With MCTL bit 12 set (the runtime sets it at start-up), `0x2000_0000` - `0x4FFF_FFFF` are mapped
+addresses as well while the game runs: MCTL.GAME set, Status.ERL clear (not the monitor level) and Status bit 4 clear. A game
+can then map code at `0x4000_0000`, unpack an overlay into it and jump there, as on the console. The monitor level, and the
+runtime's helpers that the game's code calls directly (the 64-bit helpers and the envelope rate, `n64rt_boot.c`: their entry
+sets Status bit 4, a bit of KSU that the game's code never sets, and the wrapper puts the game's Status back), see the RSP and
+the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code before it is not in the game's view either.
 
 ### 64-bit instructions and the helpers
 

@@ -157,6 +157,10 @@ __asm__(".text\n.set push\n.set noreorder\n.set noat\n.set mips3\n"
 LL_DECL(ull_rshift) LL_DECL(ull_rem) LL_DECL(ull_div) LL_DECL(ll_lshift) LL_DECL(ll_rem)
 LL_DECL(ll_div) LL_DECL(ll_mul) LL_DECL(ull_divremi) LL_DECL(ll_mod) LL_DECL(ll_rshift)
 static const struct { const u32 *w; u32 n; void *f; const char *name; } s_ll_sigs[] = { LL_SIGS };
+/* The patch goes into the runtime's code with interrupts off (an interrupt of the game's would arrive at the runtime's
+ * vector) and Status bit 4 (KSU's, which the game's code never sets) on: while the game runs, 0x2000_0000 - 0x4FFF_FFFF are
+ * the game's mapped addresses (mips_core, game_view: a game can map an overlay at 0x4000_0000 and run it there), and bit 4
+ * gives the runtime's code back its own SDRAM there. The wrapper's mtc0 puts the game's Status back. */
 static void ll_patch(u32 vram, u32 len)
 {
     u32 patched = 0;
@@ -175,8 +179,8 @@ static void ll_patch(u32 vram, u32 len)
             u32 f = (u32)(uintptr_t)s_ll_sigs[k].f;
             u32 *d = rd32(a);
             d[0] = 0x400F6000u;                      /* mfc0 t7, Status                  (the wrapper gives it back) */
-            d[1] = 0x35EE0001u;                      /* ori  t6, t7, 1 */
-            d[2] = 0x39CE0001u;                      /* xori t6, t6, 1                   (interrupts off) */
+            d[1] = 0x35EE0011u;                      /* ori  t6, t7, 0x11 */
+            d[2] = 0x39CE0001u;                      /* xori t6, t6, 1                   (interrupts off; bit 4: below) */
             d[3] = 0x408E6000u;                      /* mtc0 t6, Status */
             d[4] = 0;
             d[5] = 0x3C190000u | (f >> 16);          /* lui  t9, hi */
@@ -312,8 +316,8 @@ static void ul_patch(u32 vram, u32 len)
             if (h != s_ul_fns[k].hash) continue;
             const u32 f = (u32)(uintptr_t)s_ul_fns[k].fn;
             u32 *d = rd32(a);
-            d[0] = 0x400F6000u;                  /* mfc0 t7, Status                  (as ll_patch) */
-            d[1] = 0x35EE0001u;                  /* ori  t6, t7, 1 */
+            d[0] = 0x400F6000u;                  /* mfc0 t7, Status                  (as ll_patch, bit 4 too) */
+            d[1] = 0x35EE0011u;                  /* ori  t6, t7, 0x11 */
             d[2] = 0x39CE0001u;                  /* xori t6, t6, 1 */
             d[3] = 0x408E6000u;                  /* mtc0 t6, Status */
             d[4] = 0;
