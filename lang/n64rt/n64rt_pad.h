@@ -21,7 +21,7 @@
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
  *                        (the stick stays centred); any other value is the D-pad
- *          [21:20]  n=12 "C-Up button": 0 ZR, 1 ZL, 2 (or 3) none
+ *          [21:20]  n=12 free (was "Start": "Start button" is n=8)
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")
@@ -33,7 +33,7 @@
  * The N64's Z and R are the Pocket's L and R keys, always: the Controls menu (input.json) is where they move.
  * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
  *
- * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on the "C-Up button" key (ZR),
+ * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on ZR (the Controls menu's C-Up),
  * and on the Start key when "Start button" does not take it (another key, none; Select+Start: Start alone) -- and through the
  * Modifier (its key held turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right
  * analog stick, 2 the left one, as another source (ORed): past +-64 of 127 on its longer axis it is the one C button of that axis
@@ -143,8 +143,7 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (skey != KEY_START && (k & KEY_START)) b |= CONT_E;
         k &= ~skey;                                                   /* (the Start's key is that only) */
     }
-    const uint32_t cu = (set1 >> 20) & 3u;                            /* C-Up button */
-    if (k & (cu == 0u ? KEY_R2 : cu == 1u ? KEY_L2 : 0u)) b |= CONT_E;
+    if (k & KEY_R2) b |= CONT_E;                                      /* C-up (the Controls menu's, on ZR) */
     if (k & KEY_A) b |= CONT_A;
     if (k & KEY_B) b |= CONT_B;
     if (k & KEY_L1) b |= CONT_G;                                              /* Z (the Controls menu's) */

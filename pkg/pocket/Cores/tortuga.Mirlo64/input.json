@@ -44,6 +44,11 @@
             "id": 7,
             "name": "Start",
             "key": "pad_btn_start"
+          },
+          {
+            "id": 8,
+            "name": "C-Up",
+            "key": "pad_trig_r2"
           }
         ]
       }

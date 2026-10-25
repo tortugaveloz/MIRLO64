@@ -816,10 +816,9 @@ scan-out instead.
 | R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 | Start button | `0x1000_0120` | `interact1[4:0]` | A (6), B (7), X (8), Y (9), L (1), R (2), Select (10), **Start** (0), Select+Start (12) |
-| C-Up button | `0x1000_0130` | `interact1[21:20]` | **ZR** (0), ZL (1), None (2) |
 | Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), R (R), C-Down (Select), C-Left (Y), C-Right (X) and Start; it remaps what
+The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), R (R), C-Down (Select), C-Left (Y), C-Right (X), Start and C-Up (ZR, `pad_trig_r2`: a key the documentation does not list); it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
 - **Z and R** are the Pocket's L and R keys; the Controls menu moves them.
@@ -827,7 +826,7 @@ each button sends, and the runtime sees only the resulting key bits (so remappin
   10 Select, 11 Start, any other value none; 0 is the
   setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
   key may serve two N64 buttons.
-- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select, C-up the "C-Up button" key. With
+- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select, C-up ZR (the Controls menu's C-Up). With
   "C buttons" set to L stick or R stick, that stick adds all four beyond half its range, one at a time: the quarter of the
   circle it points into (45 degrees either side of up, right, down, left; a diagonal of exactly 45 degrees is up or down).
   With D-pad, the D-pad keys add them too.

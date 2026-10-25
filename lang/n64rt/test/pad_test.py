@@ -41,8 +41,7 @@ def spec(keys, joy, s0, s1):
         if skey != 'start' and 'start' in held:
             out.add('CUP')                        # a Start key the setting leaves: C-up
         held.discard(skey)                        # the Start's key is that only
-    cukey = {0: 'R2', 1: 'L2'}.get((s1 >> 20) & 3)   # "C-Up button" is interact1[21:20]: 0 ZR, 1 ZL, 2 and 3 none
-    if cukey in held:
+    if 'R2' in held:                              # C-up: ZR (the Controls menu moves it)
         out.add('CUP')
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
