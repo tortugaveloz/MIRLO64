@@ -309,7 +309,7 @@ static void psram_step(bool neg)
 // from the `from`-th
 // (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
 static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
-static bool o_cstat, o_ctrace, o_excstat, o_pcprof;
+static bool o_cstat, o_ctrace, o_excstat, o_pcprof, o_cmodel;
 static long o_pcprof_from, o_rcpstat;
 static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
@@ -317,6 +317,7 @@ static bool o_pad_load = true;          // PAD.., PAD_MASH are to be read (at th
 static FILE *o_ailog; static bool o_ailog_load = true;   // AILOG likewise (a run from a checkpoint: its own file, or none)
 static void opts_load()
 {
+    o_cmodel = getenv("CONMODEL") != nullptr;
     o_cstat = getenv("CPUSTAT") != nullptr; o_ctrace = getenv("CPUTRACE") != nullptr; o_excstat = getenv("EXCSTAT") != nullptr;
     ct_from = -1; ct_n = 0;
     o_exc_per = o_excstat && atoi(getenv("EXCSTAT")) > 1 ? atoi(getenv("EXCSTAT")) : 60;
@@ -421,6 +422,8 @@ static void cpu_stat_step(long sys)
     }
     if (out || mark0) { for (int i = 0; i < C_N; i++) c[i] = 0; n = ret = idle = 0; f_n = f_sum = f_max = 0; }
 }
+
+#include "con_model.h"
 
 // ---- the Pocket's data slots (data.json) and its side of the bridge
 struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
@@ -724,6 +727,7 @@ int main(int argc, char **argv)
             if (rise && cstat) cpu_stat_step(sys);
             if (rise && ctrace) cpu_trace_step();
             if (rise && excstat) exc_stat_step();
+            if (rise && o_cmodel) con_step();
             t->clk_cpu = rise;
             if (cpu_t < now) t->eval();
         }
@@ -1323,6 +1327,7 @@ int main(int argc, char **argv)
         }
     if (verify_on && !noload) bad += verify("at the end", true);
     if (bad) errors += bad;
+    if (o_cmodel) con_end();
     if (const char *d = getenv("DUMP")) {               // DUMP=addr,len: SDRAM words out (hex)
         uint32_t a = strtoul(d, 0, 0), n = strchr(d, ',') ? strtoul(strchr(d, ',') + 1, 0, 0) : 16;
         for (uint32_t i = 0; i < n; i++) printf("%08x: %08x\n", a + 4 * i, rd_word(((a & 0x3FFFFFF) >> 2) + i));

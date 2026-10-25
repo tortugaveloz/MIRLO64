@@ -925,6 +925,7 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `PAD`, `PAD2`, `PAD3`, `PAD4` `=from-to:keys[/joy],...` | a controller's keys over a span of fields |
 | `VGA=1` | every frame the pads send, as PPM |
 | `CPUSTAT=1`, `CPUTRACE=from,count` | where the CPU's cycles go; the instructions it retires |
+| `CONMODEL=n`, `CONMODEL_P=name=value,...` | every n fields, the game's code as this CPU ran it beside a timing model of the console's VR4300 run on the same instructions (`con_model.h`: its caches, interlocks, multiply / divide and FPU latencies, uncached and device accesses); `[conraw ...]` lines carry the counts, to price again with other costs |
 | `RCPSTAT=n`, `RCPSTAT_IDLE=lo,hi` | every n fields: the RSP's and the RDP's time, the CPU's outside the game's idle loop, and each SDRAM port's words and cycles waiting |
 | `RSPLOG=<file>`, `RSPPROF=<file>` | the RSP's tasks, a line each; its cycles by the microcode's pc |
 | `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
