@@ -85,18 +85,25 @@
 #define KEY_START  (1u << 15)
 #define KEY_TYPE(k) ((k) >> 28)          /* 1 Pocket, 2 dock pad without analog, 3 dock pad with analog */
 
-/* a stick byte (0x80 centred) as the N64's axis, -80 .. 80: nothing within the dead zone (dzc: the setting's code), linear from
- * its edge to the end of the range */
-static inline int8_t n64rt_pad_axis(uint32_t v, int flip, uint32_t dzc)
+/* a stick's two bytes (0x80 centred; Y up is the byte's low end) as the N64's stick, -80 .. 80 each: a radial dead zone (dzc: the
+ * setting's code) -- nothing within that distance of the centre, past it the deflection linear from the zone's edge to the end of
+ * the range, along the stick's own direction (an axis-by-axis zone would snap a slight angle onto the axes) */
+static inline uint32_t n64rt_pad_isqrt(uint32_t v)
 {
-    int a = (int)(v & 0xFFu) - 128;
-    if (flip) a = -a;
+    uint32_t r = 0, b = 1u << 14;
+    while (b) { if ((r + b) * (r + b) <= v) r += b; b >>= 1; }
+    return r;
+}
+static inline void n64rt_pad_stick(uint32_t j, uint32_t dzc, int8_t *x, int8_t *y)
+{
+    const int ax = (int)(j & 0xFFu) - 128, ay = 128 - (int)((j >> 8) & 0xFFu);
     const int pct = (dzc >= 1u && dzc <= 11u) ? (int)(dzc - 1u) * 5 : 10;
-    const int t = pct * 128 / 100, m = a < 0 ? -a : a;
-    if (m <= t) return 0;
-    int o = (m - t) * 80 / (127 - t);
-    if (o > 80) o = 80;
-    return (int8_t)(a < 0 ? -o : o);
+    const int t = pct * 128 / 100, r = (int)n64rt_pad_isqrt((uint32_t)(ax * ax + ay * ay));
+    if (r <= t) { *x = 0; *y = 0; return; }
+    const int den = r * (127 - t);
+    int ox = ax * (r - t) * 80 / den, oy = ay * (r - t) * 80 / den;
+    *x = (int8_t)(ox > 80 ? 80 : ox < -80 ? -80 : ox);
+    *y = (int8_t)(oy > 80 ? 80 : oy < -80 ? -80 : oy);
 }
 /* the Pocket key a button setting names (0: no key) */
 static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
@@ -181,7 +188,7 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;
             const uint32_t dzc = mode == 2u ? (set0 >> 25) & 31u : (set1 >> 5) & 31u;   /* (its stick's dead zone) */
-            x = n64rt_pad_axis(j >> sh, 0, dzc); y = n64rt_pad_axis(j >> (sh + 8), 1, dzc);
+            n64rt_pad_stick(j >> sh, dzc, &x, &y);
         }
         sx = x; sy = y;
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
