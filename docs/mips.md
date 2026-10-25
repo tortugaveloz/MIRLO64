@@ -815,8 +815,7 @@ scan-out instead.
 | R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), Select + Start (12), C-Left + C-Right (13), C-Down + C-Up (14): the two keys together are the Start; the Start key alone is then C-up |
 | R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
-| D-pad double tap | `0x1000_0130` | `interact1[21:20]` | **off** (0), on (1): the D-pad's stick 60 %, 100 % on a press within 300 ms of its last release |
-| C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
+| C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), D-pad (3), L stick (2), R stick (1) |
 
 The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X), C-Up, L (ZL, `pad_trig_l2`), R (R), Z (L) and Start; C-Up is on ZR (`pad_trig_r2`: a key the documentation does not list); it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).

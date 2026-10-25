@@ -8,7 +8,7 @@ int main(void)
     unsigned k, j, s0, s1;
     while (scanf("%x %x %x %x", &k, &j, &s0, &s1) == 4) {
         uint16_t b; int8_t x, y;
-        n64rt_pad_map(k, j, s0, s1, (k >> 16) & 1, &b, &x, &y);     /* (bit 16, no key: the double tap's state) */
+        n64rt_pad_map(k, j, s0, s1, &b, &x, &y);
         printf("%04x %d %d\n", b, x, y);
     }
     return 0;
