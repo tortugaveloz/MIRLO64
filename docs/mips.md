@@ -806,16 +806,15 @@ scan-out instead.
 | Setting | Address | Field | Options (value); the default in bold |
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
-| Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1) |
+| Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1), 2 columns (2) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | L stick dead zone | `0x1000_0124` | `interact1[9:5]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
-| Start = Select+Start | `0x1000_0120` | `interact1[4:0]` | **off** (0), on (12): Select with Start (or with C-Up's key) is the Start, the Start key alone C-up |
-| R as modifier: Face C buttons | `0x1000_0110` | `interact0[14:10]` | **off** (0), on (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right |
-| R as modifier: Joystick half press | `0x1000_0118` | `interact0[24:20]` | **off** (0), on (1): R held makes the D-pad's stick 60 % |
+| Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), Select + Start (12), C-Left + C-Right (13), C-Down + C-Up (14): the two keys together are the Start; the Start key alone is then C-up |
+| R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
 | D-pad double tap | `0x1000_0130` | `interact1[21:20]` | **off** (0), on (1): the D-pad's stick 60 %, 100 % on a press within 300 ms of its last release |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 
@@ -831,7 +830,7 @@ each button sends, and the runtime sees only the resulting key bits (so remappin
   "C buttons" set to L stick or R stick, that stick adds all four beyond half its range, one at a time: the quarter of the
   circle it points into (45 degrees either side of up, right, down, left; a diagonal of exactly 45 degrees is up or down).
   With D-pad, the D-pad keys add them too.
-- **R checkboxes**: with either on, R does that while held and never reaches the game.
+- **R as modifier**: when set, R does that while held and never reaches the game.
 - **Start**: a key (a button code; that key is then the Start only), or Select and Start together, which then count for
   nothing else. The Start key, when the setting leaves it (another key; with Select+Start, Start alone), is C-up.
 - **Stick**: with None, the stick stays centred. With D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog

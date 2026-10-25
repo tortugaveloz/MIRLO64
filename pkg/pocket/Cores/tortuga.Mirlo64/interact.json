@@ -1,6 +1,6 @@
 {"interact":{"magic":"APF_VER_1","variables":[
 {"name":"Crop Vertical","id":235,"type":"list","enabled":true,"persist":true,"address":"0x1000010C","defaultval":1,"options":[{"value":0,"name":"None"},{"value":8,"name":"8 lines"},{"value":12,"name":"12 lines"}],"writeonly":true},
-{"name":"Crop Right","id":236,"type":"list","enabled":true,"address":"0x10000114","persist":true,"defaultval":1,"options":[{"value":0,"name":"None"},{"value":1,"name":"1 column"}],"writeonly":true},
+{"name":"Crop Right","id":236,"type":"list","enabled":true,"address":"0x10000114","persist":true,"defaultval":1,"options":[{"value":0,"name":"None"},{"value":1,"name":"1 column"},{"value":2,"name":"2 columns"}],"writeonly":true},
 {"name":"Expansion Pak","id":238,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":true},
 {"name":"Controller 1 pak","id":214,"type":"list","enabled":true,"persist":true,"address":"0x10000108","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Controller Pak"},{"value":2,"name":"Transfer Pak"}],"writeonly":true},
 {"name":"Stick","id":225,"type":"list","enabled":true,"persist":true,"address":"0x1000012C","defaultval":1,"options":[{"value":3,"name":"None"},{"value":0,"name":"D-pad"},{"value":1,"name":"L stick"},{"value":2,"name":"R stick"}],"writeonly":true},
@@ -8,8 +8,7 @@
 {"name":"C buttons","id":223,"type":"list","enabled":true,"persist":true,"address":"0x10000128","defaultval":0,"options":[{"value":0,"name":"None"},{"value":2,"name":"L stick"},{"value":1,"name":"R stick"},{"value":3,"name":"D-pad"}],"writeonly":true},
 {"name":"L stick dead zone","id":241,"type":"list","enabled":true,"persist":true,"address":"0x10000124","defaultval":2,"options":[{"value":1,"name":"0%"},{"value":2,"name":"5%"},{"value":3,"name":"10%"},{"value":4,"name":"15%"},{"value":5,"name":"20%"},{"value":6,"name":"25%"},{"value":7,"name":"30%"},{"value":8,"name":"35%"},{"value":9,"name":"40%"},{"value":10,"name":"45%"},{"value":11,"name":"50%"}],"writeonly":true},
 {"name":"R stick dead zone","id":242,"type":"list","enabled":true,"persist":true,"address":"0x1000011C","defaultval":2,"options":[{"value":1,"name":"0%"},{"value":2,"name":"5%"},{"value":3,"name":"10%"},{"value":4,"name":"15%"},{"value":5,"name":"20%"},{"value":6,"name":"25%"},{"value":7,"name":"30%"},{"value":8,"name":"35%"},{"value":9,"name":"40%"},{"value":10,"name":"45%"},{"value":11,"name":"50%"}],"writeonly":true},
-{"name":"Start = Select+Start","id":243,"type":"check","enabled":true,"persist":true,"address":"0x10000120","defaultval":0,"value":12,"value_off":0,"writeonly":true},
+{"name":"Start macro","id":247,"type":"list","enabled":true,"persist":true,"address":"0x10000120","defaultval":0,"options":[{"value":0,"name":"None"},{"value":12,"name":"Select + Start"},{"value":13,"name":"C-Left + C-Right"},{"value":14,"name":"C-Down + C-Up"}],"writeonly":true},
 {"name":"D-pad double tap","id":246,"type":"check","enabled":true,"persist":true,"address":"0x10000130","defaultval":0,"value":1,"value_off":0,"writeonly":true},
-{"name":"R as modifier: Face C buttons","id":244,"type":"check","enabled":true,"persist":true,"address":"0x10000110","defaultval":0,"value":1,"value_off":0,"writeonly":true},
-{"name":"R as modifier: Joystick half press","id":245,"type":"check","enabled":true,"persist":true,"address":"0x10000118","defaultval":0,"value":1,"value_off":0,"writeonly":true}
+{"name":"R as modifier","id":248,"type":"list","enabled":true,"persist":true,"address":"0x10000110","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Face C buttons"},{"value":2,"name":"Joystick half press"}],"writeonly":true}
 ],"messages":[]}}

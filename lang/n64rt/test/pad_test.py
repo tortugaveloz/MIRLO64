@@ -18,7 +18,7 @@ def spec(keys, joy, s0, s1):
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
     out = set()
-    face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 20) & 31) == 1   # "R = Face C buttons" interact0[14:10], "R = Joystick half press" [24:20]
+    face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 10) & 31) == 2   # "R as modifier" interact0[14:10]: 1 face C buttons, 2 half press
     mod_key = 'R1' if face or half else None
     rmod = mod_key is not None and mod_key in held
     if mod_key:
@@ -29,10 +29,11 @@ def spec(keys, joy, s0, s1):
                 out.add(c)
         held -= {'A', 'B', 'X', 'Y'}
     scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
-    if scode == 12:
-        if 'select' in held and held & {'start', 'R2'}:    # Select with Start, or with C-Up's key (ZR)
+    if scode in (12, 13, 14):                     # a Start macro: Select+Start, C-left+C-right (Y, X), C-down+C-up (Select, ZR)
+        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}}[scode]
+        if chord <= held:
             out.add('START')
-            held -= {'select', 'start', 'R2'}
+            held -= chord
         elif 'start' in held:
             out.add('CUP')                        # the Start key the chord leaves: C-up
     else:
@@ -121,7 +122,7 @@ def settings():
             (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        sc = (0, 1, 6, 10, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
+        sc = (0, 1, 13, 14, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
         s1 = sc | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (start: "C-Up button"; the free bits)
         yield s0, s1
 

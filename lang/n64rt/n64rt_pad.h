@@ -8,13 +8,14 @@
  *
  *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
- *          [14:10]  n=4  "R = Face C buttons" (1): R held turns the face buttons into the C buttons where they sit (X up, B down,
- *                        Y left, A right); R then never reaches the game
+ *          [14:10]  n=4  "R as modifier": 0 none, 1 face C buttons (R held turns X, B, Y, A into C-up, C-down, C-left, C-right
+ *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
- *          [24:20]  n=6  "R = Joystick half press" (1): R held makes the D-pad's stick 60 % (R then never reaches the game)
+ *          [24:20]  n=6  free
  *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
- *                        Select and Start together (neither counts for anything else then); the key is the Start only
+ *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, 13 C-left+C-right,
+ *                        14 C-down+C-up; the key is the Start only
  *          [9:5]    n=9  "L stick dead zone": as the R stick's
  *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick, 3 also the
  *                        D-pad
@@ -123,7 +124,8 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
     uint16_t b = 0;
 
-    const int face = ((set0 >> 10) & 31u) == 1u, half = ((set0 >> 20) & 31u) == 1u;   /* the R checkboxes */
+    const uint32_t rm = (set0 >> 10) & 31u;                           /* R as modifier */
+    const int face = rm == 1u, half = rm == 2u;
     const uint32_t mkey = (face || half) ? KEY_R1 : 0u;
     const int rmod = (k & mkey) != 0u;
     k &= ~mkey;
@@ -135,8 +137,9 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
     }
     const uint32_t scode = set1 & 31u;                                /* Start (and C-up on the Start key it leaves) */
-    if (scode == 12u) {                       /* (Select with Start, or with C-Up's key: C-Up may be moved onto the Start button) */
-        if ((k & KEY_SELECT) && (k & (KEY_START | KEY_R2))) { b |= CONT_START; k &= ~(KEY_SELECT | KEY_START | KEY_R2); }
+    if (scode >= 12u && scode <= 14u) {       /* a Start macro: 12 Select+Start, 13 C-left+C-right (Y, X), 14 C-down+C-up (Select, ZR) */
+        const uint32_t chord = scode == 12u ? KEY_SELECT | KEY_START : scode == 13u ? KEY_Y | KEY_X : KEY_SELECT | KEY_R2;
+        if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
         else if (k & KEY_START) b |= CONT_E;
     } else {
         const uint32_t skey = n64rt_pad_key(scode, KEY_START);
