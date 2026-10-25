@@ -806,33 +806,35 @@ scan-out instead.
 | Setting | Address | Field | Options (value); the default in bold |
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
-| Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1) |
+| Crop Right | `0x1000_0114` | `interact0[19:15]` | None (0), **1 column** (1), 2 columns (2) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
-| Z button | `0x1000_0124` | `interact1[9:5]` | None (5), **L** (0), R (2), ZL (3), ZR (4) |
-| L button | `0x1000_0118` | `interact0[24:20]` | **None** (5), L (1), R (2), ZL (0), ZR (4) |
-| R button | `0x1000_011C` | `interact0[29:25]` | None (5), L (1), **R** (0), ZL (3), ZR (4) |
-| C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), Right stick (1) |
-| Start button | `0x1000_0130` | `interact1[21:20]` | None (2), **Start** (0), Select+Start (1) |
-| Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
+| L stick dead zone | `0x1000_0124` | `interact1[9:5]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
+| R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
+| Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), Select + Start (12), C-Left + C-Right (13), C-Down + C-Up (14): the two keys together are the Start; the Start key alone is then C-up |
+| R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
+| D-pad double tap | `0x1000_0130` | `interact1[21:20]` | **off** (0), on (1): the D-pad's stick 60 %, 100 % on a press within 300 ms of its last release |
+| C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X) and C-Up (Start); it remaps what
-each button sends, and the runtime sees only the resulting key bits.
+The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X), C-Up, L (ZL, `pad_trig_l2`), R (R), Z (L) and Start; C-Up is on ZR (`pad_trig_r2`: a key the documentation does not list); it remaps what
+each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
-- **Button codes** (Z, L, R, Modifier): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
+- **Z, L and R** are the Pocket's L, ZL and R keys; the Controls menu moves them.
+- **Button codes** (Modifier, Start): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
   10 Select, 11 Start, any other value none; 0 is the
   setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
   key may serve two N64 buttons.
-- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select. With
-  "C buttons" set to L stick or R stick, that stick adds all four, beyond half its range.
-- **Modifier**: while its key is held, X, B, Y and A are C-up, C-down, C-left and C-right, and the D-pad gives half the
-  stick's deflection. The key itself never reaches the game.
-- **Start**: the Pocket's Start; or Select and Start together, which then count for nothing else (Start alone is C-up); or
-  none (Start is C-up). The Controls menu's C-Up is on the Start key.
+- **A and B** are fixed. **C buttons**: C-left is Y, C-right is X, C-down is Select, C-up ZR (the Controls menu's C-Up). With
+  "C buttons" set to L stick or R stick, that stick adds all four beyond half its range, one at a time: the quarter of the
+  circle it points into (45 degrees either side of up, right, down, left; a diagonal of exactly 45 degrees is up or down).
+  With D-pad, the D-pad keys add them too.
+- **R as modifier**: when set, R does that while held and never reaches the game.
+- **Start**: a key (a button code; that key is then the Start only), or Select and Start together, which then count for
+  nothing else. The Start key, when the setting leaves it (another key; with Select+Start, Start alone), is C-up.
 - **Stick**: with None, the stick stays centred. With D-pad, the D-pad keys are the stick at full deflection (80). With L stick or R stick, the analog
-  stick's two bytes (`0x80` the centre, a dead zone of 12, scaled to 80 at the end of the range). A pad the dock
+  stick's two bytes (`0x80` the centre; nothing within its stick's dead zone, then linear from its edge to 80 at the end of the range). A pad the dock
   reports with analog sticks (type 3) gives the stick alone. A pad reported without (type 2) is believed when its stick
   bytes are not all `0x00` or all `0xFF`, and gives the D-pad keys while its stick is centred. The Pocket's own
   controls give the D-pad keys.

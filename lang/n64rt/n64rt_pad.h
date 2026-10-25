@@ -8,19 +8,21 @@
  *
  *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
- *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) turns the face buttons into the C buttons where
- *                        they sit (X up, B down, Y left, A right) and the D-pad into half a stick while held; that key never reaches
- *                        the game (so not as the Z, L or R button either)
+ *          [14:10]  n=4  "R as modifier": 0 none, 1 face C buttons (R held turns X, B, Y, A into C-up, C-down, C-left, C-right
+ *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
- *          [24:20]  n=6  "L button": which Pocket key is the N64's L
- *          [29:25]  n=7  "R button": which Pocket key is the N64's R
- *   word 1 [4:0]    n=8  free (was "EEPROM size": the save-type database decides now)
- *          [9:5]    n=9  "Z button": which Pocket key is the N64's Z
- *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick
+ *          [24:20]  n=6  free
+ *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
+ *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
+ *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, 13 C-left+C-right,
+ *                        14 C-down+C-up; the key is the Start only
+ *          [9:5]    n=9  "L stick dead zone": as the R stick's
+ *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick, 3 also the
+ *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
  *                        (the stick stays centred); any other value is the D-pad
- *          [21:20]  n=12 "Start": 0 the Pocket's Start, 1 Select and Start together (neither counts for anything else then),
- *                        2 (or 3) none
+ *          [21:20]  n=12 "D-pad double tap" (1): the D-pad's stick is 60 %, 100 % on a press within 300 ms of the last release
+ *                        (dfull: the caller keeps that state)
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")
@@ -28,13 +30,15 @@
  * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
  * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
  * 9 Y, 10 Select, 11 Start (anything else is none too).
- *   Z button: 0 = L      L button: 0 = ZL      R button: 0 = R      Modifier: 0 = none
+ *   Modifier: 0 = none
+ * The N64's Z, L and R are the Pocket's L, ZL and R keys, always: the Controls menu (input.json) is where they move.
  * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
  *
- * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on the Start key when "Start"
- * does not take it (Select+Start: Start alone; none: Start) -- the Controls menu's C-Up is on Start -- and through the Modifier (its
- * key held turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right analog stick, 2 the
- * left one, as another source (ORed): past +-64 of 127 it is C-left / C-right / C-up / C-down.
+ * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on ZR (the Controls menu's C-Up),
+ * and on the Start key when "Start button" does not take it (another key, none; Select+Start: Start alone) -- and through the
+ * Modifier (its key held turns X, B, Y, A into C-up, C-down, C-left, C-right where they sit). "C buttons" = 1 adds the right
+ * analog stick, 2 the left one, as another source (ORed): past +-64 of 127 on its longer axis it is the one C button of that axis
+ * (a quarter of the circle each, the diagonals to up and down: never two at once); 3 adds the D-pad, a key a button.
  *
  * Analog sticks. The dock says a pad has them with KEY_TYPE 3; the Pocket's own controls (type 1) have none. The pad of a type
  * the docs call "without analog" (2) is believed, for its stick bytes, when they are not 0x00000000 or 0xFFFFFFFF (a pad with
@@ -81,13 +85,18 @@
 #define KEY_START  (1u << 15)
 #define KEY_TYPE(k) ((k) >> 28)          /* 1 Pocket, 2 dock pad without analog, 3 dock pad with analog */
 
-static inline int8_t n64rt_pad_axis(uint32_t v, int flip)
+/* a stick byte (0x80 centred) as the N64's axis, -80 .. 80: nothing within the dead zone (dzc: the setting's code), linear from
+ * its edge to the end of the range */
+static inline int8_t n64rt_pad_axis(uint32_t v, int flip, uint32_t dzc)
 {
     int a = (int)(v & 0xFFu) - 128;
     if (flip) a = -a;
-    if (a > -12 && a < 12) return 0;
-    a = a * 80 / 127;
-    return (int8_t)(a > 80 ? 80 : a < -80 ? -80 : a);
+    const int pct = (dzc >= 1u && dzc <= 11u) ? (int)(dzc - 1u) * 5 : 10;
+    const int t = pct * 128 / 100, m = a < 0 ? -a : a;
+    if (m <= t) return 0;
+    int o = (m - t) * 80 / (127 - t);
+    if (o > 80) o = 80;
+    return (int8_t)(a < 0 ? -o : o);
 }
 /* the Pocket key a button setting names (0: no key) */
 static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
@@ -107,42 +116,43 @@ static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
     default: return 0;
     }
 }
-static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
+static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, int dfull, uint16_t *button, int8_t *stick_x,
+                                 int8_t *stick_y)
 {
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
     uint16_t b = 0;
 
-    const uint32_t mkey = n64rt_pad_key((set0 >> 10) & 31u, 0u);     /* Modifier */
+    const uint32_t rm = (set0 >> 10) & 31u;                           /* R as modifier */
+    const int face = rm == 1u, half = rm == 2u;
+    const uint32_t mkey = (face || half) ? KEY_R1 : 0u;
     const int rmod = (k & mkey) != 0u;
     k &= ~mkey;
-    if (rmod) {
+    if (rmod && face) {
         if (k & KEY_X) b |= CONT_E;
         if (k & KEY_B) b |= CONT_D;
         if (k & KEY_Y) b |= CONT_C;
         if (k & KEY_A) b |= CONT_F;
         k &= ~(KEY_A | KEY_B | KEY_X | KEY_Y);
     }
-    switch ((set1 >> 20) & 3u) {                                      /* Start (and C-up on the Start key it leaves) */
-    case 0:
-        if (k & KEY_START) b |= CONT_START;
-        break;
-    case 1: {
-        const uint32_t chord = KEY_SELECT | KEY_START;
+    const uint32_t scode = set1 & 31u;                                /* Start (and C-up on the Start key it leaves) */
+    if (scode >= 12u && scode <= 14u) {       /* a Start macro: 12 Select+Start, 13 C-left+C-right (Y, X), 14 C-down+C-up (Select, ZR) */
+        const uint32_t chord = scode == 12u ? KEY_SELECT | KEY_START : scode == 13u ? KEY_Y | KEY_X : KEY_SELECT | KEY_R2;
         if ((k & chord) == chord) { b |= CONT_START; k &= ~chord; }
         else if (k & KEY_START) b |= CONT_E;
-        break;
+    } else {
+        const uint32_t skey = n64rt_pad_key(scode, KEY_START);
+        if (k & skey) b |= CONT_START;
+        if (skey != KEY_START && (k & KEY_START)) b |= CONT_E;
+        k &= ~skey;                                                   /* (the Start's key is that only) */
     }
-    default:
-        if (k & KEY_START) b |= CONT_E;
-        break;
-    }
+    if (k & KEY_R2) b |= CONT_E;                                      /* C-up (the Controls menu's, on ZR) */
     if (k & KEY_A) b |= CONT_A;
     if (k & KEY_B) b |= CONT_B;
-    if (k & n64rt_pad_key((set1 >> 5) & 31u, KEY_L1)) b |= CONT_G;           /* Z button */
-    if (k & n64rt_pad_key((set0 >> 20) & 31u, KEY_L2)) b |= CONT_L;              /* L button */
-    if (k & n64rt_pad_key((set0 >> 25) & 31u, KEY_R1)) b |= CONT_R;          /* R button */
+    if (k & KEY_L1) b |= CONT_G;                                              /* Z (the Controls menu's) */
+    if (k & KEY_L2) b |= CONT_L;                                              /* L (the Controls menu's, on ZL) */
+    if (k & KEY_R1) b |= CONT_R;                                              /* R (the Controls menu's) */
 
     if (k & KEY_SELECT) b |= CONT_D;                     /* C buttons: the face buttons, always */
     if (k & KEY_Y) b |= CONT_C;
@@ -151,10 +161,15 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     if ((cm == 1u || cm == 2u) && analog) {
         const int csh = cm == 1u ? 16 : 0;
         const int rx = (int)((j >> csh) & 0xFFu) - 128, ry = (int)((j >> (csh + 8)) & 0xFFu) - 128;
-        if (rx < -64) b |= CONT_C;
-        if (rx > 64) b |= CONT_F;
-        if (ry < -64) b |= CONT_E;
-        if (ry > 64) b |= CONT_D;
+        const int ax = rx < 0 ? -rx : rx, ay = ry < 0 ? -ry : ry;
+        if (ax > ay) { if (ax > 64) b |= rx < 0 ? CONT_C : CONT_F; }  /* (the longer axis only: one C button) */
+        else if (ay > 64) b |= ry < 0 ? CONT_E : CONT_D;
+    }
+    if (cm == 3u) {
+        if (k & KEY_DPAD_UP) b |= CONT_E;
+        if (k & KEY_DPAD_DOWN) b |= CONT_D;
+        if (k & KEY_DPAD_LEFT) b |= CONT_C;
+        if (k & KEY_DPAD_RIGHT) b |= CONT_F;
     }
 
     const uint32_t mode = (set1 >> 15) & 31u;                       /* Stick */
@@ -164,18 +179,20 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         int8_t x = 0, y = 0;
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;
-            x = n64rt_pad_axis(j >> sh, 0); y = n64rt_pad_axis(j >> (sh + 8), 1);
+            const uint32_t dzc = mode == 2u ? (set0 >> 25) & 31u : (set1 >> 5) & 31u;   /* (its stick's dead zone) */
+            x = n64rt_pad_axis(j >> sh, 0, dzc); y = n64rt_pad_axis(j >> (sh + 8), 1, dzc);
         }
         sx = x; sy = y;
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
     }
     if (from_dpad) {
-        const int8_t d = rmod ? 40 : 80;
+        const int part = (rmod && half) || (((set1 >> 20) & 3u) == 1u && !dfull);   /* (half press; a single tap) */
+        const int8_t d = part ? 48 : 80;
         if (k & KEY_DPAD_LEFT) sx -= d;
         if (k & KEY_DPAD_RIGHT) sx += d;
         if (k & KEY_DPAD_UP) sy += d;
         if (k & KEY_DPAD_DOWN) sy -= d;
-        if (rmod && sx && sy) { sx = (int8_t)(sx < 0 ? -28 : 28); sy = (int8_t)(sy < 0 ? -28 : 28); }
+        if (part && sx && sy) { sx = (int8_t)(sx < 0 ? -34 : 34); sy = (int8_t)(sy < 0 ? -34 : 34); }
     }
     const uint32_t dp = (set1 >> 22) & 3u;                          /* D-pad */
     if (dp == 1u) {

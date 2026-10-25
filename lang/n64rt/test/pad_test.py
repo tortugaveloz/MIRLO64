@@ -18,30 +18,40 @@ def spec(keys, joy, s0, s1):
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
     out = set()
-    mod_key = CODE.get((s0 >> 10) & 31)           # "Modifier" is interact0[14:10]: a button code, 0 (or 5, ...) no key
+    face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 10) & 31) == 2   # "R as modifier" interact0[14:10]: 1 face C buttons, 2 half press
+    mod_key = 'R1' if face or half else None
     rmod = mod_key is not None and mod_key in held
     if mod_key:
-        held.discard(mod_key)                     # the modifier key never reaches the game
-    if rmod:                                      # face buttons become the C buttons where they sit; the pad becomes half a stick
+        held.discard(mod_key)                     # R, so used, never reaches the game
+    if rmod and face:                             # face buttons become the C buttons where they sit
         for face, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
             if face in held:
                 out.add(c)
         held -= {'A', 'B', 'X', 'Y'}
-    start_mode = (s1 >> 20) & 3                   # "Start" is interact1[21:20]: 0 Start, 1 Select+Start, 2 and 3 none
-    if start_mode == 1:
-        if {'select', 'start'} <= held:
+    scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
+    if scode in (12, 13, 14):                     # a Start macro: Select+Start, C-left+C-right (Y, X), C-down+C-up (Select, ZR)
+        chord = {12: {'select', 'start'}, 13: {'Y', 'X'}, 14: {'select', 'R2'}}[scode]
+        if chord <= held:
             out.add('START')
-            held -= {'select', 'start'}
+            held -= chord
         elif 'start' in held:
             out.add('CUP')                        # the Start key the chord leaves: C-up
-    elif start_mode == 0 and 'start' in held:
-        out.add('START')
-    elif 'start' in held:
-        out.add('CUP')                            # Start none: the Start key is C-up
+    else:
+        skey = 'start' if scode == 0 else CODE.get(scode)
+        if skey in held:
+            out.add('START')
+        if skey != 'start' and 'start' in held:
+            out.add('CUP')                        # a Start key the setting leaves: C-up
+        held.discard(skey)                        # the Start's key is that only
+    if 'R2' in held:                              # C-up: ZR (the Controls menu moves it)
+        out.add('CUP')
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
     # Z, L, R: (setting, its own default for code 0)
-    for name, code, dflt in (('Z', (s1 >> 5) & 31, 'L1'), ('L', (s0 >> 20) & 31, 'L2'), ('R', (s0 >> 25) & 31, 'R1')):
+    if 'L1' in held: out.add('Z')                 # Z and R: the Pocket's L and R keys (the Controls menu moves them)
+    if 'R1' in held: out.add('R')
+    if 'L2' in held: out.add('L')                 # L: ZL (the Controls menu moves it)
+    for name, code, dflt in ():
         key = dflt if code == 0 else CODE.get(code)
         if key and key in held:
             out.add(name)
@@ -54,28 +64,36 @@ def spec(keys, joy, s0, s1):
     cm = (s1 >> 10) & 31
     if cm in (1, 2) and analog:
         cx, cy = (rx, ry) if cm == 1 else (lx, ly)
-        if cx - 128 < -64: out.add('CLEFT')
-        if cx - 128 > 64: out.add('CRIGHT')
-        if cy - 128 < -64: out.add('CUP')
-        if cy - 128 > 64: out.add('CDOWN')
+        dx, dy = cx - 128, cy - 128
+        if abs(dx) > abs(dy):                     # one C button: the quarter of the circle the stick is in (+-45 degrees to up, down)
+            if abs(dx) > 64: out.add('CLEFT' if dx < 0 else 'CRIGHT')
+        elif abs(dy) > 64:
+            out.add('CUP' if dy < 0 else 'CDOWN')
+    if cm == 3:                                   # ... 3 the D-pad, a key a button
+        for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
+            if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
-    def ax(v, flip):
+    def ax(v, flip, dzc):                         # dead zone: code 1..11 = 0 %..50 % in 5 % steps, others 10 %; linear past it
         a = v - 128
         if flip: a = -a
-        if -12 < a < 12: return 0
-        a = int(a * 80 / 127)                     # (C: truncates toward zero)
-        return max(-80, min(80, a))
+        pct = (dzc - 1) * 5 if 1 <= dzc <= 11 else 10
+        t = pct * 128 // 100
+        if abs(a) <= t: return 0
+        o = min(80, (abs(a) - t) * 80 // (127 - t))
+        return -o if a < 0 else o
     def dpad_stick():
-        full = 40 if rmod else 80
+        part = (rmod and half) or (((s1 >> 20) & 3) == 1 and not (keys >> 16 & 1))   # half press; "D-pad double tap" a single tap
+        full = 48 if part else 80
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
         dy = (1 if 'up' in held else 0) + (-1 if 'down' in held else 0)
-        if rmod and dx and dy:
-            return 28 * dx, 28 * dy
+        if part and dx and dy:
+            return 34 * dx, 34 * dy
         return full * dx, full * dy
     smode = (s1 >> 15) & 31
     sx = sy = 0
     if smode in (1, 2):
-        use = (ax(lx, False), ax(ly, True)) if smode == 1 else (ax(rx, False), ax(ry, True))
+        dl, dr = (s1 >> 5) & 31, (s0 >> 25) & 31          # "L stick dead zone" interact1[9:5], "R stick dead zone" interact0[29:25]
+        use = (ax(lx, False, dl), ax(ly, True, dl)) if smode == 1 else (ax(rx, False, dr), ax(ry, True, dr))
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
@@ -101,10 +119,11 @@ def spec(keys, joy, s0, s1):
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
     for mod, z, l, r, c, stick, dpad, start in itertools.product(
-            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 2, 3, 7, 9, 13), (0, 1, 2, 8, 11),
+            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        s1 = 1 | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (the free fields: EEPROM size, the old FPS and chord bits)
+        sc = (0, 1, 13, 14, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
+        s1 = sc | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (start: "C-Up button"; the free bits)
         yield s0, s1
 
 
@@ -118,7 +137,7 @@ def words(rng):
         for k in ks:
             yield base | k, 0x80808080
     for _ in range(300):
-        yield rng.choice((1, 2, 3)) << 28 | rng.getrandbits(16), rng.choice(sticks) if rng.random() < .5 else rng.getrandbits(32)
+        yield rng.choice((1, 2, 3)) << 28 | rng.getrandbits(17), rng.choice(sticks) if rng.random() < .5 else rng.getrandbits(32)
     for typ in (2, 3):                            # both sticks off the centre, in all directions
         for joy in (0x808050B0, 0x80B05080, 0x8050B080, 0x50B0B050, 0x80805EB0, 0x805080B0, 0x30D0D030, 0xD03030D0):
             yield typ << 28, joy
@@ -156,7 +175,11 @@ def main():
     d = lambda k: spec(k | 1 << 28, 0x80808080, 0, 0)
     assert d(1 << K['L1']) == (N['Z'], 0, 0)
     assert d(1 << K['R1']) == (N['R'], 0, 0)
-    assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (0, 0, 0)      # the N64's L is on ZL by default
+    assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (N['CUP'], 0, 0)   # the N64's L is on ZL, C-up on ZR by default
+    assert d(1 << K['start']) == (N['START'], 0, 0)
+    c1 = lambda joy: spec(3 << 28, joy, 0, 1 << 10)                                    # "C buttons" on the right stick
+    assert c1(0xF0608080) == (N['CDOWN'], 0, 0) and c1(0x10A08080) == (N['CUP'], 0, 0)    # (a little off down / up: that one only)
+    assert c1(0x60F08080) == (N['CRIGHT'], 0, 0) and c1(0x10108080) == (N['CUP'], 0, 0)   # (45 degrees exactly: up)
     assert d(1 << K['Y']) == (N['CLEFT'], 0, 0) and d(1 << K['X']) == (N['CRIGHT'], 0, 0) and d(1 << K['select']) == (N['CDOWN'], 0, 0)
     assert d(1 << K['start']) == (N['START'], 0, 0)
     assert d(1 << K['left']) == (0, -80, 0)
