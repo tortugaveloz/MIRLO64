@@ -128,6 +128,15 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
+    /* the dock raises the D-pad's keys too while a pad's left stick is pushed (for the Pocket's menus): when a setting reads the
+     * left stick, a D-pad key that points where the stick does, past a quarter of its range, is that copy and is dropped */
+    if (analog && (((set1 >> 15) & 31u) == 1u || ((set1 >> 10) & 31u) == 2u || ((set1 >> 22) & 3u) == 2u)) {
+        const int lx = (int)(j & 0xFFu) - 128, ly = (int)((j >> 8) & 0xFFu) - 128;
+        if (lx < -32) k &= ~KEY_DPAD_LEFT;
+        if (lx > 32) k &= ~KEY_DPAD_RIGHT;
+        if (ly < -32) k &= ~KEY_DPAD_UP;
+        if (ly > 32) k &= ~KEY_DPAD_DOWN;
+    }
     uint16_t b = 0;
 
     const uint32_t rm = (set0 >> 10) & 31u;                           /* R as modifier */

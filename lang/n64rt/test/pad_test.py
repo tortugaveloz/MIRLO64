@@ -18,6 +18,11 @@ def spec(keys, joy, s0, s1):
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
     out = set()
+    # the dock's copy of the left stick on the D-pad keys: dropped when a setting reads the left stick
+    if analog and (((s1 >> 15) & 31) == 1 or ((s1 >> 10) & 31) == 2 or ((s1 >> 22) & 3) == 2):
+        dlx, dly = (joy & 255) - 128, ((joy >> 8) & 255) - 128
+        for cond, key in ((dlx < -32, 'left'), (dlx > 32, 'right'), (dly < -32, 'up'), (dly > 32, 'down')):
+            if cond: held.discard(key)
     face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 10) & 31) == 2   # "R as modifier" interact0[14:10]: 1 face C buttons, 2 half press
     mod_key = 'R1' if face or half else None
     rmod = mod_key is not None and mod_key in held
@@ -178,6 +183,8 @@ def main():
     assert d(1 << K['R1']) == (N['R'], 0, 0)
     assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (N['CUP'], 0, 0)   # the N64's L is on ZL, C-up on ZR by default
     assert d(1 << K['start']) == (N['START'], 0, 0)
+    up = spec(3 << 28 | 1 << K['up'], 0x80801080, 0, 1 << 15 | 1 << 22)     # D-pad on the D-pad, Stick on L stick: the stick up and the dock's copy
+    assert up[0] & N['DUP'] == 0 and up[2] > 0
     c1 = lambda joy: spec(3 << 28, joy, 0, 1 << 10)                                    # "C buttons" on the right stick
     assert c1(0xF0608080) == (N['CDOWN'], 0, 0) and c1(0x10A08080) == (N['CUP'], 0, 0)    # (a little off down / up: that one only)
     assert c1(0x60F08080) == (N['CRIGHT'], 0, 0) and c1(0x10108080) == (N['CUP'], 0, 0)   # (45 degrees exactly: up)
