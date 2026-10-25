@@ -79,9 +79,9 @@ def spec(keys, joy, s0, s1):
         for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
             if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
-    def stick(bx, by, dzc):                       # radial dead zone: code 1..11 = 0 %..50 % in 5 % steps, others 10 %; linear past it
+    def stick(bx, by, dzc):                       # radial dead zone: code 1..15 = 0 %..70 % in 5 % steps, others 10 %; linear past it
         ax, ay = bx - 128, 128 - by
-        pct = (dzc - 1) * 5 if 1 <= dzc <= 11 else 10
+        pct = (dzc - 1) * 5 if 1 <= dzc <= 15 else 10
         t = pct * 128 // 100
         r = math.isqrt(ax * ax + ay * ay)
         if r <= t: return 0, 0
@@ -125,7 +125,7 @@ def spec(keys, joy, s0, s1):
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
     for mod, z, l, r, c, stick, dpad, start in itertools.product(
-            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
+            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 15, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
         sc = (0, 15, 13, 14, 16, 12, 17, 18)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
