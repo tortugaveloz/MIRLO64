@@ -23,6 +23,7 @@ TB_CROPV=3 TB_CROPR=2 run $T 8 1 30 320
 TB_CROPV=5 TB_CROPR=1 run $T 8 0 30 440
 TB_CROPL=2 TB_CROPR=2 run $T 8 1 30 320
 TB_CROPL=1 run $T 8 0 30 440
+TB_CROPL=3 TB_CROPR=3 run $T 8 1 30 320
 TB_PAL=1 run $T 6 1 30 320; TB_PAL=1 run $T 6 0 30 440
 TB_SEQ=0,1,1,0,0 run $T 2 1 30 320
 # serrated pictures (VI_CTRL SERRATE, hi-res), sent woven: the picture's 640 x 480 rows in order, a progressive frame of 528 lines
