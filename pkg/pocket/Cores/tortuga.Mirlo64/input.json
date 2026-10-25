@@ -21,6 +21,11 @@
             "key": "pad_trig_l"
           },
           {
+            "id": 9,
+            "name": "L",
+            "key": "pad_trig_l2"
+          },
+          {
             "id": 3,
             "name": "R",
             "key": "pad_trig_r"
@@ -41,14 +46,14 @@
             "key": "pad_btn_x"
           },
           {
-            "id": 7,
-            "name": "Start",
-            "key": "pad_btn_start"
-          },
-          {
             "id": 8,
             "name": "C-Up",
             "key": "pad_trig_r2"
+          },
+          {
+            "id": 7,
+            "name": "Start",
+            "key": "pad_btn_start"
           }
         ]
       }

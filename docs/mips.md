@@ -812,17 +812,16 @@ scan-out instead.
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | L stick dead zone | `0x1000_0124` | `interact1[9:5]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
-| L button | `0x1000_0118` | `interact0[24:20]` | **None** (5), L (1), R (2), ZL (0), ZR (4) |
 | R stick dead zone | `0x1000_011C` | `interact0[29:25]` | 0 % (1), 5 % (2), **10 %** (3), ... 50 % (11) |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), L stick (2), R stick (1), D-pad (3) |
 | Start button | `0x1000_0120` | `interact1[4:0]` | A (6), B (7), X (8), Y (9), L (1), R (2), Select (10), **Start** (0), Select+Start (12) |
 | Modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), L (1), R (2), ZL (3), ZR (4) |
 
-The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), R (R), C-Down (Select), C-Left (Y), C-Right (X), Start and C-Up (ZR, `pad_trig_r2`: a key the documentation does not list); it remaps what
+The Pocket's own Controls menu (`input.json`) lists A, B, Z (L), L (ZL, `pad_trig_l2`), R (R), C-Down (Select), C-Left (Y), C-Right (X), Start and C-Up (ZR, `pad_trig_r2`: a key the documentation does not list); it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
 
-- **Z and R** are the Pocket's L and R keys; the Controls menu moves them.
-- **Button codes** (L, Modifier, Start): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
+- **Z, L and R** are the Pocket's L, ZL and R keys; the Controls menu moves them.
+- **Button codes** (Modifier, Start): 1 is the Pocket's L, 2 R, 3 ZL, 4 ZR, 5 none, 6 A, 7 B, 8 X, 9 Y,
   10 Select, 11 Start, any other value none; 0 is the
   setting's own key (L for Z, ZL for the L button, R for R, none for the Modifier). The settings are independent: one
   key may serve two N64 buttons.

@@ -48,7 +48,8 @@ def spec(keys, joy, s0, s1):
     # Z, L, R: (setting, its own default for code 0)
     if 'L1' in held: out.add('Z')                 # Z and R: the Pocket's L and R keys (the Controls menu moves them)
     if 'R1' in held: out.add('R')
-    for name, code, dflt in (('L', (s0 >> 20) & 31, 'L2'),):
+    if 'L2' in held: out.add('L')                 # L: ZL (the Controls menu moves it)
+    for name, code, dflt in ():
         key = dflt if code == 0 else CODE.get(code)
         if key and key in held:
             out.add(name)

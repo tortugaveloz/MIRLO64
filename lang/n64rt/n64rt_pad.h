@@ -12,7 +12,7 @@
  *                        they sit (X up, B down, Y left, A right) and the D-pad into half a stick while held; that key never reaches
  *                        the game (so not as the Z, L or R button either)
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
- *          [24:20]  n=6  "L button": which Pocket key is the N64's L
+ *          [24:20]  n=6  free (was "L button": the Controls menu's L now)
  *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        Select and Start together (neither counts for anything else then); the key is the Start only
@@ -29,8 +29,8 @@
  * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
  * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
  * 9 Y, 10 Select, 11 Start (anything else is none too).
- *   L button: 0 = ZL      Modifier: 0 = none
- * The N64's Z and R are the Pocket's L and R keys, always: the Controls menu (input.json) is where they move.
+ *   Modifier: 0 = none
+ * The N64's Z, L and R are the Pocket's L, ZL and R keys, always: the Controls menu (input.json) is where they move.
  * Nothing couples them: a key may serve two N64 buttons if asked to, and the Modifier key never reaches the game.
  *
  * The C buttons are always on the face buttons: C-left on Y, C-right on X, C-down on Select, C-up on ZR (the Controls menu's C-Up),
@@ -147,7 +147,7 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
     if (k & KEY_A) b |= CONT_A;
     if (k & KEY_B) b |= CONT_B;
     if (k & KEY_L1) b |= CONT_G;                                              /* Z (the Controls menu's) */
-    if (k & n64rt_pad_key((set0 >> 20) & 31u, KEY_L2)) b |= CONT_L;              /* L button */
+    if (k & KEY_L2) b |= CONT_L;                                              /* L (the Controls menu's, on ZL) */
     if (k & KEY_R1) b |= CONT_R;                                              /* R (the Controls menu's) */
 
     if (k & KEY_SELECT) b |= CONT_D;                     /* C buttons: the face buttons, always */
