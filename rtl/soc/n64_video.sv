@@ -74,6 +74,7 @@ module n64_video #(
     input  wire         vi_dedither,    // sys: and its dither filter (VI_CTRL bit 16)
     input  wire  [4:0]  crop_v,         // sys: the core's "Crop Vertical": lines of the picture blanked at its top and its
                                         //      bottom
+    input  wire  [1:0]  crop_l,         // sys: and its pixels blanked at the picture's left edge
     input  wire  [1:0]  crop_r,         // sys: its "Crop Right": pixels (of the 320 wide frame: two clocks each) blanked at the picture's right edge
     input  wire  [8:0]  vi_lines,       // sys: the lines the VI's window shows (the rest black)
     input  wire  [9:0]  vi_px0,         // sys: the picture's first clock in the line (H_START - 108, VI pixels)
@@ -601,22 +602,23 @@ always_ff @(posedge clk_vid) if (ce && adv)
 // taken at the frame boundary, in vblank: static for the frame's lines.)
 logic [1:0] blk_s; logic [8:0] lin_s1, lin_s2;
 always_ff @(posedge clk_vid) begin blk_s <= {blk_s[0], vi_black || !running}; lin_s1 <= vi_lines; lin_s2 <= lin_s1; end
-// The core's video options: the picture's first and last crop_v lines and its last crop_r columns (of the 320-wide
+// The core's video options: the picture's first and last crop_v lines and its first crop_l and last crop_r columns (of the 320-wide
 // frame this was: two clocks each), blanked -- relative to the picture (a window too), the frame and its timing unchanged. Thresholds
 // in the timing's own counts, registered: static.
-logic [6:0] cv_s1, cv_s2;
-logic [9:0] crop_top, crop_bot, crop_rgt;
+logic [8:0] cv_s1, cv_s2;
+logic [9:0] crop_top, crop_bot, crop_rgt, crop_lft;
 wire  [9:0] cvl = wv_v ? {4'd0, cv_s2[4:0], 1'b0} : {5'd0, cv_s2[4:0]};   // (a field's lines, as the N64's: a woven frame's two each)
 wire  [9:0] lin_v = wv_v ? {lin_s2, 1'b0} : {1'b0, lin_s2};
 always_ff @(posedge clk_vid) begin
-    cv_s1 <= {crop_r, crop_v}; cv_s2 <= cv_s1;
+    cv_s1 <= {crop_l, crop_r, crop_v}; cv_s2 <= cv_s1;
     crop_top <= py0_v + cvl;
     crop_bot <= py0_v + nr_v - cvl;
     crop_rgt <= win_end[9:0] - {7'd0, cv_s2[6:5], 1'b0};
+    crop_lft <= px0_v + {7'd0, cv_s2[8:7], 1'b0};
 end
 // the display line d shows the row fetched at d - 1, so its window is the lines py0 + 1 .. py0 + nr
 wire  crop = blk_s[1] || vcount > lin_v                 // (active lines are vcount 1..240, a woven frame's 1..480)
-          || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt || hcount <= px0_v || !cv;
+          || vcount <= crop_top || vcount > crop_bot || hcount > crop_rgt || hcount <= crop_lft || !cv;
 
 // The VI's gamma correction: a channel's square root, the N64's 2 sqrt(64 v)
 // on its eight bits (the console's VI_sqrt without the gamma dither's noise),
