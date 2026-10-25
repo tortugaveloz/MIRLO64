@@ -195,7 +195,8 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
 - **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a backward branch
-  taken, a forward one not; a register jump not), and a wrong guess costs two cycles. A delay slot costs nothing. The
+  taken, a forward one not; a register jump to its register as D reads it, when nothing ahead of it in E or M is to write
+  that register -- every function's return, mostly -- and not taken otherwise), and a wrong guess costs two cycles. A delay slot costs nothing. The
   branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
   it was taken, and the fetch chooses between them behind the registers.
 - **M**: a load takes the D-cache's word before its tag is compared. A load of the wrong line is not written back; the
@@ -231,7 +232,7 @@ line in invalid. While two or more lines wait, those masters' writes are held at
 refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
 apart) drops it too, which is rare and costs the same.
 
-Uncached, device and mapped data accesses, and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
+Uncached, device and mapped data accesses (but a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
 
 Stores leave the core as they are done (`XWB`) and go through a 16-entry FIFO in `cpu_port.sv`, written on the CPU's
@@ -290,7 +291,10 @@ time, where a wired entry of the console's TLB never misses -- so a miss must no
 runs from a mapped page, an exception handler about to read BadVAddr among it. The monitor writes BadVAddr and EntryHi
 itself for the exception it delivers to the game.
 
-A mapped data access is uncached. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
+A mapped load of a word or less from a page whose entry has the cacheable bit goes through the D-cache: the table's
+read gives the physical page, the cache is read at the physical index, and the word is taken a cycle later -- a miss
+reads the line and translates again. Other mapped accesses take the slow path, uncached; a mapped store writes through
+and drops the line it may shadow, as an uncached store does. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
 **fetch page registers** hold the last two cacheable pages a table read found (virtual page, ASID or global, physical
 page). The I-cache is indexed by the virtual address and tagged by the physical one, `{valid, pa[28:12]}`; F delivers
 the cache's word and D checks it a cycle later against the register's page. A fetch from a page neither register holds
@@ -317,7 +321,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 
 | Register | Bits |
 |---|---|
-| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
+| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
 | 22 | Read only: the address of the last translation fault the monitor level took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
 | 23 | Write: stores a table entry for EntryHi's page pair and ASID. `[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid. Read: `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's |
@@ -424,8 +428,8 @@ functions return so), and whose address is one of these registers, each a copy o
 
 | Register | Where the access goes |
 |---|---|
-| SP_MEM_ADDR to SP_SEMAPHORE, SP_PC | the RSP's host port at `0x2000_0000` |
-| DPC_START to DPC_STATUS, loads only | `0x2000_0040` |
+| SP_MEM_ADDR to SP_SEMAPHORE, SP_PC (on a core without MCTL bit 14) | the RSP's host port at `0x2000_0000` |
+| DPC_START to DPC_STATUS, loads only (likewise) | `0x2000_0040` |
 | the PI's registers other than PI_RD_LEN, PI_WR_LEN and PI_STATUS; loads of PI_DRAM_ADDR and PI_CART_ADDR excepted | `n64rt_pi_regs` |
 | the RI's registers | `n64rt_ri_regs` |
 
@@ -713,7 +717,10 @@ dock reports a pad, checked at every command, so a pad can be plugged in or remo
 ### SP and DPC
 
 The RSP and the RDP are the hardware's own ([rsp.md](rsp.md), [rdp.md](rdp.md)). The CPU's side differs from the
-console only in the address: the monitor passes the game's accesses to `0x2000_0000`. `rcp_dpc_view.sv` gives
+console only in the address: the RSP's host port at `0x2000_0000` answers at the N64's addresses too (`mirlo_mips.sv`),
+and the core passes the game's word accesses there once the runtime has set MCTL bit 14 -- a register read is some
+ten cycles, as an MI's; before that the monitor did each, some 200 cycles. A store of DPC_STATUS is still the
+monitor's, which keeps DPC_CLOCK (its CLR_CLOCK_CTR bit). `rcp_dpc_view.sv` gives
 DPC_STATUS the console's layout and ignores a DPC_START written while a start is pending.
 
 ## Saves and accessories

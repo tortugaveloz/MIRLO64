@@ -796,8 +796,8 @@ u32 n64rt_tlb_n;                        /* the entries that map something (n64rt
 u32 n64rt_tlbram;                       /* the CPU has the translation tables */
 /* The bits of COP0 23's write value (bit 4 is the page of the pair; the physical page is bits 28:12): valid, dirty (writable), global,
  * the fetch table, and TR_C = the page is CACHEABLE (the entry's C field, EntryLo bits 5:3, is not 2 = uncached). mips_core's fetch
- * table keeps the bit (the fetch page registers use the I-cache for a cacheable mapped page); the data tables have no field for it
- * yet and a mapped data access is uncached, a word at a time. */
+ * table keeps the bit (the fetch page registers use the I-cache for a cacheable mapped page), and so does the data table: a
+ * mapped load from a cacheable page goes through the D-cache (mips_core's PGD), any other mapped data access is uncached. */
 enum { TR_V = 1, TR_D = 2, TR_G = 4, TR_FETCH = 8, TR_C = 32 };
 /* an entry of the CPU's tables: COP0 23 stores it for EntryHi's page pair
  * and ASID -- the physical page, which page of the pair (va's bit 12), the
@@ -900,7 +900,7 @@ void n64rt_osUnmapTLBAll(void)
  *   tlbr   PageMask, EntryHi, EntryLo0, EntryLo1 := entry Index & 31 (G in both EntryLo: the two entries' AND)
  *   tlbp   Index := the entry EntryHi names (VPN2 under the entry's mask, ASID unless global), or P (bit 31) if none
  * The D bit (a store to a clean page is a Mod exception for the game's handler), V, G and the ASID are honoured (tlb_service); C is
- * passed on to the tables as TR_C (they do not keep it yet). A tlbr, tlbp or tlbwi that changes no translation is done in
+ * passed on to the tables as TR_C (the fetch page registers and the D-cache use it). A tlbr, tlbp or tlbwi that changes no translation is done in
  * n64rt_exc.S without the full path's register save (n64rt_mon_tlbq). */
 u32 n64rt_tlbi;                         /* the core takes the game's TLB instructions (COP0 23 bit 0) */
 #ifdef N64RT_OWN

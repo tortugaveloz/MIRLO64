@@ -245,6 +245,12 @@ wire x_regs  = x_addr[31:16] == 16'hF000;
 // +1C SP_SEMAPHORE, +20 SP_PC; 0x2000_0040 DPC_START, +44 DPC_END,
 // +48 DPC_CURRENT, +4C DPC_STATUS (read).
 wire x_rsp   = x_addr[31:8] == 24'h2000_00;
+// and at the N64's own addresses, for the game's word accesses that mips_core's SPW passes (KSEG0 or KSEG1 as the core's address
+// leaves them): SP_MEM_ADDR .. SP_SEMAPHORE (0x0404_0000 + 0x00..0x1C), SP_PC (0x0408_0000), DPC_START .. DPC_STATUS
+// (0x0410_0000 + 0x0..0xC) -- the same registers, whose host offsets (rx_addr) are 0x00..0x1C, 0x20 and 0x40..0x4C
+wire x_spr   = !x_addr[30] && x_addr[28:5] == 24'h20_2000;
+wire x_sppc  = !x_addr[30] && x_addr[28:2] == 27'h102_0000;
+wire x_dpcr  = !x_addr[30] && x_addr[28:4] == 25'h41_0000;
 wire x_audio = 1'b0;
 wire x_tcm   = 1'b0;
 wire x_grom  = 1'b0;
@@ -342,7 +348,10 @@ always_ff @(posedge clk) begin
         else if (x_pif) xs <= X_PIF;
         else if (x_d2 || x_rom || x_psw) begin if (x_we && (x_rom || d2_flash || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
         else if (x_grom) x_ack <= 1;
-        else if (x_rsp) begin rx_wdata <= x_wdata; rx_addr <= x_addr[6:2]; rx_we <= x_we; xs <= X_RSP; end
+        else if (x_rsp || x_spr || x_sppc || x_dpcr) begin
+            rx_wdata <= x_wdata; rx_we <= x_we; xs <= X_RSP;
+            rx_addr <= x_rsp ? x_addr[6:2] : {x_dpcr, x_sppc, x_dpcr ? 1'b0 : x_addr[4], x_addr[3:2]};
+        end
         else begin x_ack <= 1; if (bus_errors != 16'hFFFF) bus_errors <= bus_errors + 16'd1; end
     end
     X_REGS: if (!bus_r_req) xs <= X_REGD;            // (the geom and audio cores' accesses go first)
