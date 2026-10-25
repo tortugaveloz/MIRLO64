@@ -18,11 +18,12 @@ def spec(keys, joy, s0, s1):
     typ = keys >> 28
     analog = typ == 3 or (typ == 2 and joy not in (0, 0xFFFFFFFF))     # type 2: its stick bytes are believed unless a pad with none would send them
     out = set()
-    mod_key = CODE.get((s0 >> 10) & 31)           # "Modifier" is interact0[14:10]: a button code, 0 (or 5, ...) no key
+    face, half = ((s0 >> 10) & 31) == 1, ((s0 >> 20) & 31) == 1   # "R = Face C buttons" interact0[14:10], "R = Joystick half press" [24:20]
+    mod_key = 'R1' if face or half else None
     rmod = mod_key is not None and mod_key in held
     if mod_key:
-        held.discard(mod_key)                     # the modifier key never reaches the game
-    if rmod:                                      # face buttons become the C buttons where they sit; the pad becomes half a stick
+        held.discard(mod_key)                     # R, so used, never reaches the game
+    if rmod and face:                             # face buttons become the C buttons where they sit
         for face, c in (('X', 'CUP'), ('B', 'CDOWN'), ('Y', 'CLEFT'), ('A', 'CRIGHT')):
             if face in held:
                 out.add(c)
@@ -80,11 +81,12 @@ def spec(keys, joy, s0, s1):
         o = min(80, (abs(a) - t) * 80 // (127 - t))
         return -o if a < 0 else o
     def dpad_stick():
-        full = 40 if rmod else 80
+        part = (rmod and half) or (((s1 >> 20) & 3) == 1 and not (keys >> 16 & 1))   # half press; "D-pad double tap" a single tap
+        full = 48 if part else 80
         dx = (-1 if 'left' in held else 0) + (1 if 'right' in held else 0)
         dy = (1 if 'up' in held else 0) + (-1 if 'down' in held else 0)
-        if rmod and dx and dy:
-            return 28 * dx, 28 * dy
+        if part and dx and dy:
+            return 34 * dx, 34 * dy
         return full * dx, full * dy
     smode = (s1 >> 15) & 31
     sx = sy = 0
@@ -116,7 +118,7 @@ def spec(keys, joy, s0, s1):
 def settings():
     """every combination of the settings' values (valid ones, and invalid codes)"""
     for mod, z, l, r, c, stick, dpad, start in itertools.product(
-            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 2, 3, 7, 9, 13), (0, 1, 2, 8, 11),
+            (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 1, 2, 3, 7, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
         sc = (0, 1, 6, 10, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
@@ -134,7 +136,7 @@ def words(rng):
         for k in ks:
             yield base | k, 0x80808080
     for _ in range(300):
-        yield rng.choice((1, 2, 3)) << 28 | rng.getrandbits(16), rng.choice(sticks) if rng.random() < .5 else rng.getrandbits(32)
+        yield rng.choice((1, 2, 3)) << 28 | rng.getrandbits(17), rng.choice(sticks) if rng.random() < .5 else rng.getrandbits(32)
     for typ in (2, 3):                            # both sticks off the centre, in all directions
         for joy in (0x808050B0, 0x80B05080, 0x8050B080, 0x50B0B050, 0x80805EB0, 0x805080B0, 0x30D0D030, 0xD03030D0):
             yield typ << 28, joy

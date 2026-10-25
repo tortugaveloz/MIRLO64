@@ -547,7 +547,15 @@ static void read_pad(OSContPad *p, int index)
     case 2:  k = apf_input_cont3_key_read(); j = apf_input_cont3_joy_read(); break;
     default: k = apf_input_cont4_key_read(); j = apf_input_cont4_joy_read(); break;
     }
-    n64rt_pad_map(k, j, apf_interact_interact0_read(), apf_interact_interact1_read(), &p->button, &p->stick_x, &p->stick_y);
+    /* ("D-pad double tap": a press of the D-pad within 300 ms -- 18.75 M SoC cycles -- of its last release is a full one) */
+    static u32 s_dp[4], s_rel[4]; static int s_full[4];
+    const int i = index & 3;
+    timer0_uptime_latch_write(1);
+    const u32 now = (u32)timer0_uptime_cycles_read(), dp = k & 0xFu;
+    if (dp && !s_dp[i]) s_full[i] = now - s_rel[i] < 18750000u;
+    if (!dp && s_dp[i]) s_rel[i] = now;
+    s_dp[i] = dp;
+    n64rt_pad_map(k, j, apf_interact_interact0_read(), apf_interact_interact1_read(), s_full[i], &p->button, &p->stick_x, &p->stick_y);
     p->errnum = 0;
 #ifdef N64RT_PADLOG
     /* (make PADLOG=1) what the dock sends and what the game gets, on the JTAG UART whenever a pad's words change, at most every 20 reads

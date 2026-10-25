@@ -8,11 +8,10 @@
  *
  *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
- *          [14:10]  n=4  "Modifier": which Pocket key (a button code, below; 0 none) turns the face buttons into the C buttons where
- *                        they sit (X up, B down, Y left, A right) and the D-pad into half a stick while held; that key never reaches
- *                        the game (so not as the Z, L or R button either)
+ *          [14:10]  n=4  "R = Face C buttons" (1): R held turns the face buttons into the C buttons where they sit (X up, B down,
+ *                        Y left, A right); R then never reaches the game
  *          [19:15]  n=5  "Crop Right" (the video; a list: 0 none, 1 pixel)
- *          [24:20]  n=6  free (was "L button": the Controls menu's L now)
+ *          [24:20]  n=6  "R = Joystick half press" (1): R held makes the D-pad's stick 60 % (R then never reaches the game)
  *          [29:25]  n=7  "R stick dead zone": 1 + its tenths of half the range (0 % .. 50 % in 5 % steps), 0 (or above 11) 10 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        Select and Start together (neither counts for anything else then); the key is the Start only
@@ -21,7 +20,8 @@
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
  *                        (the stick stays centred); any other value is the D-pad
- *          [21:20]  n=12 free (was "Start": "Start button" is n=8)
+ *          [21:20]  n=12 "D-pad double tap" (1): the D-pad's stick is 60 %, 100 % on a press within 300 ms of the last release
+ *                        (dfull: the caller keeps that state)
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")
@@ -115,17 +115,19 @@ static inline uint32_t n64rt_pad_key(uint32_t code, uint32_t dflt)
     default: return 0;
     }
 }
-static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, uint16_t *button, int8_t *stick_x, int8_t *stick_y)
+static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t set1, int dfull, uint16_t *button, int8_t *stick_x,
+                                 int8_t *stick_y)
 {
     const uint32_t type = KEY_TYPE(k);
     /* stick bytes to believe: a type 3 pad's always, a type 2 pad's unless they are what a pad with none would send */
     const int analog = type == 3u || (type == 2u && j != 0u && j != 0xFFFFFFFFu);
     uint16_t b = 0;
 
-    const uint32_t mkey = n64rt_pad_key((set0 >> 10) & 31u, 0u);     /* Modifier */
+    const int face = ((set0 >> 10) & 31u) == 1u, half = ((set0 >> 20) & 31u) == 1u;   /* the R checkboxes */
+    const uint32_t mkey = (face || half) ? KEY_R1 : 0u;
     const int rmod = (k & mkey) != 0u;
     k &= ~mkey;
-    if (rmod) {
+    if (rmod && face) {
         if (k & KEY_X) b |= CONT_E;
         if (k & KEY_B) b |= CONT_D;
         if (k & KEY_Y) b |= CONT_C;
@@ -182,12 +184,13 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         if (type != 3u && sx == 0 && sy == 0) from_dpad = 1;       /* (a pad without a deflected stick, or none: the D-pad) */
     }
     if (from_dpad) {
-        const int8_t d = rmod ? 40 : 80;
+        const int part = (rmod && half) || (((set1 >> 20) & 3u) == 1u && !dfull);   /* (half press; a single tap) */
+        const int8_t d = part ? 48 : 80;
         if (k & KEY_DPAD_LEFT) sx -= d;
         if (k & KEY_DPAD_RIGHT) sx += d;
         if (k & KEY_DPAD_UP) sy += d;
         if (k & KEY_DPAD_DOWN) sy -= d;
-        if (rmod && sx && sy) { sx = (int8_t)(sx < 0 ? -28 : 28); sy = (int8_t)(sy < 0 ? -28 : 28); }
+        if (part && sx && sy) { sx = (int8_t)(sx < 0 ? -34 : 34); sy = (int8_t)(sy < 0 ? -34 : 34); }
     }
     const uint32_t dp = (set1 >> 22) & 3u;                          /* D-pad */
     if (dp == 1u) {
