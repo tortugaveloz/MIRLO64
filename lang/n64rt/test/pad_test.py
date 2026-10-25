@@ -27,17 +27,23 @@ def spec(keys, joy, s0, s1):
             if face in held:
                 out.add(c)
         held -= {'A', 'B', 'X', 'Y'}
-    start_mode = (s1 >> 20) & 3                   # "Start" is interact1[21:20]: 0 Start, 1 Select+Start, 2 and 3 none
-    if start_mode == 1:
+    scode = s1 & 31                               # "Start button" is interact1[4:0]: a button code (0 the Start key), 12 Select+Start
+    if scode == 12:
         if {'select', 'start'} <= held:
             out.add('START')
             held -= {'select', 'start'}
         elif 'start' in held:
             out.add('CUP')                        # the Start key the chord leaves: C-up
-    elif start_mode == 0 and 'start' in held:
-        out.add('START')
-    elif 'start' in held:
-        out.add('CUP')                            # Start none: the Start key is C-up
+    else:
+        skey = 'start' if scode == 0 else CODE.get(scode)
+        if skey in held:
+            out.add('START')
+        if skey != 'start' and 'start' in held:
+            out.add('CUP')                        # a Start key the setting leaves: C-up
+        held.discard(skey)                        # the Start's key is that only
+    cukey = {0: 'R2', 1: 'L2'}.get((s1 >> 20) & 3)   # "C-Up button" is interact1[21:20]: 0 ZR, 1 ZL, 2 and 3 none
+    if cukey in held:
+        out.add('CUP')
     if 'A' in held: out.add('A')
     if 'B' in held: out.add('B')
     # Z, L, R: (setting, its own default for code 0)
@@ -54,10 +60,14 @@ def spec(keys, joy, s0, s1):
     cm = (s1 >> 10) & 31
     if cm in (1, 2) and analog:
         cx, cy = (rx, ry) if cm == 1 else (lx, ly)
-        if cx - 128 < -64: out.add('CLEFT')
-        if cx - 128 > 64: out.add('CRIGHT')
-        if cy - 128 < -64: out.add('CUP')
-        if cy - 128 > 64: out.add('CDOWN')
+        dx, dy = cx - 128, cy - 128
+        if abs(dx) > abs(dy):                     # one C button: the quarter of the circle the stick is in (+-45 degrees to up, down)
+            if abs(dx) > 64: out.add('CLEFT' if dx < 0 else 'CRIGHT')
+        elif abs(dy) > 64:
+            out.add('CUP' if dy < 0 else 'CDOWN')
+    if cm == 3:                                   # ... 3 the D-pad, a key a button
+        for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
+            if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
     def ax(v, flip):
         a = v - 128
@@ -104,7 +114,8 @@ def settings():
             (0, 1, 2, 3, 4, 5, 9), (0, 1, 4, 5, 6, 10, 11, 31), (0, 2, 3, 7, 9, 13), (0, 1, 2, 8, 11),
             (0, 1, 2, 3), (0, 1, 2, 3, 9), (0, 1, 2, 3), (0, 1, 2, 3)):
         s0 = mod << 10 | l << 20 | r << 25 | 3 << 5 | 1 << 15 | 2             # (crop, pak: other fields, ignored here)
-        s1 = 1 | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (the free fields: EEPROM size, the old FPS and chord bits)
+        sc = (0, 1, 6, 10, 11, 12, 5, 31)[(mod + z + l + r + c + stick + dpad + start) % 8]   # "Start button", spread over the rest
+        s1 = sc | z << 5 | c << 10 | stick << 15 | start << 20 | dpad << 22 | 1 << 24 | 1 << 25   # (start: "C-Up button"; the free bits)
         yield s0, s1
 
 
@@ -156,7 +167,11 @@ def main():
     d = lambda k: spec(k | 1 << 28, 0x80808080, 0, 0)
     assert d(1 << K['L1']) == (N['Z'], 0, 0)
     assert d(1 << K['R1']) == (N['R'], 0, 0)
-    assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (0, 0, 0)      # the N64's L is on ZL by default
+    assert d(1 << K['L2']) == (N['L'], 0, 0) and d(1 << K['R2']) == (N['CUP'], 0, 0)   # the N64's L is on ZL, C-up on ZR by default
+    assert d(1 << K['start']) == (N['START'], 0, 0)
+    c1 = lambda joy: spec(3 << 28, joy, 0, 1 << 10)                                    # "C buttons" on the right stick
+    assert c1(0xF0608080) == (N['CDOWN'], 0, 0) and c1(0x10A08080) == (N['CUP'], 0, 0)    # (a little off down / up: that one only)
+    assert c1(0x60F08080) == (N['CRIGHT'], 0, 0) and c1(0x10108080) == (N['CUP'], 0, 0)   # (45 degrees exactly: up)
     assert d(1 << K['Y']) == (N['CLEFT'], 0, 0) and d(1 << K['X']) == (N['CRIGHT'], 0, 0) and d(1 << K['select']) == (N['CDOWN'], 0, 0)
     assert d(1 << K['start']) == (N['START'], 0, 0)
     assert d(1 << K['left']) == (0, -80, 0)
