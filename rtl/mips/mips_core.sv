@@ -1193,7 +1193,11 @@ logic        m_tlbc;                         // (PGD) the translation's entry is
 logic        m_xc1;                          // (PGD) MS_XLAT's second cycle: the cache's word and tag at the physical index
 logic        m_wq;                           // MS_WALK: the scanner took the request
 wire m_mapped = FAST ? m_k_mapped : m_mem && !m_kseg;
-wire [31:0] m_kpa = kphys(m_addr);
+// The RDRAM window decode is already available with E's address. Register it
+// with the address to keep the window comparator off M's cache-hit path.
+logic m_n64win;
+wire [31:0] m_kpa = FAST ? (m_n64win ? {N64_RDRAM[31:23], m_addr[22:0]} :
+                            (FLAT && m_addr[31:29] != 3'b101) ? m_addr : {3'b000, m_addr[28:0]}) : kphys(m_addr);
 wire [31:0] m_xpa = tphys({m_tlbq[31:12], m_addr[11:0]});
 wire [31:0] m_pa = m_kseg ? m_kpa : m_xpa;   // (the offset: the address's own)
 wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]));
@@ -2028,6 +2032,7 @@ always_ff @(posedge clk) begin
             m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
             m_res <= e_res;
             m_addr <= e_ea;
+            if (FAST) m_n64win <= n64win(e_ea);
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
                 m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_k_sc <= e_c.st == S_SC;
