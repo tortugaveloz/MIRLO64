@@ -73,7 +73,7 @@ reset:
 2:  srl     $a0, $t1, 1
     andi    $a0, $a0, 1
 
-caches:                             # index-invalidate every line: 16 KiB I, 8 KiB D, 32-byte lines
+caches:                             # index-invalidate every line: 16 KiB I, 8 KiB D
     lui     $t0, 0x4000
     li      $t1, 16384 / 32
 3:  .set mips3
@@ -83,13 +83,13 @@ caches:                             # index-invalidate every line: 16 KiB I, 8 K
     bnez    $t1, 3b
     addiu   $t0, $t0, 32
     lui     $t0, 0x4000
-    li      $t1, 8192 / 32
+    li      $t1, 8192 / 16
 4:  .set mips3
     cache   0x01, 0($t0)
     .set mips2
     addiu   $t1, $t1, -1
     bnez    $t1, 4b
-    addiu   $t0, $t0, 32
+    addiu   $t0, $t0, 16
     la      $sp, 0x43FFFFF0
     la      $t0, boot_main
     jr      $t0

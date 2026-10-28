@@ -223,7 +223,7 @@ mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(
     .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
     .x_req(c_x_req), .x_we(), .x_addr(c_x_addr), .x_wdata(), .x_strb(), .x_ack(c_x_ack), .x_rdata(c_x_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:3]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
+    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:2]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
 cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .s_req, .s_line, .s_addr, .s_rvalid, .s_rdata,

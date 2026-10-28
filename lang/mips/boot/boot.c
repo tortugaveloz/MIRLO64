@@ -24,7 +24,7 @@ static uint32_t now(void) { timer0_uptime_latch_write(1); return (uint32_t)timer
 static void invalidate_caches(void)
 {
     for (uint32_t a = MAIN_RAM; a < MAIN_RAM + 16384u; a += 32) __asm__ volatile(".set push\n.set mips3\ncache 0x00, 0(%0)\n.set pop" :: "r"(a));
-    for (uint32_t a = MAIN_RAM; a < MAIN_RAM + 8192u; a += 32) __asm__ volatile(".set push\n.set mips3\ncache 0x01, 0(%0)\n.set pop" :: "r"(a));
+    for (uint32_t a = MAIN_RAM; a < MAIN_RAM + 8192u; a += 16) __asm__ volatile(".set push\n.set mips3\ncache 0x01, 0(%0)\n.set pop" :: "r"(a));
 }
 
 /* A program is started only if it is built for this core's memory layout

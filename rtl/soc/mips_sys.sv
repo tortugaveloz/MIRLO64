@@ -49,7 +49,7 @@ module mips_sys #(
     input  wire         irq_mon,            // MIRLO_MON: the monitor level's interrupt
     // the other masters' writes into the SDRAM, for the D-cache to drop the lines they write (mips_core's SNOOP)
     input  wire         sn_t,
-    input  wire  [20:0] sn_line,
+    input  wire  [21:0] sn_line,
     output wire         sn_hold,
     output logic [31:0] dbg_pc, dbg_cause, dbg_epc
 );
@@ -85,7 +85,7 @@ localparam bit CPU_W64_MD = 1'b1;
 localparam bit CPU_W64_DIV = 1'b0;
 localparam bit CPU_FAST = FAST;
 // MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: the caches' lines (the VR4300's are 512
-// and 256: 16 KiB and 8 KiB; more are block RAM only: mips_core)
+// and 512: 16 KiB and 8 KiB; more are block RAM only: mips_core)
 // MIRLO_MON: mips_core's MON -- the monitor level and the game's own exception vector, for a game that
 // runs its own libultra (docs/mips.md)
 localparam bit CPU_MON = 1'b1;
@@ -104,13 +104,16 @@ localparam bit CPU_ROM64W = CPU_PI2W;
 // mips_core's SPW: the SP's and the DPC's registers at the N64's addresses (mirlo_mips.sv: the RSP's host port's)
 localparam bit CPU_SPW = CPU_MI;
 // mips_core's SNOOP: the D-cache drops a line the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA)
-// writes into: its 32-byte lines are two of the VR4300's (mirlo_mips.sv takes those writes from the arbiter)
-localparam bit CPU_SNOOP = 1'b1;
+// writes into (mirlo_mips.sv takes those writes from the arbiter)
+`ifndef MIRLO_CPU_SNOOP
+`define MIRLO_CPU_SNOOP 0
+`endif
+localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
 `ifndef MIRLO_CPU_IC_LOG2
 `define MIRLO_CPU_IC_LOG2 10
 `endif
 `ifndef MIRLO_CPU_DC_LOG2
-`define MIRLO_CPU_DC_LOG2 10
+`define MIRLO_CPU_DC_LOG2 11
 `endif
 mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JRP(0), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .FAST(CPU_FAST), .FPG(CPU_FPG),
             .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (

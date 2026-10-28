@@ -47,7 +47,7 @@ set_global_assignment -name SMART_RECOMPILE OFF
 # after the forwarding, the FPU's results), the small memories (MLAB / M10K) recognised at
 # any size, and the two netlist resynthesis passes off. The fit of the same design
 # (MIRLO_RSP=1 MIRLO_RSP_LANES=4 MIRLO_RSP_MULW=1 MIRLO_TLB_RAM=1 MIRLO_GB_CART=1
-# MIRLO_CPU_CLK=32 MIRLO_CPU_IC_LOG2=10 MIRLO_CPU_DC_LOG2=10 MIRLO_CLK_N64=1 MIRLO_MON=1)
+# MIRLO_CPU_CLK=32 MIRLO_CPU_IC_LOG2=10 MIRLO_CPU_DC_LOG2=11 MIRLO_CLK_N64=1 MIRLO_MON=1)
 # went from 17,901 to ~15,400 ALMs; seeds 5 and 20 close.
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP OFF
 set_global_assignment -name MUX_RESTRUCTURE ON

@@ -1,15 +1,11 @@
 /* The D-cache against the other masters' writes into the RDRAM (sim/mips_soc; docs/mips.md "Caches and memory").
  *
- * The D-cache's lines are 32 bytes where the VR4300's are 16, so a buffer that is 16-byte aligned but not 32-byte aligned
- * shares its first or last line with 16 bytes of something else. Software drops the buffer's lines before a transfer into
- * it, as on the console; a load of the other half while the transfer is under way then reads the whole line back from
- * memory that does not have the transfer's words yet, and that line stays in the cache after the transfer. Each phase
- * reproduces that, and checks that the buffer reads what was transferred:
- *   1  the PI's engine (MONITOR.PIDST / PISRC / PILEN) copying 1 KiB into a buffer whose last 16 bytes share a line with
- *      the 16 bytes after it, which are loaded while the copy runs
+ * A 16-byte-aligned buffer has separate cache lines from its neighbours. Each phase invalidates the destination,
+ * reads the adjacent line while a transfer is underway, and checks the transferred data:
+ *   1  the PI's engine (MONITOR.PIDST / PISRC / PILEN) copying 1 KiB, with the next line read during the copy
  *   2  the RSP's DMA (SP_WR_LEN: DMEM to the RDRAM) of 4 KiB, laid out the same way
- *   3  the SI's RD64B (PIF RAM to the RDRAM) into a buffer whose first 16 bytes share a line with the 16 bytes before it,
- *      loaded while the read waits for the PIF (PEND bit 4, before MONITOR.SIDONE): Ocarina of Time's controller read
+ *   3  the SI's RD64B (PIF RAM to the RDRAM), with the preceding line read while the read waits for the PIF
+ *      (PEND bit 4, before MONITOR.SIDONE)
  * The buffers are read through KSEG0 (cached) and filled with an old pattern through KSEG1 before each transfer. */
 #include <stdint.h>
 #include <generated/csr.h>
@@ -85,7 +81,7 @@ int main(void)
         monitor_pidst_write((SDRAM_RDRAM + PI_DST - 0x40000000u) >> 2);
         monitor_pisrc_write((PI_SRC - 0x40000000u) >> 2);
         monitor_pilen_write(PI_LEN / 4u);                 /* starts it */
-        uint32_t a = K0(PI_DST + PI_LEN)[0];             /* the line of the buffer's last 16 bytes comes in */
+        uint32_t a = K0(PI_DST + PI_LEN)[0];             /* the adjacent line comes in */
         for (uint32_t t = 0; t < 4000000u && (monitor_pilen_read() >> 31); t++) { }
         check("PI: the engine is done", monitor_pilen_read() >> 31, 0u);
         check("PI: the word after the buffer, loaded during the copy", a, after);
@@ -121,7 +117,7 @@ int main(void)
         uint32_t k;
         for (k = 0; k < 100000u && !(monitor_pend_read() & 0x10u); k++) { }
         check("SI: the RD64B waits for the PIF (PEND bit 4)", (monitor_pend_read() >> 4) & 1u, 1u);
-        uint32_t b = K0(SI_DST - 16u)[0];                /* the line of the buffer's first 16 bytes comes in */
+        uint32_t b = K0(SI_DST - 16u)[0];                /* the adjacent line comes in */
         monitor_pend_write(0x10u);
         monitor_sidone_write(1);
         for (uint32_t n = 0; n < 1000000u && (SI[6] & 1u); n++) { }
