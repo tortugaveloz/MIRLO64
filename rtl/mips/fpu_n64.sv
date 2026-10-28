@@ -125,7 +125,12 @@ wire is_s = is_cop1 && fmt == 5'h10, is_d = is_cop1 && fmt == 5'h11, is_w = is_c
 wire is_l = is_cop1 && fmt == 5'h15 && (fn == 6'h20 || fn == 6'h21);   // cvt.s.l, cvt.d.l
 // to a 64-bit integer (cvt.l, round.l, trunc.l, ceil.l, floor.l): done as to a word, the word sign-extended into the pair
 wire to_l = (is_s || is_d) && ((fn >= 6'h08 && fn <= 6'h0B) || fn == 6'h25);
-wire is_mov = (is_s || is_d) && fn == 6'h06;
+// FAST holds the decode alongside M's instruction, avoiding a late MOV select
+// on the register-file write data.
+logic mov_q;
+always_ff @(posedge clk) if (adv)
+    mov_q <= insn_e[31:26] == 6'h11 && (insn_e[25:21] == 5'h10 || insn_e[25:21] == 5'h11) && insn_e[5:0] == 6'h06;
+wire is_mov = FAST ? mov_q : (is_s || is_d) && fn == 6'h06;
 wire is_arith = ((is_s || is_d || is_w) && !is_mov) || is_l;      // through the datapath
 wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc1 = op == 6'h3D;
 
