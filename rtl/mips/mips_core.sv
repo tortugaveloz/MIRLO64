@@ -2263,7 +2263,9 @@ always_ff @(posedge clk) begin
         end
         MS_XLAT: begin                               // a fault, a store done, or on to the slow path
             m_xc1 <= 1'b0;
-            if (!m_live || m_commit_e) ms <= MS_IDLE;
+            // A translated cached access cannot commit in MS_XLAT: m_done
+            // waits for MS_DONE. Keep unrelated completion logic off its data path.
+            if (!m_live || (m_commit_e && !m_cl && !m_cs)) ms <= MS_IDLE;
             else if (m_needs_slow) ms <= MS_SLOW_A;
             // (PGD) a mapped load through the D-cache: the word at the physical index in the second cycle, or its line read in
             else if (m_cl || m_cs) begin
