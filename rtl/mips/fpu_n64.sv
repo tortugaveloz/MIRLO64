@@ -208,6 +208,7 @@ endfunction
 logic ar_q;
 always_ff @(posedge clk) if (adv) ar_q <= arith_of(insn_e);
 logic isd_q, isw_q, isl_q;                              // (FAST) is_d, is_w and is_l, likewise
+logic decide_l_q;                                        // S_PRE's copy for S_DECIDE
 always_ff @(posedge clk) if (adv) begin
     isd_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h11;
     isw_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h14;
@@ -287,6 +288,7 @@ always_ff @(posedge clk) begin
     S_UNPY: begin ay <= up; st <= FAST ? S_PRE : S_DECIDE; end
     // (FAST) what S_DECIDE asks of the two operands, as registers
     S_PRE: begin
+        decide_l_q <= isl_q;
         fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
         fmlt <= {ax.e, ax.f} < {ay.e, ay.f}; fmeq <= {ax.e, ax.f} == {ay.e, ay.f};
         st <= S_DECIDE;
@@ -296,7 +298,7 @@ always_ff @(posedge clk) begin
         nx = FAST ? fnx : isnan(ax); ny = FAST ? fny : isnan(ay); ix = FAST ? fix : isinf(ax); iy = FAST ? fiy : isinf(ay);
         zx = FAST ? fzx : iszero(ax); zy = FAST ? fzy : iszero(ay);
         st <= S_DONE;                                     // (the special cases: done now)
-        if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
+        if (FAST ? decide_l_q : sel_l) begin              // cvt.s.l: the integer {zmag, ax}
             kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
             if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
             else if (zmag == 32'd0) begin zs <= 0; zmag <= ax; st <= S_NORM; end                    // an unsigned word

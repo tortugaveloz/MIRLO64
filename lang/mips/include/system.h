@@ -12,7 +12,8 @@ extern "C" {
 
 #define MIPS_ICACHE_BYTES 16384u
 #define MIPS_DCACHE_BYTES 8192u
-#define MIPS_LINE_BYTES   32u
+#define MIPS_LINE_BYTES   16u
+#define MIPS_ICACHE_LINE_BYTES 32u
 #define MIRLO_CACHEABLE_BASE  0x40000000u
 #define MIRLO_CACHEABLE_BYTES 0x04000000u
 
@@ -22,7 +23,7 @@ extern "C" {
 
 static inline void flush_cpu_icache(void)
 {
-    for (unsigned long a = 0x40000000u; a < 0x40000000u + MIPS_ICACHE_BYTES; a += MIPS_LINE_BYTES)
+    for (unsigned long a = 0x40000000u; a < 0x40000000u + MIPS_ICACHE_BYTES; a += MIPS_ICACHE_LINE_BYTES)
         MIPS_CACHE_OP(0x00, a);                 /* Index_Invalidate_I */
 }
 static inline void flush_cpu_dcache(void)

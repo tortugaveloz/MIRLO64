@@ -24,7 +24,7 @@ env:
   MIPS_CC: mips-linux-gnu-gcc-13
   # the SoC's test programs that print PASS today
   GATED: >-
-    cpu_test cache_wb_test int64_test libc_test n64win_test tlbram_test mon_test mi_test ai_test si_test rcpcpu_test
+    cpu_test cache_wb_test dma_coh_test int64_test libc_test n64win_test tlbram_test mon_test mi_test ai_test si_test rcpcpu_test
     tlbmon_test tlbgame_test tlbpg_test
   # run, not gated: vi_test gives no verdict within 30 Mcycles; pi2_test prints a known FAIL ("ROM reads, KSEG1")
   UNGATED: vi_test pi2_test

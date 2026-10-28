@@ -182,7 +182,7 @@ instantiates it with the boot ROM and these parameters:
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
-| `IC_LOG2`, `DC_LOG2` | 10 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `IC_LOG2`, `DC_LOG2` | 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | The D-cache does not snoop external-master writes; software uses cache operations around DMA |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
@@ -210,15 +210,22 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 
 ### Caches and memory
 
-Both caches are direct mapped with 32-byte lines and physical tags, and each is 32 KiB (1,024 lines) of block RAM. They
+Both caches are direct mapped with physical tags. The I-cache has 32-byte lines and 16 KiB; the D-cache has 16-byte
+lines and 8 KiB (512 lines each). They
 hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache is write-back and write-allocate:
 a store miss refills the line, a store hit updates it and marks it dirty, and a dirty victim is written to memory before
 the requested line is refilled. `CACHE` index write-back-invalidate (`0x01`) and hit write-back operations (`0x15`,
 `0x19`) send dirty lines through the CPU write FIFO; the invalidate forms then clear the tag. Hit invalidate (`0x11`)
 discards the line. Index load/store tag (`0x05`, `0x09`) transfer the selected tag through COP0 TagLo, and create dirty
 exclusive (`0x0D`) replaces the selected tag after writing back a different dirty victim. Index write-back-invalidate
-covers all cache lines, including the extra capacity beyond the VR4300's 8 KiB D-cache, so software can keep using the
-console's cache-walk code.
+covers all cache lines, including any extra capacity when configured larger than the VR4300's 8 KiB D-cache, so
+software can keep using the console's cache-walk code.
+Data-cache instructions wait in a separate cache state while the tag is read and any writeback is sent. Their tag
+comparison therefore does not sit on the pipeline's advance path. Store hits mark their own physical tag dirty; a
+following access is held for a tag replacement or invalidation, but not just for the dirty-bit update.
+
+Like MiSTer's N64 data cache, MIRLO's D-cache uses 16-byte lines, so invalidating one line leaves adjacent lines alone.
+The SDRAM port fetches 32 bytes at a time, but a D-cache refill installs only the addressed 16-byte half.
 
 There is no external-master snoop (`SNOOP=0`). Software must use the N64's
 cache operations around DMA to keep CPU and RSP, RDP, PI and SI views coherent. A DMA that writes a dirty cached line
@@ -948,7 +955,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
 | `rcpcpu_test` | The CPU's side of the SP and DPC registers: the semaphore, the DMA queue, DPC writes |
-| `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer whose edge shares a 32-byte line with data loaded during the transfer |
+| `dma_coh_test` | PI, RSP and SI DMA into 16-byte-aligned buffers while the CPU reads adjacent cache lines |
 | `ram8_test` | Every block above the RDRAM's first 4 MiB; `sim/mips_soc/ram8_check.sh` runs it and checks the audio and the picture |
 | `hires_test`, `vwin_test`, `viaa_test` | The scan-out's sizes and windows, and the VI's filters (`sim/vi_filter/viaa_check.py` compares the frame) |
 | `rsp_replay` | One recorded RSP task on the whole SoC, timed |

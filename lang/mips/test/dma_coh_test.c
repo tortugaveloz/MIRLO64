@@ -1,10 +1,7 @@
 /* The D-cache against the other masters' writes into the RDRAM (sim/mips_soc; docs/mips.md "Caches and memory").
  *
- * The D-cache's lines are 32 bytes where the VR4300's are 16, so a buffer that is 16-byte aligned but not 32-byte aligned
- * shares its first or last line with 16 bytes of something else. Software drops the buffer's lines before a transfer into
- * it, as on the console; a load of the other half while the transfer is under way then reads the whole line back from
- * memory that does not have the transfer's words yet, and that line stays in the cache after the transfer. Each phase
- * reproduces that, and checks that the buffer reads what was transferred:
+ * A buffer aligned to 16 bytes must occupy different cache lines from its neighbors, as on the VR4300. Each phase
+ * invalidates the destination, loads an adjacent line during a transfer and checks the transferred data:
  *   1  the PI's engine (MONITOR.PIDST / PISRC / PILEN) copying 1 KiB into a buffer whose last 16 bytes share a line with
  *      the 16 bytes after it, which are loaded while the copy runs
  *   2  the RSP's DMA (SP_WR_LEN: DMEM to the RDRAM) of 4 KiB, laid out the same way
@@ -79,6 +76,7 @@ int main(void)
     {
         volatile uint32_t *src = (volatile uint32_t *)PI_SRC;
         for (uint32_t i = 0; i < PI_LEN / 4u; i++) src[i] = 0x11000000u | (i * 0x10001u);
+        writeback_cpu_dcache_range((const void *)src, PI_LEN);
         old_fill(PI_DST, PI_LEN / 4u + 4u, 0xA1000000u);   /* the buffer and the 16 bytes after it */
         uint32_t after = K0(PI_DST + PI_LEN)[0];
         inval(PI_DST, PI_LEN + 16u);
