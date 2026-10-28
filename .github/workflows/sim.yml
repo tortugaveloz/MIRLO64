@@ -24,7 +24,7 @@ env:
   MIPS_CC: mips-linux-gnu-gcc-13
   # the SoC's test programs that print PASS today
   GATED: >-
-    cpu_test int64_test libc_test n64win_test tlbram_test mon_test mi_test ai_test si_test rcpcpu_test
+    cpu_test dcache16_test mapped_cache_test int64_test libc_test n64win_test tlbram_test mon_test mi_test ai_test si_test rcpcpu_test
     tlbmon_test tlbgame_test tlbpg_test
   # run, not gated: vi_test gives no verdict within 30 Mcycles; pi2_test prints a known FAIL ("ROM reads, KSEG1")
   UNGATED: vi_test pi2_test
@@ -95,6 +95,9 @@ jobs:
           tools/area2/rdp_regress.sh > sim-out/rdp.txt 2>&1; st rdp $?
           SH
           nohup bash "$RUNNER_TEMP/bg.sh" > /dev/null 2>&1 &
+
+      - name: Pocket bridge queued reads
+        run: sh sim/apf/queued_reads_test.sh
 
       # picolibc is the slow part; make rebuilds the rest from the sources' dates
       - uses: actions/cache/restore@v4

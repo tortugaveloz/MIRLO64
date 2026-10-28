@@ -1,5 +1,5 @@
 /* System interface for MIRLO's MIPS game CPU (rtl/mips/mips_core.sv).
- * Its caches: 16 KiB I, 8 KiB D, direct mapped, 32-byte lines; the D-cache
+ * Its caches: direct mapped, 32-byte I lines and 16-byte D lines; the D-cache
  * writes through, so a "flush" only has to drop lines -- memory is always
  * current, but lines may be stale after another master (RDP, the geom or
  * audio core, the Pocket's bridge) wrote SDRAM. A core built with larger
@@ -14,7 +14,8 @@ extern "C" {
 
 #define MIPS_ICACHE_BYTES 16384u
 #define MIPS_DCACHE_BYTES 8192u
-#define MIPS_LINE_BYTES   32u
+#define MIPS_LINE_BYTES   16u
+#define MIPS_ICACHE_LINE_BYTES 32u
 
 /* CACHE op on the line at `a` (op[17:16]: 0 I, 1 D; op[20:18]: 0 an index
  * op, 4 a hit op -- the core drops the line either way, never looking at its
@@ -23,7 +24,7 @@ extern "C" {
 
 static inline void flush_cpu_icache(void)
 {
-    for (unsigned long a = 0x40000000u; a < 0x40000000u + MIPS_ICACHE_BYTES; a += MIPS_LINE_BYTES)
+    for (unsigned long a = 0x40000000u; a < 0x40000000u + MIPS_ICACHE_BYTES; a += MIPS_ICACHE_LINE_BYTES)
         MIPS_CACHE_OP(0x00, a);                 /* Index_Invalidate_I */
 }
 static inline void flush_cpu_dcache(void)

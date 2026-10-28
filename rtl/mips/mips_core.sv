@@ -83,7 +83,7 @@
 //    costs nothing), E (ALU), M (D-cache, the slow path, COP0/COP1,
 //    exceptions), W (write-back). Forwarding into E from M and W; a branch
 //    in D waits for a result still in E, a load's for one cycle.
-//  - Caches: 16 KiB I, 8 KiB D, direct mapped, 32-byte lines, physically
+//  - Caches: direct mapped, 32-byte I and 16-byte D lines, physically
 //    tagged; KSEG0 RDRAM only. The D-cache writes through an 8-entry write
 //    buffer: memory is always current for the engines that read it (the RSP
 //    firmware, RDP, the audio core). A read goes out only with the buffer
@@ -196,10 +196,10 @@ module mips_core #(
     // reaches the next fetch
     parameter bit FAST = 0,
     // the caches' lines, as powers of two: 512 of the I-cache's (16 KiB) and
-    // 256 of the D-cache's (8 KiB) are the VR4300's; more of them are block RAM
+    // 512 of the D-cache's (8 KiB) are the VR4300's; more of them are block RAM
     // and a few address bits (the tags stay as wide: pa[28:14], pa[28:13])
     parameter int IC_LOG2 = 9,
-    parameter int DC_LOG2 = 8,
+    parameter int DC_LOG2 = 9,
     // the write buffer is outside (rtl/soc/cpu_port.sv, where the core's clock
     // is its own): every store leaves by st_* as it is done -- one for the
     // SDRAM as the write buffer would have taken it, or (st_dev) a device's,
@@ -211,7 +211,7 @@ module mips_core #(
     // the I-cache like KSEG0's (see "The page registers" above F). 0: a mapped fetch is always the slow path.
     parameter bit FPG = 0,
     // the D-cache drops a line another master writes into (FLAT, the SDRAM's 64 MiB): sn_t turns over for each of
-    // those writes, sn_line is its line (pa[25:5]); see "The snoop" below the cache RAM writes
+    // those writes, sn_line is its line (pa[25:4]); see "The snoop" below the cache RAM writes
     parameter bit SNOOP = 0,
     // FAST: a register jump (jr, jalr: every function's return) is guessed taken, to its register as D reads it, when no
     // instruction ahead of it in E or M is to write that register (one in W is bypassed into the read): the guess is then the
@@ -251,7 +251,7 @@ module mips_core #(
     // SNOOP: another master's write (sampled here: from another clock, each value lasts a cycle of this one at least),
     // and the hold on those writes while the lines to drop pile up
     input  wire         sn_t,
-    input  wire  [20:0] sn_line,
+    input  wire  [21:0] sn_line,
     output logic        sn_hold,
     // retire trace (co-simulation)
     output logic        tr_retire,
@@ -667,14 +667,14 @@ end endgenerate
 
 // =============================================================== caches
 localparam int IC_LINES = 1 << IC_LOG2, DC_LINES = 1 << DC_LOG2;
-localparam int IW = IC_LOG2 + 3, DW = DC_LOG2 + 3;      // a word's address in them: pa[IW+1:2], pa[DW+1:2]
+localparam int IW = IC_LOG2 + 3, DW = DC_LOG2 + 2;      // a word's address in them: pa[IW+1:2], pa[DW+1:2]
 logic [31:0] ic_data [IC_LINES * 8];
 // The tag: {valid, pa[28:14]}. With the page registers (PG) a line's index comes from the virtual address, so the physical bits
 // between the page offset and the tag's first -- pa[13:12], which the index no longer says -- are in it too: {valid, pa[28:12]}.
 localparam int TLO = PG ? 12 : 14;           // the tag's lowest physical address bit
 localparam int ITW = 28 - TLO + 1;           // its width without the valid bit
 logic [ITW:0] ic_tag  [IC_LINES];
-logic [7:0]  dc_b0 [DC_LINES * 8], dc_b1 [DC_LINES * 8], dc_b2 [DC_LINES * 8], dc_b3 [DC_LINES * 8];   // byte lanes
+logic [7:0]  dc_b0 [DC_LINES * 4], dc_b1 [DC_LINES * 4], dc_b2 [DC_LINES * 4], dc_b3 [DC_LINES * 4];   // byte lanes
 logic [16:0] dc_tag  [DC_LINES];            // {valid, pa[28:13]}
 logic [IW-1:0] ic_raddr; logic [31:0] ic_q; logic [ITW:0] ic_tq;
 logic [DW-1:0] dc_raddr; logic [31:0] dc_q; logic [16:0] dc_tq;
@@ -683,8 +683,8 @@ logic [DW-1:0] dc_raddr; logic [31:0] dc_q; logic [16:0] dc_tq;
 logic        ic_we;  logic [IW-1:0] ic_waddr;  logic [31:0] ic_wdata;
 logic        ict_we; logic [IW-4:0]  ict_waddr; logic [ITW:0] ict_wdata;
 logic        dc_we;  logic [DW-1:0] dc_waddr;  logic [31:0] dc_wdata; logic [3:0] dc_wbe;
-logic        dct_we; logic [DW-4:0] dct_waddr; logic [16:0] dct_wdata;
-logic        sn_go; logic [DW-4:0] sn_idx;  // (SNOOP) a line to drop, by the tags' write port when the core leaves it
+logic        dct_we; logic [DC_LOG2-1:0] dct_waddr; logic [16:0] dct_wdata;
+logic        sn_go; logic [DC_LOG2-1:0] sn_idx;  // (SNOOP) a line to drop, by the tags' write port when the core leaves it
 logic        sn_kill;                        // (SNOOP) the line being read in was written meanwhile: it comes in invalid
 logic        slow_is_d;
 logic        slow_d_own;                     // P_SLOW was granted to M's slow path (else to F's)
@@ -700,7 +700,7 @@ always_ff @(posedge clk) begin
 end
 always_ff @(posedge clk) begin
     dc_q  <= {dc_b3[dc_raddr], dc_b2[dc_raddr], dc_b1[dc_raddr], dc_b0[dc_raddr]};
-    dc_tq <= dc_tag[dc_raddr[DW-1:3]];
+    dc_tq <= dc_tag[dc_raddr[DW-1:2]];
     if (dc_we) begin
         if (dc_wbe[0]) dc_b0[dc_waddr] <= dc_wdata[7:0];
         if (dc_wbe[1]) dc_b1[dc_waddr] <= dc_wdata[15:8];
@@ -1177,9 +1177,9 @@ wire m_cached = FAST ? m_k_cach : cacheable(m_addr, game_view);
 // the line dropped last cycle (an uncached store into cached memory, sdc1,
 // a cache instruction): an access right behind it read the tag in the edge
 // that cleared it
-logic        tk_valid; logic [DW-4:0] tk_idx;
+logic        tk_valid; logic [DC_LOG2-1:0] tk_idx;
 wire m_dc_hit = dc_tq[16] && dc_tq[15:0] == m_pa[28:13] &&   // (physically tagged; index bits pa == va)
-                !(tk_valid && tk_idx == m_addr[DW+1:5]);
+                !(tk_valid && tk_idx == m_addr[DW+1:4]);
 // FAST: a load's word is taken as it is; m_lmiss, late in the cycle, says it
 // was not its line's. In a delay slot the load has waited a cycle: m_hit_r
 logic m_w1, m_hit_r;
@@ -1390,13 +1390,17 @@ assign st_strb  = m_st_strb;
 // (PG: a hit-type op on the I-cache, once a mapped page may have its lines under another colour than the physical
 // address's, drops the line under every colour: IC_LOG2 - 7 index bits above the page offset, ck_n steps through them)
 localparam int CK_WI = PG ? IC_LOG2 - 8 : IC_LOG2 - 9;
-localparam int CK_W = (CK_WI > DC_LOG2 - 8) ? CK_WI : DC_LOG2 - 8;
+localparam int CK_WD = DC_LOG2 > 8 ? DC_LOG2 - 8 : 0;
+localparam int CK_W = (CK_WI > CK_WD) ? CK_WI : CK_WD;
 logic [CK_W:0] ck_n;
 logic          ic_alias;                     // a mapped page was entered at a colour that is not its physical address's
 wire           ck_isw = PG && ic_alias && m_insn[17:16] == 2'd0 && m_insn[20];
-wire           ck_run = !m_insn[20] || ck_isw;
-wire  [CK_W:0] ck_last = ck_isw ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) :
-                         (CK_W + 1)'((m_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 8))) - 1);
+// A mapped D-cache hit operation has a virtual address but the cache is
+// physically indexed. Invalidate all possible physical page colours.
+wire           ck_dalias = (m_insn[20:16] == 5'h11 || m_insn[20:16] == 5'h15) && !m_kseg;
+wire           ck_run = !m_insn[20] || ck_isw || ck_dalias;
+wire  [CK_W:0] ck_last = ck_dalias ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) :
+                         (CK_W + 1)'((m_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 9))) - 1);
 logic m_done;
 always_comb begin
     m_done = 1'b1;
@@ -1656,20 +1660,20 @@ always_comb begin
         if (f_cnt == 3'd7) begin ict_we = 1; ict_waddr = PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5]; ict_wdata = {1'b1, f_fill_pa[28:TLO]}; end
     end
     if (port == P_DLINE && mem_rvalid) begin
-        dc_we = 1; dc_wbe = 4'hF;
-        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:5]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
+        dc_we = ms_cnt[2] == m_fpa[4]; dc_wbe = 4'hF;
+        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:4]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
     if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
         if (m_cached && m_dc_hit) begin
             dc_we = 1; dc_wbe = m_cst_strb;
         end else if (!m_cached && pa_cached(m_pa)) begin
-            dct_we = 1; dct_waddr = m_pa[DW+1:5]; dct_wdata = 17'd0;
+            dct_we = 1; dct_waddr = m_pa[DW+1:4]; dct_wdata = 17'd0;
         end
     end
     // (the D-cache's write address and data do not wait for the conditions of the write -- they are
     // the enables' -- but go by the port only: no store completes while a line is coming in)
-    dc_waddr = port == P_DLINE ? {m_fpa[DW+1:5], ms_cnt} : m_cst_idx;
+    dc_waddr = port == P_DLINE ? {m_fpa[DW+1:4], ms_cnt[1:0]} : m_cst_idx;
     dc_wdata = port == P_DLINE ? mem_rdata : m_cst_data;
     // cache instructions: invalidate a line (every op but the fills; a write-through D-cache has nothing to write back)
     // (a cache of more lines than the VR4300's: an index op -- software that
@@ -1677,7 +1681,12 @@ always_comb begin
     // VR4300's index stands for, one a cycle: ck_n)
     if (m_cache_go) begin
         if (m_insn[17:16] == 2'd0) begin ict_we = 1; ict_waddr = m_addr[IW+1:5]; if (!m_insn[20]) ict_waddr = IC_LOG2'({ck_n, m_addr[13:5]}); else if (ck_isw) ict_waddr = IC_LOG2'({ck_n, m_addr[11:5]}); ict_wdata = '0; end
-        else if (m_insn[17:16] == 2'd1) begin dct_we = 1; dct_waddr = m_addr[DW+1:5]; if (!m_insn[20]) dct_waddr = DC_LOG2'({ck_n, m_addr[12:5]}); dct_wdata = 17'd0; end
+        else if (m_insn[17:16] == 2'd1 && m_insn[20:16] != 5'h05 && m_insn[20:16] != 5'h19) begin
+            dct_we = 1; dct_waddr = m_addr[DW+1:4];
+            if (!m_insn[20]) dct_waddr = DC_LOG2'({ck_n, m_addr[12:4]});
+            else if (ck_dalias) dct_waddr = DC_LOG2'({ck_n, m_addr[11:4]});
+            dct_wdata = 17'd0;
+        end
     end
 end
 // the D-cache read: the next M's address, or M's own while it waits
@@ -1687,10 +1696,9 @@ always_comb dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_a
                                : e_ea[DW+1:2];
 
 // =============================================================== the snoop (SNOOP)
-// The D-cache's lines are 32 bytes, the VR4300's 16. Software drops a buffer's lines before another master writes
-// into it, but a buffer that is 16-byte aligned shares a line with the 16 bytes beside it, and a load of those while
-// the transfer is under way reads the line back from memory without the transfer's words: on the console the two are
-// different lines. So the line of every write of another master is looked up, and dropped when the cache holds it.
+// The D-cache's lines are 16 bytes, as on the VR4300. A line can still be
+// refilled while another master writes it, so each such write is looked up
+// and the line is dropped when the cache holds it.
 //   S  sn_t and sn_line sampled; a new write when sn_t has turned over
 //   R  its index read from a copy of the tags (sn_dup: the valid bit and the nine tag bits above the index, written
 //      with the tags: its read port is the snoop's alone, so a lookup never waits); the line M's refill reads, if it
@@ -1703,16 +1711,16 @@ always_comb dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_a
 // accesses take the cycles they took without it, but where a drop or sn_kill changes what a tag says.
 generate if (SNOOP) begin : g_sn
     logic          sn_ts, sn_seen, r_kill, c_v, h_v;
-    logic [20:0]   sn_ls;
+    logic [21:0]   sn_ls;
     logic [DC_LOG2+8:0] c_line;                          // (the index and the nine bits the copy has)
     logic [9:0]    c_q;                                  // the copy's entry at R's index
     logic [9:0]    sn_dup [DC_LINES];
-    logic [DW-4:0] h_idx;
-    (* ramstyle = "MLAB" *) logic [DW-4:0] sn_q [8];      // (not an M10K of its own)
+    logic [DC_LOG2-1:0] h_idx;
+    (* ramstyle = "MLAB" *) logic [DC_LOG2-1:0] sn_q [8];      // (not an M10K of its own)
     logic [2:0]    q_r, q_w;
     logic [3:0]    q_n;
     wire           r_v = sn_ts != sn_seen;
-    wire           r_fill = r_v && ms == MS_REFILL && sn_ls == m_fpa[25:5];
+    wire           r_fill = r_v && ms == MS_REFILL && sn_ls == m_fpa[25:4];
     wire           sn_core = (port == P_DLINE && ms_cnt == 3'd7) || (m_valid && m_c.cache) ||
                              (m_valid && m_st && !m_cached && pa_cached(m_pa));
     wire  [3:0]    q_nn = q_n + {3'd0, h_v} - {3'd0, sn_go};
@@ -1723,7 +1731,7 @@ generate if (SNOOP) begin : g_sn
         sn_ts <= sn_t; sn_ls <= sn_line; sn_seen <= sn_ts;
         c_line <= sn_ls[DC_LOG2+8:0];
         c_q <= sn_dup[sn_ls[DC_LOG2-1:0]];
-        if (dct_we) sn_dup[dct_waddr] <= {dct_wdata[16], dct_wdata[DC_LOG2:DC_LOG2-8]};
+        if (dct_we) sn_dup[dct_waddr] <= {dct_wdata[16], dct_wdata[DC_LOG2-1:DC_LOG2-9]};
         h_idx <= c_line[DC_LOG2-1:0];
         if (h_v) sn_q[q_w] <= h_idx;
         if (rst) begin c_v <= 1'b0; h_v <= 1'b0; r_kill <= 1'b0; q_r <= '0; q_w <= '0; q_n <= '0; sn_hold <= 1'b0; end
@@ -1884,6 +1892,9 @@ always_ff @(posedge clk) begin
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
             if (m_c.md == MD_MTHI || m_c.md == MD_MTLO) begin md_mt <= 1'b1; md_mth <= m_c.md == MD_MTHI; md_busy <= 1'b1; end
             if (m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) hilo_soft <= 1'b0;   // (a multiply or a divide: HI and LO are the core's again)
+            // A write-through cache has no dirty lines for software to write
+            // back. Report an invalid tag to cache-walking writeback code.
+            if (m_c.cache && m_insn[20:16] == 5'h05) c0_taglo <= 0;
             if (m_c.mtc0) begin
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
