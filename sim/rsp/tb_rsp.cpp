@@ -12,6 +12,11 @@
 //   tb_rsp [-v] task.bin ...
 //   RAM_LAT=<cycles> a read's latency (default 1), RAM_STALL=<percent> of cycles the RDRAM takes no request
 //   KINDS=1 where the cycles go, by kind of instruction; PERF=<file> every instruction's cycles (perf_kinds.py)
+//   CYCLES=1 the cycles too, against the console's (rsp_time.c), cycle by cycle: an instruction that leaves E (a slot:
+//            one, or a pair) before the console's rules let it, a cycle E waits with nothing of those rules (nor the
+//            DMA's hold on DMEM) to wait for, a slot paired where the console's is not or the other way round -- counted
+//            by kind, the first few printed; the model then follows the RTL's slot. CYTRACE=<from>[,<to>]: each cycle of
+//            those (counted from the task's start), with the RTL's state
 #include "Vrsp_top.h"
 #include "Vrsp_top___024root.h"
 #include "verilated.h"
@@ -22,6 +27,7 @@
 #include <vector>
 #include <deque>
 #include "rsp.h"
+#include "rsp_time.h"
 
 #define RDRAM_SIZE (8u << 20)
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
@@ -51,6 +57,15 @@ static int kind_of(uint32_t in)
     if ((op >= 1 && op <= 7) || (op == 0 && (fn == 8 || fn == 9))) return K_BRANCH;
     return K_SCALAR;
 }
+// (CYCLES) the differences from the console's timing, over all tasks
+static double cy_late[K_N], cy_early[K_N], cy_pm[2][K_N], cy_dmaw, cy_slots, cy_con, cy_why[K_N][5];
+static int cy_shown;
+static uint32_t mword(const rsp_t &m, uint32_t pc)
+{
+    pc &= 0xFFCu;
+    return (uint32_t)m.imem[pc] << 24 | m.imem[pc + 1] << 16 | m.imem[pc + 2] << 8 | m.imem[pc + 3];
+}
+static bool is_comp(uint32_t in) { return (in >> 26) == 0x12 && (in & (1u << 25)); }
 static void on_rdp(void *, const uint32_t *w, int n) { for (int i = 0; i < 2 * n; i++) model_rdp.push_back(w[i]); }
 
 struct Tb {
@@ -162,11 +177,15 @@ int main(int argc, char **argv)
         struct Vs { long ins; uint32_t pc, in; uint16_t vr[32][8], ah[8], am[8], al[8], vco, vcc; uint8_t vce; };
         std::deque<Vs> vexp;                          // vector-unit instructions the RTL has not finished
         int drain = 0, dmem_late = 0;
+        static const bool cyc_on = getenv("CYCLES") != nullptr;
+        rsp_time_t ct;
+        rsp_time_reset(&ct);
+        bool ct_go = false, ct_ok = false;           // (ct_ok: the slot the model is at has met the rules: it stays let go)
         auto &R = *t->rootp;
         for (long n = 0; n < 2000000000L && !bad; n++) {
             // the cycle's events are sampled before its edge
             t->eval();
-            bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we; int vdone = t->tr_v;
+            bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we, mw = t->tr_mw; int vdone = t->tr_v;
             // the microcode's DMA runs behind it, as the console's: what it reads of SP_DMA_FULL / SP_DMA_BUSY is the RTL's,
             // and DMEM is compared only with no DMA under way or queued (the model's was done at its length's write)
             const bool dma_full = R.rsp_top__DOT__p_full, dma_on = dma_full || R.rsp_top__DOT__ds != 0;
@@ -188,6 +207,21 @@ int main(int argc, char **argv)
                     }
                 }
             }
+            // (CYCLES) the vector unit's state this cycle, for a late cycle's reason: an EX that waits a cycle, a register
+            // write put off (or to be), a load's write, an EX under way
+            const int vwhy = R.rsp_top__DOT__vu__DOT__x_wait ? 0 : (R.rsp_top__DOT__vu__DOT__x_defer || R.rsp_top__DOT__vu__DOT__wp) ? 1
+                           : R.rsp_top__DOT__vu__DOT__lw_v ? 2 : R.rsp_top__DOT__vu__DOT__x_v ? 3 : 4;
+            static long tr_a = getenv("CYTRACE") ? atol(getenv("CYTRACE")) : -1;
+            static long tr_b = getenv("CYTRACE") && strchr(getenv("CYTRACE"), ',') ? atol(strchr(getenv("CYTRACE"), ',') + 1) : getenv("CYTRACE") ? tr_a + 40 : -2;
+            if (cyc_on && tb.cyc - c0 >= tr_a && tb.cyc - c0 <= tr_b) {
+                const uint32_t ci0 = mword(m, m.pc), ci1 = mword(m, m.pc + 4u); const int nc = rsp_time_pair(&ct, ci0, ci1) ? 2 : 1;
+                printf("  [%ld] e%d%d epc %03x | model pc %03x %08x %08x pair %d ready %d | su ev %d hz %d dpc %03x dv %d | dm %d se %d smw %d | vu xv %d xw %d lw %d wp %d xdef %d\n",
+                       tb.cyc - c0, e, e2, epc, m.pc & 0xFFCu, ci0, ci1, nc, rsp_time_ready(&ct, ci0, ci1, nc),
+                       (int)R.rsp_top__DOT__su__DOT__e_valid, (int)R.rsp_top__DOT__su__DOT__hazard, (unsigned)R.rsp_top__DOT__su__DOT__d_pc,
+                       (int)R.rsp_top__DOT__su__DOT__d_valid, (int)R.rsp_top__DOT__dm_valid, (int)R.rsp_top__DOT__su__DOT__stall_e, (int)R.rsp_top__DOT__su__DOT__s_mwait,
+                       (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__lw_v,
+                       (int)R.rsp_top__DOT__vu__DOT__wp, (int)R.rsp_top__DOT__vu__DOT__x_defer);
+            }
             tb.tick();
             if (dmem_late && !bad) {
                 dmem_late = 0;
@@ -197,6 +231,32 @@ int main(int argc, char **argv)
                                tb.dmem_word(a), be32(m.dmem + a));
                         bad = 1; break;
                     }
+            }
+            // (CYCLES) this cycle against the console's rules: the slot the model is at, i0 (and i1 next to it)
+            uint32_t ci0 = 0, ci1 = 0; int cnr = 0;
+            if (cyc_on && !ended && !bad) {
+                ci0 = mword(m, m.pc); ci1 = mword(m, m.pc + 4u);
+                const int nc = rsp_time_pair(&ct, ci0, ci1) ? 2 : 1;
+                auto show = [&](const char *what) {
+                    if (cy_shown++ < 12) printf("  cycles: %s at pc %03x (%08x %08x), cycle %ld\n", what, m.pc & 0xFFCu, ci0, ci1, tb.cyc - c0);
+                };
+                if (e) {
+                    ct_go = true;
+                    cnr = e2 ? 2 : 1;
+                    if (cnr != nc) {
+                        const uint32_t su = is_comp(ci0) ? ci1 : ci0;
+                        cy_pm[cnr == 2][kind_of(su)]++;
+                        show(cnr == 2 ? "a pair the console does not make" : "no pair where the console makes one");
+                    }
+                    if (!ct_ok && !rsp_time_ready(&ct, ci0, ci1, cnr)) { cy_early[kind_of(ci0)]++; show("issued early"); }
+                    ct_ok = false;
+                } else if (ct_go) {
+                    const bool rdy = ct_ok || rsp_time_ready(&ct, ci0, ci1, nc);
+                    if (mw) cy_dmaw++;
+                    else if (rdy) { cy_late[kind_of(ci0)]++; cy_why[kind_of(ci0)][vwhy]++; show("a cycle late"); }
+                    ct_ok = rdy && !ct.bubble;
+                    rsp_time_idle(&ct);
+                }
             }
             if (e) {
                 m.dma_full = dma_full; m.dma_busy = dma_on;
@@ -224,6 +284,7 @@ int main(int argc, char **argv)
                     }
                 }
                 if (e2) pairs++;
+                if (cnr) { rsp_time_issue(&ct, ci0, ci1, cnr, m.delay, m.pc); cy_slots++; }
                 const bool dma_now = dma_on || m.dmas != dmas;          // (or this instruction starts one)
                 const bool deep_now = ins0 / deep != ins / deep;
                 if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
@@ -292,9 +353,10 @@ int main(int argc, char **argv)
             if (rtl_rdp != model_rdp) { printf("  !! the RDP's commands differ (%zu words, the model %zu)\n", rtl_rdp.size(), model_rdp.size()); bad = 1; }
             if (t->unimpl) printf("  (an instruction the vector unit does not implement ran)\n");
         }
-        printf("%s: %s -- %ld instructions (%ld pairs), %ld cycles (%.2f a instruction, %.2f ms at 62.8 MHz), %zu RDP words\n", argv[ai],
-               bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, pairs, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62832.0, rtl_rdp.size());
+        printf("%s: %s -- %ld instructions (%ld pairs), %ld cycles (%.2f a instruction, %.2f ms at 62.5 MHz), %zu RDP words\n", argv[ai],
+               bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, pairs, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62500.0, rtl_rdp.size());
         tot_cyc += cycles; tot_ins += ins;
+        cy_con += (double)ct.now;
         bad_tasks += bad || !ended;
         t->final(); delete t;
     }
@@ -303,6 +365,16 @@ int main(int argc, char **argv)
         for (int k = 0; k < K_N; k++)
             if (kins[k]) printf("  %-22s %9.0f instructions (%4.1f %%), %5.2f cycles each, %4.1f %% of the cycles\n", kname[k], kins[k],
                                 100.0 * kins[k] / tot_ins, kcyc[k] / kins[k], 100.0 * kcyc[k] / tc);
+    }
+    if (getenv("CYCLES")) {
+        double l = 0, ea = 0, p0 = 0, p1 = 0;
+        for (int k = 0; k < K_N; k++) { l += cy_late[k]; ea += cy_early[k]; p0 += cy_pm[0][k]; p1 += cy_pm[1][k]; }
+        printf("cycles against the console's rules: %.0f slots; %.0f cycles late, %.0f slots early, %.0f cycles held by the DMA; "
+               "%.0f pairs missing, %.0f pairs extra\n", cy_slots, l, ea, cy_dmaw, p0, p1);
+        for (int k = 0; k < K_N; k++)
+            if (cy_late[k] || cy_early[k] || cy_pm[0][k] || cy_pm[1][k])
+                printf("  %-22s late %8.0f  early %8.0f  pairs missing %8.0f  extra %8.0f   (late: EX waits %.0f, write put off %.0f, load write %.0f, EX %.0f, other %.0f)\n",
+                       kname[k], cy_late[k], cy_early[k], cy_pm[0][k], cy_pm[1][k], cy_why[k][0], cy_why[k][1], cy_why[k][2], cy_why[k][3], cy_why[k][4]);
     }
     if (tot_ins) printf("total: %.0f instructions, %.0f cycles (%.2f a instruction)%s\n", tot_ins, tot_cyc, tot_cyc / tot_ins, bad_tasks ? " -- MISMATCHES" : "");
     return bad_tasks ? 1 : 0;

@@ -38,7 +38,7 @@ module ooc_rsp (input wire clk, rst, h_we, input wire [3:0] h_addr, input wire [
     output wire r_valid, r_we, output wire [23:2] r_addr, output wire [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
     output wire dpc_start_we, dpc_end_we, dpc_status_we, output wire [31:0] dpc_wdata, input wire [31:0] dpc_start, dpc_end, dpc_current, dpc_status,
     input wire [9:0] dx_addr, output wire [31:0] dx_data, output wire halted, unimpl);
-    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_v(), .tr_vp(), .*);
+    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
 endmodule
 SV
 ;;

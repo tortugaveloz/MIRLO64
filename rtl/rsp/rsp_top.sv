@@ -86,6 +86,7 @@ module rsp_top #(
     output logic        tr_we,
     output logic [4:0]  tr_wr,
     output logic [31:0] tr_val,
+    output logic        tr_mw,              // E waits for DMEM's port, which the DMA has
     output logic [3:0]  tr_v,               // vector-unit instructions whose effects are all in with this cycle
     output logic        tr_vp               // ... the registers' only: the accumulator and flags are a later one's already
 );
@@ -102,25 +103,28 @@ logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
 logic [31:0] c_ins, c_a, c_b, c_res, c_lins;
-logic        c_lv;
-logic [4:0]  c_ra_n, c_rb_n, c_rb;
-logic        dm_valid, dm_we;       logic [11:0] dm_addr; logic [31:0] dm_wdata;   // the DMA's (whole words): see the DMEM
+logic        c_pr;
+logic [4:0]  c_ra_n, c_rb_n, c_rd_n, c_rd;
+logic [31:0] v_res_l;
+logic        dm_valid /* verilator public_flat_rd */, dm_we;       logic [11:0] dm_addr; logic [31:0] dm_wdata;   // the DMA's (whole words): see the DMEM
+logic        tr_e_mem;
 
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_data, .i_data2, .i2_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_b, .c_lv, .c_lins, .c_done, .c_res, .c_ra_n, .c_rb_n, .c_rb,
-    .tr_e, .tr_e_pc, .tr_e2, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
+    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd,
+    .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
-// c_lins, which c_ins only adds a select to)
+// c_lins, which c_ins only adds a select to; c_pr: a pair, its computation on c_ins)
 wire         is_cop0 = c_lins[31:26] == 6'h10;
+wire         l_vu    = c_lins[31:26] == 6'h32 || c_lins[31:26] == 6'h3A || (c_lins[31:26] == 6'h12 && !c_lins[25]);   // the vector unit's
 logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
-rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && !is_cop0), .ins(c_ins), .a(c_a), .b(c_b),
-    .l_valid(c_valid && c_lv), .l_ins(c_lins), .ra_n(c_ra_n), .rb_n(c_rb_n), .rb(c_rb), .done(v_done), .res(v_res),
+rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins(c_ins), .a(c_a), .b(c_b),
+    .l_valid(c_valid && c_pr && l_vu), .l_ins(c_lins), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_be(vm_be), .m_wdata(vm_wdata), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
 
@@ -215,11 +219,16 @@ assign status = {17'd0, st_sig, st_intbrk, st_sstep, 1'b0, p_full, dma_bf, st_br
 assign halted = st_halt;
 assign su_run = !st_halt;
 
+// SP_RD_LEN / SP_WR_LEN as they read: of the running transfer, the rows left less one and the bytes left in the row,
+// less 8 (counted down as the words go); after one, a count of 0 and a length of 0xFF8; 0 after reset
+logic [7:0]  rd_cnt;
+logic [11:3] rd_len;
+logic        dma_any;                 // a transfer has run
 function automatic logic [31:0] cop0_rd(input logic [3:0] r);
     unique case (r)
     4'd0:  return {19'd0, sp_addr, 3'd0};
     4'd1:  return {8'd0, ram_addr, 3'd0};
-    4'd2, 4'd3: return {d_skip, 3'd0, 20'h00FF8};          // as a DMA leaves them: the skip, the count 0, the length run out
+    4'd2, 4'd3: return {d_skip, 3'd0, rd_cnt, rd_len, 3'd0};   // the running transfer's skip, rows and row bytes left
     4'd4:  return status;
     4'd5:  return {31'd0, p_full};
     4'd6:  return {31'd0, dma_bf};          // (games check for busy right after starting)
@@ -232,9 +241,9 @@ function automatic logic [31:0] cop0_rd(input logic [3:0] r);
     endcase
 endfunction
 
-// COP0, from the scalar unit's E stage
-wire         mfc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd0;
-wire         mtc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd4;
+// COP0, from the scalar unit's E stage (a pair's: in the cycle the vector unit takes its computation)
+wire         mfc0 = c_valid && c_done && is_cop0 && c_lins[25:21] == 5'd0;
+wire         mtc0 = c_valid && c_done && is_cop0 && c_lins[25:21] == 5'd4;
 wire  [3:0]  c0r  = c_lins[14:11];
 wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 
@@ -287,6 +296,8 @@ wire  [31:0] d_len   = p_len;
 wire         d_rd0   = p_rd0;
 wire  [9:0]  sp_word = {sp_addr[11:3], d_half};
 assign dma_busy = ds != D_IDLE;
+assign rd_cnt   = ds == D_IDLE ? 8'd0 : g_rows;
+assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : g_words[9:1] - 9'd1 + {8'd0, g_words[0]};
 
 assign r_valid  = (ds == D_IN && !q_done) || (ds == D_OUT && ob_n != 2'd0);
 assign r_we     = ds == D_OUT;
@@ -308,6 +319,7 @@ wire         sp_wr   = wq_v;                               // a word is written 
 // (IMEM is only ever written by a DMA)
 wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
 assign dm_valid = (sp_wr && !d_im) || dm_rd;
+assign tr_mw    = dm_valid && tr_e_mem;
 assign dm_we    = sp_wr;
 assign dm_addr  = ds == D_OUT ? {np, 3'b000} : {sp_word, 2'b00};
 assign dm_wdata = wq_d;
@@ -316,7 +328,7 @@ assign iw_addr  = ds == D_OUT ? {np, iq != 2'd0} : sp_word;
 assign iw_data  = wq_d;
 
 assign c_res  = is_cop0 ? cop0_rd(c0r) : v_res;
-assign c_done = !is_cop0 ? v_done : 1'b1;
+assign c_done = (c_pr || !is_cop0) ? v_done : 1'b1;
 
 // one writer of the SP registers a cycle: the microcode (MTC0) first, the
 // host when it is not there (h_ready)
@@ -336,7 +348,7 @@ always_ff @(posedge clk) begin
         st_halt <= 1'b1; st_broke <= 1'b0; st_sstep <= 1'b0; st_intbrk <= 1'b0; st_sig <= 8'd0;
         p_full <= 1'b0; p_len <= '0; p_rd0 <= 1'b0;
         sem <= 1'b0; irq <= 1'b0; sp_addr <= '0; ram_addr <= '0; sp_addr_w <= '0; ram_addr_w <= '0; d_skip <= '0;
-        ds <= D_IDLE; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
+        ds <= D_IDLE; d_half <= 1'b0; q_half <= 1'b0; q_done <= 1'b0; dma_any <= 1'b0;
     end else begin
         // ---- register writes
         if (w_en) unique case (w_reg)
@@ -363,6 +375,8 @@ always_ff @(posedge clk) begin
         default: ;
         endcase
         if ((mfc0 && c0r == 4'd7) || (h_rd && h_addr == 4'd7)) sem <= 1'b1;   // the semaphore: read (the microcode's or the host's), then taken
+        // single step: halted again as an instruction (a slot) leaves E
+        if (st_sstep && tr_e) st_halt <= 1'b1;
         if (su_brk) begin
             st_halt <= 1'b1; st_broke <= 1'b1;
             if (st_intbrk) irq <= 1'b1;
@@ -399,7 +413,7 @@ always_ff @(posedge clk) begin
             d_half  <= 1'b0; q_half <= 1'b0; q_done <= 1'b0;
             sp_addr <= sp_addr_w; ram_addr <= ram_addr_w;      // from the addresses last written
             np <= sp_addr_w[11:3]; ob_n <= 2'd0; iq <= 2'd0; pf_h <= 1'b0; pf_n <= 2'd0; pf_rd <= 1'b0;
-            ds <= d_rd0 ? D_IN : D_OUT;
+            ds <= d_rd0 ? D_IN : D_OUT; dma_any <= 1'b1;
         end
         D_IN:    if (sp_wr && d_last) ds <= D_END;
         D_OUT: begin

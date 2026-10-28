@@ -59,7 +59,7 @@ def classify(w):
     if op == 0x12:
         if w & (1 << 25):
             fn = w & 63
-            return VEC_NAMES.get(fn, f"COP2 reserved fn {fn:02x}"), fn in VEC_OK, fn in VEC_NAMES, True
+            return VEC_NAMES.get(fn, f"COP2 reserved fn {fn:02x}"), fn in VEC_OK or fn not in VEC_NAMES, fn in VEC_NAMES, True
         rs = (w >> 21) & 31
         name = {0: "MFC2", 2: "CFC2", 4: "MTC2", 6: "CTC2"}.get(rs)
         ok = name is not None and (w & 0x7F) == 0

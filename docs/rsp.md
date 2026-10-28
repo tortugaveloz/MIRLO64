@@ -60,8 +60,8 @@ SP_STATUS reads `{signals 7..0 [14:7], interrupt on break [6], single step [5],
 the console's clear / set pairs: bit 0 clears halt and bit 1 sets it, bit 2
 clears broke, bits 3 / 4 clear / set the SP interrupt, 5 / 6 single step,
 7 / 8 interrupt on break, and from bit 9 on a clear / set pair for each signal.
-Both bits of a pair together leave the flag as it is. The single-step flag is
-stored and read back; it does not change how the unit runs.
+Both bits of a pair together leave the flag as it is. With single step set the
+RSP halts again as an instruction (or a pair) leaves E.
 
 BREAK sets halt and broke, and raises the SP interrupt (`irq`) if interrupt on
 break is set. After reset the RSP is halted.
@@ -72,9 +72,10 @@ A transfer is rows of 8-byte units: the length word gives the row's length
 less one (bits 11:0, taken up to a multiple of 8 bytes), the number of rows
 less one (bits 19:12) and the bytes skipped in RDRAM between rows (bits 31:20,
 of which the multiple of 8 is kept). It starts from the addresses last written
-to SP_MEM_ADDR and SP_DRAM_ADDR; the SP pointer wraps inside its 4 KiB. After a
-transfer SP_RD_LEN and SP_WR_LEN read the skip, a count of 0 and a length of
-`0xFF8`.
+to SP_MEM_ADDR and SP_DRAM_ADDR; the SP pointer wraps inside its 4 KiB.
+SP_RD_LEN and SP_WR_LEN read the running transfer's skip, the rows left less one
+and the bytes left in its row less 8, as they count down; after a transfer a
+count of 0 and a length of `0xFF8`, and 0 after reset.
 
 The engine moves one 32-bit word per request on the RDRAM port (`r_valid`,
 `r_we`, `r_addr`, `r_wdata`, `r_ready`, `r_rvalid`, `r_rdata`):
@@ -188,35 +189,47 @@ The pipeline has five stages:
 | W | register write |
 
 Branches and jumps resolve in E. The delay slot, then in D, always runs; the
-instruction being fetched is squashed when the branch is taken. A load followed
-by an instruction that uses its result stalls one cycle. A load or store
-addresses 1, 2 or 4 bytes at any byte address in one DMEM access.
+instruction being fetched is squashed when the branch is taken -- the cycle of
+nothing after a taken branch's delay slot that the console has too. A load or
+store addresses 1, 2 or 4 bytes at any byte address in one DMEM access.
+
+### Issue
+
+This is the fast RSP: it keeps no rule of the console's timing beyond what
+the results need. A load followed by an instruction that reads its value
+stalls one cycle (and one after CFC2, whose value comes in M too); every other
+result is forwarded. What the vector unit's instructions wait for it keeps
+itself (a register a computation, a load or MTC2 has yet to write). The
+console's own cycle counts, which `sim/rsp/rsp_time.c` models, are longer:
+`tb_rsp CYCLES=1` shows by how much (slots issued early).
 
 A coprocessor instruction goes out on `c_valid` / `c_ins` with the values of
 rs and rt and holds E until `c_done`. `rsp_top` answers MFC0 / MTC0 itself and
 passes the rest to the vector unit.
 
 Two instructions issue together, as on the console, when one is a vector
-computation and the other, next to it in either order, a scalar instruction
-that is neither a coprocessor's nor a branch, jump or BREAK -- and D's
-instruction is not a delay slot. IMEM's second port gives D the word after
-its own; the pair enters E together, the scalar instruction takes E's path
-as any other and the computation goes to the vector unit on `c_*` in the same
-cycle, and the fetch goes on two words further. The two share no register
-and no state, so nothing orders them; either waits for the other (a load's
-result, DMEM, the vector unit's lanes). A pair is a cycle instead of two:
-some 7 % of a graphics task's cycles and 9 % of an audio task's.
+computation and the other, next to it in either order, an instruction of the
+scalar unit: an ALU op, a scalar load or store, a branch, jump or BREAK (only
+second), MFC0 or MTC0, and with eight lanes a vector load (LBV to LUV) or store
+(SBV to SUV, SHV, SFV), MFC2, MTC2, CFC2 or CTC2. The rule is the console's: no
+pair when the first writes a vector or control register the second reads or
+writes (a one-lane op's lane field, or VNOP's vd behind MTC2, is taken for a
+register, as on the console; a reserved function is taken to read vs and vt
+and write vd, which the console's rule does not count, so that a pair's result
+is the two in order). D's instruction must not be a delay slot (a taken branch's target at an
+odd word pairs too, which the console's does not).
+IMEM's second port gives D the word after its own; the pair enters E
+together, the scalar instruction takes E's path as any other and the
+computation goes to the vector unit on `c_*` in the same cycle (`c_pr`; the
+scalar unit's own on `c_lins`, a load's or store's base on `c_a`), and the
+fetch goes on two words further. The vector unit starts both in the same
+cycle or neither. Both of D's words are decoded and the pair's choice picks
+among them last, so the rule is not in front of E's decode.
 
-With eight lanes the scalar instruction of a pair may also be a vector load
-(LBV to LUV) of a register the computation neither reads nor writes (and the
-computation no VNOP or VNULL). The load goes to the vector unit with the
-computation (`c_lv`, `c_lins`, its base on `c_a`); the vector unit starts both
-in the same cycle or neither. The load writes its register the cycle after,
-which is the computation's EX: the computation's write goes a cycle late, from
-`hold` (`wp`), as a computation's behind a load does with four lanes; a
-one-lane write (a reciprocal, VMOV) is not kept and its EX waits instead, and
-no one-lane computation reaches EX under a late write. Another 2.6 % of a
-graphics task.
+A pair's load (or MTC2) writes its register the cycle after, which is the
+computation's EX: the computation's write goes a cycle late, from `hold`
+(`wp`); a one-lane write (a reciprocal, VMOV) is not kept and its EX waits
+instead.
 
 BREAK stops the unit as it leaves E: the instruction after it is not executed,
 and `pc_next` names it. While halt is set nothing enters E.
@@ -241,8 +254,9 @@ It implements:
 
 SHV and SFV (the packed stores of every second and every fourth byte) take one
 cycle; SFV only with an element that is a multiple of 4. Not implemented:
-LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ, VMACQ and
-the reserved COP2 functions. They change nothing and set `unimpl`.
+LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ and VMACQ.
+They change nothing and set `unimpl` (no microcode in the ROMs scanned with
+`rom_ucode_scan.py` has them).
 
 ### Lanes
 
@@ -261,12 +275,12 @@ the four lanes stand four multiply-accumulate units (`lane_mul`): a
 multiplier, the accumulator adder and the clamp, with none of the add, compare
 or clip logic.
 
-The storage is always eight elements wide. The register file is two copies of
-a 32-word LUT RAM (`rsp_lutram`), each a whole register wide and written a byte
-at a time: a load or MTC2 writes its bytes over a register's and reads nothing.
-One copy is read at the instruction's vs, the other at its vt, for the operands
-of a computation -- or at the register MFC2 or MTC2 names, a store's, or the one
-STV has reached. Each memory registers its read address itself, a cycle ahead:
+The storage is always eight elements wide. The register file is three copies
+of a 32-word LUT RAM (`rsp_lutram`), each a whole register wide and written a
+byte at a time: a load or MTC2 writes its bytes over a register's and reads
+nothing. Copy A is read at a computation's vs, C at its vt, and D at the
+register a store or MFC2 reads (or the one STV has reached), so that a pair's
+computation and store each have theirs. Each memory registers its read address itself, a cycle ahead:
 the scalar unit gives the addresses of the instruction that E holds next. The
 accumulator and the flags are registers for all eight elements. The
 element broadcast of vt (each element its own, one element of each pair, one
@@ -308,9 +322,12 @@ that is still busy:
   cycle;
 * a reciprocal waits for the EX of any instruction before it (the divide
   registers are serial);
-* MTC2, CFC2, CTC2, LTV and STV wait until nothing is under way; a store or
-  MFC2 waits for a pending write of the register it reads; a load of another
-  register starts under a running computation.
+* LTV and STV wait until nothing is under way; a store or MFC2 waits for a
+  pending write of the register it reads (an EX that waits a cycle for another
+  register's does not hold it); a load or MTC2 starts under a running
+  computation, and under a clip's EX that waits if not of its register; CFC2
+  and CTC2 start at once (with eight lanes; with four they wait until nothing
+  is under way).
 
 The register file has one write port. When the last pass's write would fall
 in the cycle a load writes its register, the load has the port and vd is
@@ -323,7 +340,11 @@ The input (16 bits, or 32 with the half a preceding VRCPH / VRSQH left) is
 taken in the first SEL, normalised the cycle after, which gives the ROM's
 address, and the ROM's word is shifted back in the last pass's EX. VRCPH and
 VRSQH store the input's high half and return the high half of the previous
-result.
+result. With eight lanes a reciprocal starts under the EX of the one before
+it: the divide registers it reads are forwarded from that EX.
+
+The reserved COP2 functions give the console's result: vd 0, the
+accumulator's low word vs + vt (the lanes' adder, as VADDC), the flags kept.
 
 ### Loads, stores and moves
 
@@ -339,7 +360,11 @@ half of an element unchanged reads the register on copy B for the merge.
 LTV and STV move sixteen bytes between DMEM and the eight registers of vt's
 group, one byte per cycle.
 
-MFC2, MTC2, CFC2 and CTC2 take one cycle.
+MFC2, MTC2, CFC2 and CTC2 take one cycle in E. MFC2's bytes are read in E
+(copy D); MTC2 writes its bytes the cycle after, as a load does. CFC2's value is
+taken the cycle after, in the scalar unit's M (an older EX that waited a cycle
+gives its flags then); CTC2 writes the flag register the cycle after, over such
+an EX's write.
 
 ## Memories
 
@@ -404,9 +429,13 @@ Several details of the RTL exist for this clock:
   select by them in the next, and their select reads only the kept flags, so
   the adder is not in front of the register write.
 
-In steady state the scalar unit completes one instruction per cycle. The
-cycles above that come from the load-use stall, taken branches, vector
-computations that follow each other, an MTC0 that waits for its DMA, and
+In steady state the scalar unit completes one instruction per cycle, two in a
+pair. The cycles above that come from the load-use stall, taken branches
+(forward ones; and backward ones not taken), a register a computation reads
+before the one before has written it, the vector unit's one register write
+port (a computation's write and a load's in the same cycle put the
+computation's off a cycle, `wp`), a clip's or a reciprocal's EX that takes a
+cycle more, LTV and STV (a byte a cycle), an MTC0 that waits for its DMA, and
 `m_stall`.
 
 ## Verification
@@ -416,7 +445,8 @@ Everything specific to the RSP is in `sim/rsp`.
 | File | What it is |
 |---|---|
 | `rsp.c`, `rsp.h` | the reference model in C: the scalar unit, COP0 with the DMA and the SP / DPC registers, the vector unit. `rsp_step` runs one instruction, `rsp_run` runs to BREAK. The RDP is not modelled: complete commands are passed to a callback. It also counts instructions by kind |
-| `rsp_task.c`, `Makefile` | `rsp_task`: runs task dumps on the model and reports instructions per kind, DMA traffic and RDP commands; `-o` writes the RDP command words, the RDRAM and DMEM after the task |
+| `rsp_task.c`, `Makefile` | `rsp_task`: runs task dumps on the model and reports instructions per kind, DMA traffic and RDP commands; `-o` writes the RDP command words, the RDRAM and DMEM after the task; `-t` the cycles the task takes on the console (`rsp_time.c`) and where they go |
+| `rsp_time.c`, `rsp_time.h` | the console's timing beside the model: in which cycle the N64 issues each instruction, by the pipeline's rules as the n64brew wiki gives them (pairs, latencies, the store after a load, the branch's bubble); the DMA on a timeline of the console's rate |
 | `tb_rsp.cpp`, `build_rtl.sh` | the RTL against the model in lockstep, in Verilator |
 | `gen_rand_task.py` | a random program as a task dump |
 | `tb_dma.cpp`, `build_dma.sh` | the host side of the DMA and the semaphore, on `rsp_top` alone |
@@ -425,8 +455,7 @@ Everything specific to the RSP is in `sim/rsp`.
 | `make_div_rom.py` | the reciprocal ROM |
 
 The model is the contract: the RTL must have the same state after each
-instruction. The model covers slightly more than the RTL (it has LHV and SWV,
-and gives the reserved functions a result).
+instruction. The model covers slightly more than the RTL (it has LHV and SWV).
 
 ### Lockstep bench
 
@@ -452,11 +481,18 @@ It compares:
 * at the end, the whole RDRAM, the RDP's command words, and that the RTL has
   halted.
 
+`CYCLES=1` holds the RTL to the console's timing as well (`rsp_time.c`), cycle
+by cycle: a slot (an instruction, or a pair) that leaves E before the console's
+rules let it, a cycle in which E waits with nothing in those rules to wait for
+(a cycle the DMA holds DMEM's port excepted), and a slot paired where the
+console's is not or the other way round are counted by kind of instruction and
+the first few printed; the timing model then follows the RTL.
+
 `RAM_LAT` sets the latency of an RDRAM read and `RAM_STALL` the percentage of
 cycles in which the memory accepts no request. `KINDS=1` prints where the
 cycles go by kind of instruction and `PERF=<file>` writes every instruction's
 cycles. The summary line gives cycles per instruction and a time computed at
-62.832 MHz. The exit status is non-zero on any mismatch.
+62.5 MHz. The exit status is non-zero on any mismatch.
 
 The inputs are of two kinds:
 

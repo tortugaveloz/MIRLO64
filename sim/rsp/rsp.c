@@ -649,6 +649,7 @@ int rsp_step(rsp_t *s)
         }
         r[0] = 0;
         s->pc = next;
+        if (s->status & 0x20u) s->status |= 1u;     /* single step: halted again after the instruction */
     }
     return s->status & 1u;                          /* (the microcode set its own halt bit) */
 }

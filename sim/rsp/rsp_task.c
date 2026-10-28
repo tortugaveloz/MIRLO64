@@ -8,11 +8,13 @@
  *     -o: for each task (n = its place in the list) <prefix>_n.rdp (the RDP's
  *         command words, big-endian), <prefix>_n.ram (the RDRAM after the
  *         task) and <prefix>_n.dmem (the DMEM after it)
- *     -q: only the totals over all the tasks given */
+ *     -q: only the totals over all the tasks given
+ *     -t: also the cycles the task takes on the console (rsp_time.c) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rsp.h"
+#include "rsp_time.h"
 
 #define RDRAM_SIZE (8u << 20)
 
@@ -27,6 +29,28 @@ static void on_rdp(void *user, const uint32_t *w, int n)
     rdp_ops[(w[0] >> 24) & 63u]++;
     if (rdp_out)
         for (int i = 0; i < 2 * n; i++) { uint8_t b[4]; wbe32(b, w[i]); fwrite(b, 1, 4, rdp_out); }
+}
+
+/* (-t) where the console's cycles go, by kind -- as tb_rsp's KINDS counts the RTL's: a slot's cycles to its first instruction */
+enum { K_SCALAR, K_LOAD, K_BRANCH, K_VMUL, K_VOTHER, K_VRCP, K_VLOAD, K_VSTORE, K_C2MOVE, K_COP0, K_DMA, K_N };
+static const char *kname[K_N] = { "scalar", "scalar load", "branch/jump", "vector multiply", "vector other", "vector reciprocal",
+                                  "vector load", "vector store", "MFC2/MTC2/CFC2/CTC2", "MFC0/MTC0", "DMA (MTC0)" };
+static double kcyc[K_N], kins[K_N];
+static int kind_of(uint32_t in)
+{
+    unsigned op = in >> 26, fn = in & 63u;
+    if (op == 0x32) return K_VLOAD;
+    if (op == 0x3A) return K_VSTORE;
+    if (op == 0x12) {
+        if (!(in & (1u << 25))) return K_C2MOVE;
+        if (fn < 0x10) return K_VMUL;
+        if (fn >= 0x30 && fn <= 0x36 && fn != 0x33) return K_VRCP;
+        return K_VOTHER;
+    }
+    if (op == 0x10) return ((in >> 21) & 31u) == 4 && (((in >> 11) & 15u) == 2 || ((in >> 11) & 15u) == 3) ? K_DMA : K_COP0;
+    if (op >= 0x20 && op <= 0x27) return K_LOAD;
+    if ((op >= 1 && op <= 7) || (op == 0 && (fn == 8 || fn == 9))) return K_BRANCH;
+    return K_SCALAR;
 }
 
 static uint64_t tot_prof[RSP_P_N], tot_insts, tot_dma_rd, tot_dma_wr, tot_cmds, tot_unimpl;
@@ -55,11 +79,13 @@ static void report(const char *title, const uint64_t *prof, uint64_t insts, uint
 int main(int argc, char **argv)
 {
     const char *prefix = 0;
-    int quiet = 0, ai = 1;
+    int quiet = 0, timed = 0, ai = 1;
+    uint64_t tot_cyc = 0;
     for (; ai < argc && argv[ai][0] == '-'; ai++) {
         if (!strcmp(argv[ai], "-o") && ai + 1 < argc) prefix = argv[++ai];
         else if (!strcmp(argv[ai], "-q")) quiet = 1;
-        else { fprintf(stderr, "usage: rsp_task [-o out_prefix] [-q] task.bin ...\n"); return 2; }
+        else if (!strcmp(argv[ai], "-t")) timed = 1;
+        else { fprintf(stderr, "usage: rsp_task [-o out_prefix] [-q] [-t] task.bin ...\n"); return 2; }
     }
     static uint8_t ram[RDRAM_SIZE];
     static rsp_t s;
@@ -86,7 +112,29 @@ int main(int argc, char **argv)
         s.pc = 0;
         char path[1024];
         if (prefix) { snprintf(path, sizeof path, "%s_%d.rdp", prefix, tot_tasks); rdp_out = fopen(path, "wb"); }
-        int r = rsp_run(&s, 200000000ull);
+        int r;
+        rsp_time_t tm;
+        if (timed) {
+            rsp_time_reset(&tm);
+            s.status &= ~1u;
+            r = -1;
+            while (s.insts < 200000000ull) {
+                uint64_t c0 = tm.now, i0 = s.insts;
+                uint32_t pc0 = s.pc & 0xFFCu;
+                int end = rsp_time_slot(&tm, &s);
+                for (uint64_t k = 0; k < s.insts - i0; k++) {
+                    uint32_t a = (pc0 + 4u * (uint32_t)k) & 0xFFCu;
+                    uint32_t in = (uint32_t)s.imem[a] << 24 | s.imem[a + 1] << 16 | s.imem[a + 2] << 8 | s.imem[a + 3];
+                    kins[kind_of(in)]++;
+                    if (!k) kcyc[kind_of(in)] += (double)(tm.now - c0);
+                }
+                if (end) { r = 0; break; }
+            }
+            printf("%s: console %llu cycles (%.3f ms at 62.5 MHz), %llu instructions, %llu pairs, %llu stall cycles, %llu bubbles, %llu cycles with a DMA running\n",
+                   argv[ai], (unsigned long long)tm.now, tm.now / 62500.0, (unsigned long long)s.insts, (unsigned long long)tm.pairs,
+                   (unsigned long long)tm.stalls, (unsigned long long)tm.bubbles, (unsigned long long)tm.dma_wait);
+            tot_cyc += tm.now;
+        } else r = rsp_run(&s, 200000000ull);
         if (rdp_out) { fclose(rdp_out); rdp_out = 0; }
         if (prefix) {
             snprintf(path, sizeof path, "%s_%d.ram", prefix, tot_tasks);
@@ -110,6 +158,12 @@ int main(int argc, char **argv)
         char title[64];
         snprintf(title, sizeof title, "TOTAL of %d tasks", tot_tasks);
         report(title, tot_prof, tot_insts, tot_dma_rd, tot_dma_wr, tot_cmds, tot_unimpl);
+        if (timed) {
+            printf("  console: %llu cycles\n", (unsigned long long)tot_cyc);
+            for (int k = 0; k < K_N; k++)
+                if (kins[k]) printf("  %-22s %9.0f instructions, %5.2f cycles each, %4.1f %% of the cycles\n", kname[k], kins[k],
+                                    kcyc[k] / kins[k], 100.0 * kcyc[k] / (double)tot_cyc);
+        }
         /* what a lite RSP may do in several cycles: the loads/stores that are not "plain" */
         printf("  vector loads/stores, plain (element 0, aligned) / all:");
         for (int k = 0; k < 2; k++)
