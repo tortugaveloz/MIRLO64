@@ -1470,14 +1470,17 @@ end
 wire m_stall = (FAST ? m_valid : m_live) && !m_done;
 wire [DC_LOG2-1:0] m_cache_didx = m_insn[20] ? m_addr[DW+1:4] : DC_LOG2'({ck_n, m_addr[12:4]});
 wire m_cache_dtag_ready = dc_tidx_q == m_cache_didx;
+// CACHE already enters MS_CACHE before examining the tag. Capture its physical
+// address on entry so tag comparisons do not include address translation.
+logic [31:0] m_cache_pa;
 wire m_cache_wb_op = m_insn[20:16] == 5'h01 || m_insn[20:16] == 5'h15 ||
                      m_insn[20:16] == 5'h19 || m_insn[20:16] == 5'h0D;
 wire m_cache_wb_req = m_live && ms == MS_CACHE && m_c.cache && m_insn[17:16] == 2'd1 && m_cache_wb_op &&
                       m_cache_dtag_ready && dc_tq[17] &&
                       !(dc_wb_recent && dc_wb_recent_idx == m_cache_didx) &&
                       ((m_insn[20:16] == 5'h01 && dc_tq[18]) ||
-                       ((m_insn[20:16] == 5'h15 || m_insn[20:16] == 5'h19) && dc_tq[18] && dc_tq[16:0] == m_pa[28:12]) ||
-                       (m_insn[20:16] == 5'h0D && (!dc_tq[18] || dc_tq[16:0] != m_pa[28:12])));
+                       ((m_insn[20:16] == 5'h15 || m_insn[20:16] == 5'h19) && dc_tq[18] && dc_tq[16:0] == m_cache_pa[28:12]) ||
+                       (m_insn[20:16] == 5'h0D && (!dc_tq[18] || dc_tq[16:0] != m_cache_pa[28:12])));
 wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_REREAD)) &&
                   (m_insn[17:16] != 2'd1 || (ms == MS_CACHE && m_cache_dtag_ready)) && !m_cache_wb_req && ms != MS_WB_READ && ms != MS_WB_SEND;
 assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? m_dc_store_hit : m_lhit);
@@ -1747,14 +1750,14 @@ always_comb begin
             dct_waddr = m_cache_didx;
             if (m_insn[20:16] == 5'h01) begin
                 if (!m_cache_wb_req) begin dct_we = 1; dct_wdata = '0; end
-            end else if (m_insn[20:16] == 5'h15 && dc_tq[18] && dc_tq[16:0] == m_pa[28:12]) begin
+            end else if (m_insn[20:16] == 5'h15 && dc_tq[18] && dc_tq[16:0] == m_cache_pa[28:12]) begin
                 if (!m_cache_wb_req) begin dct_we = 1; dct_wdata = '0; end
-            end else if (m_insn[20:16] == 5'h11 && dc_tq[18] && dc_tq[16:0] == m_pa[28:12]) begin
+            end else if (m_insn[20:16] == 5'h11 && dc_tq[18] && dc_tq[16:0] == m_cache_pa[28:12]) begin
                 dct_we = 1; dct_wdata = '0;
             end else if (m_insn[20:16] == 5'h09) begin
                 dct_we = 1; dct_wdata = {c0_taglo[7], c0_taglo[6], c0_taglo[24:8]};
             end else if (m_insn[20:16] == 5'h0D && !m_cache_wb_req) begin
-                dct_we = 1; dct_wdata = {1'b1, 1'b1, m_pa[28:12]};
+                dct_we = 1; dct_wdata = {1'b1, 1'b1, m_cache_pa[28:12]};
             end
         end
     end
@@ -2210,7 +2213,9 @@ always_ff @(posedge clk) begin
         // ---------------------------------------------------- M's slow path / refill
         case (ms)
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
-        else if (m_live && m_c.cache && m_insn[17:16] == 2'd1) ms <= MS_CACHE;
+        else if (m_live && m_c.cache && m_insn[17:16] == 2'd1) begin
+            m_cache_pa <= m_pa; ms <= MS_CACHE;
+        end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
                 if (TLB_EN && utlb_hit(utlb_m, m_addr, c0_entryhi[7:0])) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= TLB_RAM && utlb_m.x.c; end
@@ -2230,12 +2235,12 @@ always_ff @(posedge clk) begin
         end
         MS_CACHE: if (!m_live) ms <= MS_IDLE;
         else if (m_cache_wb_req) begin
-            dc_wb_seg <= m_pa[31:29];
+            dc_wb_seg <= m_cache_pa[31:29];
             dc_wb_line <= (({dc_tq[16:0], 12'b0} >> (DC_LOG2 + 4)) << (DC_LOG2 + 4)) | (29'(m_cache_didx) << 4);
             dc_wb_idx <= m_cache_didx; dc_wb_tag <= dc_tq[16:0];
             dc_wb_cache <= 1'b1;
             dc_wb_cache_inv <= m_insn[20:16] == 5'h01 || m_insn[20:16] == 5'h15;
-            dc_wb_cache_create <= m_insn[20:16] == 5'h0D; dc_wb_new_tag <= m_pa[28:12];
+            dc_wb_cache_create <= m_insn[20:16] == 5'h0D; dc_wb_new_tag <= m_cache_pa[28:12];
             ms_cnt <= 0; ms <= MS_WB_READ;
         end
         else if (m_cache_go && (!ck_run || ck_n == ck_last)) ms <= MS_DONE;
