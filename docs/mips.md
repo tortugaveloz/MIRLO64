@@ -183,7 +183,7 @@ instantiates it with the boot ROM and these parameters:
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 10 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
-| `SNOOP` | 1 | The D-cache drops a line the RDP, the RSP's DMA or the bridge writes into ("Caches and memory") |
+| `SNOOP` | 0 | The D-cache does not snoop external-master writes; software uses cache operations around DMA |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -211,34 +211,26 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 ### Caches and memory
 
 Both caches are direct mapped with 32-byte lines and physical tags, and each is 32 KiB (1,024 lines) of block RAM. They
-hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache writes through, so memory is always
-current for the other masters (the RSP's DMA, the RDP, the PI's engine, the scan-out); a line another master has
-overwritten is dropped with a cache instruction, which invalidates its line whatever the operation. Software that
-empties a cache walks the VR4300's 16 KiB and 8 KiB with index operations: an index operation drops every line that
-the VR4300's index stands for, one a cycle, so such code needs no change.
+hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache is write-back and write-allocate:
+a store miss refills the line, a store hit updates it and marks it dirty, and a dirty victim is written to memory before
+the requested line is refilled. `CACHE` index write-back-invalidate (`0x01`) and hit write-back operations (`0x15`,
+`0x19`) send dirty lines through the CPU write FIFO; the invalidate forms then clear the tag. Hit invalidate (`0x11`)
+discards the line. Index load/store tag (`0x05`, `0x09`) transfer the selected tag through COP0 TagLo, and create dirty
+exclusive (`0x0D`) replaces the selected tag after writing back a different dirty victim. Index write-back-invalidate
+covers all cache lines, including the extra capacity beyond the VR4300's 8 KiB D-cache, so software can keep using the
+console's cache-walk code.
 
-The D-cache also drops by itself a line that another master writes into (`SNOOP`). Its lines are twice the VR4300's
-16 bytes, so a buffer that is 16-byte aligned shares a line with the 16 bytes beside it. Software drops a buffer's
-lines before a transfer into it, as on the console; but a load of the bytes beside it while the transfer is under way
-brings the whole line back from memory that does not have the transfer's words yet, and the line would stay. Ocarina
-of Time reads its controllers that way: its buffer is at 0x8012c4f0, and the message queue it reads at 0x8012c4e0
-while the SI's RD64B waits for the PIF refills the line with the request it sent, so every button reads held. The
-same can happen with the PI's engine and the RSP's DMA. `mirlo_mips.sv` takes from the arbiter the line of every
-write it grants the RDP, the RSP's DMA and the bridge (the PI's engine, the SI's DMA), across to the CPU's clock as
-`cpu_port.sv`'s read words go. The core looks each up in a copy of the tags (a valid bit and the nine tag bits above
-the index: one M10K, whose read port is the snoop's alone, so a lookup never waits), queues a hit and drops the line
-through the tags' write port in a cycle where the core writes no tag; a refill that such a write overtakes brings its
-line in invalid. While two or more lines wait, those masters' writes are held at the arbiter. A drop costs the CPU a
-refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
-apart) drops it too, which is rare and costs the same.
+There is no external-master snoop (`SNOOP=0`). Software must use the N64's
+cache operations around DMA to keep CPU and RSP, RDP, PI and SI views coherent. A DMA that writes a dirty cached line
+without first writing it back and invalidating it can be overwritten when the CPU later evicts that line.
 
 Uncached, device and mapped data accesses (but a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
 
-Stores leave the core as they are done (`XWB`) and go through a 16-entry FIFO in `cpu_port.sv`, written on the CPU's
-clock and read on the system clock. The SDRAM's stores go to the arbiter in runs (a write among another port's reads
-costs the bus its turn); a device's store goes to the device port in its turn, and the CPU waits for it. The order is
-kept: a read, or a device access, begins only when every store ahead of it has gone. The two clocks come from one PLL
+Uncached stores and cache-line writebacks leave the core (`XWB`) through a 16-entry FIFO in `cpu_port.sv`, written on
+the CPU's clock and read on the system clock. The SDRAM's stores go to the arbiter in runs (a write among another
+port's reads costs the bus its turn); a device's store goes to the device port in its turn, and the CPU waits for it.
+The order is kept: a read, or a device access, begins only when every store ahead of it has gone. The two clocks come from one PLL
 at a ratio of 3/2, so nothing in the crossing is asynchronous: every path is register to register and timed by the
 analyser at the closest pair of edges (5.3 ns). A value from the CPU's side stays until it is answered; a value from
 the system side lasts one system cycle and carries a bit that tells a second sample from the next word.

@@ -103,9 +103,8 @@ localparam bit CPU_PI2W = CPU_PIW;
 localparam bit CPU_ROM64W = CPU_PI2W;
 // mips_core's SPW: the SP's and the DPC's registers at the N64's addresses (mirlo_mips.sv: the RSP's host port's)
 localparam bit CPU_SPW = CPU_MI;
-// mips_core's SNOOP: the D-cache drops a line the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA)
-// writes into: its 32-byte lines are two of the VR4300's (mirlo_mips.sv takes those writes from the arbiter)
-localparam bit CPU_SNOOP = 1'b1;
+// The write-back D-cache relies on software cache operations around DMA; no external-master snoop.
+localparam bit CPU_SNOOP = 1'b0;
 `ifndef MIRLO_CPU_IC_LOG2
 `define MIRLO_CPU_IC_LOG2 10
 `endif
