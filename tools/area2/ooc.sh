@@ -99,7 +99,7 @@ esac
   echo "set_global_assignment -name NUM_PARALLEL_PROCESSORS 2"
   echo "set_global_assignment -name SEARCH_PATH rtl/soc"
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
-  for m in RSP_LANES=8 CPU_IC_LOG2=10 CPU_DC_LOG2=11; do
+  for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'

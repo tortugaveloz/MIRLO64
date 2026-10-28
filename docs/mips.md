@@ -182,7 +182,7 @@ instantiates it with the boot ROM and these parameters:
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
-| `IC_LOG2`, `DC_LOG2` | 10, 11 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
@@ -210,8 +210,8 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 
 ### Caches and memory
 
-Both caches are direct mapped with physical tags and each is 32 KiB. The I-cache has 1,024 lines of 32 bytes; the
-D-cache has 2,048 lines of 16 bytes. They
+Both caches are direct mapped with physical tags. The I-cache has 512 lines of 32 bytes (16 KiB); the
+D-cache has 512 lines of 16 bytes (8 KiB). They
 hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cache writes through the CPU store FIFO;
 the FIFO orders earlier stores before the device accesses that start DMA. External writes do not snoop the D-cache in
 the default build: software manages buffer ownership and invalidates stale destination lines with cache instructions.
