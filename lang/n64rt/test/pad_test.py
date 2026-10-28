@@ -79,10 +79,9 @@ def spec(keys, joy, s0, s1):
         for key, c in (('up', 'CUP'), ('down', 'CDOWN'), ('left', 'CLEFT'), ('right', 'CRIGHT')):
             if key in held: out.add(c)
     # the stick: "Stick" is interact1[19:15] (0 D-pad, 1 L stick, 2 R stick, 3 none; other: D-pad)
-    def stick(bx, by, dzc):                       # radial dead zone: code 1..15 = 0 %..70 % in 5 % steps, others 10 %; linear past it
+    def stick(bx, by, dzc):                       # actual threshold is 130% of the menu setting
         ax, ay = bx - 128, 128 - by
-        pct = (dzc - 1) * 5 if 1 <= dzc <= 15 else 10
-        t = pct * 128 // 100
+        t = (dzc - 1) * 13 * 128 // 200 if 1 <= dzc <= 15 else 13 * 128 // 100
         r = math.isqrt(ax * ax + ay * ay)
         if r <= t: return 0, 0
         q = lambda a: max(-80, min(80, int(a * (r - t) * 80 / (r * (127 - t)))))   # (C: truncates toward zero)
@@ -167,6 +166,17 @@ def main():
     for k, j in ws:
         for s0, s1 in rng.sample(sets, 6) + [(0, 0)]:
             cases.append((k, j, s0, s1))
+    # Exercise the actual boundary and full travel for both sticks, including
+    # the high settings and the fallback for an invalid code.
+    boundary_cases = []
+    for code, edge in ((1, 0), (2, 8), (6, 41), (10, 74), (11, 83), (15, 116), (0, 16)):
+        for mode in (1, 2):
+            for offset in sorted({edge, min(edge + 2, 127), 127}):
+                joy = 0x80808080 | (offset << (0 if mode == 1 else 16))
+                s0 = (code << 25) if mode == 2 else 0
+                s1 = mode << 15 | ((code << 5) if mode == 1 else 0)
+                boundary_cases.append((3 << 28, joy, s0, s1))
+    cases.extend(boundary_cases)
     inp = ''.join('%x %x %x %x\n' % c for c in cases)
     res = subprocess.run([exe], input=inp, capture_output=True, text=True, check=True).stdout.split('\n')
     bad = 0
@@ -177,6 +187,13 @@ def main():
             bad += 1
             if bad <= 10:
                 print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x: C %s %s %s, spec %04x %d %d' % (*c, b, x, y, *want))
+    for case, line in zip(boundary_cases, res[len(cases) - len(boundary_cases):]):
+        _, x, y = line.split()
+        mode, code = (case[3] >> 15) & 31, ((case[3] >> 5) & 31) if (case[3] >> 15) & 31 == 1 else (case[2] >> 25) & 31
+        edge = {1: 0, 2: 8, 6: 41, 10: 74, 11: 83, 15: 116, 0: 16}[code]
+        offset = ((case[1] >> (0 if mode == 1 else 16)) & 255) - 128
+        assert int(y) == 0 and (int(x) == 0 if offset == edge else int(x) > 0)
+        if offset == 127: assert int(x) == 80
     # the defaults: Z on L, L button on ZL, R on R, face-button C buttons, the D-pad is the stick, Start is Start, no modifier
     d = lambda k: spec(k | 1 << 28, 0x80808080, 0, 0)
     assert d(1 << K['L1']) == (N['Z'], 0, 0)
