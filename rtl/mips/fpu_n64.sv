@@ -182,7 +182,11 @@ logic        fg;                                         // (FAST) to int: the g
 logic        lcar;                                       // cvt.s.l: the lower word's negation carries
 
 // the unpacker: fs in S_IDLE, ft in S_UNPY (W: the integer as it is)
-wire         upy = st == S_UNPY;
+// Select the second operand one cycle ahead, outside the unpacker's path.
+// In FAST mode S_UNPX always immediately precedes S_UNPY.
+logic upy_q;
+always_ff @(posedge clk) upy_q <= !rst && live && st == S_UNPX;
+wire         upy = FAST ? upy_q : st == S_UNPY;
 // (FAST: from the operands as S_IDLE took them -- fs in ax, a double's upper
 // half in zmag; ft in ay, its upper half in ir)
 fbits_t up_raw;

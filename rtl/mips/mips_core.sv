@@ -867,17 +867,18 @@ always_comb begin
     x = X_NONE;
     if (W64) begin
         case (d_c.alu)
-        A_AND:  if ((aw || bw) && !d_c.b_imm) x = X_AND;    // (andi's result is 16 bits)
-        A_OR:   if (aw || bw) x = X_OR;
-        A_XOR:  if (aw || bw) x = X_XOR;
-        A_NOR:  if (aw || bw) x = X_NOR;
-        A_SLT:  if (aw || bw) x = X_SLT;
-        A_SLTU: if (aw || bw) x = X_SLTU;
+        A_AND:  if (!d_c.b_imm) x = X_AND;    // (andi's result is 16 bits)
+        A_OR:   x = X_OR;
+        A_XOR:  x = X_XOR;
+        A_NOR:  x = X_NOR;
+        A_SLT:  x = X_SLT;
+        A_SLTU: x = X_SLTU;
         A_MFHI: if (XMD && hi_wide) x = X_MFHI;
         A_MFLO: if (XMD && lo_wide) x = X_MFLO;
         default: ;
         endcase
-        if (x != X_NONE) begin
+        // Decode the operation in parallel with the register-width bypass.
+        if (x != X_NONE && ((aw || bw) || d_c.alu == A_MFHI || d_c.alu == A_MFLO)) begin
             if (XALU) begin
                 d_cx.x64 = x;
                 if (x == X_SLT || x == X_SLTU) begin d_cx.alu = A_NONE; d_cx.late = 1'b1; end    // (the others: the lower word is E's, as ever)
