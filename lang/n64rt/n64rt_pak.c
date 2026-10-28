@@ -55,6 +55,7 @@
 #include <generated/soc.h>
 #include <layout.h>
 #include "n64rt.h"
+#include "n64rt_persist.h"
 
 #define CPAK_SLOT     LAYOUT_CPAK_SLOT          /* data.json's */
 #define CPAK_SDRAM    ((u32)LAYOUT_CPAK)
@@ -179,6 +180,7 @@ static void cpak_format(void)
         for (u32 pg = 5; pg < 128; pg++) { m[base + 2 * pg + 1] = 3; sum8 = (u8)(sum8 + 3u); }
         m[base + 1] = sum8;
     }
+    n64rt_persist((const void *)(uintptr_t)CPAK_SDRAM, PAK_BYTES);
 }
 
 void n64rt_pak_init(void)
@@ -216,7 +218,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
     if (kind == N64RT_PAK_CONTROLLER) {
         volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + a);
         if (a < PAK_BYTES) {
-            if (write) { cpak_dirty(); for (int i = 0; i < 32; i++) m[i] = b[i]; }
+            if (write) { cpak_dirty(); for (int i = 0; i < 32; i++) m[i] = b[i]; n64rt_persist((const void *)(uintptr_t)(CPAK_SDRAM + a), 32); }
             else for (int i = 0; i < 32; i++) b[i] = m[i];
         }
         else if (!write) memset(b, 0, 32);

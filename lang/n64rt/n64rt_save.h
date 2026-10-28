@@ -9,6 +9,7 @@
  * Array reads address 16-bit units: the ID is an old MX chip's (0x00C2001E), for which libultra's devAddr is page * 64. */
 #ifndef N64RT_SAVE_H
 #define N64RT_SAVE_H
+#include "n64rt_persist.h"
 #define SAVE_MEM    ((u8 *)(uintptr_t)LAYOUT_SAVE)
 #define FL_PAGE     ((u8 *)(uintptr_t)LAYOUT_SAVE_AUX)                       /* the page buffer */
 #define FL_STATW    ((volatile u32 *)(uintptr_t)(LAYOUT_SAVE_AUX + 0x100u))  /* the status words (the hardware reads [0]) */
@@ -20,7 +21,7 @@ enum { D2_NONE, D2_SRAM, D2_FLASH };
 static u32 s_fl_mode = FL_READ;
 static u32 s_fl_off;                    /* the selected sector/page, in bytes; ~0: the whole chip */
 static u32 s_d2 = D2_NONE;              /* what domain 2 is: an SRAM until the game writes the command register */
-static inline void fl_status(u32 a, u32 b) { FL_STATW[0] = a; FL_STATW[1] = b; }
+static inline void fl_status(u32 a, u32 b) { FL_STATW[0] = a; FL_STATW[1] = b; n64rt_persist((const void *)FL_STATW, 8); }
 static void flash_cmd(u32 c)
 {
     d2_use(D2_FLASH);
@@ -34,11 +35,12 @@ static void flash_cmd(u32 c)
     case 0xA5: s_fl_off = (c & 0xFFFFu) * 128u; fl_status(0x11118004u, 0x00C2001Eu); break;
     case 0xD2:                                      /* execute */
         if (s_fl_mode == FL_ERASE) {
-            if (s_fl_off == ~0u) memset(SAVE_MEM, 0xFF, FLASH_BYTES);
-            else if (s_fl_off < FLASH_BYTES) memset(SAVE_MEM + (s_fl_off & ~0x3FFFu), 0xFF, 0x4000u);
+            if (s_fl_off == ~0u) { memset(SAVE_MEM, 0xFF, FLASH_BYTES); n64rt_persist(SAVE_MEM, FLASH_BYTES); }
+            else if (s_fl_off < FLASH_BYTES) { memset(SAVE_MEM + (s_fl_off & ~0x3FFFu), 0xFF, 0x4000u); n64rt_persist(SAVE_MEM + (s_fl_off & ~0x3FFFu), 0x4000u); }
         } else if (s_fl_mode == FL_WRITE && s_fl_off + 128u <= FLASH_BYTES) {
             flush_cpu_dcache_range(FL_PAGE, 128u);  /* (the PI's engine may have written it) */
             memcpy(SAVE_MEM + s_fl_off, FL_PAGE, 128u);
+            n64rt_persist(SAVE_MEM + s_fl_off, 128u);
         }
         break;
     default: N64RT_SAVE_LOG("n64rt: flash command %08lx?\n", (unsigned long)c); break;

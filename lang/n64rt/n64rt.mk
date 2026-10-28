@@ -50,6 +50,8 @@ $(BUILD)/%.o: $(MIRLO)/lang/c/game/%.c
 $(BUILD)/%.o: $(RT)/%.c $(RT)/n64rt.h $(RT)/n64rt_savedb.h $(MIRLO)/lang/mips/include/layout.h
 	@mkdir -p $(BUILD)
 	$(MIPS_GCC) $(CFLAGS) -c $< -o $@
+$(BUILD)/n64rt_io.o: $(RT)/n64rt_save.h $(RT)/n64rt_persist.h $(MIRLO)/lang/mips/include/system.h
+$(BUILD)/n64rt_pak.o: $(RT)/n64rt_persist.h $(MIRLO)/lang/mips/include/system.h
 $(BUILD)/%.o: $(RT)/%.S
 	@mkdir -p $(BUILD)
 	$(MIPS_GCC) $(CFLAGS) -c $< -o $@

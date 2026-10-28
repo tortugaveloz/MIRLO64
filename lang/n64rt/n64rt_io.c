@@ -381,7 +381,7 @@ static void d2_use(int kind)
     if ((int)s_d2 == kind || s_d2 == D2_FLASH) return;
     s_d2 = kind;
     const u32 bytes = kind == D2_FLASH ? FLASH_BYTES : SRAM_BYTES, from = s_save_fsz > s_save_ff ? s_save_fsz : s_save_ff;
-    if (from < bytes) { memset(SAVE_MEM + from, 0xFF, bytes - from); s_save_ff = bytes; }
+    if (from < bytes) { memset(SAVE_MEM + from, 0xFF, bytes - from); n64rt_persist(SAVE_MEM + from, bytes - from); s_save_ff = bytes; }
     save_size(bytes);
     if (kind == D2_FLASH) {
         fl_status(0u, 0u);
@@ -431,12 +431,12 @@ static void d2_copy(u32 dev, u8 *d, u32 size, s32 dir)
     u32 off = ((dev & 0x1FFFFFFFu) - 0x08000000u) & (D2_WINDOW - 1u);
     if (s_d2 == D2_NONE) d2_use(D2_SRAM);
     if (s_d2 == D2_FLASH) {
-        if (dir == OS_WRITE) { if (s_fl_mode == FL_WRITE) copy_words(FL_PAGE, d, size > 128u ? 128u : size); }
+        if (dir == OS_WRITE) { if (s_fl_mode == FL_WRITE) { u32 n = size > 128u ? 128u : size; copy_words(FL_PAGE, d, n); n64rt_persist(FL_PAGE, n); } }
         else if (s_fl_mode == FL_STATUS || s_fl_mode == FL_ERASE) { u32 w[2] = { FL_STATW[0], FL_STATW[1] }; copy_words(d, w, size > 8u ? 8u : size); }
         else if (off * 2u + size <= FLASH_BYTES) { flush_cpu_dcache_range(SAVE_MEM + off * 2u, size); copy_words(d, SAVE_MEM + off * 2u, size); }
     } else {
         if (size > D2_WINDOW - off) size = D2_WINDOW - off;
-        if (dir == OS_WRITE) memcpy(SAVE_MEM + off, d, size);
+        if (dir == OS_WRITE) { memcpy(SAVE_MEM + off, d, size); n64rt_persist(SAVE_MEM + off, size); }
         else { flush_cpu_dcache_range(SAVE_MEM + off, size); memcpy(d, SAVE_MEM + off, size); }
     }
 #ifdef N64RT_DEBUG
@@ -523,7 +523,7 @@ static s32 io_write(u32 dev, u32 data)
     if (is_flash(dev)) {
         const u32 off = ((dev & 0x1FFFFFFFu) - 0x08000000u) & (D2_WINDOW - 1u);
         if (off == 0x10000u) flash_cmd(data);                        /* the FlashRAM's command register */
-        else if (s_d2 != D2_FLASH) { d2_use(D2_SRAM); *(volatile u32 *)(SAVE_MEM + (off & ~3u)) = data; }
+        else if (s_d2 != D2_FLASH) { d2_use(D2_SRAM); *(volatile u32 *)(SAVE_MEM + (off & ~3u)) = data; n64rt_persist(SAVE_MEM + (off & ~3u), 4); }
         return 0;
     }
     n64rt_log("n64rt: PI write %08lx to %08lx -- ignored\n", (unsigned long)data, (unsigned long)dev);
@@ -704,7 +704,7 @@ static void eep_use(u32 bytes)
 {
     if (s_eep_bytes >= bytes) return;
     const u32 from = s_save_fsz > s_save_ff ? s_save_fsz : s_save_ff;
-    if (from < bytes) { memset(SAVE_MEM + from, 0xFF, bytes - from); s_save_ff = bytes; }
+    if (from < bytes) { memset(SAVE_MEM + from, 0xFF, bytes - from); n64rt_persist(SAVE_MEM + from, bytes - from); s_save_ff = bytes; }
     save_size(bytes);
     n64rt_log("n64rt: the cartridge's EEPROM is used (the save slot: %lu bytes, %lu of them from the file)\n", (unsigned long)bytes,
               (unsigned long)(s_save_fsz < bytes ? s_save_fsz : bytes));
@@ -783,6 +783,7 @@ static u32 pif_run(void)
             else if (cmd[0] == 0x05u && tx >= 10 && rx >= 1) {
                 if (cmd[1] >= 64u) eep_use(EEPROM_16K);
                 for (int k = 0; k < 8; k++) e[cmd[1] * 8u + (u32)k] = cmd[2 + k];
+                n64rt_persist((const void *)(uintptr_t)(EEPROM_SDRAM + cmd[1] * 8u), 8);
                 rep[0] = 0x00; ok = 1;
             }
 #ifdef N64RT_DEBUG
@@ -971,8 +972,13 @@ s32 n64rt_osEepromLongRead(OSMesgQueue *mq, u8 a, u8 *b, int n)
 s32 n64rt_osEepromLongWrite(OSMesgQueue *mq, u8 a, u8 *b, int n)
 {
     (void)mq;
-    volatile u8 *e = (volatile u8 *)(uintptr_t)EEPROM_SDRAM;     /* (the D-cache writes through) */
+    volatile u8 *e = (volatile u8 *)(uintptr_t)EEPROM_SDRAM;
     for (int i = 0; i < n; i++) { u32 x = (u32)a * 8u + (u32)i; if (x < EEPROM_BYTES) e[x] = b[i]; }
+    if (n > 0 && (u32)a * 8u < EEPROM_BYTES) {
+        u32 off = (u32)a * 8u, len = (u32)n;
+        if (len > EEPROM_BYTES - off) len = EEPROM_BYTES - off;
+        n64rt_persist((const void *)(uintptr_t)(EEPROM_SDRAM + off), len);
+    }
 #ifdef N64RT_DEBUG
     { static u32 s_n; if (s_n++ < 12u && n >= 4) n64rt_log("n64rt: EEPROM write block %u, %d bytes: %02x %02x %02x %02x ...\n", a, n, b[0], b[1], b[2], b[3]); }
 #endif
@@ -1672,6 +1678,10 @@ static int pi_hw_dma(int rd, u32 dev, u32 pa, u32 size)
     if (rd) src = rdram; else dst = rdram;
     if ((src & 1u) || (!s_pi2_hw && ((src | size) & 3u))) goto soft;
     while (monitor_pilen_read() >> 31) { }                            /* (one at a time: the game's PI queue does that too) */
+    if (cpa >= 0x08000000u && cpa < 0x10000000u) {
+        if (rd) flush_cpu_dcache_range((const void *)(uintptr_t)dst, size);
+        else n64rt_persist((const void *)(uintptr_t)src, size);
+    }
     if (!rd) {
         if (n64rt_gfx_quiesce && fb_overlaps(pa, size)) n64rt_gfx_quiesce();
         flush_cpu_dcache_range(K0P(pa), size);
