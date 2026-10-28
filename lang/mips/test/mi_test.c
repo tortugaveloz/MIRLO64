@@ -229,6 +229,7 @@ int main(void)
     volatile uint32_t *src = (volatile uint32_t *)0x40200000u;
     volatile uint32_t *dst = (volatile uint32_t *)0xA0010000u;
     for (uint32_t i = 0; i < 1024u; i++) { src[i] = 0xC0DE0000u + i * 0x10001u; dst[i] = 0; }
+    writeback_cpu_dcache_range((const void *)src, 1024u * sizeof(*src));
     dst[-1] = 0; dst[1024] = 0;
     monitor_miclr_write(0x3Eu);
     monitor_pidst_write(0x10000u >> 2);

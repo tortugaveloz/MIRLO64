@@ -30,8 +30,8 @@ u32 n64rt_osVirtualToPhysical(u32 va)
 /* Keep the N64 cache calls' writeback and invalidate behavior: DMA sources
  * must reach SDRAM, while DMA destinations discard stale cached lines. The
  * I-cache: a fragment the game has just loaded (and relocated) must be fetched anew. */
-void n64rt_osInvalDCache(void *p, s32 n) { flush_cpu_dcache_range(p, (unsigned long)n); }
-void n64rt_osWritebackDCache(void *p, s32 n) { writeback_cpu_dcache_range(p, (unsigned long)n); }
+void n64rt_osInvalDCache(void *p, s32 n) { if (n > 0) flush_cpu_dcache_range(p, (unsigned long)n); }
+void n64rt_osWritebackDCache(void *p, s32 n) { if (n > 0) writeback_cpu_dcache_range(p, (unsigned long)n); }
 void n64rt_osWritebackDCacheAll(void) { writeback_cpu_dcache_all(); }
 void n64rt_osInvalICache(void *p, s32 n) { (void)p; (void)n; n64rt_late_poll(); flush_cpu_icache(); }
 

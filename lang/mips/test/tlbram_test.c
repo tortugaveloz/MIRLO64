@@ -62,6 +62,7 @@ int main(void)
 
     /* data, through a valid entry: no exception */
     K0(0x10000)[0] = 0x600DCAFEu; K0(0x10000)[1] = 0x11112222u;
+    flush_cpu_dcache();
     tlb_set(0x04000000u, 0, 0x00010000u, V | G);
     volatile uint32_t *m = (volatile uint32_t *)0x04000000u;
     check("load", m[0], 0x600DCAFEu);
@@ -75,15 +76,18 @@ int main(void)
     check("mod code", CODE, 1);
     check("mod badv", s_badv, 0x04000008u);
     check("mod: data's", s_fetch, 0);
+    flush_cpu_dcache();
     check("mod store", K0(0x10000)[2], 0xABCD0123u);
     m[3] = 0x55AA55AAu;
     check("dirty: no trap", s_traps, 1);
     check("dirty store", K1(0x10000)[3], 0x55AA55AAu);
     ((volatile uint8_t *)m)[13] = 0x77;
+    flush_cpu_dcache();
     check("byte store", K0(0x10000)[3], 0x557755AAu);
 
     /* no entry: TLBL on a load, TLBS on a store; filled, and the access again */
     K0(0x12000)[0] = 0xFEEDF00Du;
+    flush_cpu_dcache();
     s_fill_pa = 0x00012000u;
     check("miss load", *(volatile uint32_t *)0x04005000u, 0xFEEDF00Du);
     check("miss trap", s_traps, 2);
@@ -97,6 +101,7 @@ int main(void)
 
     /* another page of the same index (2 MiB on): its own entry, then the first's again */
     K0(0x14000)[0] = 0x0BADBEEFu;
+    flush_cpu_dcache();
     s_fill_pa = 0x00014000u;
     check("same index, other page", *(volatile uint32_t *)0x04200000u, 0x0BADBEEFu);
     check("other page trap", s_traps, 4);

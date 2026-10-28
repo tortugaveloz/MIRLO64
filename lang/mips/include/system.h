@@ -16,9 +16,8 @@ extern "C" {
 #define MIRLO_CACHEABLE_BASE  0x40000000u
 #define MIRLO_CACHEABLE_BYTES 0x04000000u
 
-/* CACHE op on the line at `a` (op[17:16]: 0 I, 1 D; op[20:18]: 0 an index
- * op, 4 a hit op -- the core drops the line either way, never looking at its
- * tag: a hit op is the one line `a` itself can be in) */
+/* CACHE op on the line at `a`: index operations select by index; hit
+ * operations also compare the physical tag. */
 #define MIPS_CACHE_OP(op, a) __asm__ volatile(".set push\n.set mips3\ncache %0, 0(%1)\n.set pop" :: "i"(op), "r"(a) : "memory")
 
 static inline void flush_cpu_icache(void)
@@ -35,9 +34,13 @@ static inline void flush_cpu_dcache(void)
 static inline void flush_cpu_dcache_range(const void *p, unsigned long n)
 {
     if (!n) return;
-    unsigned long a = (unsigned long)p & ~(MIPS_LINE_BYTES - 1u), e = (unsigned long)p + n;
+    unsigned long start = (unsigned long)p, a = start & ~(MIPS_LINE_BYTES - 1u), e = start + n;
     if (n >= MIPS_DCACHE_BYTES) { flush_cpu_dcache(); return; }
-    for (; a < e; a += MIPS_LINE_BYTES) MIPS_CACHE_OP(0x11, a);     /* Hit_Invalidate_D */
+    for (; a < e; a += MIPS_LINE_BYTES) {
+        /* Preserve dirty bytes outside the requested range on partial lines. */
+        if (a < start || e - a < MIPS_LINE_BYTES) MIPS_CACHE_OP(0x15, a);
+        else MIPS_CACHE_OP(0x11, a);
+    }
 }
 static inline void writeback_cpu_dcache_all(void)
 {

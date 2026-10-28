@@ -41,9 +41,8 @@ int main(void)
     check("unaligned w", u.w, 0xCAFEF00Du); check("unaligned h", u.h, 0x1234);
     uint8_t *p = (uint8_t *)&u;
     check("unaligned bytes", (uint32_t)p[1] << 24 | p[2] << 16 | p[3] << 8 | (uint32_t)p[4], 0xCAFEF00Du);
-    /* the D-cache: a cached write then a read through the device window of the same SDRAM? (no alias:
-     * check write-through by invalidating and reading back) */
-    w[2] = 0x5A5A1234u; flush_cpu_dcache(); check("write-through", w[2], 0x5A5A1234u);
+    /* Write back the cached data and read it again after invalidation. */
+    w[2] = 0x5A5A1234u; flush_cpu_dcache(); check("writeback", w[2], 0x5A5A1234u);
     /* the FPU (single) and doubles in software are not linked here: floats only */
     float f = fa * fb + 0.5f;
     check("fmul/fadd", *(uint32_t *)&f, 0xC0380000u);          /* -2.875 */
@@ -66,9 +65,9 @@ int main(void)
     /* the N64 window: KSEG0 (cached), KSEG1 and SDRAM 0x4380_0000 are one RDRAM */
     volatile uint32_t *k0 = (volatile uint32_t *)0x80000100u, *k1 = (volatile uint32_t *)0xA0000100u,
                       *sd = (volatile uint32_t *)0x43800100u;
-    k0[0] = 0x01234567u; check("kseg1 sees kseg0", k1[0], 0x01234567u); check("sdram sees kseg0", sd[0], 0x01234567u);
+    k0[0] = 0x01234567u; flush_cpu_dcache(); check("kseg1 sees kseg0", k1[0], 0x01234567u); check("sdram sees kseg0", sd[0], 0x01234567u);
     sd[1] = 0x89ABCDEFu; check("kseg0 sees sdram", k0[1], 0x89ABCDEFu);
-    k1[2] = 0x55AA55AAu; flush_cpu_dcache(); check("kseg0 sees kseg1", k0[2], 0x55AA55AAu);
+    flush_cpu_dcache(); k1[2] = 0x55AA55AAu; check("kseg0 sees kseg1", k0[2], 0x55AA55AAu);
     ((volatile uint8_t *)k0)[13] = 0x77; check("kseg0 sb", sd[3] >> 16 & 0xFF, 0x77);
     volatile uint32_t *top = (volatile uint32_t *)0x807FFFFCu;
     *top = 0xFACEB00Cu; check("window top", *(volatile uint32_t *)0x43FFFFFCu, 0xFACEB00Cu);

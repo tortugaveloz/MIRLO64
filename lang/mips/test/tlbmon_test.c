@@ -227,8 +227,12 @@ int main(void)
     check("odd page", m[0x400], 0x12000000u);
     check("odd page 2", m[0x400 + 7], 0x12000007u);
     m[1] = 0xCAFE0001u; m[0x401] = 0xCAFE0002u;
-    check("store through the even page", K1(0x10000)[1], 0xCAFE0001u);
-    check("store through the odd page", K1(0x12000)[1], 0xCAFE0002u);
+    check("store through the even page", K0(0x10000)[1], 0xCAFE0001u);
+    check("store through the odd page", K0(0x12000)[1], 0xCAFE0002u);
+    writeback_cpu_dcache_range((const void *)K0(0x10000), 8);
+    writeback_cpu_dcache_range((const void *)K0(0x12000), 8);
+    check("even page written back", K1(0x10000)[1], 0xCAFE0001u);
+    check("odd page written back", K1(0x12000)[1], 0xCAFE0002u);
     check("fills: one a page", m_fills, 2);
 
     /* tlbr: the registers back, as written (the odd EntryLo has the G bit of both) */
@@ -390,7 +394,7 @@ int main(void)
         typedef uint32_t (*fn_t)(void);
         uint32_t f0 = m_fills;
         check("game's view: a load and a call at 0x4000_0000", ((fn_t)0x04500000u)(), 0x12340001u);
-        check("game's view: the store went to the RDRAM", K1(0x64000)[5], 0x12340000u);
+        check("game's view: the store went to the RDRAM", K0(0x64000)[5], 0x12340000u);
         check("game's view: the fills (code, data, code at 0x4000_0000)", m_fills, f0 + 3);
         check("game's view: Status bit 4 back", (MFC0(12) >> 4) & 1u, 1);
         MTC0(0, 12); TLBR();

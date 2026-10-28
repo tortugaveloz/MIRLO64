@@ -224,8 +224,8 @@ There is no external-master snoop (`SNOOP=0`). Software must use the N64's
 cache operations around DMA to keep CPU and RSP, RDP, PI and SI views coherent. A DMA that writes a dirty cached line
 without first writing it back and invalidating it can be overwritten when the CPU later evicts that line.
 
-Uncached, device and mapped data accesses (but a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
-to cached memory are two words in two cycles.
+Uncached and device accesses take the slow path. Mapped accesses to cacheable pages use the D-cache after translation;
+64-bit accesses transfer two words.
 
 Uncached stores and cache-line writebacks leave the core (`XWB`) through a 16-entry FIFO in `cpu_port.sv`, written on
 the CPU's clock and read on the system clock. The SDRAM's stores go to the arbiter in runs (a write among another
@@ -283,10 +283,9 @@ time, where a wired entry of the console's TLB never misses -- so a miss must no
 runs from a mapped page, an exception handler about to read BadVAddr among it. The monitor writes BadVAddr and EntryHi
 itself for the exception it delivers to the game.
 
-A mapped load of a word or less from a page whose entry has the cacheable bit goes through the D-cache: the table's
-read gives the physical page, the cache is read at the physical index, and the word is taken a cycle later -- a miss
-reads the line and translates again. Other mapped accesses take the slow path, uncached; a mapped store writes through
-and drops the line it may shadow, as an uncached store does. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
+A mapped load or store from a page whose entry has the cacheable bit goes through the D-cache: the table's
+read gives the physical page, the cache is read at the physical index, and a dirty victim is written back before a miss
+refills the line. Other mapped accesses take the slow path, uncached. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
 **fetch page registers** hold the last two cacheable pages a table read found (virtual page, ASID or global, physical
 page). The I-cache is indexed by the virtual address and tagged by the physical one, `{valid, pa[28:12]}`; F delivers
 the cache's word and D checks it a cycle later against the register's page. A fetch from a page neither register holds

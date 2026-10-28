@@ -44,6 +44,7 @@ int main(void)
     check("no trap", s_traps, 0);
     st(0x80000204u, 0x12345678u);
     check("rdram store", rd[1], 0x12345678u);
+    flush_cpu_dcache();
     check("kseg1 load", ld(0xA0000204u, 0), 0x12345678u);
     check("no trap 2", s_traps, 0);
     (void)ld(0xA4040010u, 0);                                       /* SP_STATUS */

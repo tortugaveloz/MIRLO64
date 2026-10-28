@@ -1202,9 +1202,8 @@ logic        sb_valid; logic [DW-1:0] sb_waddr; logic [31:0] sb_data; logic [3:0
 wire         sb_hit = sb_valid && (FAST ? m_k_sbeq : sb_waddr == m_addr[DW+1:2]);
 wire m_fwide = FAST ? m_k_fwide : (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D);
 wire m_cached = FAST ? m_k_cach : cacheable(m_addr, game_view);
-// the line dropped last cycle (an uncached store into cached memory, sdc1,
-// a cache instruction): an access right behind it read the tag in the edge
-// that cleared it
+// A tag invalidated or replaced last cycle: a following access could have
+// read the old tag on the edge that changed it.
 logic        tk_valid;
 wire m_dc_hit = dc_tq[17] && dc_tq[15:0] == m_pa[28:13] &&   // (physically tagged; index bits pa == va)
                 !tk_valid;
@@ -1313,7 +1312,7 @@ wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
 
 // stores: data and strobes of the word at m_addr (lane 3 - k is N64 byte k);
 // sd's by which of its two words is being written
-wire m_second = m_cw ? m_ph : ms == MS_SLOW_B;
+wire m_second = (m_cw || m_cs) ? m_ph : ms == MS_SLOW_B;
 logic [31:0] m_st_data; logic [3:0] m_st_strb;
 always_comb begin
     logic [1:0] k;
@@ -1393,12 +1392,11 @@ endfunction
 // (FAST, an unmapped address: m_f_devk, registered; a mapped one: the table's page. Not pa_dev(m_pa) for both, which would
 // put m_addr -> kphys -> pa_dev into this mux's cone -- and into m_needs_slow, m_done and every stall of the pipeline -- for a case the mux never takes)
 wire m_devst = m_st && !m_wide && (FAST ? (m_kseg ? m_f_devk : pa_dev(tphys({m_tlbq[31:12], m_addr[11:0]}))) : pa_dev(m_pa));
-// the slow path: uncached / device / mapped loads, device stores, 64-bit
-// accesses to anything not cached; other stores (sc too) go through the write
-// buffer whatever the region
-// (PGD) a mapped load through the D-cache
-wire m_cl = PGD && FAST && TLB_RAM && m_mapped && m_ld && !m_wide && m_tlbc;
-wire m_needs_slow = m_mem && !m_sc_fail && ((m_wide && !m_cached) || (m_ld && !m_cached && !m_cl) || m_devst);
+// A mapped cacheable access uses the physical index after translation.
+// Uncached and device accesses use the slow path or the write buffer.
+wire m_cl = PGD && FAST && TLB_RAM && m_mapped && m_ld && m_tlbc;
+wire m_cs = PGD && FAST && TLB_RAM && m_mapped && m_st && m_tlbc && !m_devst;
+wire m_needs_slow = m_mem && !m_sc_fail && ((m_wide && !m_cached && !m_cs && !m_cl) || (m_ld && !m_cached && !m_cl) || m_devst);
 // a store's word this cycle: of a 64-bit one to cached memory, the half by m_ph
 wire [31:0] m_cst_data = m_st_data;
 wire [3:0]  m_cst_strb = m_st_strb;
@@ -1406,7 +1404,7 @@ wire [DW-1:0] m_cst_idx = m_cw ? {m_addr[DW+1:3], m_ph} : m_addr[DW+1:2];
 wire [31:0] m_cst_pa   = m_cw ? {m_pa[31:3], m_ph, 2'b00} : {m_pa[31:2], 2'b00};
 wire m_is_md = FAST ? m_k_md : m_c.md != MD_NONE;
 // an uncached store into the write buffer as it completes (a 64-bit one's first word: m_w0)
-wire m_wb_push = (m_commit_e || m_w0) && m_st && !m_cached && (!m_wide || m_cw) && !m_sc_fail && !m_devst;
+wire m_wb_push = (m_commit_e || m_w0) && m_st && !m_cached && !m_cs && (!m_wide || m_cw) && !m_sc_fail && !m_devst;
 // XWB: and the slow path's stores, a word as soon as it is taken (a device's
 // then waits for st_done: sw_wait)
 logic sw_wait;
@@ -1445,12 +1443,14 @@ always_comb begin
         // translated completed during the search, on the page before's)
         if (m_mapped && (ms == MS_IDLE || ms == MS_WALK)) m_done = 1'b0;
         if (m_cl) m_done = ms == MS_DONE;                           // (the word in ms_data: a tag never reaches the advance)
+        if (m_cs) m_done = ms == MS_DONE;
         if (m_c.tlbp || m_c.tlbr) m_done = ms == MS_DONE;           // a search / a read of the TLB RAM
         if ((FAST ? m_k_fpu : (m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS)) && fpu_busy) m_done = 1'b0;
         if (m_is_md && md_busy) m_done = 1'b0;
         // (FAST: a line on its way in for a load that is on its way back)
         if (FAST && (ms == MS_REFILL || ms == MS_REREAD)) m_done = 1'b0;
         if (ms == MS_WB_READ || ms == MS_WB_SEND) m_done = 1'b0;
+        if (m_cache_wb_req) m_done = 1'b0;
         if (m_c.cache && m_insn[17:16] == 2'd1 && !m_cache_dtag_ready) m_done = 1'b0;
         if (m_shwait) m_done = 1'b0;                                // (a d-shift: still shifting)
         if (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last) m_done = 1'b0;
@@ -1468,7 +1468,7 @@ wire m_cache_wb_req = m_live && m_c.cache && m_insn[17:16] == 2'd1 && m_cache_wb
                        ((m_insn[20:16] == 5'h15 || m_insn[20:16] == 5'h19) && dc_tq[17] && dc_tq[15:0] == m_pa[28:13]) ||
                        (m_insn[20:16] == 5'h0D && (!dc_tq[17] || dc_tq[15:0] != m_pa[28:13])));
 wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_REREAD)) &&
-                  (m_insn[17:16] != 2'd1 || m_cache_dtag_ready) && ms != MS_WB_READ && ms != MS_WB_SEND;
+                  (m_insn[17:16] != 2'd1 || m_cache_dtag_ready) && !m_cache_wb_req && ms != MS_WB_READ && ms != MS_WB_SEND;
 assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? m_dc_store_hit : m_lhit);
 assign m_lmiss = FAST && m_live && m_ld && m_cached && !m_dly && ms == MS_IDLE && !m_ph && !m_dc_hit;
 wire m_commit_e = m_live && m_done;         // (M always advances when done)
@@ -1699,9 +1699,9 @@ always_comb begin
     dc_we = 0; dc_waddr = 0; dc_wdata = 0; dc_wbe = 0;
     // (SNOOP: a line another master wrote is dropped in a cycle the core writes no tag, sn_go says)
     dct_we = sn_go; dct_waddr = sn_idx; dct_wdata = 0;
-    // Prepare unchanged tag bits without passing through M's completion logic;
-    // a store hit only changes the dirty bit in this tag RAM.
-    if (m_st && m_cached && !sn_go) dct_wdata = {1'b1, 1'b1, dc_tq[15:0]};
+    // A store hit keeps its own physical tag and marks it dirty. dc_tq may
+    // already be the next access's tag while the registered store hit retires.
+    if (m_st && m_cached && !sn_go) dct_wdata = {1'b1, 1'b1, m_pa[28:13]};
     if (port == P_ILINE && mem_rvalid) begin
         ic_we = 1; ic_waddr = {PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5], f_cnt}; ic_wdata = mem_rdata;
         if (f_cnt == 3'd7) begin ict_we = 1; ict_waddr = PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5]; ict_wdata = {1'b1, f_fill_pa[28:TLO]}; end
@@ -1714,12 +1714,17 @@ always_comb begin
     if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
         if (m_cached && m_dc_store_hit) begin
             dc_we = 1; dc_wbe = m_cst_strb;
-            if (!dc_tq[16]) begin dct_we = 1; dct_waddr = m_addr[DW+1:5]; end
+            dct_we = 1; dct_waddr = m_addr[DW+1:5];
         end
+    end
+    if (m_live && m_cs && ms == MS_XLAT && m_xc1 && m_dc_hit && !m_sc_fail) begin
+        dc_we = 1; dc_wbe = m_cst_strb;
+        dct_we = 1; dct_waddr = m_pa[DW+1:5]; dct_wdata = {1'b1, 1'b1, m_pa[28:13]};
     end
     // (the D-cache's write address and data do not wait for the conditions of the write -- they are
     // the enables' -- but go by the port only: no store completes while a line is coming in)
-    dc_waddr = port == P_DLINE ? {m_fpa[DW+1:5], ms_cnt} : m_cst_idx;
+    dc_waddr = port == P_DLINE ? {m_fpa[DW+1:5], ms_cnt} :
+               m_cs ? {m_pa[DW+1:3], m_wide ? m_ph : m_pa[2]} : m_cst_idx;
     dc_wdata = port == P_DLINE ? mem_rdata : m_cst_data;
     // cache instructions: dirty D-cache lines are written back before an operation that requires it
     // (a cache of more lines than the VR4300's: an index op -- software that
@@ -1755,7 +1760,7 @@ always_comb begin
     if (ms == MS_WB_READ) dc_raddr = {dc_wb_idx, 3'd0};
     else if (ms == MS_WB_SEND) dc_raddr = {dc_wb_idx, m_dwb_push ? ms_cnt + 3'd1 : ms_cnt};
     else if (m_live && m_c.cache && m_insn[17:16] == 2'd1) dc_raddr = {m_cache_didx, 3'b000};
-    else dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_addr[DW+1:12], m_addr[11:3], (m_cw && (m_w0 || m_ph)) ? 1'b1 : m_addr[2]}
+    else dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_addr[DW+1:12], m_addr[11:3], ((m_cw && (m_w0 || m_ph)) || (m_cl && m_wide && m_ph)) ? 1'b1 : m_addr[2]}
                             : e_ea[DW+1:2];
 end
 always_comb dc_taddr = (m_live && m_c.cache && m_insn[17:16] == 2'd1) ? m_cache_didx : dc_raddr[DW-1:3];
@@ -1948,7 +1953,9 @@ always_ff @(posedge clk) begin
         sb_valid <= 0;
         dc_wb_recent <= ms == MS_WB_SEND && m_dwb_push && ms_cnt == 3'd7 && dc_wb_cache;
         if (ms == MS_WB_SEND && m_dwb_push && ms_cnt == 3'd7 && dc_wb_cache) dc_wb_recent_idx <= dc_wb_idx;
-        tk_valid <= dct_we;
+        // Marking an already valid store hit dirty does not invalidate it.
+        tk_valid <= dct_we && !(((m_commit_e || m_w0) && m_st && m_cached && m_dc_store_hit && !m_sc_fail) ||
+                                (m_live && m_cs && ms == MS_XLAT && m_xc1 && m_dc_hit && !m_sc_fail));
         if (m_commit_e) begin
             if (m_st && !m_sc_fail && m_cached && m_dc_store_hit) begin
                 sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
@@ -2022,7 +2029,7 @@ always_ff @(posedge clk) begin
         wb_cnt <= wb_cnt + 4'(m_wb_fifo_push) - 4'(port == P_WB && mem_ack);
         // a cached 64-bit access's first word is done: a load's is kept
         if (flush || m_adv) m_ph <= 1'b0;
-        else if (m_w0 && !m_lmiss) m_ph <= 1'b1;
+        else if ((m_w0 && !m_lmiss) || (m_live && (m_cs || m_cl) && m_wide && !m_ph && ms == MS_XLAT && m_xc1 && m_dc_hit)) m_ph <= 1'b1;
         if (m_w0 && m_ld) begin if (BIG) ms_data[63:32] <= dc_qm; else ms_data[31:0] <= dc_qm; end
         // a d-shift: the value in, then a byte or a bit a cycle
         if (flush || m_adv) begin sh_on <= 1'b0; end
@@ -2237,7 +2244,8 @@ always_ff @(posedge clk) begin
         case (ms)
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_cache_wb_req) begin
-            dc_wb_seg <= m_pa[31:29]; dc_wb_line <= {dc_tq[15:2], m_cache_didx, 5'b0};
+            dc_wb_seg <= m_pa[31:29];
+            dc_wb_line <= (({dc_tq[15:0], 13'b0} >> (DC_LOG2 + 5)) << (DC_LOG2 + 5)) | (29'(m_cache_didx) << 5);
             dc_wb_idx <= m_cache_didx; dc_wb_tag <= dc_tq[15:0];
             dc_wb_cache <= 1'b1;
             dc_wb_cache_inv <= m_insn[20:16] == 5'h01 || m_insn[20:16] == 5'h15;
@@ -2246,14 +2254,14 @@ always_ff @(posedge clk) begin
         end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr, c0_entryhi[7:0])) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr, c0_entryhi[7:0])) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= TLB_RAM && utlb_m.x.c; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if ((m_ld || m_st) && m_cached && !m_dc_hit && !m_ph) begin
                 ms_cnt <= 0;
                 if (dc_tq[17] && dc_tq[16]) begin
                     dc_wb_seg <= m_pa[31:29];
-                    dc_wb_line <= {dc_tq[15:2], m_addr[DW+1:5], 5'b0};
+                    dc_wb_line <= (({dc_tq[15:0], 13'b0} >> (DC_LOG2 + 5)) << (DC_LOG2 + 5)) | (29'(m_addr[DW+1:5]) << 5);
                     dc_wb_idx <= m_addr[DW+1:5];
                     dc_wb_tag <= dc_tq[15:0]; dc_wb_cache <= 1'b0; dc_wb_cache_inv <= 1'b0; dc_wb_cache_create <= 1'b0;
                     ms <= MS_WB_READ;
@@ -2278,12 +2286,33 @@ always_ff @(posedge clk) begin
             if (!m_live || m_commit_e) ms <= MS_IDLE;
             else if (m_needs_slow) ms <= MS_SLOW_A;
             // (PGD) a mapped load through the D-cache: the word at the physical index in the second cycle, or its line read in
-            else if (m_cl) begin
+            else if (m_cl || m_cs) begin
                 m_xc1 <= 1'b1;
                 if (m_xc1) begin
                     m_xc1 <= 1'b0;
-                    if (m_dc_hit) begin ms_data[31:0] <= dc_qm; ms <= MS_DONE; end
-                    else begin ms <= MS_REFILL; ms_cnt <= 0; end
+                    if (m_dc_hit) begin
+                        if (m_cl) begin
+                            if (!m_wide) begin ms_data[31:0] <= dc_qm; ms <= MS_DONE; end
+                            else if (!m_ph) begin
+                                if (BIG) ms_data[63:32] <= dc_qm; else ms_data[31:0] <= dc_qm;
+                            end else begin
+                                if (BIG) ms_data[31:0] <= dc_qm; else ms_data[63:32] <= dc_qm;
+                                ms <= MS_DONE;
+                            end
+                        end
+                        else if (!m_wide || m_ph) ms <= MS_DONE;
+                        else m_xc1 <= 1'b1;
+                    end
+                    else begin
+                        ms_cnt <= 0;
+                        if (dc_tq[17] && dc_tq[16]) begin
+                            dc_wb_seg <= m_pa[31:29];
+                            dc_wb_line <= (({dc_tq[15:0], 13'b0} >> (DC_LOG2 + 5)) << (DC_LOG2 + 5)) | (29'(m_pa[DW+1:5]) << 5);
+                            dc_wb_idx <= m_pa[DW+1:5];
+                            dc_wb_tag <= dc_tq[15:0]; dc_wb_cache <= 1'b0; dc_wb_cache_inv <= 1'b0; dc_wb_cache_create <= 1'b0;
+                            ms <= MS_WB_READ;
+                        end else ms <= MS_REFILL;
+                    end
                 end
             end
         end
@@ -2293,7 +2322,7 @@ always_ff @(posedge clk) begin
         end
         MS_WB_READ: begin ms_cnt <= 0; ms <= MS_WB_SEND; end
         MS_WB_SEND: if (m_dwb_push) begin
-            if (ms_cnt == 3'd7) begin ms <= MS_REFILL; ms_cnt <= 0; end
+            if (ms_cnt == 3'd7) begin ms <= dc_wb_cache ? MS_IDLE : MS_REFILL; ms_cnt <= 0; end
             else ms_cnt <= ms_cnt + 3'd1;
         end
         MS_REREAD: ms <= MS_IDLE;

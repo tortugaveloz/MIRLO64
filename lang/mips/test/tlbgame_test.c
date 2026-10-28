@@ -353,7 +353,7 @@ int main(void)
     check("store refill: handler ran", LOG(0), 2);
     check("store refill: Cause.ExcCode TLBS", (LOG(4) >> 2) & 31u, 3);
     check("store refill: BadVAddr", LOG(8), 0x04010004u);
-    check("store refill: the store landed", *K1(0x102004), 0xC0FFEE01u);
+    check("store refill: the store landed", *K0(0x102004), 0xC0FFEE01u);
 
     /* 3. a refill in a branch's delay slot: EPC the branch, BD, and the branch is taken after the slot ran again */
     pte(0x04020000u, LO(0x104000, LV | LD | LG), LO(0x105000, LV | LD | LG));
@@ -420,7 +420,7 @@ int main(void)
     check("clean page: Mod, the general vector", LOG(0x40), g0 + 1);
     check("clean page: Cause.ExcCode Mod", (LOG(0x44) >> 2) & 31u, 1);
     check("clean page: BadVAddr", LOG(0x48), 0x04400008u);
-    check("clean page: the store landed after the repair", *K1(0x10C008), 0xFEED0002u);
+    check("clean page: the store landed after the repair", *K0(0x10C008), 0xFEED0002u);
     *(volatile uint32_t *)0x0440000Cu = 0xFEED0003u;
     check("clean page: no second Mod", LOG(0x40), g0 + 1);
 
@@ -496,8 +496,28 @@ int main(void)
     check("0xE000_0000: BadVAddr", LOG(8), 0xE0000000u);
     check("0xE000_0000: Context BadVPN2", LOG(16), 0x80000000u | ((0xE0000000u >> 13) << 4));
     *(volatile uint8_t *)0xE0000005u = 0x5A;
-    check("0xE000_0005: a byte stored", (*K1(0x11F004) >> 16) & 0xFFu, 0x5A);
+    check("0xE000_0005: a byte stored", (*K0(0x11F004) >> 16) & 0xFFu, 0x5A);
     check("0xE000_0005: and loaded", *(volatile uint8_t *)0xE0000005u, 0x5A);
+    *(volatile uint64_t *)0xE0000008u = UINT64_C(0x123456789abcdef0);
+    check("mapped sd high", *K0(0x11F008), 0x12345678u);
+    check("mapped sd low", *K0(0x11F00C), 0x9abcdef0u);
+    uint64_t mapped64 = *(volatile uint64_t *)0xE0000008u;
+    check("mapped ld high", (uint32_t)(mapped64 >> 32), 0x12345678u);
+    check("mapped ld low", (uint32_t)mapped64, 0x9abcdef0u);
+    uint32_t ld_hi, ld_lo;
+    __asm__ volatile(".set push\n.set mips3\n.set noreorder\n"
+                     "lui $8, 0x1234\nori $8, $8, 0x5678\ndsll32 $8, $8, 0\n"
+                     "lui $9, 0x9abc\nori $9, $9, 0xdef0\ndsll32 $9, $9, 0\ndsrl32 $9, $9, 0\n"
+                     "or $8, $8, $9\nsd $8, 0(%2)\nld $8, 0(%2)\n"
+                     "dsrl32 %0, $8, 0\nsll %1, $8, 0\n.set pop"
+                     : "=&r"(ld_hi), "=&r"(ld_lo) : "r"(0xE0000010u) : "$8", "$9", "memory");
+    check("mapped SD high", *K0(0x11F010), 0x12345678u);
+    check("mapped SD low", *K0(0x11F014), 0x9abcdef0u);
+    check("mapped LD high", ld_hi, 0x12345678u);
+    check("mapped LD low", ld_lo, 0x9abcdef0u);
+    *K0(0x127000) = 0x13579bdfu; /* same cache index as physical 0x11f000 */
+    check("mapped load after conflict", *(volatile uint32_t *)0xE0000000u, 0x1F000000u);
+    check("mapped miss writes dirty victim", *K1(0x127000), 0x13579bdfu);
     check("0xE000_0000: no other refill", LOG(0), pre + 1);
     {
         uint32_t r = ((uint32_t (*)(void))0xE0001000u)();
