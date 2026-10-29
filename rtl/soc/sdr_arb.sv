@@ -16,7 +16,8 @@
 
 module sdr_arb #(
     parameter int N    = 5,
-    parameter int MAXB = 16
+    parameter int MAXB = 16,
+    parameter bit APF_PREEMPT = 0
 ) (
     input  wire              clk,
     input  wire              rst,
@@ -26,6 +27,7 @@ module sdr_arb #(
     input  wire  [N-1:0][31:0] p_wdata,
     input  wire  [N-1:0][3:0]  p_be,
     input  wire  [N-1:0]     p_urgent,
+    input  wire              apf_force,
     output logic [N-1:0]     p_ready,
     output logic [N-1:0]     p_rvalid,
     output logic [31:0]      p_rdata,
@@ -50,39 +52,40 @@ logic          held;            // cur keeps it (it asked last cycle and got ser
 logic [4:0]    beats;
 
 // the first port of v round the ring from cur + 1 (cur itself the last): {found, the port; cur when none}.
-// Two priority chains by the port's place against cur -- those above it, then those up to it -- and no modulo.
+// Prefer requesters after cur; if none are there, wrap to the start of the ring.
 function automatic logic [IW:0] ring(input logic [N-1:0] v, input logic [IW-1:0] c);
-    logic f; logic [IW-1:0] p;
+    logic f; logic [IW-1:0] p; logic [N-1:0] after_cur, candidates;
     f = 0; p = c;
-    for (int i = N - 1; i >= 0; i--) if (v[i] && IW'(i) <= c) begin p = IW'(i); f = 1; end
-    for (int i = N - 1; i >= 0; i--) if (v[i] && IW'(i) > c)  begin p = IW'(i); f = 1; end
+    for (int i = 0; i < N; i++) after_cur[i] = v[i] && IW'(i) > c;
+    candidates = (|after_cur) ? after_cur : v;
+    for (int i = N - 1; i >= 0; i--) if (candidates[i]) begin p = IW'(i); f = 1; end
     return {f, p};
 endfunction
 // the next port: cur if held and still asking, else urgent first, else round-robin after cur
-logic [IW-1:0] pick, pu, pn;
-logic          any, fu;
+logic [IW-1:0] pick;
+logic          any;
+logic [N-1:0]  urgent_valid;
 logic [IW:0]   rn;
 always_comb begin
     any = |p_valid;
-    {fu, pu} = ring(p_valid & p_urgent, cur);
-    rn = ring(p_valid, cur);
-    pn = rn[IW-1:0];
-    if (held && p_valid[cur] && beats < 5'(MAXB)) pick = cur;
-    else pick = fu ? pu : pn;
+    urgent_valid = p_valid & p_urgent;
+    rn = ring((|urgent_valid) ? urgent_valid : p_valid, cur);
+    if (APF_PREEMPT && p_valid[4] && apf_force) pick = IW'(4);
+    else if (held && p_valid[cur] && beats < 5'(MAXB)) pick = cur;
+    else pick = rn[IW-1:0];
 end
 // the next other port: as above, cur left out
-logic [IW-1:0] ou, on;
-logic          fou, fon;
-logic [N-1:0]  p_oth;
+logic [IW:0]   ro;
+logic [N-1:0]  p_oth, urgent_oth;
 always_comb begin
     p_oth = p_valid;
     p_oth[cur] = 0;
-    {fou, ou} = ring(p_oth & p_urgent, cur);
-    {fon, on} = ring(p_oth, cur);
+    urgent_oth = p_oth & p_urgent;
+    ro = ring((|urgent_oth) ? urgent_oth : p_oth, cur);
 end
 always_ff @(posedge clk) begin
-    la_valid <= !rst && fon;
-    la_addr  <= p_addr[fou ? ou : on];
+    la_valid <= !rst && ro[IW];
+    la_addr  <= p_addr[ro[IW-1:0]];
 end
 
 // the register stage

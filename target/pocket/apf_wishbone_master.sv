@@ -26,6 +26,9 @@ module apf_wishbone_master (
     output reg [3:0] sel = 0,
     // Strobe. Need to receive ack or err after this
     output reg stb = 0,
+    // Work already visible in the system clock domain, including queued work
+    // before cyc rises. Used to keep another DMA from taking the shared port.
+    output wire pending,
     // Write enable
     output reg we = 0,
 
@@ -175,6 +178,7 @@ module apf_wishbone_master (
   // localparam WRITE_WAIT_ACK = 2;
 
   reg [2:0] state = 3'h0;
+  assign pending = state != NONE || !mem_write_empty || !addr_read_empty;
 
   // Registered (68.5 MHz): combinationally, the FIFO output + offset add
   // reached the SoC's Wishbone arbiter/decoder too late. The FIFO data is

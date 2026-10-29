@@ -72,6 +72,7 @@ module rcp_mi #(
     input  wire  [23:0] io_adr,
     input  wire         io_ps,                  // ROM64: the read is the PSRAM's
     input  wire  [31:0] io_wd,
+    input  wire  [3:0]  io_be,
     output wire         io_ack
 );
 
@@ -143,23 +144,27 @@ generate if (PI) begin : g_pi
     logic [1:0]  tail;                          // PI2: the last word's bytes (0: all four)
     logic        half, half_n;                  // PI2: the source starts at a word's second half (the next copy's)
     logic [15:0] carry;                         // PI2: the source word's second half, the next word's first
-    logic        ps;                            // ROM64: the source is the PSRAM's
+    logic        ps, dst_ps;                    // ROM/save source and destination in PSRAM
     wire         last = cnt == 21'd1;
     assign pi_busy = st != P_IDLE && st != P_IO;
     assign pi_cnt  = cnt;
     assign d_req   = st != P_IDLE;
     assign d_we    = st == P_WR || (PI2 && st == P_IO && io_we);
     assign d_adr   = st == P_WR ? dst : (PI2 && st == P_IO) ? io_adr : src;
-    assign d_ps    = PI2 && ROM64 && (st == P_IO ? io_ps : st != P_WR && ps);
-    assign d_sel   = PI2 && st == P_WR && last && tail != 2'd0 ? {1'b1, tail[1], tail == 2'd3, 1'b0} : 4'hF;
+    assign d_ps    = PI2 && ROM64 && (st == P_IO ? io_ps : st == P_WR ? dst_ps : ps);
+    assign d_sel   = PI2 && st == P_IO ? io_be : PI2 && st == P_WR && last && tail != 2'd0 ? {1'b1, tail[1], tail == 2'd3, 1'b0} : 4'hF;
     assign d_wdata = (PI2 && st == P_IO) ? io_wd : (PI2 && half) ? {carry, d_rdata[31:16]} : d_rdata;
     assign io_ack  = PI2 && st == P_IO && d_ack;
     always_ff @(posedge clk) begin
         pi_done <= 1'b0;
-        if (rst) begin st <= P_IDLE; abort <= 1'b0; half_n <= 1'b0; end
+        if (rst) begin st <= P_IDLE; abort <= 1'b0; half_n <= 1'b0; dst_ps <= 1'b0; end
         else begin
             if (pi_wr && w_wd[0] && pi_busy) abort <= 1'b1;
-            if (dst_we) dst <= {PI2 && csr_wd[23:21] != 3'd0 ? csr_wd[23:21] : 3'b111, csr_wd[20:0]};
+            if (dst_we) begin
+                dst_ps <= PI2 && ROM64 && csr_wd[25];
+                dst <= PI2 && ROM64 && csr_wd[25] ? csr_wd[23:0] :
+                       {PI2 && csr_wd[23:21] != 3'd0 ? csr_wd[23:21] : 3'b111, csr_wd[20:0]};
+            end
             if (src_we) begin src <= csr_wd[23:0]; half_n <= PI2 && csr_wd[24]; ps <= PI2 && ROM64 && csr_wd[25]; end
             case (st)
             P_IDLE: begin

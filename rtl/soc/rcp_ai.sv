@@ -62,6 +62,7 @@ logic [19:0] dram;                      // DRAM_ADDR [22:3]
 logic [13:0] dac_r;
 logic        ena;
 logic [20:0] c_adr, n_adr;              // the buffers' words (the RDRAM's word, 21 bits)
+logic        dma_carry;                  // carry into the next buffer after an 8 KiB boundary
 logic [15:0] c_left, n_len;             // words left of the current, the queued one's length
 logic        c_v, n_v;                  // the current is loaded (it may be read to its end and not yet gone from), a second is queued
 logic [19:0] step;
@@ -106,14 +107,15 @@ logic signed [15:0] mb;
 logic signed [32:0] mp;
 wire         below = !(fill[9] | fill[8]);  // fewer than 256 words in the FIFO
 assign req = st == S_FRD;
-assign adr = {3'b111, c_adr};
+wire [20:0] fetch_adr = {c_adr[20:11] + {9'd0, dma_carry}, c_adr[10:0]};
+assign adr = {3'b111, fetch_adr};
 wire  [15:0] mix = (rch ? pr : pl) + mp[30:15];
 
 always_ff @(posedge clk) begin
     irq <= 1'b0; chg <= 1'b0; fw <= 1'b0;
     if (rst) begin
         st <= S_OFF; sil <= 1'b0; have_rst <= 1'b0; priming <= 1'b0; have <= 1'b0; dry <= '0; c_v <= 1'b0; n_v <= 1'b0; c_left <= '0; ena <= 1'b0; wt <= '0;
-        step <= 20'd43690; dac_r <= '0;
+        step <= 20'd43690; dac_r <= '0; dma_carry <= 1'b0;
     end else begin
         if (step_we) step <= step_wd;
         if (wt != 3'd0) wt <= wt - 3'd1;
@@ -129,7 +131,8 @@ always_ff @(posedge clk) begin
                  else begin rch <= 1'b0; st <= S_MUL0; end
         S_FCHK:  st <= c_avail ? S_FRD : S_DRY;
         S_FRD:   if (ack) begin
-            c_adr <= c_adr + 21'd1; c_left <= c_left - 16'd1;
+            c_adr <= fetch_adr + 21'd1; c_left <= c_left - 16'd1;
+            dma_carry <= c_end && fetch_adr[10:0] == 11'h7ff;
             if (c_end) begin                // NEXTDMA: the queued buffer goes on (and the interrupt), or the AI is idle
                 if (n_v) begin c_adr <= n_adr; c_left <= n_len; n_v <= 1'b0; irq <= 1'b1; end
                 else c_v <= 1'b0;
