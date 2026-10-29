@@ -18,7 +18,7 @@ module apf_test;
     apf_wishbone_master dut(.clk_74a(clk_74a), .clk_sys(clk_sys), .bridge_addr(ba),
         .bridge_wr_data(32'd0), .bridge_rd_data(read_data), .bridge_wr(1'b0), .bridge_rd(rd),
         .bridge_endian_little(1'b1), .ram_data_address(32'd0), .current_address(),
-        .addr(addr), .bte(), .cti(), .cyc(cyc), .data_write(), .sel(), .stb(stb), .we(we),
+        .addr(addr), .bte(), .cti(), .cyc(cyc), .pending(), .data_write(), .sel(), .stb(stb), .we(we),
         .ack(ack), .data_read(32'hb0000000 | {30'd0, addr[1:0]}), .err(1'b0));
     always @(posedge clk_sys) begin
         ack <= 0;

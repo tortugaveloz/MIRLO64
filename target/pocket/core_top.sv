@@ -891,6 +891,7 @@ module core_top (
   wire [1:0] apf_master_bte;
   wire [2:0] apf_master_cti;
   wire apf_master_cyc;
+  wire apf_master_pending;
   wire [31:0] apf_master_data_read;
   wire [31:0] apf_master_data_write;
   wire apf_master_err;
@@ -998,6 +999,7 @@ module core_top (
       .wishbone_master_bte(apf_master_bte),
       .wishbone_master_cti(apf_master_cti),
       .wishbone_master_cyc(apf_master_cyc),
+      .wishbone_master_pending(apf_master_pending),
       .wishbone_master_dat_r(apf_master_data_read),
       .wishbone_master_dat_w(apf_master_data_write),
       .wishbone_master_err(apf_master_err),
@@ -1084,6 +1086,7 @@ module core_top (
       .bte(apf_master_bte),
       .cti(apf_master_cti),
       .cyc(apf_master_cyc),
+      .pending(apf_master_pending),
       .data_write(apf_master_data_write),
       .data_read(apf_master_data_read),
       .sel(apf_master_sel),

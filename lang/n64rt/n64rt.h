@@ -11,7 +11,7 @@
  *
  *   - threads, message queues, events, timers: a priority-preemptive
  *     scheduler of the game's threads (n64rt_os.c, n64rt_exc.S)
- *   - VI, PI (the ROM is in SDRAM), SI (the Pocket's controllers), AI and
+ *   - VI, PI (the ROM is split between SDRAM and PSRAM), SI (the Pocket's controllers), AI and
  *     the RSP's tasks (n64rt_io.c)
  *
  * A game supplies an n64rt_game_t: where its ROM is, how it boots, and the
@@ -208,7 +208,7 @@ int n64rt_hook_break(u32 epc);
 
 typedef struct {
     const char  *name;
-    u32          rom_sdram;         /* where the ROM sits in SDRAM (its words as the N64's) */
+    u32          rom_sdram;         /* ROM's bridge address (legacy field name; the ROM can span both memories) */
     u32          rom_size;
     u32          boot_rom, boot_vram, boot_len;   /* what IPL3 copies (ROM offset -> RDRAM) */
     u32          entry;             /* where IPL3 jumps */
@@ -245,13 +245,13 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
  * bridge's place of it, 0x4000_0000 + its offset in the file) and rom_size,
  * then n64rt_run(g); the port fills in the rest of g.
  * The ROM is read where the Pocket's load leaves it and never moved
- * (lang/mips/include/layout.h): its first 32 MiB in the PSRAM, the rest in
- * the SDRAM (MONITOR.ID bit 7), both through the core's window at
+ * (lang/mips/include/layout.h): its first 30 MiB in PSRAM, the rest in
+ * SDRAM, both through the core's window at
  * N64RT_ROM_WIN, whose byte o is the file's at 1 MiB + o -- the cartridge's
  * reads of the ROM, decoded as the game's are. n64rt_rom_word() and
  * n64rt_rom_copy() read it. */
 #define N64RT_ROM_FILE_OFF 0x00100000u
-#define N64RT_ROM_PSRAM_MAX 0x02000000u    /* the ROM's part in the PSRAM */
+#define N64RT_ROM_SPLIT 0x01E00000u    /* ROM offsets below this are in PSRAM */
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
 void n64rt_rom_copy(void *dst, u32 off, u32 size);

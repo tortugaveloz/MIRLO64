@@ -38,10 +38,10 @@ controllers, the clocks and the fit, and the simulations. The RSP and the RDP ha
 | Monitor RAM | `rtl/soc/mon_ram.sv` | 2 KiB of block RAM for the monitor's entry |
 | Cartridge slot | `rtl/soc/gb_cart.sv` | A Game Boy cartridge in the Pocket's slot, a byte at a time |
 | SDRAM | `rtl/soc/sdr_arb.sv`, `sdr_ctrl.sv`, `sdr_phy.sv` | The arbiter, the controller and the PHY of the Pocket's 64 MiB SDRAM |
-| PSRAM | `rtl/soc/psram.sv` | The controller and the PHY of the Pocket's two PSRAMs, 32 MiB: a ROM's first 32 MiB |
+| PSRAM | `rtl/soc/psram.sv` | The controller and the PHY of the Pocket's two PSRAMs, 32 MiB: saves, Controller Paks and a ROM's first 30 MiB |
 
-The SDRAM holds the runtime, the saves, the N64's RDRAM and what a ROM has past its first 32 MiB; the Pocket's two PSRAMs
-hold the ROM's first 32 MiB -- all of most games' -- so the game's reads of its ROM take nothing of the SDRAM's time (see
+The SDRAM holds the runtime, coverage, the N64's RDRAM and what a ROM has past its first 30 MiB; the Pocket's two PSRAMs
+hold saves and the ROM's first 30 MiB, so reads from that part take nothing of the SDRAM's time (see
 [The ROM](#the-rom)). The arbiter has six ports: the scan-out, the CPU, the RDP, the RSP's DMA, the Pocket's bridge (which
 the PI's engine, the AI's reader and the SI's DMA share while the bridge is idle) and the RDP's command fetch. The CPU
 and the RSP's DMA go first: each waits for the words it asks for (a cache line, a transfer the microcode waits on),
@@ -100,11 +100,8 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | SDRAM (CPU address) | Size | Contents |
 |---|---|---|
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
-| `0x4010_0000` | 32 MiB | A ROM's bytes from 32 MiB on (its first 32 MiB are in the PSRAM: [The ROM](#the-rom)). It is never moved |
+| `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
-| `0x4330_8000` | 32 KiB | The Controller Pak |
-| `0x4332_0000` | 128 KiB | The cartridge's save: EEPROM, SRAM or FlashRAM |
-| `0x4334_0000` | | A FlashRAM's page buffer (128 bytes) and, at `+0x100`, its status words |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -117,16 +114,13 @@ game's RDRAM.
 
 A ROM of up to 64 MiB is loaded as it is, at the bridge's 1 MiB (data slot 0), and read where the load leaves it:
 
-* **its first 32 MiB in the PSRAMs** (`rtl/soc/psram.sv`): the two chips side by side as one 32-bit memory, a word at a
-  time and asynchronously -- the chips' power-up mode, their clock never started. The bridge writes each word at its
-  address mod 32 MiB, so the PSRAM's word for the ROM's offset *o* is ((1 MiB + *o*) / 4) mod 8 M: the word the SDRAM's
-  would be, its 23 low bits. No adder is needed anywhere.
-* **the rest in the SDRAM**, from `0x4010_0000`: the bridge writes 33 MiB to 65 MiB at the address less 32 MiB.
+* **its first 30 MiB in the PSRAMs** (`rtl/soc/psram.sv`): the two chips work as one 32-bit memory. ROM offset *o* is stored at PSRAM byte address `0x0020_0000 + o`.
+* **the rest in the SDRAM**, from `0x4010_0000`: the bridge writes 31 MiB to 65 MiB at the address less 30 MiB.
 * **the bridge's port** (`port_apf`, `n64_ports.sv`) is the PSRAM's only master: an access with `x_sel` goes to the
   PSRAM instead of the arbiter, and its read data lands where the SDRAM's does -- so the PI's engine, the game CPU's reads
   and the Pocket's writes all take the same path.
 * **the PI's engine** (`rcp_mi.sv`): `PISRC` bit 25 says the copy's source is the PSRAM's. The runtime sets it for a copy
-  in the first 32 MiB; one from 32 MiB on is the SDRAM's, and one across 32 MiB is the runtime's own (`n64rt_rom_copy`).
+  in the first 30 MiB; one from 30 MiB on is the SDRAM's, and one across the boundary is the runtime's own (`n64rt_rom_copy`). `PIDST` bit 25 selects a PSRAM destination for save writes.
 * **the game CPU's reads** (`0x1000_0000` - `0x13FF_FFFF`) and **the runtime's window** (`0x3000_0000`) are decoded the
   same way, by the ROM's offset.
 * `MONITOR.ID` bit 7 says the core places the ROM so, bit 8 that the chips are set up (their configuration registers
@@ -142,19 +136,19 @@ The bridge's address 0 is the SDRAM's first byte. `mirlo_mips.sv` decodes a brid
 | Bridge address | A write goes to |
 |---|---|
 | below `0x0010_0000` (1 MiB) | the SDRAM, at that address |
-| `0x0010_0000` - `0x020F_FFFF` (1 - 33 MiB) | the PSRAM, at the address mod 32 MiB: a ROM's first 32 MiB |
-| `0x0210_0000` - `0x040F_FFFF` (33 - 65 MiB) | the SDRAM, at the address less 32 MiB: the rest of a ROM. (The megabytes `0x38` - `0x3F` reach the SDRAM at their own address too, first -- the RDRAM's place, which the runtime clears when it starts a game.) |
+| `0x0010_0000` - `0x01EF_FFFF` (1 - 31 MiB) | PSRAM, at the bridge address plus 1 MiB: a ROM's first 30 MiB |
+| `0x01F0_0000` - `0x040F_FFFF` (31 - 65 MiB) | SDRAM, at the bridge address less 30 MiB: the rest of a ROM |
+| `0x0730_0000` - `0x073F_FFFF` | PSRAM save and accessory storage, with the cartridge save remapped to byte offset `0x0014_0000` |
 | anything else | the SDRAM, at the address's low 26 bits |
 
-A read is always the SDRAM's, at the address's low 26 bits. A slot that lies in the saves' part of the SDRAM therefore
-has, as its address, its SDRAM offset with bit 26 set (`LAYOUT_SLOT_BRIDGE`), where no ROM's bytes arrive. The slots
+A read of a save or Controller Pak slot is routed to PSRAM. The slots
 (`pkg/pocket/Cores/tortuga.Mirlo64/data.json`):
 
 | Slot | Name | File | Bridge address | CPU address |
 |---|---|---|---|---|
-| 0 | Game | `.z64` (or `.bin`), required | `0x0010_0000` | `0x4010_0000` |
-| 1 | Save | `.sav`, nonvolatile, at most 128 KiB | `0x0732_0000` | `0x4332_0000` |
-| 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x4330_8000` |
+| 0 | Game | `.z64` (or `.bin`), required | `0x0010_0000` | `0x3000_0000` ROM window |
+| 1 | Save | `.sav`, nonvolatile, at most 128 KiB | `0x0732_0000` | `0x3414_0000` |
+| 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
 
@@ -163,9 +157,9 @@ quits: as many bytes as the slot's file size in the core's table. The runtime se
 when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 4 with no
 gap: the table of file sizes is indexed by a slot's place in `data.json`.
 
-A core and a program each carry the word `0x4D4C0003` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
+A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
 `0x4000_0008`. The boot ROM starts only a program that has it, and the runtime starts a game only on a core that has
-it; otherwise a notice is shown on the screen and the SDRAM is left as the Pocket loaded it, so the saves are written
+it; otherwise a notice is shown on the screen and memory is left as the Pocket loaded it, so the saves are written
 back unchanged.
 
 ## The CPU
@@ -737,7 +731,7 @@ kind of memory and sets the slot's file size then; what the file did not have re
 Domain 2 is an SRAM until the command register is written, and a FlashRAM from then on. The FlashRAM's command
 interpreter is `lang/n64rt/n64rt_save.h`: read-array, status and ID modes (the ID is `0x00C2001E`), sector and chip
 erase, and page program from a 128-byte buffer the game writes by DMA. Its page buffer and status words are in the
-SDRAM beside the save, so that the PI's engine and the hardware's status read reach them.
+PSRAM beside the save, so that the PI's engine and the hardware's status read reach them.
 
 ### The save-type database
 
@@ -768,7 +762,7 @@ The setting "Controller 1 pak" is read at every access (`lang/n64rt/n64rt_pak.c`
 The accessory is what the joybus sees, 32-byte blocks at a 16-bit address, and the game's own `osPfs*` and `osGbpak*`
 code runs on top of it. There is no Rumble Pak: the core's interface to the Pocket has no vibration output.
 
-**Controller Pak**: 32 KiB in the SDRAM, `data.json` slot 2, saved as `<game>.mpk`. An image that is not a formatted
+**Controller Pak**: 32 KiB in PSRAM, `data.json` slot 2, saved as `<game>.mpk`. Space for four paks is reserved; only Controller 1 is implemented. An image that is not a formatted
 pak is formatted empty. The slot gets a file size when the game first writes to the pak.
 
 **Transfer Pak**: its registers are the accessory's own:

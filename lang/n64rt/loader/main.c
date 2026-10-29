@@ -1,5 +1,5 @@
 /* The runtime's program, n64rt.sys (data slot 3 of the core): it runs the N64 game in slot 0, a .z64 ROM as it is. The Pocket
- * loads this file at 0 and the ROM at 1 MiB (N64RT_ROM_FILE_OFF: its first 32 MiB go to the PSRAM), untouched.
+ * loads this file at 0 and the ROM at 1 MiB (N64RT_ROM_FILE_OFF: its first 30 MiB go to PSRAM), untouched.
  *
  * The game runs its own libultra (N64RT_OWN), so nothing but the ROM is needed, and nothing of any game is in this program or
  * in the runtime: no table, no row, no patch, no address. What IPL3 knows comes from the ROM image -- the CIC from the boot

@@ -99,6 +99,12 @@ jobs:
       - name: Pocket bridge queued reads
         run: sh sim/apf/queued_reads_test.sh
 
+      - name: Pocket bridge readback under contention
+        run: sh sim/apf/arbiter_readback_test.sh
+
+      - name: Pocket bridge with SDRAM and shared DMA
+        run: sh sim/apf/sdr_deadline_test.sh
+
       # picolibc is the slow part; make rebuilds the rest from the sources' dates
       - uses: actions/cache/restore@v4
         id: lib

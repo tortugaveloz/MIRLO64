@@ -127,6 +127,7 @@ module mirlo_regs (
     input  wire  [23:0] io_adr,
     input  wire         io_ps,
     input  wire  [31:0] io_wd,
+    input  wire  [3:0]  io_be,
     output wire         io_ack,
     output logic        d2_flash,
     // the PSRAMs (psram.sv) are set up -- MONITOR.ID bit 8
@@ -333,7 +334,7 @@ rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT), .ROM64(ROM64_PRESENT)) mi (.clk, .r
     .dst_we(wr && a == R_MONITOR_PIDST), .src_we(wr && a == R_MONITOR_PISRC), .len_we(wr && a == R_MONITOR_PILEN), .csr_wd(r_wdata[25:0]),
     .intr(mi_intr), .mask_o(mi_mask), .pi_busy, .pi_cnt,
     .w_mi(mi_w_mi), .w_pi(mi_w_pi), .w_we(mi_w_we), .w_a(mi_w_a), .w_wd(mi_w_wd), .w_rd(mi_w_rd), .line(mi_line),
-    .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_ps, .io_wd, .io_ack);
+    .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata, .d_ack, .io_req, .io_we, .io_adr, .io_ps, .io_wd, .io_be, .io_ack);
 
 assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's resampler step, rcp_ai.sv)
 assign ai_step_wd = r_wdata[19:0];

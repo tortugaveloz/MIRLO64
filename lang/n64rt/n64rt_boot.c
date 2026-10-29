@@ -661,8 +661,8 @@ static void late_apply(int all)
  * n64rt_boot_rom) or as one game file (tools/make_mirlo_game.py: the port's
  * program and the ROM as block ROM0, the port's Makefile's
  * ROM0@0x100000=<rom.z64>; n64rt_boot_game_file). The ROM is read where
- * that leaves it (layout.h): what the Pocket loaded from 1 MiB to 33 MiB is
- * in the PSRAM, the rest of it in the SDRAM, where the bridge wrote it -- all
+ * that leaves it (layout.h): the first 30 MiB are in PSRAM, and the rest
+ * is in SDRAM, where the bridge wrote it -- all
  * through the core's window, N64RT_ROM_WIN. Nothing is moved. The port links its boot stack below
  * N64RT_ROM_FILE_OFF (--defsym=_fstack=0x400FFFF0). */
 #define FILE_SDRAM 0x40000000u
@@ -715,15 +715,15 @@ static void rom_at(n64rt_game_t *g, u32 off, u32 size)
     g->rom_sdram = FILE_SDRAM + off;
     g->rom_size = size;
 #ifdef N64RT_DEBUG
-    if (size > N64RT_ROM_PSRAM_MAX) {
+    if (size > N64RT_ROM_SPLIT) {
         /* (what a simulation compares with the file: words either side of where the SDRAM's part starts and the last one,
          * and a copy across it) */
         const n64rt_game_t *was = n64rt_game;
         n64rt_game = g;
         u8 b[16];
-        const u32 t = N64RT_ROM_PSRAM_MAX, at[4] = { t - 4u, t, t + 0x00800000u, size - 4u };
+        const u32 t = N64RT_ROM_SPLIT, at[4] = { t - 4u, t, t + 0x00800000u, size - 4u };
         n64rt_rom_copy(b, t - 6u, 16);
-        printf("n64rt: a ROM of %lu bytes, from %08lx on in the SDRAM: words", (unsigned long)size, (unsigned long)t);
+        printf("n64rt: a ROM of %lu bytes, from %08lx on in SDRAM: words", (unsigned long)size, (unsigned long)t);
         for (int i = 0; i < 4; i++) if (at[i] < size) printf(" %08lx=%08lx", (unsigned long)at[i], (unsigned long)n64rt_rom_word(at[i]));
         printf("; bytes at %08lx:", (unsigned long)(t - 6u));
         for (int i = 0; i < 16; i++) printf(" %02x", b[i]);

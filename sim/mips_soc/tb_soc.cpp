@@ -31,6 +31,7 @@
 // rest -- the slots' files -- goes through the bridge's port, a word at a
 // time. BRIDGE_ALL=1: all of it through the port, as the Pocket does it
 // (some 6 clocks a word).
+//   BRIDGE_ROM_PROBES=1  exercise selected ROM boundary words through the bridge
 //   VERIFY=1         when the load is over, and again at the end (then less
 //                    the program's megabyte and the saves), the chips'
 //                    models are compared with the files, each byte where
@@ -178,7 +179,7 @@ static void chip_step()
 }
 
 // ---- the PSRAMs (AS1C8M16PL-70: two chips side by side as 32 bits, each two
-// dies of 4 M words; rtl/soc/psram.sv: die 0 the scan-out's woven picture, die 1 a 64 MiB ROM's last 16 MiB). What the chips see is what the PHY's
+// dies of 4 M words; rtl/soc/psram.sv selects them for the current layout). What the chips see is what the PHY's
 // registers hold, stepped twice a sys cycle (h: half cycles, 7.96 ns): after
 // clk's rising edge, and after its falling edge -- which is the chips' rising
 // clock edge when the PHY has the clock on. The checks are the datasheet's,
@@ -429,7 +430,7 @@ static void cpu_stat_step(long sys)
 struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
 static Slot slots[8];
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
-static const uint32_t FILE_PSRAM_END = 33u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
+static const uint32_t FILE_PSRAM_END = 31u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
 static const uint32_t FILE_ROM_END = 65u << 20;     // and LAYOUT_FILE_MAX)
 static const int PROG_SLOT = 3;                     // with ROM=: the program's (data.json's "Runtime")
 static bool read_file(const char *path, std::vector<uint8_t> &d)
@@ -470,19 +471,23 @@ static bool read_data_json(const std::string &path)
 struct BrJob { int slot; bool write; uint32_t addr; size_t off, len; };
 static std::deque<BrJob> br_jobs;
 static size_t br_pos;
-// Where the bridge's map puts a word the Pocket writes (rtl/soc/mirlo_mips.sv): the SDRAM below 1 MiB, the PSRAM from there to
-// 33 MiB (at the address mod 32 MiB: its word's bit 22 the die), the SDRAM at the address less 32 MiB up to 65 MiB, else the
-// SDRAM at the address's low 26 bits
+// ROM file bytes 1..31 MiB go to PSRAM at 2..32 MiB; 31..65 MiB go to SDRAM at 1..35 MiB.
 static void place(uint32_t a, uint32_t w)
 {
-    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; psm[x >> 22][0][x & 0x3FFFFFu] = (uint16_t)(w >> 16); psm[x >> 22][1][x & 0x3FFFFFu] = (uint16_t)w; }
-    else if (a >= FILE_PSRAM_END && a < FILE_ROM_END) wr_word((a - (32u << 20)) / 4, w);
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a + (1u << 20)) / 4; psm[x >> 22][0][x & 0x3FFFFFu] = (uint16_t)(w >> 16); psm[x >> 22][1][x & 0x3FFFFFu] = (uint16_t)w; }
+    else if (a >= FILE_PSRAM_END && a < FILE_ROM_END) wr_word((a - (30u << 20)) / 4, w);
     else wr_word((a & 0x3FFFFFFu) / 4, w);
 }
 static uint32_t placed(uint32_t a)
 {
-    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a / 4) & 0x7FFFFFu; return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu]; }
-    if (a >= FILE_PSRAM_END && a < FILE_ROM_END) return rd_word((a - (32u << 20)) / 4);
+    if (a >= (1u << 20) && a < FILE_PSRAM_END) { uint32_t x = (a + (1u << 20)) / 4; return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu]; }
+    if (a >= FILE_PSRAM_END && a < FILE_ROM_END) return rd_word((a - (30u << 20)) / 4);
+    if ((a >> 20) == 0x73) {
+        uint32_t off = a & 0xfffffu;
+        if ((off >> 17) == 1) off += 0x20000u;
+        uint32_t x = (0x100000u + off) / 4;
+        return (uint32_t)psm[x >> 22][0][x & 0x3FFFFFu] << 16 | psm[x >> 22][1][x & 0x3FFFFFu];
+    }
     return rd_word((a & 0x3FFFFFFu) / 4);
 }
 // The chips' models against the files, each byte where the bridge's map puts its address. `end`: less what a program
@@ -657,16 +662,25 @@ int main(int argc, char **argv)
             if (d.empty() || ((k == 0 || k == prog) != (pass == (slots_first ? 1 : 0)))) continue;
             slots[k].size = (uint32_t)d.size();
             size_t len = (d.size() + 3) & ~(size_t)3, direct = 0;
-            if (!bridge_all && slots[k].addr < FILE_ROM_END) {
+            if (!bridge_all && !(getenv("BRIDGE_SLOT") && k == atoi(getenv("BRIDGE_SLOT"))) && slots[k].addr < FILE_ROM_END) {
                 direct = len < FILE_ROM_END - slots[k].addr ? len : FILE_ROM_END - slots[k].addr;
                 for (size_t i = 0; i < direct; i += 4) {
                     const uint32_t a = slots[k].addr + (uint32_t)i;
-                    if (a >= (56u << 20) && a < (64u << 20)) wr_word(a / 4, be32(d, i));   // (56 MiB to 64: the SDRAM's own write first)
                     place(a, be32(d, i));
                 }
             }
             if (direct < len) br_jobs.push_back({k, true, slots[k].addr + (uint32_t)direct, direct, len - direct});
         }
+    // Exercise the real bridge decoder at the ends of both ROM regions without
+    // sending the entire 64 MiB image through the simulated bus.
+    if (getenv("BRIDGE_ROM_PROBES") && slots[0].data.size() == (64u << 20)) {
+        const uint32_t offsets[] = {0, 0x00dffffc, 0x00e00000, 0x01dffffc, 0x01e00000, 0x02000000, 0x03000000, 0x03700000, 0x03fffffc};
+        for (uint32_t off : offsets) {
+            uint32_t a = slots[0].addr + off;
+            place(a, 0);
+            br_jobs.push_back({0, true, a, off, 4});
+        }
+    }
     const std::vector<uint8_t> &program = slots[prog].data;
     printf("program: %zu bytes at 0x40000000%s\n", program.size(), noload ? " (NOLOAD: not given)" : "");
     // PRELOAD=file@0xADDR[@0xMARK]: a file's big-endian words straight into SDRAM
@@ -1185,6 +1199,17 @@ int main(int argc, char **argv)
             if (gpcprof && sys >= pcprof_from && (sys & 255) == 0) {
                 if (t->geom_msg == 0xB0000040u) gpc_idle++; else gpc_hist[t->geom_pc]++;
             }
+            if (getenv("TBLINETRACE") && (t->diag_line & 0x80000000u)) {
+                static unsigned lastline=~0u;
+                unsigned line=(t->diag_line >> 4) & 1023u;
+                if (line!=lastline) { lastline=line; printf("[line %ld %u diag=%08x flow=%08x]\n",sys,line,t->diag_line,t->diag_flow); }
+            }
+            if (getenv("TBVIDTRACE") && (t->diag_vid_flags & 0x80)) {
+                static long nv=0;
+                unsigned f=t->diag_vid_flags;
+                if (((f & 0x30)==0x30 || (f & 8)) && nv++ < 20000)
+                    printf("[vid %ld f=%02x addr=%06x data=%08x tag=%02x]\n",sys,f,t->diag_vid_addr,t->diag_vid_data,t->diag_vid_tag);
+            }
             // MEMSTAT=1: the SDRAM's use -- the words each port had, the rows
             // opened (and of them, those in a bank nothing had used for 8
             // cycles: a row another request could have had opened behind the
@@ -1195,7 +1220,8 @@ int main(int argc, char **argv)
             static const bool mstat = getenv("MEMSTAT") != nullptr;
             if (mstat) {
                 static long mp[6], mact, mact_idle, mwords, mwait, mrow, mturn, rdp, mrsp, mn, last_use[4], last_dir = -1, mswitch;
-                static bool marks;
+                static bool marks; static long hidden[6], saves[6];
+                for (int i=0;i<6;i++) { if (t->mem_hidden & (1u<<i)) hidden[i]++; if (t->mem_save & (1u<<i)) saves[i]++; }
                 unsigned m = t->mem_stat;
                 unsigned c = (m >> 6) & 7, ba = (m >> 9) & 3;
                 bool mark0 = t->x_ack && t->x_we && t->x_addr == 0xF0000504u && (t->x_wdata >> 24) == 0xA5u;
@@ -1215,9 +1241,10 @@ int main(int argc, char **argv)
                            "a word moved %.0f %% of the cycles, the controller on a row %.0f %%, on the bus's turn %.0f %% (%ld turns), a port asking %.0f %%; "
                            "RDP at work %.1f ms, RSP running %.1f ms]\n", mn / TB_SYS_KHZ, mp[0], mp[1], mp[2], mp[3], mp[4], mp[5],
                            mact, mact_idle, 100.0 * mwords / mn, 100.0 * mrow / mn, 100.0 * mturn / mn, mswitch, 100.0 * mwait / mn, rdp / TB_SYS_KHZ, mrsp / TB_SYS_KHZ);
+                    printf("[memdetail hidden scan %ld cpu %ld rdp %ld rsp %ld bridge %ld dpc %ld; save scan %ld cpu %ld rdp %ld rsp %ld bridge %ld dpc %ld]\n", hidden[0], hidden[1], hidden[2], hidden[3], hidden[4], hidden[5], saves[0], saves[1], saves[2], saves[3], saves[4], saves[5]);
                     fflush(stdout);
                 }
-                if (out || mark0) { for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = rdp = mrsp = mn = mswitch = 0; }
+                if (out || mark0) { for (int i = 0; i < 6; i++) { hidden[i] = 0; saves[i] = 0; } for (int i = 0; i < 6; i++) mp[i] = 0; mact = mact_idle = mwords = mwait = mrow = mturn = rdp = mrsp = mn = mswitch = 0; }
             }
             // CPUSTAT=1 [CPUSTAT_IDLE=lo,hi]: where the game CPU's cycles go, a
             // line a second or between a program's marks (as MEMSTAT's): the
@@ -1317,6 +1344,7 @@ int main(int argc, char **argv)
     fflush(stdout);
     printf("\n%ld sys cycles, %ld frames, %ld SDRAM protocol errors; cpu pc %08x cause %08x epc %08x\n",
            sys, frames, errors, t->cpu_pc, t->cpu_cause, t->cpu_epc);
+    printf("VI diagnostic: %08x\n", t->diag_vi);
     printf("PSRAM: %ld asynchronous accesses, %ld register writes%s%s\n", ps.n_async, ps.n_cfg, t->ps_ready ? "" : "; NOT set up",
            ps.n_burst ? "; bursts too (there should be none)" : "");
     if (const char *so = getenv("SLOTS_OUT"))

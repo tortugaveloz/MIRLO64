@@ -49,6 +49,10 @@ module soc_sim_top (
     // its request taken, [12] a request at it, [13] a port asking, [14] the
     // RDP at work, [15] the RSP running
     output wire  [15:0] mem_stat,
+    output wire  [5:0]  mem_hidden, mem_save,
+    output wire [31:0] diag_vi, diag_vid_addr, diag_vid_data,
+    output wire [7:0] diag_vid_flags, diag_vid_tag,
+    output wire [31:0] diag_line, diag_flow,
     output wire         mem_hit,        // (the controller's request is of an open row)
     // (CPUSTAT) the game CPU this cycle of its clock: [0] an instruction
     // retires, [1] M waits, [4:2] M's slow-path state, [7:5] F's state, [8] F
@@ -127,7 +131,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),
     .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),
-    .wishbone_master_cyc(wbm_cyc), .wishbone_master_dat_r(wbm_dat_r), .wishbone_master_dat_w(wbm_dat_w), .wishbone_master_err(),
+    .wishbone_master_cyc(wbm_cyc), .wishbone_master_pending(wbm_cyc), .wishbone_master_dat_r(wbm_dat_r), .wishbone_master_dat_w(wbm_dat_w), .wishbone_master_err(),
     .wishbone_master_sel(4'hF), .wishbone_master_stb(wbm_cyc), .wishbone_master_we(wbm_we),
     .wishbone_sel(), .wishbone_stb(), .wishbone_we()
 );
@@ -159,6 +163,22 @@ assign fb_px0    = soc.fb_px0; assign fb_pw = soc.fb_pw; assign fb_xs = soc.fb_x
 assign fb_y0     = soc.fb_y0;
 assign fb_rows   = soc.fb_rows;
 assign fb_gamma  = soc.fb_gamma;                              // (the scan-out's gamma correction is on)
+for (genvar mem_i = 0; mem_i < 6; mem_i = mem_i + 1) begin
+    assign mem_hidden[mem_i] = soc.p_valid[mem_i] && soc.p_ready[mem_i] && soc.p_addr[mem_i][23:18] == 6'h37;
+    assign mem_save[mem_i] = soc.p_valid[mem_i] && soc.p_ready[mem_i] && soc.p_addr[mem_i][23:18] == 6'h33;
+end
+assign diag_flow = {6'd0, soc.video.drop, soc.video.tq_n,
+                    soc.video.all, soc.video.room, soc.video.running, soc.video.fb_sys,
+                    2'd0, soc.video.h_next};
+assign diag_line = {soc.video.hid_f, soc.video.f_empty, soc.video.f_q[36], soc.video.stale,
+                    soc.video.wlevel[13:0], soc.video.vcount[9:0], 4'd0};
+assign diag_vid_tag = {3'd0, soc.video.tq_h};
+assign diag_vid_addr = {8'd0,soc.p_addr[0]};
+assign diag_vid_data = soc.p_rdata;
+assign diag_vid_flags = {soc.video.hid_f, soc.video.h_next, soc.p_valid[0], soc.p_ready[0], soc.p_rvalid[0], 1'b0, soc.p_rvalid[0], soc.video.fb_sys};
+assign diag_vi = {20'd0, soc.video.hid_f, soc.vi_aa, soc.mon_vi, soc.fb_en,
+                  soc.video.running, soc.video.h_next, soc.p_valid[0], soc.p_ready[0],
+                  soc.p_rvalid[0], soc.video.hires, soc.video.px32_n, soc.video.all};
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
 assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.rdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
                     soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
