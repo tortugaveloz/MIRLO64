@@ -132,13 +132,13 @@ wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc
 // ============================================================ unpack
 typedef struct packed { logic s; logic [7:0] e; logic [22:0] f; } fbits_t;
 function automatic fbits_t d2f(input logic [31:0] lo, input logic [31:0] hi);
-    logic [10:0] e; logic signed [12:0] e2; logic [31:0] r;
+    logic [10:0] e; logic [31:0] r;
     e = hi[30:20];
-    e2 = $signed({2'b0, e}) - 13'sd896;
     if (e == 11'h7FF) r = {hi[31], 8'hFF, hi[19:0], lo[31:29]} | {31'd0, lo[28:0] != 0};
-    else if (e2 <= 0) r = {hi[31], 31'd0};
-    else if (e2 >= 255) r = {hi[31], 8'hFF, 23'd0};
-    else r = {hi[31], e2[7:0], hi[19:0], lo[31:29]} + {31'd0, lo[28]};   // (a carry may reach the exponent)
+    else if (e <= 11'd896) r = {hi[31], 31'd0};
+    else if (e >= 11'd1151) r = {hi[31], 8'hFF, 23'd0};
+    // Subtracting 896 in this range flips bit 7 of the low exponent byte.
+    else r = {hi[31], ~e[7], e[6:0], hi[19:0], lo[31:29]} + {31'd0, lo[28]};
     return r;
 endfunction
 function automatic fbits_t ftz(input fbits_t x);
@@ -225,8 +225,13 @@ function automatic logic [34:0] rshift(input logic [33:0] v, input logic [7:0] n
     return {o, sk};
 endfunction
 function automatic logic [4:0] lzc32(input logic [31:0] v);
-    logic [4:0] n; n = 5'd31;
-    for (int i = 0; i < 32; i++) if (v[i]) n = 5'(31 - i);
+    logic [4:0] n; logic [31:0] a;
+    a = v; n = 0;
+    if (!(|a[31:16])) begin n[4]=1; a = a << 16; end
+    if (!(|a[31:24])) begin n[3]=1; a = a << 8; end
+    if (!(|a[31:28])) begin n[2]=1; a = a << 4; end
+    if (!(|a[31:30])) begin n[1]=1; a = a << 2; end
+    if (!a[31]) n[0]=1;
     return n;
 endfunction
 
@@ -388,7 +393,7 @@ always_ff @(posedge clk) begin
         a = {1'b0, 1'b1, add_lf, 7'd0};
         b = sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]};   // the shifted-out bits as a sticky LSB
         if (FAST) b = zmag;
-        sum = sub_eff ? a - b : a + b;
+        sum = a + (b ^ {32{sub_eff}}) + {31'd0, sub_eff};
         zmag <= sum; zst <= 0; zexp <= 12'(add_le) + 12'sd1;
         if (FAST) st <= S_NORM;                                   // (x - x: S_NORM's)
         else if (sum == 32'd0) begin res <= 32'd0; st <= S_DONE; end   // x - x: +0

@@ -127,7 +127,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),
     .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),
-    .wishbone_master_cyc(wbm_cyc), .wishbone_master_dat_r(wbm_dat_r), .wishbone_master_dat_w(wbm_dat_w), .wishbone_master_err(),
+    .wishbone_master_cyc(wbm_cyc), .wishbone_master_pending(wbm_cyc), .wishbone_master_dat_r(wbm_dat_r), .wishbone_master_dat_w(wbm_dat_w), .wishbone_master_err(),
     .wishbone_master_sel(4'hF), .wishbone_master_stb(wbm_cyc), .wishbone_master_we(wbm_we),
     .wishbone_sel(), .wishbone_stb(), .wishbone_we()
 );

@@ -127,6 +127,7 @@ module mirlo_mips #(
     input  wire    [1:0] wishbone_master_bte,
     input  wire    [2:0] wishbone_master_cti,
     input  wire          wishbone_master_cyc,
+    input  wire          wishbone_master_pending,
     output wire   [31:0] wishbone_master_dat_r,
     input  wire   [31:0] wishbone_master_dat_w,
     output wire          wishbone_master_err,
@@ -174,7 +175,7 @@ always_ff @(posedge clk) begin
     sn_hold_s <= !rst && sn_hold;
     if (rst) sn_t <= 1'b0; else if (|(p_ready & p_we & SN_PORTS)) sn_t <= !sn_t;
 end
-sdr_arb #(.N(NP)) arb (.clk, .rst, .p_valid(p_valid & ~(p_we & SN_PORTS & {NP{sn_hold_s}})), .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
+sdr_arb #(.N(NP), .APF_PREEMPT(1)) arb (.clk, .rst, .p_valid(p_valid & ~(p_we & SN_PORTS & {NP{sn_hold_s}})), .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .apf_force(wishbone_master_cyc || wishbone_master_pending), .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
     .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag);
 logic [1:0]  dfi_ras_n, dfi_cas_n, dfi_we_n;
@@ -607,7 +608,7 @@ logic        pa_dma;
 always_ff @(posedge clk) begin
     if (rst) pa_dma <= 1'b0;
     else if (pa_dma) begin if (pa_ack) pa_dma <= 1'b0; end
-    else if ((d_req || ai_req || si_req) && !wishbone_master_cyc) pa_dma <= 1'b1;
+    else if ((d_req || ai_req || si_req) && !wishbone_master_cyc && !wishbone_master_pending) pa_dma <= 1'b1;
 end
 // MIRLO_AI: the AI's reader (rcp_ai.sv) is a third: a read, first when both ask (it is rare and must not wait for a copy),
 // but not between the engine's read and its write of a word (pa_dat_r)
@@ -645,7 +646,10 @@ end
 assign wishbone_master_ack   = pa_ack && !pa_dma && (!br_two || pa_done);
 assign wishbone_master_dat_r = pa_dat_r;
 assign wishbone_master_err = 1'b0;
-assign p_urgent[4] = 0;
+// The arbiter's apf_force separately preempts for a pending bridge request,
+// including any PI/AI/SI access that already owns this shared port. Port 4
+// otherwise uses the normal round-robin priority.
+assign p_urgent[4] = 1'b0;
 
 // ---------------------------------------------------------------- the PSRAMs
 // a word at a time, the bridge's port's accesses: it holds one until its ack; the word is the port's SDRAM word's 23 low bits
