@@ -54,7 +54,7 @@ result codes). A data slot is one of the entries of the core's `data.json`.
 | `REQUEST_OPENFILE` | `0x0C` | W | A write of 1 asks to change the slot's file to the one a path in memory names |
 | `SLOT_ID` | `0x10` | RW | The slot (16 bits) |
 | `DATA_OFFSET` | `0x14` | RW | The offset in the slot's file |
-| `TRANSFER_LENGTH` | `0x18` | RW | The bytes to transfer |
+| `TRANSFER_LENGTH` | `0x18` | RW | The bytes to transfer. Bits 23:20 are also, in MiB, the size of the save state the Pocket is told ([mips.md](mips.md), "Save states"): the runtime writes it before it answers a save and keeps the whole block there otherwise |
 | `RAM_DATA_ADDRESS` | `0x1C` | RW | The SDRAM address (`0x4xxx_xxxx`) of the data |
 | `FILE_SIZE` | `0x20` | RW | Read: the size of the slot's file. Write: sets the size the Pocket has for it, which is what it writes back of a nonvolatile slot |
 | `STATUS` | `0x24` | R | 1 when a command has completed; a read clears it |

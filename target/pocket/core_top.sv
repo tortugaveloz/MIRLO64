@@ -414,9 +414,9 @@ module core_top (
   // A save is ready to be read out, and a load done, when the runtime has answered; the Pocket copies a state in before
   // it asks for its load. Whether the core takes a state at all (SUPPORTED) is the runtime's to say.
   localparam [31:0] SS_ADDR = 32'h0630_0000;
-  localparam [31:0] SS_SIZE = 32'h0097_0000;            // (lang/n64rt/n64rt_state.c: SS_BYTES)
+  localparam [31:0] SS_SIZE = 32'h00A0_0000;            // (the most a state can be, and a load may be: layout.h LAYOUT_STATE_BYTES)
   wire ss_done_t, ss_err, ss_sup;
-  reg  ss_save_t = 0, ss_load_t = 0, ss_ack = 0, ss_st_d = 0, ss_ld_d = 0, ss_op = 0, ss_busy = 0;
+    reg  ss_save_t = 0, ss_load_t = 0, ss_ack = 0, ss_st_d = 0, ss_ld_d = 0, ss_op = 0, ss_busy = 0;
   reg  ss_st_ok = 0, ss_st_err = 0, ss_ld_ok = 0, ss_ld_err = 0, ss_sup_s1 = 0, ss_sup_s2 = 0;
   reg  [2:0] ss_done_s = 0;
   always @(posedge clk_74a) begin
@@ -440,7 +440,6 @@ module core_top (
   end
   assign savestate_supported   = ss_sup_s2;
   assign savestate_addr        = SS_ADDR;
-  assign savestate_size        = SS_SIZE;
   assign savestate_maxloadsize = SS_SIZE;
   assign savestate_start_ack   = ss_ack;
   assign savestate_start_busy  = ss_busy && !ss_op;
@@ -813,6 +812,9 @@ module core_top (
 
   wire [31:0] apf_bridge_data_offset;
   wire [31:0] apf_bridge_length;
+  // The state's size, in MiB, is what the runtime has written to APF_BRIDGE.TRANSFER_LENGTH (bits 23:20) -- a register that nothing
+  // else uses while a state is made; it settles long before the done toggle reaches here, as ss_err does. The Pocket reads that much.
+  assign savestate_size        = {8'd0, apf_bridge_length[23:20], 20'd0};
   wire [15:0] apf_bridge_slot_id;
 
   reg [2:0] apf_bridge_request_counter = 0;

@@ -8,6 +8,12 @@
  * the game or the runtime uses: the game goes on while the Pocket reads a Memory out, and the game the wake booted
  * runs while the Pocket copies one in -- neither touches it.
  *
+ * The block holds as much as the state needs, not more: its memories (DMEM, the save, the Controller Pak, the coverage plane,
+ * the RDRAM and the runtime's own) are each a stream of tokens over 32-bit words -- a count of words that follow as they are,
+ * or a word repeated -- which is some tenth of the RDRAM when a game has used little of it, and the size the core tells the
+ * Pocket (APF_BRIDGE.TRANSFER_LENGTH's bits 23:20, in MiB) is what was written: the Pocket reads, keeps and copies back that much, and its time
+ * goes with the size. The header and the registers are at fixed offsets, uncompressed.
+ *
  * Both requests come to the monitor (MONITOR.PEND bit 5: n64rt_rcp_events), with the game stopped wherever it was,
  * its registers in n64rt_mon_ctx, as at any of the monitor's wake-ups. A state is then
  *
@@ -42,25 +48,29 @@
 #include "n64rt.h"
 
 #define SS_MAGIC    0x4D535331u         /* "MSS1" */
-#define SS_VERSION  1u
-/* the state's block (layout.h LAYOUT_STATE, LAYOUT_STATE_BYTES): offsets in it */
+#define SS_VERSION  2u
+/* the state's block (layout.h LAYOUT_STATE, LAYOUT_STATE_BYTES, its largest): the header and the registers at fixed offsets,
+ * then the regions one after the other, each a stream of tokens (rle_put) of the words of a memory */
 #define SS_HEAD     0x000000u           /* ss_head_t */
 #define SS_HW       0x001000u           /* ss_hw_t */
-#define SS_DMEM     0x003000u           /* the RSP's DMEM, 4 KiB */
-#define SS_RT       0x004000u           /* the runtime's .data and .bss */
-#define SS_RT_MAX   0x03C000u
-#define SS_SAVE     0x040000u           /* LAYOUT_SAVE, 128 KiB, and LAYOUT_SAVE_AUX's 4 KiB */
-#define SS_CPAK     0x061000u           /* LAYOUT_CPAK, 32 KiB */
-#define SS_HID      0x070000u           /* LAYOUT_HID, 1 MiB */
-#define SS_RDRAM    0x170000u           /* LAYOUT_RDRAM, 8 MiB */
-_Static_assert(SS_RDRAM + 0x800000u == LAYOUT_STATE_BYTES, "the state's size: target/pocket/core_top.sv's SS_SIZE");
+#define SS_BODY     0x003000u           /* the first region */
+#define SS_RT_MAX   0x03C000u           /* the runtime's .data and .bss, at most */
+enum { RG_DMEM, RG_SAVE, RG_CPAK, RG_HID, RG_RDRAM, RG_RT, RG_N };      /* (the runtime's last: a load goes on from its copy) */
+/* what a load decodes the runtime's memory into before it is copied over the runtime's own, and what a save keeps RDRAM's first 4 KiB
+ * in while DMEM goes through them: SDRAM nothing else uses, above the block's largest size */
+#define SS_SCR_RT   (LAYOUT_STATE + 0x00B00000u)
+#define SS_SCR_RAM  (LAYOUT_STATE + 0x00B40000u)
+_Static_assert(SS_SCR_RAM + 0x1000u <= LAYOUT_SAVEDB, "the scratch areas lie below the save-type database");
+_Static_assert(SS_BODY + 0x1000u + SS_RT_MAX + LAYOUT_SAVE_MAX + 0x1000u + LAYOUT_PAK_BYTES + 0x100000u + 0x800000u + 64u <= LAYOUT_STATE_BYTES,
+               "the largest state fits the size the core tells the Pocket it may load: target/pocket/core_top.sv's SS_SIZE");
 #define SS_AT(o)    (LAYOUT_STATE + (o))
 
 typedef struct {
-    u32 magic, version, bytes, layout;  /* SS_MAGIC, SS_VERSION, LAYOUT_STATE_BYTES, LAYOUT_MARK */
+    u32 magic, version, bytes, layout;  /* SS_MAGIC, SS_VERSION, the state's size (what the Pocket is told), LAYOUT_MARK */
     u32 code_sum, code_bytes;           /* the runtime's code and constants: a state is for this n64rt.sys */
     u32 rt_bytes, mon_id;               /* its .data and .bss; MONITOR.ID: the core's blocks */
     u32 rom[12];                        /* the ROM's header, 0x10 - 0x3F: its check words, its title, its ID */
+    u32 off[RG_N], len[RG_N];           /* where each region's tokens are in the block, and how many bytes */
 } ss_head_t;
 
 typedef struct {
@@ -139,6 +149,53 @@ static void copy_words(u32 dst, u32 src, u32 bytes)
         d[0] = a; d[1] = b; d[2] = c; d[3] = e;
     }
 }
+/* A memory as tokens: a word with bit 31 clear is the count of words that follow it as they are; with bit 31 set, the count of
+ * times the word after it is repeated (three or more). rle_put writes from s to d and gives where it ended; rle_get puts
+ * n words at d from the tokens at s and gives where they ended. */
+static u32 *rle_put(u32 *d, const u32 *s, u32 n)
+{
+    const u32 *lit = s, *const end = s + n;
+    while (s < end) {
+        const u32 v = *s;
+        const u32 *t = s + 1;
+        while (t < end && *t == v) t++;
+        if (t - s >= 3) {
+            if (s > lit) { *d++ = (u32)(s - lit); do *d++ = *lit++; while (lit < s); }
+            *d++ = 0x80000000u | (u32)(t - s);
+            *d++ = v;
+            lit = t;
+        }
+        s = t;
+    }
+    if (end > lit) { *d++ = (u32)(end - lit); do *d++ = *lit++; while (lit < end); }
+    return d;
+}
+static const u32 *rle_get(u32 *d, const u32 *s, u32 n)
+{
+    u32 *const end = d + n;
+    while (d < end) {
+        const u32 t = *s++;
+        u32 c = t & 0x7FFFFFFFu;
+        if (!c) break;                                  /* (a state that is not one: no endless loop) */
+        if (c > (u32)(end - d)) c = (u32)(end - d);
+        if (t >> 31) { const u32 v = *s++; do *d++ = v; while (--c); }
+        else do *d++ = *s++; while (--c);
+    }
+    return s;
+}
+static u32 *put_region(ss_head_t *h, u32 rg, u32 *d, const void *src, u32 bytes)
+{
+    h->off[rg] = (u32)((uintptr_t)d - LAYOUT_STATE);
+    u32 *e = rle_put(d, (const u32 *)src, bytes / 4u);
+    h->len[rg] = (u32)((uintptr_t)e - (uintptr_t)d);
+    return e;
+}
+/* a region back to dst; 0 if its tokens did not end where the header says */
+static int get_region(const ss_head_t *h, u32 rg, void *dst, u32 bytes)
+{
+    const u32 *e = rle_get((u32 *)dst, (const u32 *)(uintptr_t)SS_AT(h->off[rg]), bytes / 4u);
+    return (u32)((uintptr_t)e - LAYOUT_STATE) == h->off[rg] + h->len[rg];
+}
 static u32 code_sum(void)
 {
     u32 s = 0x4D49524Cu;
@@ -155,8 +212,9 @@ static u32 slot_size(u32 id, u32 want)  /* a slot's size in the Pocket's table; 
     apf_bridge_slot_id_write(prev);
     return size;
 }
-static void answer(int failed)
+static void answer(int failed, u32 bytes)   /* bytes: a state's size, a whole number of MiB (the Pocket reads that much); 0 for a load */
 {
+    if (bytes) apf_bridge_transfer_length_write(bytes);     /* (before the answer: APF_BRIDGE.TRANSFER_LENGTH is the size the Pocket is told) */
     __asm__ volatile("" ::: "memory");  /* (every store of the state before it: the Pocket reads it out once told) */
     apf_bridge_savestate_done_write(failed ? 1u : 0u);
 #ifdef N64RT_DEBUG
@@ -218,7 +276,7 @@ static void save(void)
     ss_hw_t *w = (ss_hw_t *)(uintptr_t)SS_AT(SS_HW);
     const u32 rt = (u32)(_end - _fdata);
     h->magic = 0;                                       /* (a state half made is no state) */
-    if (n64rt_pak_kind(0) == N64RT_PAK_TRANSFER || rt > SS_RT_MAX || !quiesce(0)) { answer(1); return; }
+    if (n64rt_pak_kind(0) == N64RT_PAK_TRANSFER || rt > SS_RT_MAX || !quiesce(0)) { answer(1, 0); return; }
     memset(w, 0, sizeof *w);
     w->uptime = uptime();
     /* COP0 */
@@ -246,39 +304,45 @@ static void save(void)
     /* the monitor's, the Pocket's table */
     w->mon_ctl = monitor_ctl_read(); w->mon_mask = monitor_mask_read(); w->mon_pi2 = monitor_pi2_read();
     w->fsize[1] = slot_size(1, 0); w->fsize[2] = slot_size(LAYOUT_CPAK_SLOT, 0);
-    /* the memories; DMEM through the RDRAM's first 4 KiB, which the copy of the RDRAM has and gets back */
-    copy_words(SS_AT(SS_RDRAM), LAYOUT_RDRAM, 0x800000u);
-    copy_words(SS_AT(SS_HID), LAYOUT_HID, 0x100000u);
-    copy_words(SS_AT(SS_SAVE), LAYOUT_SAVE, LAYOUT_SAVE_MAX + 0x1000u);
-    copy_words(SS_AT(SS_CPAK), LAYOUT_CPAK, LAYOUT_PAK_BYTES);
+    /* the memories, region after region; DMEM through the RDRAM's first 4 KiB, which wait in the scratch area meanwhile */
+    u32 *d = (u32 *)(uintptr_t)SS_AT(SS_BODY);
+    copy_words(SS_SCR_RAM, LAYOUT_RDRAM, 0x1000u);
     sp_dma(0x0000u, 0x000000u, 0x1000u, 1);
     flush_cpu_dcache_range((const void *)(uintptr_t)LAYOUT_RDRAM, 0x1000u);
-    copy_words(SS_AT(SS_DMEM), LAYOUT_RDRAM, 0x1000u);
-    copy_words(LAYOUT_RDRAM, SS_AT(SS_RDRAM), 0x1000u);
+    d = put_region(h, RG_DMEM, d, (const void *)(uintptr_t)LAYOUT_RDRAM, 0x1000u);
+    copy_words(LAYOUT_RDRAM, SS_SCR_RAM, 0x1000u);
     SP_MEM_ADDR = w->sp_mem; SP_DRAM_ADDR = w->sp_dram;
+    d = put_region(h, RG_SAVE, d, (const void *)(uintptr_t)LAYOUT_SAVE, LAYOUT_SAVE_MAX + 0x1000u);
+    d = put_region(h, RG_CPAK, d, (const void *)(uintptr_t)LAYOUT_CPAK, LAYOUT_PAK_BYTES);
+    d = put_region(h, RG_HID, d, (const void *)(uintptr_t)LAYOUT_HID, 0x100000u);
+    d = put_region(h, RG_RDRAM, d, (const void *)(uintptr_t)LAYOUT_RDRAM, 0x800000u);
     /* the header, and last the runtime's own memory: a load goes on from here (n64rt_state_resumed) */
-    h->version = SS_VERSION; h->bytes = LAYOUT_STATE_BYTES; h->layout = LAYOUT_MARK;
+    h->version = SS_VERSION; h->layout = LAYOUT_MARK;
     h->code_sum = code_sum(); h->code_bytes = (u32)(_erodata - _ftext); h->rt_bytes = rt; h->mon_id = monitor_id_read();
     for (u32 n = 0; n < 12u; n++) h->rom[n] = n64rt_rom_word(0x10u + 4u * n);
-    copy_words(SS_AT(SS_RT), (u32)(uintptr_t)_fdata, (rt + 15u) & ~15u);
+    d = put_region(h, RG_RT, d, _fdata, (rt + 15u) & ~15u);
+    const u32 total = ((u32)((uintptr_t)d - LAYOUT_STATE) + 15u) & ~15u;
+    h->bytes = total;
     h->magic = SS_MAGIC;
+    const u32 padded = (total + 0xFFFFFu) & ~0xFFFFFu;    /* (what the core tells the Pocket: whole MiB, 4 bits of a register) */
     time_put(w);
-    answer(0);
+    answer(0, padded);
 }
 
 /* ---- a state put back ----------------------------------------------------------------------------------------- */
 static int state_ok(const ss_head_t *h)
 {
-    if (h->magic != SS_MAGIC || h->version != SS_VERSION || h->bytes != LAYOUT_STATE_BYTES || h->layout != LAYOUT_MARK) return 0;
+    if (h->magic != SS_MAGIC || h->version != SS_VERSION || h->bytes < SS_BODY || h->bytes > LAYOUT_STATE_BYTES || h->layout != LAYOUT_MARK) return 0;
     if (h->code_bytes != (u32)(_erodata - _ftext) || h->rt_bytes != (u32)(_end - _fdata) || h->code_sum != code_sum()) return 0;
     if (h->mon_id != monitor_id_read()) return 0;
     for (u32 n = 0; n < 12u; n++) if (h->rom[n] != n64rt_rom_word(0x10u + 4u * n)) return 0;
+    for (u32 r = 0; r < RG_N; r++) if (h->off[r] < SS_BODY || h->len[r] > h->bytes || h->off[r] > h->bytes - h->len[r]) return 0;
     return 1;
 }
-static void rsp_put(const ss_hw_t *w)
+static int rsp_put(const ss_head_t *h, const ss_hw_t *w)
 {
     /* DMEM through the RDRAM's first 4 KiB (the RDRAM is put back after this) */
-    copy_words(LAYOUT_RDRAM, SS_AT(SS_DMEM), 0x1000u);
+    const int ok = get_region(h, RG_DMEM, (void *)(uintptr_t)LAYOUT_RDRAM, 0x1000u);
     sp_dma(0x0000u, 0x000000u, 0x1000u, 0);
     /* BROKE: only a BREAK sets it -- one, at IMEM's start (whose words the next task loads anew), run with the interrupt
      * on a BREAK off; else cleared */
@@ -300,6 +364,7 @@ static void rsp_put(const ss_hw_t *w)
     SP_STATUS = (w->mi_intr & 1u) ? 0x10u : 0x08u;      /* the SP interrupt, as the MI had it */
     if (w->sp_sema) (void)SP_SEMAPHORE; else SP_SEMAPHORE = 0;
     SP_MEM_ADDR = w->sp_mem; SP_DRAM_ADDR = w->sp_dram;
+    return ok;
 }
 static void dpc_put(const ss_hw_t *w)
 {
@@ -353,10 +418,10 @@ static void load(void)
     const ss_head_t *h = (const ss_head_t *)(uintptr_t)SS_AT(SS_HEAD);
     const ss_hw_t *w = (const ss_hw_t *)(uintptr_t)SS_AT(SS_HW);
     flush_cpu_dcache();                                 /* (the Pocket wrote it behind the D-cache) */
-    if (!state_ok(h)) { answer(1); return; }
+    if (!state_ok(h)) { answer(1, 0); return; }
     (void)quiesce(1);
     /* the hardware, then the memories (DMEM and the RSP's BREAK went through the RDRAM) */
-    rsp_put(w);
+    int ok = rsp_put(h, w);
     dpc_put(w);
     hw_wr(SI_DRAM_ADDR, w->si_dram);
     for (u32 n = 0; n < 15u; n++) hw_wr(PIF_RAM + 4u * n, w->pif[n]);
@@ -367,11 +432,12 @@ static void load(void)
     monitor_pi2_write(w->mon_pi2);
     monitor_ctl_write(w->mon_ctl);
     monitor_mask_write(w->mon_mask);
-    copy_words(LAYOUT_SAVE, SS_AT(SS_SAVE), LAYOUT_SAVE_MAX + 0x1000u);
-    copy_words(LAYOUT_CPAK, SS_AT(SS_CPAK), LAYOUT_PAK_BYTES);
+    ok &= get_region(h, RG_SAVE, (void *)(uintptr_t)LAYOUT_SAVE, LAYOUT_SAVE_MAX + 0x1000u);
+    ok &= get_region(h, RG_CPAK, (void *)(uintptr_t)LAYOUT_CPAK, LAYOUT_PAK_BYTES);
     (void)slot_size(1, w->fsize[1]); (void)slot_size(LAYOUT_CPAK_SLOT, w->fsize[2]);
-    copy_words(LAYOUT_HID, SS_AT(SS_HID), 0x100000u);
-    copy_words(LAYOUT_RDRAM, SS_AT(SS_RDRAM), 0x800000u);
+    ok &= get_region(h, RG_HID, (void *)(uintptr_t)LAYOUT_HID, 0x100000u);
+    ok &= get_region(h, RG_RDRAM, (void *)(uintptr_t)LAYOUT_RDRAM, 0x800000u);
+    ok &= get_region(h, RG_RT, (void *)(uintptr_t)SS_SCR_RT, (h->rt_bytes + 15u) & ~15u);
     flush_cpu_dcache(); flush_cpu_icache();
     n64rt_tr_flush();                                   /* (the CPU's tables: filled again from the state's entries) */
     mi_put(w);
@@ -382,8 +448,9 @@ static void load(void)
     MTC0(7, (MFC0(7) & 3u) | (w->mctl & 0x500u) | 0xA00u);  /* (the pass-through, the 4 MiB of RDRAM: each with its enable) */
     time_put(w);
     monitor_pend_write(0x1Fu);          /* (the booted game's wake-ups: the state's runtime computes the VI's and the AI's again) */
-    answer(0);
-    n64rt_state_resume((const void *)(uintptr_t)SS_AT(SS_RT), _fdata, ((u32)(_end - _fdata) + 15u) / 16u * 4u, w);
+    if (!ok) { answer(1, 0); return; }  /* (a state whose tokens do not add up: the game is no longer one that can go on, but it is the Pocket's to say) */
+    answer(0, 0);
+    n64rt_state_resume((const void *)(uintptr_t)SS_SCR_RT, _fdata, ((u32)(_end - _fdata) + 15u) / 16u * 4u, w);
 }
 
 /* The runtime is the state's from here (n64rt_state_resume copied it), on its exception stack; the monitor's exit
@@ -417,4 +484,5 @@ void n64rt_state_poll(void)
 {
     const u32 ok = n64rt_pak_kind(0) != N64RT_PAK_TRANSFER;
     if ((apf_bridge_savestate_read() & 1u) != ok) apf_bridge_savestate_write(ok);
+    if (!(apf_bridge_transfer_length_read() >> 20 & 0xFu)) apf_bridge_transfer_length_write(LAYOUT_STATE_BYTES);   /* (the size told until a state says its own) */
 }

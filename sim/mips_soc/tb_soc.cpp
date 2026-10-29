@@ -626,7 +626,7 @@ static void dump_frame(const std::string &dir, long n)
 }
 
 // the save state's block (lang/mips/include/layout.h LAYOUT_STATE; target/pocket/core_top.sv SS_ADDR, SS_SIZE)
-static const uint32_t SS_SDRAM = 0x02300000u, SS_BRIDGE_ADDR = 0x06300000u, SS_BYTES = 0x00970000u;
+static const uint32_t SS_SDRAM = 0x02300000u, SS_BRIDGE_ADDR = 0x06300000u, SS_BYTES = 0x00A00000u;
 static int ss_req;                  // 1 a save asked, 2 a load asked, 3 a load's copy under way, 4 a save's read-out under way
 static long ss_req_sys;
 static bool ss_done_was;
@@ -830,13 +830,15 @@ int main(int argc, char **argv)
                 if (o_ailog) fprintf(o_ailog, "M %s\n", ss_req == 1 ? "save" : "load");     // (state_compare.py --audio: where it was)
                 if (ss_req == 1 && !t->ss_err) {
                     ss_out = getenv("SS_OUT") ? getenv("SS_OUT") : (outdir.empty() ? std::string(".") : outdir) + "/state.bin";
+                    const uint32_t n = ((uint32_t)t->br_length >> 20 & 0xFu) << 20;          // (what the core says it wrote: the Pocket reads that much)
+                    printf("[state: %u bytes of %u]\n", n, SS_BYTES);
                     if (ss_bridge) {
-                        slots[7].back.assign(SS_BYTES, 0); slots[7].size = SS_BYTES;
-                        br_jobs.push_back({7, false, SS_BRIDGE_ADDR, 0, SS_BYTES});
+                        slots[7].back.assign(n, 0); slots[7].size = n;
+                        br_jobs.push_back({7, false, SS_BRIDGE_ADDR, 0, n});
                         ss_req = 4;
                     } else {
-                        std::vector<uint8_t> d(SS_BYTES);
-                        for (uint32_t i = 0; i < SS_BYTES; i += 4) { uint32_t v = rd_word((SS_SDRAM + i) / 4); d[i] = v >> 24; d[i + 1] = v >> 16; d[i + 2] = v >> 8; d[i + 3] = v; }
+                        std::vector<uint8_t> d(n);
+                        for (uint32_t i = 0; i < n; i += 4) { uint32_t v = rd_word((SS_SDRAM + i) / 4); d[i] = v >> 24; d[i + 1] = v >> 16; d[i + 2] = v >> 8; d[i + 3] = v; }
                         ss_write(ss_out, d);
                         ss_req = 0;
                         if (getenv("SS_EXIT")) done = true;
@@ -1176,7 +1178,7 @@ int main(int argc, char **argv)
                     }
                     if (frames == o_ss_load_at && getenv("SS_LOAD")) {
                         std::vector<uint8_t> d;
-                        if (!read_file(getenv("SS_LOAD"), d) || d.size() != SS_BYTES) { printf("[state: %s is no state]\n", getenv("SS_LOAD")); return 2; }
+                        if (!read_file(getenv("SS_LOAD"), d) || d.size() > SS_BYTES || d.empty()) { printf("[state: %s is no state]\n", getenv("SS_LOAD")); return 2; }
                         printf("[state: the Pocket copies a state in at field %ld, sys %ld]\n", frames, sys); fflush(stdout);
                         if (ss_bridge) {
                             slots[7].data = d; slots[7].size = (uint32_t)d.size();

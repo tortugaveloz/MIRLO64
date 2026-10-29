@@ -101,7 +101,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 |---|---|---|
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
 | `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
-| `0x4230_0000` | 9.4 MiB | A save state ([Save states](#save-states)) |
+| `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
@@ -796,8 +796,8 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
 ### Save states
 
 The Pocket's Sleep and its Memories are save states (`core.json`'s `sleep_supported`). To make one the Pocket sends the
-core its Savestate Start command; when the core says the state is ready, it reads the core's block of 9,895,936 bytes
-(`0x0097_0000`) at the bridge's `0x0630_0000` -- the SDRAM's `0x4230_0000`, above the last byte of a ROM of 64 MiB --
+core its Savestate Start command; when the core says the state is ready, it reads the core's block, as many bytes as the core
+says (at most 10 MiB, `0x00A0_0000`, of which a state is at most `0x0097_0000`; a title screen's is some 0.9 MB, written as 1 MiB) at the bridge's `0x0630_0000` -- the SDRAM's `0x4230_0000`, above the last byte of a ROM of 64 MiB --
 into a file. To put one back (the wake from a Sleep, a Memory chosen) it starts the core as for any launch, the game
 booting afresh, copies the file in at the same address and sends Savestate Load. `target/pocket/core_top.sv` answers
 both commands at once and reports them busy until the runtime is done; `APF_BRIDGE.SAVESTATE` and `SAVESTATE_DONE`
@@ -819,6 +819,13 @@ copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped i
    and the ROM (its header's check words, title and ID): a state is refused by another `n64rt.sys` or another game.
    The game then goes on (a Memory) as from the moment the hardware came to rest: the VI's line is waited for and Count,
    Compare and the MI's interrupts are put back, so the copies' time is none of the game's.
+   **Its size.** The Pocket's time to save a state and to put one back goes with the state's size (some 16 s of a wake, for
+   9.9 MB), so the memories are written as tokens over 32-bit words: a word with bit 31 clear is the count of words that
+   follow it as they are, with bit 31 set the count of times the word after it is repeated (three or more). The header
+   and the registers are at fixed offsets, then DMEM, the save, the Controller Pak, the coverage plane, the RDRAM and last
+   the runtime's own memory, each from an offset the header names. The core tells the Pocket the size, in MiB, that the runtime has written
+   to `APF_BRIDGE.TRANSFER_LENGTH` (bits 23:20, whole MiB) before its `SAVESTATE_DONE`. The RDRAM of a game that has used little of it is mostly zeros, and the coverage plane a constant:
+   a title screen's state is some 0.9 MB.
 3. **A load** quiets the booted game's hardware the same way (its RSP halted where it is if it does not stop), puts back
    the RSP (DMEM through the RDRAM; BROKE by a BREAK it runs), the DPC (CURRENT and END; a SYNC FULL through the RDP's
    command port clears what END's write set), the PIF RAM, the AI, the VI, the MI and COP0, then the memories, waits for
