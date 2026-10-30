@@ -64,6 +64,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak, Virtual Transfer Pak | The accessory in controller 1. The Virtual Transfer Pak takes its Game Boy game from "Load Game Boy ROM" in the core's settings (a `.gb` or `.gbc` in `Assets/n64/common/`), and keeps its save in `Saves/n64/common/<N64 game>.gbsav`: **first copy the Game Boy game's `.sav` there with that name** (see [Saves](#saves)). No Sleep or Memories while a Transfer Pak is selected |
+| Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
 | Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
@@ -84,6 +85,15 @@ The Pocket writes them to `Saves/n64/common/` when you quit the core. A file app
 | `<game>.gbsav` | The Game Boy game of the Virtual Transfer Pak: the cartridge's RAM, as a Game Boy core keeps it (one file for each N64 game) |
 
 The Game Boy save is named after the N64 game, not after the Game Boy game. **Before using a Game Boy game in the Virtual Transfer Pak, copy its `.sav` (the Game Boy core's, from `Saves/gbc/common/` or `Saves/gb/common/`) to `Saves/n64/common/<N64 game>.gbsav`**: without that file the game starts with an empty save and writes a new one, so a save you already have is not used. To play that game again on a Game Boy core, copy the `.gbsav` back to `Saves/gbc/common/` (or `Saves/gb/common/`) with the name that core uses (`<Game Boy game>.sav`). Keep a copy of the save the first time.
+
+### GameShark codes
+
+With "Enable Gameshark codes" on, the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
+is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
+field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
+choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the
+types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The codes are read when the
+game starts. The file `PUT_CODES_HERE.txt` in that folder says it too.
 
 ## Building from source
 

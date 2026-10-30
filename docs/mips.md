@@ -103,6 +103,8 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
 | `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
 | `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak's cartridge RAM, its save ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
+| `0x42D3_0000` | 4 KiB | The parameter struct of the runtime's open command ([GameShark codes](#gameshark-codes)) |
+| `0x42D4_0000` | up to 64 KiB | The game's GameShark codes, a text file |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4340_0000` | up to 3 MiB | The virtual Transfer Pak's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
@@ -156,10 +158,11 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
 | 5 | Game Boy ROM | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
 | 6 | Game Boy Save | `.gbsav`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
+| 7 | Gameshark codes | no file at the start: the runtime opens one by path, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
-when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 6 with no
+when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 7 with no
 gap: the table of file sizes is indexed by a slot's place in `data.json`.
 
 A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
@@ -821,6 +824,31 @@ touched). The game's own `osGbpak*` code runs on it as on the real one.
 
 `lang/n64rt/test` runs it under libultra's own code (`pak_test`; its header says how).
 
+### GameShark codes
+
+The setting "Enable Gameshark codes" (off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
+`n64rt_gs.c`). They are a text file on the SD card, in `Assets/n64/common/gameshark/`, named after the cartridge: its four-character ID
+(ROM `0x3B..0x3E`: `NSME`, the game's code and its region) and, for a revision whose addresses differ, its version byte in decimal:
+`NSME.1.txt` is tried first, then `NSME.txt`. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
+from its hook on the vertical retrace: there is no choosing among them (the file holds the codes to run). `n64rt_gs.h` has the format
+(`80123456 0063  a description`; lines that are not a code and `#`, `;` and `//` comments are skipped) and the types: `80`/`81` (8- and 16-bit
+writes), `A0`/`A1`, `D0` to `D3` (the next line runs if the byte or half-word at the address is, or is not, the value), `50` (the repeater), and
+`F0`/`F1` (as `80`/`81`). The GS button's `88` and `89` and the types that are not known are skipped. A write that would not change a value is not made;
+one that does is made visible to the game's data cache, and the instruction cache is dropped in the field if any did. With 4 MiB of RDRAM (the
+Expansion Pak setting off) writes above it are ignored. `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host.
+
+The file is read by the Pocket at the runtime's request, with the bridge's target commands (`APF_BRIDGE`, [control.md](control.md)); the
+core's hardware already has them. The runtime writes the open command's parameter struct (the path, 256 bytes, then the flags and the size,
+0) at `0x42D3_0000`, sets `SLOT_ID` to 7 and `RAM_DATA_ADDRESS` to it, and writes `REQUEST_OPENFILE`; the Pocket reads the struct from the
+SDRAM through the bridge and opens the file. Then `DATA_OFFSET` 0, `TRANSFER_LENGTH` the file's size (`FILE_SIZE`), `RAM_DATA_ADDRESS` `0x42D4_0000` and
+`REQUEST_READ`. Each command's end is `STATUS`; the result is `COMMAND_RESULT_CODE` (0 done; the Pocket answers 4 for a path it does not find).
+**The path has to start with a slash and be the card's own** (`/Assets/n64/common/gameshark/NSME.txt`): measured on a Pocket, the same path
+without the slash, relative to `common/`, to `n64/common/` or alone, all fail with 4.
+
+The setting is looked at in every field (a box that is on and has no codes loads the file; off drops them) because the Pocket does
+not send a setting to the core at a fixed time. A setting's `address` in `interact.json` has to be one no other setting has: the setting
+table's n = 8, `0x1000_0120`, is the Start macro's, and a second setting there overwrote the first (the codes were never on).
+
 ### Save states
 
 The Pocket's Sleep and its Memories are save states (`core.json`'s `sleep_supported`). To make one the Pocket sends the
@@ -879,6 +907,7 @@ scan-out instead.
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
+| Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2), Virtual Transfer Pak (3) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |

@@ -312,6 +312,7 @@ static void vi_field_common(void)
         n64rt_dump_threads();
     }
 #endif
+    n64rt_cheat_field();
 }
 
 /* (n64rt_tick, interrupts off) */
@@ -1218,6 +1219,7 @@ void n64rt_io_init(void)
 {
     n64rt_eeprom_init();
     eep_db_init();
+    n64rt_cheat_init();
     n64rt_pak_init();
     extern void n64rt_audio_init(void), n64rt_gfx_init(void);
     n64rt_audio_init();
