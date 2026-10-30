@@ -2,7 +2,7 @@ MIRLO 64: A Nintendo 64 core for the Analogue Pocket.
 
 An original system-on-chip written in SystemVerilog, with a VR4300-class MIPS CPU and an RSP and RDP of its own. It runs each game's own code, unmodified, from its .z64 ROM (up to 64 MiB); a small runtime, n64rt.sys, starts it in place of the console's boot.
 
-Put the ROMs (.z64, big-endian) in Assets/n64/common/ and launch the core. Saves (EEPROM, SRAM, FlashRAM) and the Controller Pak are kept in Saves/n64/; the Transfer Pak reads a Game Boy cartridge in the Pocket's slot.
+Put the ROMs (.z64, big-endian) in Assets/n64/common/ and launch the core. Saves (EEPROM, SRAM, FlashRAM) and the Controller Pak are kept in Saves/n64/; the Transfer Pak reads a Game Boy cartridge in the Pocket's slot, or, as the Virtual Transfer Pak, Assets/n64/common/transferpak.gb with its save in Saves/n64/common/<game>.gbsav.
 
 Settings: Expansion Pak (on by default), the controller's pak and button mapping, and picture crop.
 

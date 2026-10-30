@@ -30,6 +30,13 @@
                                              * runtime's (n64rt_io.c), what the PI's engine and the game's reads of domain 2 reach
                                              * (rtl/soc/rcp_mi.sv's PI2: its address is the RTL's, mirlo_mips.sv's io_adr) */
 #define LAYOUT_FREE         0x34161000      /* unused PSRAM up to the ROM at byte offset 0x00200000 */
+#define LAYOUT_GBROM        0x43400000      /* slot 5: the Virtual Transfer Pak's Game Boy ROM, up to 3 MiB (lang/n64rt/n64rt_gbvirt.c), at the
+                                             * bridge's 0x0740_0000. Below it the bridge's 0x0730_0000 - 0x073F_FFFF are the PSRAM's, not the SDRAM's */
+#define LAYOUT_GBROM_SLOT   5
+#define LAYOUT_GBROM_MAX    0x00300000
+#define LAYOUT_GBSAVE       0x42D00000      /* slot 6: that cartridge's RAM (and its clock's 48 bytes), at the bridge's 0x06D0_0000; nonvolatile */
+#define LAYOUT_GBSAVE_SLOT  6
+#define LAYOUT_GBSAVE_MAX   0x00021000
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000

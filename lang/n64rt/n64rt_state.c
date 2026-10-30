@@ -276,7 +276,7 @@ static void save(void)
     ss_hw_t *w = (ss_hw_t *)(uintptr_t)SS_AT(SS_HW);
     const u32 rt = (u32)(_end - _fdata);
     h->magic = 0;                                       /* (a state half made is no state) */
-    if (n64rt_pak_kind(0) == N64RT_PAK_TRANSFER || rt > SS_RT_MAX || !quiesce(0)) { answer(1, 0); return; }
+    if (n64rt_pak_kind(0) >= N64RT_PAK_TRANSFER || rt > SS_RT_MAX || !quiesce(0)) { answer(1, 0); return; }
     memset(w, 0, sizeof *w);
     w->uptime = uptime();
     /* COP0 */
@@ -479,10 +479,10 @@ void n64rt_state_event(void)
     s_in = 0;
 }
 /* whether the Pocket may ask: not with a Game Boy cartridge in the Transfer Pak (its RAM and clock are the cartridge's
- * own, which no state can hold) */
+ * own, which no state can hold; the virtual one's neither, for now) */
 void n64rt_state_poll(void)
 {
-    const u32 ok = n64rt_pak_kind(0) != N64RT_PAK_TRANSFER;
+    const u32 ok = n64rt_pak_kind(0) < N64RT_PAK_TRANSFER;
     if ((apf_bridge_savestate_read() & 1u) != ok) apf_bridge_savestate_write(ok);
     if (!(apf_bridge_transfer_length_read() >> 20 & 0xFu)) apf_bridge_transfer_length_write(LAYOUT_STATE_BYTES);   /* (the size told until a state says its own) */
 }

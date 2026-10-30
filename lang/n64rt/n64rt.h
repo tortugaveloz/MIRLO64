@@ -287,11 +287,18 @@ extern u32 n64rt_cpu64, n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md;   /* what the
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* controller 1's accessory (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
-enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
+enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
 u8   n64rt_pak_crc(const u8 *block);
+u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
+/* the virtual Transfer Pak's Game Boy cartridge, made of data.json's slots 5 and 6 (n64rt_gbvirt.c) */
+int  n64rt_gbv_look(void);                 /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
+u32  n64rt_gbv_id(void);                   /* its header's CRC */
+void n64rt_gbv_power(int on);              /* the cartridge's power: on is its reset */
+u8   n64rt_gbv_read(u32 addr);             /* its bus, 0x0000 - 0xBFFF */
+void n64rt_gbv_write(u32 addr, u8 value);
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */

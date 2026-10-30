@@ -54,6 +54,31 @@
         "filename": "n64savedb.txt",
         "size_maximum": "0x10000",
         "address": "0x07100000"
+      },
+      {
+        "name": "Game Boy ROM",
+        "id": 5,
+        "required": false,
+        "parameters": "0x1",
+        "extensions": [
+          "gb",
+          "gbc"
+        ],
+        "size_maximum": "0x300000",
+        "address": "0x07400000",
+        "filename": "transferpak.gb"
+      },
+      {
+        "name": "Game Boy Save",
+        "id": 6,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "gbsav"
+        ],
+        "size_maximum": "0x21000",
+        "address": "0x06D00000"
       }
     ]
   }

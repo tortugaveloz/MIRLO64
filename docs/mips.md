@@ -102,7 +102,9 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
 | `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
 | `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
+| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak's cartridge RAM, its save ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
+| `0x4340_0000` | up to 3 MiB | The virtual Transfer Pak's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -152,10 +154,12 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
+| 5 | Game Boy ROM | `.gb`, `.gbc` or `transferpak.gb`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
+| 6 | Game Boy Save | `.gbsav`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
-when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 4 with no
+when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 6 with no
 gap: the table of file sizes is indexed by a slot's place in `data.json`.
 
 A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
@@ -793,6 +797,30 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
   data at 58. A write has /WR low from clock 16 to 48; the data bank's level translator is turned outward only inside a
   write, when /RD is high, so the translator and the cartridge never drive the data pins together.
 
+### The virtual Transfer Pak
+
+The setting "Controller 1 pak" has a second Transfer Pak, **Virtual Transfer Pak**: the same accessory (the registers above) with a cartridge that
+is made of two files the Pocket loads, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
+touched). The game's own `osGbpak*` code runs on it as on the real one.
+
+* **The ROM** is data slot 5, "Game Boy ROM" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`. If `Assets/n64/common/transferpak.gb` exists the Pocket
+  loads it when the core starts; the core's settings also have "Load Game Boy ROM", which loads another file while the game runs. It is there for the game
+  when its header's checksum and logo are right and its cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a
+  cartridge put in or taken out, as with the real one: a game that polls the status finds it within a second. A game that looks for the cartridge only when
+  it starts (as a console's power-on) has to be started after the ROM is loaded: use `transferpak.gb`.
+* **The RAM** is data slot 6, "Game Boy Save" (`.gbsav`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav`):
+  one Game Boy save for each N64 game, so a save of a Game Boy cartridge is copied there as it is. It is the cartridge's RAM as the emulators keep it (its size is the
+  header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is
+  left 0. With no file the RAM is `0xFF`. The slot takes a file size (what the Pocket writes back when the core quits) when the game first
+  writes to the RAM or the clock, so a game that never saves leaves no file.
+* **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
+  there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
+  (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
+* **The clock** counts seconds while the core runs. The core has no calendar, so the time the Pocket is off is not counted.
+* **No save state** while the setting is a Transfer Pak, either kind: the Pocket's Sleep and Memories are refused ([Save states](#save-states)).
+
+`lang/n64rt/test` runs it under libultra's own code (`pak_test`; its header says how).
+
 ### Save states
 
 The Pocket's Sleep and its Memories are save states (`core.json`'s `sleep_supported`). To make one the Pocket sends the
@@ -835,7 +863,7 @@ copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped i
 Not in a state, because the hardware is at rest when it is made: IMEM and the RSP's registers (every task loads its
 microcode and sets its registers), the AI's queue and the SI's DMA. Nor the RDP's modes and TMEM, which nothing reads
 back: a game sets what it draws with in every frame's display list. A state is refused while controller 1 has the
-Transfer Pak (the Game Boy cartridge's RAM and clock are its own), and the core says it takes none when no game runs.
+Transfer Pak, the Game Boy cartridge in the Pocket's slot (its RAM and clock are its own) or the virtual one (its RAM and mapper are not in a state yet), and the core says it takes none when no game runs.
 `sim/mips_soc`'s `SS_SAVE`, `SS_LOAD` and `sim/mips_soc/state_compare.py` make a state, load it into another run and
 compare the two runs' pictures and sound.
 
@@ -851,7 +879,7 @@ scan-out instead.
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
-| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2) |
+| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2), Virtual Transfer Pak (3) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | L stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 5 % (2), 10 % (3), ... 70 % (15); actual threshold is 30 % larger (0 % to 91 %) |

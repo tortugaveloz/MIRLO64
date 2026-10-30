@@ -6,6 +6,13 @@
  *     tb_soc build/pak_test.bin -c 120 +gbcart=<rom.gb>
  * Without +gbcart, or on a SoC without the port, the slot's Transfer Pak
  * must be one with no cartridge in it.
+ * The virtual Transfer Pak (n64rt_gbvirt.c) has the same battery, with the ROM
+ * and the save as the Pocket's slots 5 and 6:
+ *     SLOT5=<rom.gb> [SLOT6=<save>] SLOTS_OUT=<dir> tb_soc build/pak_test.bin -c 150
+ * With make_gb.py's ROM it runs the Transfer Pak's checks on it and the RAM it
+ * wrote is in <dir>/slot6.bin; with another ROM it reads the whole cartridge,
+ * through the game's own osGbpakReadWrite, and prints the CRC-32 of some of its ROM's
+ * banks and of each of its RAM's: the files', for the host to compare.
  * The ROM is make_gb.py's: a valid header, MBC3, each bank's last byte its
  * number. */
 #include <stdio.h>
@@ -16,7 +23,7 @@
 extern unsigned pak_test_kind;
 void pak_test_boot(void);
 int pak_test_slot_port(void);
-enum { NONE, CPAK, SLOT };                 /* the setting's values */
+enum { NONE, CPAK, SLOT, VIRT };            /* the setting's values */
 
 static void fill(void *p, int v, unsigned n) { u8 *b = p; while (n--) *b++ = (u8)v; }
 static int fails;
@@ -30,6 +37,7 @@ static void check(const char *what, s32 got, s32 want)
 OSMesgQueue pak_test_mq;                   /* (si_test: the SI's event queue) */
 static OSPfs s_pfs;
 static u8 s_buf[1024], s_back[1024];
+static OSGbpakId id_dummy;
 
 static void controller_pak(void)
 {
@@ -79,12 +87,12 @@ static void transfer_pak_empty(void)
     check("osGbpakPower off, no cartridge", osGbpakPower(&s_pfs, OS_GBPAK_POWER_OFF), 0);
 }
 
-static void transfer_pak(void)
+static void transfer_pak(int kind)
 {
     u8 status = 0, blk[32], back[32];
     OSGbpakId id;
 
-    pak_test_kind = SLOT;
+    pak_test_kind = kind;
     pak_test_boot();
     fill(&s_pfs, 0, sizeof s_pfs);
     check("osPfsInitPak on a Transfer Pak fails", osPfsInitPak(&pak_test_mq, &s_pfs, 0) != 0, 1);
@@ -139,6 +147,53 @@ static void transfer_pak(void)
     check("osGbpakPower off", osGbpakPower(&s_pfs, OS_GBPAK_POWER_OFF), 0);
 }
 
+static u32 crc_add(u32 c, const u8 *p, u32 n)
+{
+    while (n--) { c ^= *p++; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); }
+    return c;
+}
+/* the cartridge as a game reads it: the ROM bank by bank (a bank's number to 0x2000: the MBC1, 3 and 5's), the RAM
+ * bank by bank (0x0000: on, 0x4000: the bank); the CRC-32s are the host's to compare with the files' */
+static u8 s_bank[0x4000];
+static const u8 s_probe[] = { 1, 2, 3, 17, 31, 32, 33, 62, 63 };   /* (a 1 MiB ROM through the joybus takes long: bank 0 and these) */
+static void whole_cartridge(int kind)
+{
+    u8 status = 0, blk[32];
+    OSGbpakId id;
+    static const u32 ram_bytes[6] = { 0, 0x800, 0x2000, 0x8000, 0x20000, 0x10000 };
+
+    pak_test_kind = kind;
+    pak_test_boot();
+    fill(&s_pfs, 0, sizeof s_pfs);
+    check("osGbpakInit", osGbpakInit(&pak_test_mq, &s_pfs, 0), 0);
+    check("osGbpakReadId", osGbpakReadId(&s_pfs, &id, &status), 0);
+    u32 banks = 2u << id.rom_size, ram = id.ram_size < 6 ? ram_bytes[id.ram_size] : 0;
+    printf("  cartridge \"%.16s\", type %02x, %lu ROM banks, %lu bytes of RAM\n", (const char *)id.game_title, id.cart_type,
+           (unsigned long)banks, (unsigned long)ram);
+    check("bank 0", osGbpakReadWrite(&s_pfs, OS_READ, 0x0000, s_bank, 0x4000), 0);
+    printf("  ROM bank 0 crc %08lx\n", (unsigned long)~crc_add(0xFFFFFFFFu, s_bank, 0x4000));
+    for (u32 i = 0; i < sizeof s_probe; i++) {
+        u32 b = s_probe[i];
+        if (b >= banks) continue;
+        fill(blk, (int)(b & 0xFF), sizeof blk);
+        check("ROM bank write", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x2000, blk, 32), 0);
+        check("ROM bank read", osGbpakReadWrite(&s_pfs, OS_READ, 0x4000, s_bank, 0x4000), 0);
+        printf("  ROM bank %lu crc %08lx\n", (unsigned long)b, (unsigned long)~crc_add(0xFFFFFFFFu, s_bank, 0x4000));
+    }
+    if (ram) {
+        fill(blk, 0x0A, sizeof blk);
+        check("RAM on", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x0000, blk, 32), 0);
+        u32 rb = ram >= 0x2000u ? ram >> 13 : 1u, part = ram >= 0x2000u ? 0x2000u : ram;
+        for (u32 b = 0; b < rb; b++) {
+            fill(blk, (int)b, sizeof blk);
+            check("RAM bank", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x4000, blk, 32), 0);
+            check("RAM read", osGbpakReadWrite(&s_pfs, OS_READ, 0xA000, s_bank, part), 0);
+            printf("  RAM bank %lu crc %08lx\n", (unsigned long)b, (unsigned long)~crc_add(0xFFFFFFFFu, s_bank, part));
+        }
+    }
+    check("osGbpakPower off", osGbpakPower(&s_pfs, OS_GBPAK_POWER_OFF), 0);
+}
+
 static void no_pak(void)
 {
     pak_test_kind = NONE;
@@ -164,10 +219,26 @@ int main(void)
     check("osGbpakInit, the slot", osGbpakInit(&pak_test_mq, &s_pfs, 0), 0);
     if (osGbpakGetStatus(&s_pfs, &status) == 0) {
         printf("  the slot: a cartridge (the port %s)\n", pak_test_slot_port() ? "is there" : "IS NOT THERE");
-        transfer_pak();
+        transfer_pak(SLOT);
     } else {
         printf("  the slot: no cartridge (the port %s)\n", pak_test_slot_port() ? "is there" : "is not in this SoC");
         transfer_pak_empty();
+    }
+    /* the virtual Transfer Pak: its cartridge is made of the Pocket's slots 5 and 6 */
+    pak_test_kind = VIRT;
+    pak_test_boot();
+    fill(&s_pfs, 0, sizeof s_pfs);
+    check("osGbpakInit, virtual", osGbpakInit(&pak_test_mq, &s_pfs, 0), 0);
+    if (osGbpakGetStatus(&s_pfs, &status) == 0) {
+        OSGbpakId id;
+        check("osGbpakReadId, virtual", osGbpakReadId(&s_pfs, &id, &status), 0);
+        const int mine = bcmp(id.game_title, "MIRLO TEST", 10) == 0;
+        printf("  the virtual slot: a cartridge%s\n", mine ? " (make_gb.py's)" : "");
+        if (mine) transfer_pak(VIRT); else whole_cartridge(VIRT);
+    } else {
+        printf("  the virtual slot: no cartridge\n");
+        pak_test_boot();
+        check("osGbpakReadId, no virtual cartridge", osGbpakReadId(&s_pfs, &id_dummy, &status), PFS_ERR_NO_GBCART);
     }
     no_pak();
     printf(fails ? "pak_test: FAILED\n" : "pak_test: PASS\n");
