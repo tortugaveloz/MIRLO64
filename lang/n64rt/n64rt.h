@@ -292,6 +292,9 @@ void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
 u8   n64rt_pak_crc(const u8 *block);
+/* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
+void n64rt_cheat_init(void);
+void n64rt_cheat_field(void);
 u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
 /* the virtual Transfer Pak's Game Boy cartridge, made of data.json's slots 5 and 6 (n64rt_gbvirt.c) */
 int  n64rt_gbv_look(void);                 /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */

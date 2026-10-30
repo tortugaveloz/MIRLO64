@@ -1,0 +1,13 @@
+GameShark codes, one file for each game: <ID>.txt, where <ID> is the four characters the ROM's header has at 0x3B (the game's code and its
+region, such as NSME). A revision whose addresses differ can have its own file, <ID>.<version>.txt, with the header's
+version byte (0x3F) in decimal: NSME.1.txt is used before NSME.txt.
+
+Each line is a code, 8 hex digits, a space, 4 hex digits, and then anything you like:
+
+    80123456 0063   Infinite lives
+    # a comment, like blank lines and lines starting with ; or //
+
+Every code in the file runs, in every video field, when "Enable Gameshark codes" is on in the core's settings: leave out of the file the
+ones you do not want. Supported: 80 and 81 (write a byte / a 16-bit value), A0 and A1, D0 to D3 (the next line runs only if the value at
+the address is / is not what the code says), 50 (repeater), F0 and F1. 88 and 89 (the GS button) and other types are skipped.
+Codes are read when the game starts.

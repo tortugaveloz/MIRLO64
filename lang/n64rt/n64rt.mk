@@ -23,10 +23,10 @@ N64RT_F3D := -DF3D_N64RAM $(if $(filter 1,$(RAWCC)),-DF3D_RAW_CC) -DF3D_TRACE=0
 # RSP=1: for the SoC built with MIRLO_RSP -- the game's tasks on its own
 # microcode (n64rt_rsp.c): no translator, no geom or audio firmware.
 ifeq ($(RSP),1)
-N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_exc.o n64rt_rsp.o n64rt_savedb.o n64rt_state.o)
+N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_gs.o n64rt_cheat.o n64rt_exc.o n64rt_rsp.o n64rt_savedb.o n64rt_state.o)
 CFLAGS += -DN64RT_RSP
 else
-N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_exc.o n64rt_gfx.o n64rt_savedb.o \
+N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_gs.o n64rt_cheat.o n64rt_exc.o n64rt_gfx.o n64rt_savedb.o \
                 f3d_emit.o geom_load.o)
 endif
 CFLAGS += -I$(RT) -I$(MIRLO)/lang/c/game -I$(MIRLO)/lang/c/geom -I$(MIRLO)/lang/c/mips \

@@ -37,6 +37,13 @@
 #define LAYOUT_GBSAVE       0x42D00000      /* slot 6: that cartridge's RAM (and its clock's 48 bytes), at the bridge's 0x06D0_0000; nonvolatile */
 #define LAYOUT_GBSAVE_SLOT  6
 #define LAYOUT_GBSAVE_MAX   0x00021000
+/* the GameShark codes of the game (lang/n64rt/n64rt_cheat.c): data.json's slot LAYOUT_GS_SLOT, a file the runtime asks the Pocket to open by
+ * its path (Assets/n64/common/gameshark/<the cartridge's ID>.txt) and to read to LAYOUT_GS; LAYOUT_GS_PARAM holds the open command's
+ * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. */
+#define LAYOUT_GS_PARAM     0x42D30000
+#define LAYOUT_GS           0x42D40000
+#define LAYOUT_GS_SLOT      7
+#define LAYOUT_GS_MAX       0x00010000
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000
