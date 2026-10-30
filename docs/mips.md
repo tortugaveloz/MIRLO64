@@ -154,7 +154,7 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
-| 5 | Game Boy ROM | `.gb`, `.gbc` or `transferpak.gb`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
+| 5 | Game Boy ROM | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
 | 6 | Game Boy Save | `.gbsav`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
@@ -803,11 +803,11 @@ The setting "Controller 1 pak" has a second Transfer Pak, **Virtual Transfer Pak
 is made of two files the Pocket loads, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
 touched). The game's own `osGbpak*` code runs on it as on the real one.
 
-* **The ROM** is data slot 5, "Game Boy ROM" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`. If `Assets/n64/common/transferpak.gb` exists the Pocket
-  loads it when the core starts; the core's settings also have "Load Game Boy ROM", which loads another file while the game runs. It is there for the game
-  when its header's checksum and logo are right and its cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a
-  cartridge put in or taken out, as with the real one: a game that polls the status finds it within a second. A game that looks for the cartridge only when
-  it starts (as a console's power-on) has to be started after the ROM is loaded: use `transferpak.gb`.
+* **The ROM** is data slot 5, "Game Boy ROM" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`. It has no default file: the core's settings have "Load Game Boy
+  ROM", which loads one from `Assets/n64/common` while the game runs. It is there for the game when its header's checksum and logo are right and its
+  cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
+  that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
+  loaded after that.
 * **The RAM** is data slot 6, "Game Boy Save" (`.gbsav`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav`):
   one Game Boy save for each N64 game. A Game Boy core's `.sav` has the same bytes: it is copied in and out by hand (the Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file). It is the cartridge's RAM as the emulators keep it (its size is the
   header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is

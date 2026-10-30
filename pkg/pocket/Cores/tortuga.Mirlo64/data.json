@@ -65,8 +65,7 @@
           "gbc"
         ],
         "size_maximum": "0x300000",
-        "address": "0x07400000",
-        "filename": "transferpak.gb"
+        "address": "0x07400000"
       },
       {
         "name": "Game Boy Save",
