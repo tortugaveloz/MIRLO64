@@ -6,6 +6,8 @@
  *   1  a Controller Pak
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
  *      own slot
+ *   3  a Transfer Pak with a virtual cartridge: a Game Boy ROM and its save,
+ *      files the Pocket loads (data.json's slots 5 and 6; n64rt_gbvirt.c)
  * Any other value is nothing. The other controllers have none.
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
@@ -49,7 +51,11 @@
  * (by its CRC) are right; only then are writes and the RAM's chip select let
  * through (GB_CART.CTRL's TRUST), so that a cartridge of another kind left in
  * the slot never sees more than reads. On a SoC without the registers
- * (GB_CART.ID reads 0) the Transfer Pak is there with no cartridge in it. */
+ * (GB_CART.ID reads 0) the Transfer Pak is there with no cartridge in it.
+ *
+ * The virtual Transfer Pak is the same accessory with another cartridge: what the game reads and writes at 0xC000 goes to
+ * n64rt_gbvirt.c's mapper, ROM and RAM, and the Pocket keeps its save. The cartridge is looked for in its slot where the
+ * physical one is looked for in the Pocket's. It does not touch the port, so a cartridge in the Pocket's slot is left alone. */
 #include <string.h>
 #include <generated/csr.h>
 #include <generated/soc.h>
@@ -68,6 +74,7 @@ static u8 s_sized;                              /* the Controller Pak's file siz
 #define LOGO_CRC  0x46195417u                   /* CRC-32 of the header's 48 logo bytes */
 static struct {
     u8  hw;                                     /* the SoC has the port */
+    u8  virt;                                   /* the cartridge looked for, and the one the power is on for, is the virtual one */
     u8  in;                                     /* a Game Boy cartridge answered the last look */
     u8  bus;                                    /* the port is on (the game's power) */
     u8  pulled;                                 /* another cartridge, or none, since the status was read */
@@ -94,20 +101,38 @@ static int slot_xfer(u32 addr, u32 we, u8 wd, u8 *rd)
     gb_cart_ctrl_write(0);
     return 0;
 }
-static void slot_power(int on)
+/* one byte on the cartridge's bus, the real one's or the virtual one's */
+static int xfer(u32 addr, u32 we, u8 wd, u8 *rd)
 {
+    if (!s_slot.virt) return slot_xfer(addr, we, wd, rd);
+    if (we) n64rt_gbv_write(addr, wd);
+    else if (rd) *rd = n64rt_gbv_read(addr);
+    return 1;
+}
+static void slot_power(int on, int virt)
+{
+    if (on) s_slot.virt = (u8)virt;
+    if (s_slot.virt) { n64rt_gbv_power(on); s_slot.bus = (u8)on; return; }
     if (!s_slot.hw) return;
     gb_cart_ctrl_write(on ? 1u | (s_slot.in ? 2u : 0u) : 0u);
     s_slot.bus = (u8)on;
     if (on) wait_us(200);
 }
-/* is a Game Boy cartridge there? (the port off before and after) */
-static void slot_look(void)
+/* is a Game Boy cartridge there? (the port off before and after); the virtual one: is a ROM in its slot */
+static void slot_look(int virt)
 {
     u8 h[0x50] = { 0 }, was = s_slot.in;
     u32 id = s_slot.id;
     s_slot.looked = now();
     s_slot.in = 0;
+    if (virt) {
+        s_slot.virt = 1;
+        s_slot.in = (u8)n64rt_gbv_look();
+        if (s_slot.in) s_slot.id = n64rt_gbv_id();
+        if (s_slot.in != was || (s_slot.in && s_slot.id != id)) s_slot.pulled = 1;
+        return;
+    }
+    s_slot.virt = 0;
     if (!s_slot.hw) return;
     gb_cart_ctrl_write(1);                      /* out of reset; no TRUST: reads of the ROM only */
     wait_us(200);
@@ -129,7 +154,7 @@ static void slot_look(void)
 static void settle(void) { for (volatile int i = 0; i < 256; i++) { } }
 /* a slot's file size in the core's table (0: no file); `want` sets it, so the
  * Pocket writes that many bytes back to a nonvolatile slot's file */
-static u32 slot_size(u32 id, u32 want)
+u32 n64rt_slot_size(u32 id, u32 want)
 {
     u32 prev = apf_bridge_slot_id_read();
     apf_bridge_slot_id_write(id);
@@ -145,7 +170,7 @@ static void cpak_dirty(void)
 {
     if (s_sized) return;
     s_sized = 1;
-    slot_size(CPAK_SLOT, PAK_BYTES);
+    n64rt_slot_size(CPAK_SLOT, PAK_BYTES);
 }
 
 /* ---- the Controller Pak's file system, empty ----------------------------------- */
@@ -187,11 +212,11 @@ void n64rt_pak_init(void)
     memset(&s_slot, 0, sizeof s_slot);
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
-    if (n64rt_pak_kind(0) == N64RT_PAK_TRANSFER) { slot_look(); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
+    { int k = n64rt_pak_kind(0); if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; } }   /* (any other setting: the port is left alone) */
 #ifdef N64RT_DEBUG
     n64rt_log("n64rt: the cartridge slot's port: %s\n", s_slot.hw ? "there" : "not in this SoC");
 #endif
-    s_sized = slot_size(CPAK_SLOT, 0) >= PAK_BYTES;
+    s_sized = n64rt_slot_size(CPAK_SLOT, 0) >= PAK_BYTES;
     if (!cpak_id_ok((const volatile u8 *)(uintptr_t)(CPAK_SDRAM + 0x20u))) cpak_format();
 }
 
@@ -203,15 +228,16 @@ int n64rt_pak_kind(int ch)
 #else
     u32 k = apf_interact_interact0_read() & 31u;
 #endif
-    return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : N64RT_PAK_NONE;
+    return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
 }
 
 /* a block of 32 bytes at address a (its low 5 bits clear); 0, or 1 with no pak there */
 int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 {
-    int kind = n64rt_pak_kind(ch);
+    int kind = n64rt_pak_kind(ch), virt = kind == N64RT_PAK_VIRTUAL;
     a &= 0xFFE0u;
-    if (kind != N64RT_PAK_TRANSFER && s_slot.bus && ch == 0) { slot_power(0); s_tp.access = 0; }   /* (the setting changed) */
+    if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus && ch == 0) { slot_power(0, 0); s_tp.access = 0; }   /* (the setting changed) */
+    if (s_slot.bus && s_slot.virt != (u8)virt && ch == 0) { slot_power(0, 0); s_tp.access = 0; }   /* (the other cartridge) */
     if (kind == N64RT_PAK_NONE) return 1;
     if (kind == N64RT_PAK_CONTROLLER) {
         volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + a);
@@ -226,23 +252,23 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
     if (write) {
         if (hi == 0x8u) {
             if (b[0] == 0x84u) s_tp.on = 1;
-            else if (b[0] == 0xFEu) { s_tp.on = 0; s_tp.access = 0; slot_power(0); }
+            else if (b[0] == 0xFEu) { s_tp.on = 0; s_tp.access = 0; slot_power(0, virt); }
         } else if (!s_tp.on) {
         } else if (hi == 0xAu) s_tp.bank = b[0] & 3u;
         else if (hi == 0xBu) {
             u8 acc = b[0] & 1u;
-            if (acc && !s_tp.access) { slot_look(); slot_power(1); }   /* (the cartridge powers up) */
-            if (!acc && s_tp.access) slot_power(0);
+            if (acc && !s_tp.access) { slot_look(virt); slot_power(1, virt); }   /* (the cartridge powers up) */
+            if (!acc && s_tp.access) slot_power(0, virt);
             s_tp.access = acc;
             s_tp.changed = 1;
         } else if (hi >= 0xCu && s_tp.access) {
             u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
-            if (s_slot.in && s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && slot_xfer(g + i, 1, b[i], 0); i++) { }
+            if (s_slot.in && s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 1, b[i], 0); i++) { }
         }
         return 0;
     }
     if (hi == 0xBu && s_tp.on && !s_tp.access && now() - s_slot.looked > CONFIG_CLOCK_FREQUENCY)
-        slot_look();                                    /* (it may have been put in, or taken out) */
+        slot_look(virt);                                /* (it may have been put in, or taken out) */
     memset(b, 0, 32);
     if (!s_tp.on) return 0;
     if (hi == 0x8u) memset(b, 0x84, 32);
@@ -254,7 +280,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
         s_slot.pulled = 0;
     } else if (hi >= 0xCu && s_tp.access && s_slot.in) {
         u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
-        if (s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && slot_xfer(g + i, 0, 0, &b[i]); i++) { }
+        if (s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 0, 0, &b[i]); i++) { }
     }
     return 0;
 }

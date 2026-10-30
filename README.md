@@ -14,7 +14,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
-* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, and EEPROM, SRAM and FlashRAM saves.
+* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, a Virtual Transfer Pak that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
@@ -63,7 +63,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
-| Controller 1 pak | **None**, Controller Pak, Transfer Pak | The accessory in controller 1 |
+| Controller 1 pak | **None**, Controller Pak, Transfer Pak, Virtual Transfer Pak | The accessory in controller 1. The Virtual Transfer Pak takes its Game Boy game from "Load Game Boy ROM" in the core's settings (a `.gb` or `.gbc` in `Assets/n64/common/`), and keeps its save in `Saves/n64/common/<N64 game>.gbsav`: **first copy the Game Boy game's `.sav` there with that name** (see [Saves](#saves)). No Sleep or Memories while a Transfer Pak is selected |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
 | Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
@@ -81,6 +81,9 @@ The Pocket writes them to `Saves/n64/common/` when you quit the core. A file app
 |---|---|
 | `<game>.sav` | The cartridge's save: EEPROM, SRAM or FlashRAM, whichever the game uses |
 | `<game>.mpk` | The Controller Pak, when that setting is on |
+| `<game>.gbsav` | The Game Boy game of the Virtual Transfer Pak: the cartridge's RAM, as a Game Boy core keeps it (one file for each N64 game) |
+
+The Game Boy save is named after the N64 game, not after the Game Boy game. **Before using a Game Boy game in the Virtual Transfer Pak, copy its `.sav` (the Game Boy core's, from `Saves/gbc/common/` or `Saves/gb/common/`) to `Saves/n64/common/<N64 game>.gbsav`**: without that file the game starts with an empty save and writes a new one, so a save you already have is not used. To play that game again on a Game Boy core, copy the `.gbsav` back to `Saves/gbc/common/` (or `Saves/gb/common/`) with the name that core uses (`<Game Boy game>.sav`). Keep a copy of the save the first time.
 
 ## Building from source
 

@@ -17,7 +17,7 @@ BUILD     = build
 ULT_SRC   = gbpakinit gbpakpower gbpakgetstatus gbpakreadid gbpakreadwrite gbpaksetbank gbpakcheckconnector \
             pfsinitpak pfschecker contpfs pfsallocatefile pfsreadwritefile pfssearchfile pfsdeletefile \
             pfsfreeblocks pfsfilestate pfsselectbank
-OBJECTS   = $(BUILD)/pak_test.o $(BUILD)/pak_glue.o $(BUILD)/n64rt_pak.o $(addprefix $(BUILD)/ult_,$(addsuffix .o,$(ULT_SRC)))
+OBJECTS   = $(BUILD)/pak_test.o $(BUILD)/pak_glue.o $(BUILD)/n64rt_pak.o $(BUILD)/n64rt_gbvirt.o $(addprefix $(BUILD)/ult_,$(addsuffix .o,$(ULT_SRC)))
 .DEFAULT_GOAL := all
 include $(MIRLO)/lang/mips/program.mk
 CFLAGS   += -O2 -Wall -fno-strict-aliasing
@@ -36,6 +36,9 @@ $(BUILD)/pak_glue.o: pak_glue.c ../n64rt.h
 $(BUILD)/n64rt_pak.o: ../n64rt_pak.c ../n64rt.h pak_force.h $(MIRLO)/lang/mips/include/layout.h
 	@mkdir -p $(BUILD)
 	$(MIPS_GCC) $(CFLAGS) -I.. -DN64RT_DEBUG -include pak_force.h -c $< -o $@
+$(BUILD)/n64rt_gbvirt.o: ../n64rt_gbvirt.c ../n64rt.h $(MIRLO)/lang/mips/include/layout.h
+	@mkdir -p $(BUILD)
+	$(MIPS_GCC) $(CFLAGS) -I.. -DN64RT_DEBUG -c $< -o $@
 clean:
 	rm -rf $(BUILD)
 .PHONY: all clean
