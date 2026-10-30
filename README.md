@@ -81,6 +81,9 @@ The Pocket writes them to `Saves/n64/common/` when you quit the core. A file app
 |---|---|
 | `<game>.sav` | The cartridge's save: EEPROM, SRAM or FlashRAM, whichever the game uses |
 | `<game>.mpk` | The Controller Pak, when that setting is on |
+| `<game>.gbsav` | The Game Boy game of the Virtual Transfer Pak: the cartridge's RAM, as a Game Boy core keeps it (one file for each N64 game) |
+
+The Game Boy save is named after the N64 game, not after the Game Boy game. To use a Game Boy save in the Virtual Transfer Pak, copy the Game Boy core's `.sav` to `Saves/n64/common/<N64 game>.gbsav`. To play that game again on a Game Boy core, copy the `.gbsav` back to `Saves/gbc/common/` (or `Saves/gb/common/`) with the name that core uses (`<Game Boy game>.sav`). Keep a copy of the save the first time.
 
 ## Building from source
 

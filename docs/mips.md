@@ -809,7 +809,7 @@ touched). The game's own `osGbpak*` code runs on it as on the real one.
   cartridge put in or taken out, as with the real one: a game that polls the status finds it within a second. A game that looks for the cartridge only when
   it starts (as a console's power-on) has to be started after the ROM is loaded: use `transferpak.gb`.
 * **The RAM** is data slot 6, "Game Boy Save" (`.gbsav`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav`):
-  one Game Boy save for each N64 game, so a save of a Game Boy cartridge is copied there as it is. It is the cartridge's RAM as the emulators keep it (its size is the
+  one Game Boy save for each N64 game. A Game Boy core's `.sav` has the same bytes: it is copied in and out by hand (the Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file). It is the cartridge's RAM as the emulators keep it (its size is the
   header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is
   left 0. With no file the RAM is `0xFF`. The slot takes a file size (what the Pocket writes back when the core quits) when the game first
   writes to the RAM or the clock, so a game that never saves leaves no file.
