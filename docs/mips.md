@@ -858,8 +858,8 @@ into a file. To put one back (the wake from a Sleep, a Memory chosen) it starts 
 booting afresh, copies the file in at the same address and sends Savestate Load. `target/pocket/core_top.sv` answers
 both commands at once and reports them busy until the runtime is done; `APF_BRIDGE.SAVESTATE` and `SAVESTATE_DONE`
 ([control.md](control.md)) are the runtime's side, and `MONITOR.PEND` bit 5 its wake-up. The block is no memory the game
-or the runtime uses, so a game goes on while the Pocket reads a Memory out, and the booted game runs while the Pocket
-copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped in the monitor wherever it was:
+or the runtime uses, but the Pocket's read of it shares the SDRAM's port with the game (below), and the booted game runs
+while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped in the monitor wherever it was:
 
 1. **The hardware at rest.** The monitor waits for the RSP to halt and its DMA, the RDP, the PI's engine and the SI to
    be idle, and for the AI to have played its buffers (some 0.2 s, most of it the AI's), answering the other wake-ups as
@@ -882,6 +882,13 @@ copies one in. `lang/n64rt/n64rt_state.c` does the work, with the game stopped i
    the runtime's own memory, each from an offset the header names. The core tells the Pocket the size, in MiB, that the runtime has written
    to `APF_BRIDGE.TRANSFER_LENGTH` (bits 23:20, whole MiB) before its `SAVESTATE_DONE`. The RDRAM of a game that has used little of it is mostly zeros, and the coverage plane a constant:
    a title screen's state is some 0.9 MB.
+   **The read-out.** The Pocket reads the block after the answer, for seconds (some 11 s for 4 MB), through the bridge's port: the
+   one the AI's reader and the game's SDRAM accesses go through. A game that went on meanwhile had its audio buffers come
+   late and its sound crackled for as long as the read lasted. So the game stays stopped, in the monitor, until it is over (`readout_wait`). The
+   core does not say when that is; it shows in the time a cold read of 4 KiB of the RDRAM takes: measured before the answer
+   and in the 300 ms after it, the read is over when the time has been back near the first for a second. If the contention is
+   not to be seen the wait is 4 s a MiB, and it is never more than 40 s. Count is put back after it (the game's time is that of the
+   state's, not the wait's) and the runtime's own clocks move on by it.
 3. **A load** quiets the booted game's hardware the same way (its RSP halted where it is if it does not stop), puts back
    the RSP (DMEM through the RDRAM; BROKE by a BREAK it runs), the DPC (CURRENT and END; a SYNC FULL through the RDP's
    command port clears what END's write set), the PIF RAM, the AI, the VI, the MI and COP0, then the memories, waits for
