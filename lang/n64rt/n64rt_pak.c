@@ -1,14 +1,16 @@
 /* The accessory in controller 1 -- the core's "Controller 1 pak" setting
  * (interact.json: word 0's bits 4-0), read at every access, so it can be
- * changed while a game runs:
+ * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 0's bits 24-20), None or a
+ * Virtual Transfer Pak, which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
+ * the game finds the pak. The values of controller 1's:
  *   0  nothing (the default, and what the setting word is until the Pocket
  *      has sent it: the cartridge slot is left alone)
  *   1  a Controller Pak
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
  *      own slot
  *   3  a Transfer Pak with a virtual cartridge: a Game Boy ROM and its save,
- *      files the Pocket loads (data.json's slots 5 and 6; n64rt_gbvirt.c)
- * Any other value is nothing. The other controllers have none.
+ *      files the Pocket loads (the slots "GB Transfer Pak #1" and "Game Boy Save #1"; n64rt_gbvirt.c)
+ * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "#2"); controllers 3 and 4 have none.
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
  * read and written at a 16-bit address. The game's own libultra runs on top
@@ -66,7 +68,8 @@
 #define CPAK_SDRAM    ((u32)LAYOUT_CPAK)
 #define PAK_BYTES     ((u32)LAYOUT_PAK_BYTES)
 
-static struct { u8 on, access, changed, bank; } s_tp;   /* the Transfer Pak */
+#define NPAK 2                                  /* the controllers with an accessory: 1 and 2 */
+static struct { u8 on, access, changed, bank; } s_tpv[NPAK];   /* the Transfer Pak of each */
 static u8 s_sized;                              /* the Controller Pak's file size is in the table */
 
 /* ---- the cartridge in the Pocket's slot ---------------------------------------- */
@@ -80,7 +83,10 @@ static struct {
     u8  pulled;                                 /* another cartridge, or none, since the status was read */
     u32 id;                                     /* its header's CRC */
     u64 looked;                                 /* when */
-} s_slot;
+} s_slotv[NPAK];                                /* (the real cartridge's port, `hw`, is controller 1's alone) */
+static int s_ch;                                /* the controller the call is for: the two names below are its */
+#define s_slot (s_slotv[s_ch])
+#define s_tp   (s_tpv[s_ch])
 static u64 now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
 static void wait_us(u32 us) { u64 e = now() + (u64)us * (CONFIG_CLOCK_FREQUENCY / 1000000u); while (now() < e) { } }
 static u32 crc32(const u8 *p, u32 n)
@@ -105,14 +111,14 @@ static int slot_xfer(u32 addr, u32 we, u8 wd, u8 *rd)
 static int xfer(u32 addr, u32 we, u8 wd, u8 *rd)
 {
     if (!s_slot.virt) return slot_xfer(addr, we, wd, rd);
-    if (we) n64rt_gbv_write(addr, wd);
-    else if (rd) *rd = n64rt_gbv_read(addr);
+    if (we) n64rt_gbv_write(s_ch, addr, wd);
+    else if (rd) *rd = n64rt_gbv_read(s_ch, addr);
     return 1;
 }
 static void slot_power(int on, int virt)
 {
     if (on) s_slot.virt = (u8)virt;
-    if (s_slot.virt) { n64rt_gbv_power(on); s_slot.bus = (u8)on; return; }
+    if (s_slot.virt) { n64rt_gbv_power(s_ch, on); s_slot.bus = (u8)on; return; }
     if (!s_slot.hw) return;
     gb_cart_ctrl_write(on ? 1u | (s_slot.in ? 2u : 0u) : 0u);
     s_slot.bus = (u8)on;
@@ -127,8 +133,8 @@ static void slot_look(int virt)
     s_slot.in = 0;
     if (virt) {
         s_slot.virt = 1;
-        s_slot.in = (u8)n64rt_gbv_look();
-        if (s_slot.in) s_slot.id = n64rt_gbv_id();
+        s_slot.in = (u8)n64rt_gbv_look(s_ch);
+        if (s_slot.in) s_slot.id = n64rt_gbv_id(s_ch);
         if (s_slot.in != was || (s_slot.in && s_slot.id != id)) s_slot.pulled = 1;
         return;
     }
@@ -208,11 +214,17 @@ static void cpak_format(void)
 
 void n64rt_pak_init(void)
 {
-    memset(&s_tp, 0, sizeof s_tp);
-    memset(&s_slot, 0, sizeof s_slot);
+    memset(s_tpv, 0, sizeof s_tpv);
+    memset(s_slotv, 0, sizeof s_slotv);
+    s_ch = 0;
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
-    { int k = n64rt_pak_kind(0); if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; } }   /* (any other setting: the port is left alone) */
+    for (int ch = 0; ch < NPAK; ch++) {
+        s_ch = ch;
+        int k = n64rt_pak_kind(ch);
+        if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
+    }
+    s_ch = 0;
 #ifdef N64RT_DEBUG
     n64rt_log("n64rt: the cartridge slot's port: %s\n", s_slot.hw ? "there" : "not in this SoC");
 #endif
@@ -222,12 +234,13 @@ void n64rt_pak_init(void)
 
 int n64rt_pak_kind(int ch)
 {
-    if (ch != 0) return N64RT_PAK_NONE;
+    if (ch < 0 || ch >= NPAK) return N64RT_PAK_NONE;
 #ifdef N64RT_PAK_FORCE                          /* (a simulation, where nothing sets the core's settings) */
-    u32 k = N64RT_PAK_FORCE;
+    u32 k = ch == 0 ? N64RT_PAK_FORCE : 0u;
 #else
-    u32 k = apf_interact_interact0_read() & 31u;
+    u32 k = (apf_interact_interact0_read() >> (ch == 0 ? 0 : 20)) & 31u;
 #endif
+    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the virtual one) */
     return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
 }
 
@@ -236,8 +249,10 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 {
     int kind = n64rt_pak_kind(ch), virt = kind == N64RT_PAK_VIRTUAL;
     a &= 0xFFE0u;
-    if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus && ch == 0) { slot_power(0, 0); s_tp.access = 0; }   /* (the setting changed) */
-    if (s_slot.bus && s_slot.virt != (u8)virt && ch == 0) { slot_power(0, 0); s_tp.access = 0; }   /* (the other cartridge) */
+    if (ch < 0 || ch >= NPAK) return 1;
+    s_ch = ch;
+    if (kind != N64RT_PAK_TRANSFER && !virt && s_slot.bus) { slot_power(0, 0); s_tp.access = 0; }   /* (the setting changed) */
+    if (s_slot.bus && s_slot.virt != (u8)virt) { slot_power(0, 0); s_tp.access = 0; }   /* (the other cartridge) */
     if (kind == N64RT_PAK_NONE) return 1;
     if (kind == N64RT_PAK_CONTROLLER) {
         volatile u8 *m = (volatile u8 *)(uintptr_t)(CPAK_SDRAM + a);

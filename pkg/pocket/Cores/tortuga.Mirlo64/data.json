@@ -56,8 +56,40 @@
         "address": "0x07100000"
       },
       {
-        "name": "Game Boy ROM",
+        "name": "Game Boy Save #1",
         "id": 5,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "gbsav1"
+        ],
+        "size_maximum": "0x21000",
+        "address": "0x06D00000"
+      },
+      {
+        "name": "Game Boy Save #2",
+        "id": 6,
+        "required": false,
+        "parameters": "0x24",
+        "nonvolatile": true,
+        "extensions": [
+          "gbsav2"
+        ],
+        "size_maximum": "0x21000",
+        "address": "0x06D50000"
+      },
+      {
+        "name": "Gameshark codes",
+        "id": 7,
+        "required": false,
+        "parameters": "0x08",
+        "size_maximum": "0x10000",
+        "address": "0x06D40000"
+      },
+      {
+        "name": "GB Transfer Pak #1",
+        "id": 8,
         "required": false,
         "parameters": "0x1",
         "extensions": [
@@ -68,24 +100,16 @@
         "address": "0x07400000"
       },
       {
-        "name": "Game Boy Save",
-        "id": 6,
+        "name": "GB Transfer Pak #2",
+        "id": 9,
         "required": false,
-        "parameters": "0x24",
-        "nonvolatile": true,
+        "parameters": "0x1",
         "extensions": [
-          "gbsav"
+          "gb",
+          "gbc"
         ],
-        "size_maximum": "0x21000",
-        "address": "0x06D00000"
-      },
-      {
-        "name": "Gameshark codes",
-        "id": 7,
-        "required": false,
-        "parameters": "0x08",
-        "size_maximum": "0x10000",
-        "address": "0x06D40000"
+        "size_maximum": "0x300000",
+        "address": "0x06E00000"
       }
     ]
   }

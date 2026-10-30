@@ -1,6 +1,8 @@
-/* The virtual Transfer Pak's cartridge: a Game Boy cartridge made of two files the Pocket loads (data.json's slots
+/* The virtual Transfer Pak's cartridges: a Game Boy cartridge made of two files the Pocket loads (data.json's slots
  * LAYOUT_GBROM_SLOT, the ROM, and LAYOUT_GBSAVE_SLOT, the cartridge's battery RAM), for the "Controller 1 pak" setting's
- * Virtual Transfer Pak (n64rt_pak.c). What a cartridge's bus does is done here: the mapper's registers at 0x0000-0x7FFF,
+ * Virtual Transfer Pak (n64rt_pak.c); and a second, LAYOUT_GBROM2_SLOT and LAYOUT_GBSAVE2_SLOT, for the "Controller 2 pak" setting's.
+ * The two are instances (n = 0, 1) of the same code, each with its own ROM, mapper, RAM and clock; one with no ROM in its slot is no cartridge
+ * (the same for both). What a cartridge's bus does is done here: the mapper's registers at 0x0000-0x7FFF,
  * the ROM at 0x0000-0x7FFF, the RAM (or the clock) at 0xA000. The game's own osGbpak* code runs on top of it exactly as on
  * a real one.
  *
@@ -23,14 +25,17 @@
 #include <system.h>
 #include "n64rt.h"
 
-#define ROM_MEM  ((const volatile u8 *)(uintptr_t)LAYOUT_GBROM)
-#define RAM_MEM  ((volatile u8 *)(uintptr_t)LAYOUT_GBSAVE)
+#define ROM_MEM    ((const volatile u8 *)(uintptr_t)g.rom_base)
+#define RAM_MEM    ((volatile u8 *)(uintptr_t)(g.n ? LAYOUT_GBSAVE2 : LAYOUT_GBSAVE))
+#define SAVE_SLOT  (g.n ? LAYOUT_GBSAVE2_SLOT : LAYOUT_GBSAVE_SLOT)
 #define RTC_FOOT 48u
 #define LOGO_CRC 0x46195417u                    /* CRC-32 of the header's 48 logo bytes */
 
 enum { K_NONE, K_ROM, K_MBC1, K_MBC2, K_MBC3, K_MBC5 };
 
-static struct {
+typedef struct {
+    u8  n;                                      /* which cartridge: 0 (controller 1's), 1 (controller 2's) */
+    u32 rom_base;                               /* where its ROM is: its own slot's memory */
     u8  in, kind, timer;                        /* a cartridge is there; its mapper; it has a clock */
     u8  ram_en, mode, hi2, ram_sel, latch_arm;  /* the mapper's registers */
     u16 rom_bank;                               /* the one at 0x4000, as written (MBC1: its low 5 bits) */
@@ -43,7 +48,11 @@ static struct {
     u32 s, m, h, d;                             /* d: 9 bits */
     u8  halt, carry;
     u32 l[5];                                   /* latched: seconds, minutes, hours, days low, control */
-} g;
+} gbv_t;
+static gbv_t s_gbv[2] = { { .n = 0 }, { .n = 1 } };
+static gbv_t *s_cur = &s_gbv[0];
+#define g (*s_cur)                              /* (the cartridge the call is for: every function below begins with its n) */
+static void sel(int n) { s_cur = &s_gbv[n ? 1 : 0]; }
 
 static u64 now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
 static u32 crc32(const u8 *p, u32 n)
@@ -59,7 +68,7 @@ static void need_file(void)
     if (g.sized) return;
     g.sized = 1;
     u32 want = g.ram_bytes + (g.timer ? RTC_FOOT : 0u);
-    if (n64rt_slot_size(LAYOUT_GBSAVE_SLOT, 0) < want) n64rt_slot_size(LAYOUT_GBSAVE_SLOT, want);
+    if (n64rt_slot_size(SAVE_SLOT, 0) < want) n64rt_slot_size(SAVE_SLOT, want);
 }
 /* ---- the clock --------------------------------------------------------------- */
 static void rtc_tick(void)
@@ -124,7 +133,7 @@ static void rtc_write(u32 reg, u8 v)
 /* the RAM's memory from the slot: what the file has, the rest 0xFF (the clock's footer 0) */
 static void ram_init(void)
 {
-    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u), have = n64rt_slot_size(LAYOUT_GBSAVE_SLOT, 0);
+    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u), have = n64rt_slot_size(SAVE_SLOT, 0);
     if (have > LAYOUT_GBSAVE_MAX) have = LAYOUT_GBSAVE_MAX;
     flush_cpu_dcache_range((const void *)RAM_MEM, total);
     for (u32 i = have < total ? have : total; i < total; i++) RAM_MEM[i] = i < g.ram_bytes ? 0xFFu : 0u;
@@ -135,12 +144,14 @@ static void ram_init(void)
 }
 
 /* ---- the header ------------------------------------------------------------------ */
-int n64rt_gbv_look(void)
+int n64rt_gbv_look(int n)
 {
     u8 h[0x50];
-    u32 size = n64rt_slot_size(LAYOUT_GBROM_SLOT, 0);
+    sel(n);
+    u32 size = n64rt_slot_size(n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
     if (size > LAYOUT_GBROM_MAX) size = LAYOUT_GBROM_MAX;
     if (size < 0x150u) { g.in = 0; return 0; }
+    g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
     flush_cpu_dcache_range((const void *)(ROM_MEM + 0x100), sizeof h);
     for (u32 i = 0; i < sizeof h; i++) h[i] = ROM_MEM[0x100u + i];
     u8 x = 0;
@@ -176,11 +187,12 @@ int n64rt_gbv_look(void)
 #endif
     return 1;
 }
-u32 n64rt_gbv_id(void) { return g.id; }
+u32 n64rt_gbv_id(int n) { sel(n); return g.id; }
 
 /* the cartridge's reset */
-void n64rt_gbv_power(int on)
+void n64rt_gbv_power(int n, int on)
 {
+    sel(n);
     if (on) {
         g.ram_en = 0; g.mode = 0; g.hi2 = 0; g.ram_sel = 0; g.latch_arm = 0;
         g.rom_bank = 1;
@@ -208,8 +220,9 @@ static u32 ram_off(u32 o)                       /* a RAM address in the 8 KiB wi
     return (bank % g.ram_banks) * 0x2000u + o;
 }
 
-u8 n64rt_gbv_read(u32 a)
+u8 n64rt_gbv_read(int n, u32 a)
 {
+    sel(n);
     if (!g.in) return 0xFFu;
     if (a < 0x4000u) return rom_at((g.kind == K_MBC1 && g.mode ? ((u32)g.hi2 << 5) & (g.rom_banks - 1u) : 0u) << 14 | a);
     if (a < 0x8000u) return rom_at(bank_hi() << 14 | (a & 0x3FFFu));
@@ -225,8 +238,9 @@ u8 n64rt_gbv_read(u32 a)
     return g.kind == K_MBC2 ? (u8)(0xF0u | RAM_MEM[r]) : RAM_MEM[r];
 }
 
-void n64rt_gbv_write(u32 a, u8 v)
+void n64rt_gbv_write(int n, u32 a, u8 v)
 {
+    sel(n);
     if (!g.in) return;
     if (a < 0x8000u) {
         switch (g.kind) {

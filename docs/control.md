@@ -123,7 +123,7 @@ each setting has an address of its own and needs no mask.
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
 | 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | L button |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Controller 2 pak (None, or Virtual Transfer Pak: 3) |
 | 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
 | 8 | `0x1000_0120` | `INTERACT1[4:0]` | Start macro |
 | 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
