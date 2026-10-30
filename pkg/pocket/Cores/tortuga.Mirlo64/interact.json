@@ -4,6 +4,7 @@
 {"name":"Enable Gameshark codes","id":249,"type":"check","enabled":true,"persist":true,"address":"0x1000013C","defaultval":0,"value":1,"writeonly":true},
 {"name":"Expansion Pak","id":238,"type":"check","enabled":true,"persist":true,"address":"0x10000138","defaultval":1,"value":0,"value_off":1,"writeonly":true},
 {"name":"Controller 1 pak","id":214,"type":"list","enabled":true,"persist":true,"address":"0x10000108","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"Controller Pak"},{"value":2,"name":"Transfer Pak"},{"value":3,"name":"Virtual Transfer Pak"}],"writeonly":true},
+{"name":"Controller 2 pak","id":250,"type":"list","enabled":true,"persist":true,"address":"0x10000118","defaultval":0,"options":[{"value":0,"name":"None"},{"value":3,"name":"Virtual Transfer Pak"}],"writeonly":true},
 {"name":"Stick","id":225,"type":"list","enabled":true,"persist":true,"address":"0x1000012C","defaultval":1,"options":[{"value":3,"name":"None"},{"value":0,"name":"D-pad"},{"value":1,"name":"L stick"},{"value":2,"name":"R stick"}],"writeonly":true},
 {"name":"D-pad","id":226,"type":"list","enabled":true,"persist":true,"address":"0x10000134","defaultval":0,"options":[{"value":0,"name":"None"},{"value":1,"name":"D-pad"},{"value":2,"name":"L stick"},{"value":3,"name":"R stick"}],"writeonly":true},
 {"name":"C buttons","id":223,"type":"list","enabled":true,"persist":true,"address":"0x10000128","defaultval":0,"options":[{"value":0,"name":"None"},{"value":3,"name":"D-pad"},{"value":2,"name":"L stick"},{"value":1,"name":"R stick"}],"writeonly":true},

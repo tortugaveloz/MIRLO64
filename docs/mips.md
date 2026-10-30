@@ -102,11 +102,13 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
 | `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
 | `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
-| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak's cartridge RAM, its save ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
+| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak #1's cartridge RAM, its save ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
+| `0x42D5_0000` | up to 132 KiB | The same for the virtual Transfer Pak #2 (controller 2's) |
+| `0x42E0_0000` | up to 3 MiB | The virtual Transfer Pak #2's Game Boy ROM |
 | `0x42D3_0000` | 4 KiB | The parameter struct of the runtime's open command ([GameShark codes](#gameshark-codes)) |
 | `0x42D4_0000` | up to 64 KiB | The game's GameShark codes, a text file |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
-| `0x4340_0000` | up to 3 MiB | The virtual Transfer Pak's Game Boy ROM |
+| `0x4340_0000` | up to 3 MiB | The virtual Transfer Pak #1's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -156,13 +158,15 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
-| 5 | Game Boy ROM | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
-| 6 | Game Boy Save | `.gbsav`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
+| 5 | Game Boy Save #1 | `.gbsav1`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
+| 6 | Game Boy Save #2 | `.gbsav2`, the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
 | 7 | Gameshark codes | no file at the start: the runtime opens one by path, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
+| 8 | GB Transfer Pak #1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
+| 9 | GB Transfer Pak #2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
-when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 7 with no
+when the game first uses the memory, so a game that never saves leaves no file. The slots are numbered 0 to 9 with no
 gap: the table of file sizes is indexed by a slot's place in `data.json`.
 
 A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
@@ -813,13 +817,16 @@ The setting "Controller 1 pak" has a second Transfer Pak, **Virtual Transfer Pak
 is made of two files the Pocket loads, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
 touched). The game's own `osGbpak*` code runs on it as on the real one.
 
-* **The ROM** is data slot 5, "Game Boy ROM" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`. It has no default file: the core's settings have "Load Game Boy
-  ROM", which loads one from `Assets/n64/common` while the game runs. It is there for the game when its header's checksum and logo are right and its
+The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "#2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
+
+* **The ROM** is data slot 8, "GB Transfer Pak #1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "GB Transfer Pak #2", `0x42E0_0000`. With no
+  file in a slot there is no cartridge in that pak, for either one. They are the last entries of the core's page. There is no default file: "Load GB Transfer Pak #1"
+  loads one from `Assets/n64/common` while the game runs. It is there for the game when its header's checksum and logo are right and its
   cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
   that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
   loaded after that.
-* **The RAM** is data slot 6, "Game Boy Save" (`.gbsav`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav`), so a Game Boy game's existing `.sav` has to be copied there first, with that name:
-  one Game Boy save for each N64 game. A Game Boy core's `.sav` has the same bytes: it is copied in and out by hand (the Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file). It is the cartridge's RAM as the emulators keep it (its size is the
+* **The RAM** is data slot 5, "Game Boy Save #1" (`.gbsav1`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav1`), so a Game Boy game's existing `.sav` has to be copied there first, with that name;
+  controller 2's is slot 6 (`.gbsav2`, `0x42D5_0000`): one Game Boy save for each N64 game and each pak. A Game Boy core's `.sav` has the same bytes: it is copied in and out by hand (the Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file). It is the cartridge's RAM as the emulators keep it (its size is the
   header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is
   left 0. With no file the RAM is `0xFF`. The slot takes a file size (what the Pocket writes back when the core quits) when the game first
   writes to the RAM or the clock, so a game that never saves leaves no file.
@@ -923,6 +930,7 @@ scan-out instead.
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
 | Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2), Virtual Transfer Pak (3) |
+| Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Virtual Transfer Pak (3) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | L stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 5 % (2), 10 % (3), ... 70 % (15); actual threshold is 30 % larger (0 % to 91 %) |

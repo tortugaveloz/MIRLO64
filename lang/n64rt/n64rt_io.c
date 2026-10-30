@@ -581,6 +581,7 @@ static void read_pad(OSContPad *p, int index)
 static int pad_there(int i)
 {
     if (i == 0) return 1;
+    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Virtual Transfer Pak": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
     return KEY_TYPE(k) != 0u;
 }
