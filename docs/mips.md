@@ -658,7 +658,10 @@ The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what 
 
 The runtime computes what the scan-out needs -- the rows' pitch, the picture's window in the line and in the field,
 and the two scales -- from VI_WIDTH, VI_H_START, VI_V_START, VI_X_SCALE and VI_Y_SCALE when one of them changes
-(`n64rt_vi_hw_event`); [resolution.md](resolution.md) has how each picture is shown.
+(`n64rt_vi_hw_event`); [resolution.md](resolution.md) has how each picture is shown. A low-resolution window (WIDTH below
+512) that asks for more pixels than the row has -- WIDTH 384, X_SCALE 0.649 and a 597-clock window ask for 387 -- ends with
+the row: the console's VI reads the next row's first pixels there, at the edge a television's overscan hides, and the scan-out
+shows the whole line, so they are not shown.
 
 ### AI
 
