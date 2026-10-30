@@ -46,17 +46,22 @@ static void vi_hw_note_origin(void);
 static struct { OSMesgQueue *mq; OSMesg msg; u32 retrace, count; } s_vi_ev;
 static u32 s_fb_cur, s_fb_next, s_fb_prev;
 /* The frame buffers the game has handed the VI lately (osViSwapBuffer, VI_ORIGIN): where the RDP draws.
- * A cartridge DMA into one of them waits for the RDP (pi_copy). */
-static u32 s_fb_ring[4]; static u32 s_fb_ring_n;
+ * A cartridge DMA into one of them waits for the RDP (pi_copy). An origin the VI has not shown for FB_AGE fields is no
+ * longer one: libultra's first ORIGIN, before the game hands it a buffer, is a line into the RDRAM's first bytes (0x280), and
+ * kept for good it made every DMA into the low memory of a game that streams from the cartridge wait for the RDP's frame
+ * (a game's audio thread held up for 11 ms at a time). */
+#define FB_AGE 120u
+static u32 s_fb_ring[4]; static u32 s_fb_ring_n; static u32 s_fb_seen[4];
+static u32 s_fields;
 static void fb_note(u32 fb)
 {
     fb &= 0x007FFFFFu;
-    for (u32 i = 0; i < 4u; i++) if (s_fb_ring[i] == fb) return;
+    for (u32 i = 0; i < 4u; i++) if (s_fb_ring[i] == fb) { s_fb_seen[i] = s_fields; return; }
+    s_fb_seen[s_fb_ring_n & 3u] = s_fields;
     s_fb_ring[s_fb_ring_n++ & 3u] = fb;
 }
 u32 n64rt_swaps;                         /* (framebuffer swaps the scan-out took: a game's frames) */
 static u32 s_tasks[3];
-static u32 s_fields;
 u32 n64rt_fields(void) { return s_fields; }             /* (fields so far: a debugging build's traces start at one) */
 void n64rt_osCreateViManager(OSPri pri) { (void)pri; }
 /* OSViMode: u8 type, then the common registers (ctrl, width, ...) */
@@ -423,7 +428,7 @@ static int fb_overlaps(u32 pa, u32 size)
 #endif
     const u32 bytes = s_vi_width_cur >= 512u && s_vi_width_cur != ~0u ? 640u * 480u * VI_BPP(s_vi_px32_cur) : 320u * 240u * 4u;
     for (u32 i = 0; i < 4u; i++)
-        if (s_fb_ring[i] && pa < s_fb_ring[i] + bytes && s_fb_ring[i] < pa + size) return 1;
+        if (s_fb_ring[i] && s_fields - s_fb_seen[i] < FB_AGE && pa < s_fb_ring[i] + bytes && s_fb_ring[i] < pa + size) return 1;
     return 0;
 }
 /* a DMA between the RDRAM and domain 2, by the CPU (what the engine does not: n64rt_save.h's d2_engine_addr) */

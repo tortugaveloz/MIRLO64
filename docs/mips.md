@@ -620,7 +620,11 @@ console's: PI_WR_LEN moves `len + 1` bytes when that is at most 126 and inside o
 `len + 1` rounded up to even; PI_RD_LEN moves `(len | 1) + 1`. The engine does the copy when the RDRAM address is word
 aligned and the source is even: from the ROM, and to and from the save's memory. The runtime first drops the CPU's
 D-cache lines over an RDRAM destination, and when the destination overlaps a frame buffer it waits (50 ms at most) for
-the RSP and the RDP to finish, so that the copied data is not drawn over. What the engine cannot do, the runtime copies
+the RSP and the RDP to finish, so that the copied data is not drawn over. The frame buffers are the origins the VI has
+shown in the last two seconds (120 fields): one it has not shown since is no longer one. libultra's first ORIGIN, before the game
+hands the VI a buffer, is a line (0x280) into the RDRAM's first bytes; kept for good, it made every DMA into the low memory of a game that
+streams from the cartridge wait for the RDP's frame -- 11 ms at a time, with the game held in the monitor and its audio thread
+with it, the AI dry for 0.65 ms at almost every field (a click each) and for a whole field now and then. What the engine cannot do, the runtime copies
 with the CPU.
 
 Between copies the engine also does the game's own word accesses to the cartridge: a read of the ROM (the word at
