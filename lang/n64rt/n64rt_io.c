@@ -155,6 +155,13 @@ static void vi_width_gamma(void)
     const u32 xs = s_vi_xs & 0xFFFu ? (s_vi_xs > 0x400u ? 0x400u : s_vi_xs & 0xFFFu) : 0x200u;
     u32 ys = s_vi_ys > 0x800u ? 0x800u : s_vi_ys ? s_vi_ys : 0x400u;     /* (2.0 at most: a serrated picture's field, every other row) */
     n64rt_vi_fit(y0, rows, ys, &rows, &ys);
+    /* A window that asks for more pixels than the row has (a mode with WIDTH 384 and X_SCALE 0.649 takes 597 clocks of H_START 128 to
+     * H_END 725: 387 pixels) reads the next row's first ones at its right end, as the console's VI does -- where a television's
+     * overscan hides them. The scan-out shows the whole line, so they are not shown: the window ends with the row. */
+    if (w < 512u && pw) {
+        const u32 maxpw = ((w << 10) - 1u) / xs + 1u;
+        if (pw > maxpw) pw = maxpw;
+    }
     /* the window's last pixel's source pixel, the priming's seven before it (rtl/soc/n64_video.sv NPE - NF), two to a word (a
      * 32-bit picture's: one), and one more */
     const u32 np = (((pw - 1u) * xs) >> 10) + 8u;
