@@ -438,25 +438,24 @@ logic [15:0]        s_hi [LANES], t_hi [LANES];
 logic [5:0]         x_fn;
 logic [2:0]         x_am;                     // (amode of it)
 wire  [5:0]         fn_m  = (NP == 2 && b1) ? x_fn : fn;
-wire  s_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd5 || fn_m[2:0] == 3'd7;
-wire  t_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd6 || fn_m[2:0] == 3'd7;
+// A multiply takes a stage between SEL and EX (m_*): its operands are in s_r and t_r, and the products (the DSP blocks) go
+// to p_r at the end of it; EX is the cycle after. Any other computation goes from SEL to EX at once, and may not start behind
+// a multiply that is in this stage (they would reach EX together).
+logic               m_v;
+logic [5:0]         m_fn;
+logic [4:0]         m_vdn;
+wire  m_ssgn = m_fn[2:0] == 3'd0 || m_fn[2:0] == 3'd1 || m_fn[2:0] == 3'd5 || m_fn[2:0] == 3'd7;
+wire  m_tsgn = m_fn[2:0] == 3'd0 || m_fn[2:0] == 3'd1 || m_fn[2:0] == 3'd6 || m_fn[2:0] == 3'd7;
 logic [15:0]        s_n [LANES], t_n [LANES];
+logic [15:0]        s_r [LANES], t_r [LANES];
 logic signed [33:0] p_n [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
         s_n[l] = (NP == 2 && b1) ? s_hi[l] : qa[l];
         t_n[l] = (NP == 2 && b1) ? t_hi[l] : tv[l];
-        p_n[l] = $signed({s_sgn & s_n[l][15], s_n[l]}) * $signed({t_sgn & t_n[l][15], t_n[l]});
+        p_n[l] = $signed({m_ssgn & s_r[l][15], s_r[l]}) * $signed({m_tsgn & t_r[l][15], t_r[l]});   // (the MUL stage: the cycle after SEL)
     end
-// (MULW) the upper lanes' products, for a multiply
-logic signed [33:0] pm_n [LANES], pm_r [LANES];
-always_comb
-    for (int l = 0; l < LANES; l++) begin
-        logic [15:0] sm, tm;
-        sm = qa[((LANES + l) & 7)]; tm = tv[((LANES + l) & 7)];
-        pm_n[l] = 34'sd0;
-        if (MW) pm_n[l] = $signed({s_sgn & sm[15], sm}) * $signed({t_sgn & tm[15], tm});
-    end
+logic signed [33:0] pm_r [LANES];            // (MULW: not in this unit)
 
 // EX's registers: the pass, its operands and products, the instruction's fields
 logic               x_v /* verilator public_flat_rd */, x_pass, x_last, x_wait /* verilator public_flat_rd */, x_one, x_rcp;
@@ -466,7 +465,6 @@ logic [3:0]         fl_r [LANES];             // the adder's flags of the cycle 
 logic [3:0]         x_ve;
 logic [4:0]         x_vdn;
 logic [2:0]         x_de;
-logic [15:0]        s_r [LANES], t_r [LANES];
 logic signed [33:0] p_r [LANES];
 logic [15:0]        hold [8];                 // the earlier pass's results
 lane_t ex [LANES];
@@ -668,7 +666,7 @@ logic [15:0] lw_mb;
 // (one pass: only a pair's computation, whose load writes in its EX's cycle)
 assign x_defer = (NP == 2 || LPAIR) && x_fin && (lw_v || wp) && !x_one;
 assign x_wr    = x_fin && !x_defer;
-wire         idle    = st == V_IDLE && !x_v && !lw_v && !wp;  // nothing under way: the registers and flags are final
+wire         idle    = st == V_IDLE && !m_v && !x_v && !lw_v && !wp;  // nothing under way: the registers and flags are final
 // MTC2: rt's two bytes at e and e + 1 (one at the register's end), written the cycle after it starts, as a load's
 wire  [15:0] mt_be   = (16'd1 << el) | (el == 4'd15 ? 16'd0 : 16'd2 << el);
 wire  [15:0] in_be   = lw_be;
@@ -692,7 +690,7 @@ always_comb
 // a computational instruction's SEL: not under an EX that writes what it reads,
 // nor (a reciprocal) under any, nor under a load's write of what it reads
 wire cmp      = valid && vec && fn_known && !fn_none;
-wire dep      = (x_v && x_last && (x_vdn == vsn || x_vdn == vtn)) || (wp && (w_vdn == vsn || w_vdn == vtn));
+wire dep      = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && x_last && (x_vdn == vsn || x_vdn == vtn)) || (wp && (w_vdn == vsn || w_vdn == vtn));
 // (a load's write of another register is no matter: the operands come from
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
@@ -700,7 +698,7 @@ wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
 // (one pass: a one-lane write, which is not kept, does not reach EX under a computation's late write -- x_defer now is wp then)
 // (one pass: a reciprocal starts under an EX that runs, a reciprocal's too -- the divide registers it reads are that
 // EX's, forwarded: dph_s, dih_s; with two passes it waits for any EX)
-wire sel0r    = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(dep || (fn_rcp && x_v && NP == 2)) && !(NP == 1 && fn_one && x_defer);
+wire sel0r    = cmp && st == V_IDLE && !ldep && !x_wait && !b1 && !(m_v && !fn_mul) && !(dep || (fn_rcp && x_v && NP == 2)) && !(NP == 1 && fn_one && x_defer);
 wire x_rh     = x_exec && x_last && x_rcp;                  // a reciprocal's EX runs: the divide registers as it leaves them
 wire dph_s    = x_rh ? x_fn[1:0] == 2'd2 : dph;
 wire [15:0] dih_s = (x_rh && x_fn[1:0] == 2'd2) ? rin[15:0] : div_in_h;
@@ -717,7 +715,7 @@ wire sel_fire = sel0 || sel1;
 // CTC2 writes them the cycle after, over what one writes then). (Two passes:
 // MTC2, CFC2 and CTC2 when nothing is under way.)
 // (one pass: under an EX that waits too, if of another register -- what it completes is counted behind that EX)
-wire x_free   = (!x_v || ((NP == 1 || !x_wait) && x_vdn != rb_live)) && !(wp && w_vdn == rb_live);
+wire x_free   = !(m_v && m_vdn == rb_live) && (!x_v || ((NP == 1 || !x_wait) && x_vdn != rb_live)) && !(wp && w_vdn == rb_live);
 wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load under the second pass's SEL: its write would meet that pass's, a
 // cycle on -- a load into another register goes ahead, and vd is written the
@@ -726,7 +724,7 @@ wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (one pass: a load or MTC2 starts under a clip's EX that waits, whose write then goes a cycle late -- not into its
 // register, nor under a one-lane one)
 wire [4:0] l_reg = mtc2 ? li[15:11] : ltn;
-wire ld_ok    = !(x_wait && (NP == 2 || x_one || l_reg == x_vdn)) && !x_defer && (!b1 || (ls_known && !ls_tv && ltn != x_vdn));
+wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_wait && (NP == 2 || x_one || l_reg == x_vdn)) && !x_defer && (!b1 || (ls_known && !ls_tv && ltn != x_vdn));
 wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || (mtc2 && NP == 1)) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free)
@@ -824,12 +822,11 @@ end
 // DSP blocks' output registers (272 flip-flops and their selects out of the
 // logic with 8 lanes)
 always_ff @(posedge clk)
-    if (!rst && sel_fire)
-        for (int l = 0; l < LANES; l++) begin p_r[l] <= p_n[l]; pm_r[l] <= pm_n[l]; end
+    for (int l = 0; l < LANES; l++) begin p_r[l] <= p_n[l]; pm_r[l] <= 34'sd0; end
 
 always_ff @(posedge clk) begin
     if (rst) begin
-        st <= V_IDLE; lw_v <= 1'b0; unimpl <= 1'b0; x_v <= 1'b0; x_wait <= 1'b0; b1 <= 1'b0; c_def <= 3'd0;
+        st <= V_IDLE; m_v <= 1'b0; lw_v <= 1'b0; unimpl <= 1'b0; x_v <= 1'b0; x_wait <= 1'b0; b1 <= 1'b0; c_def <= 3'd0;
         wp <= 1'b0; c_defw <= 3'd0; mf_q <= 1'b0; lw_mgf <= 1'b0;
         vco <= 16'd0; vcc <= 16'd0; vce <= 8'd0; dph <= 1'b0; div_out <= 32'd0; div_in_h <= 16'd0;
         for (int g = 0; g < 8; g++) begin acc_h[g] <= 16'd0; acc_m[g] <= 16'd0; acc_l[g] <= 16'd0; end
@@ -880,7 +877,8 @@ always_ff @(posedge clk) begin
         b1 <= NP == 2 && sel0 && !(MW && fn_mul);
         if (sel_fire) begin
             for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
-            x_v <= 1'b1; x_pass <= sel1; x_last <= NP == 1 || sel1 || (MW && fn_mul);
+            if (!fn_mul) x_v <= 1'b1;                          // (a multiply enters EX from the MUL stage)
+            x_pass <= sel1; x_last <= NP == 1 || sel1 || (MW && fn_mul);
             x_mw <= MW && sel0 && fn_mul;
             // one pass: a reciprocal waits a cycle for the ROM; VCL, VCH and VCR
             // take their adder's flags in one cycle and select by them in the
@@ -899,6 +897,14 @@ always_ff @(posedge clk) begin
                 rin <= (fn[1:0] == 2'd1 && dph_s) ? {dih_s, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
                 r_sqrt <= fn[2];
             end
+        end
+
+        // ---- the MUL stage, and a multiply's start of EX behind it
+        m_v <= sel0 && fn_mul;
+        if (sel0) begin m_fn <= fn; m_vdn <= vdn; end
+        if (m_v) begin
+            x_v <= 1'b1; x_pass <= 1'b0; x_last <= 1'b1; x_mw <= 1'b0; x_wait <= 1'b0; x_one <= 1'b0; x_rcp <= 1'b0; x_pc <= 1'b0;
+            x_fn <= m_fn; x_vdn <= m_vdn; x_am <= 3'd0; x_ve <= 4'd0; x_de <= 3'd0;
         end
 
         // ---- the others
