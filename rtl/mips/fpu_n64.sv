@@ -243,12 +243,37 @@ wire [22:0] add_sf = (FAST && sw) ? ax.f : ay.f;
 wire [7:0]  add_le = (FAST && sw) ? ay.e : ax.e;
 wire [33:0] sh_v = st == S_F2W ? {1'b1, ax.f, 10'd0} : {1'b0, 1'b1, add_sf, 9'd0};
 wire [34:0] sh_o = rshift(sh_v, sh_n);
+wire [31:0] za_b = FAST ? zmag : sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]};   // (the shifted-out bits as a sticky LSB)
 
 // the iteration's subtractor (div: r - divisor; sqrt: (r << 2 | next) - (q << 2 | 1))
 wire [31:0] it_a = kind == K_DIV ? ir : {ir[29:0], mp[55:54]};
 wire [31:0] it_b = kind == K_DIV ? {8'd0, 1'b1, ay.f} : {2'd0, zmag[27:0], 2'b01};
 wire [32:0] it_d = {1'b0, it_a} - {1'b0, it_b};
 wire        it_ge = !it_d[32];
+
+// the one adder of the 32-bit magnitudes (zmag's): x + (y ^ inv) + cin, for the add's sum (S_ADD2), the integer's negation
+// (S_DECIDE: cvt.s.w, a word of cvt.s.l; S_LNEG: the lower word of the other cvt.s.l), the upper word's negation with the
+// lower one's carry (S_LNEG2) and the rounded integer of a conversion (S_F2W2). ax still holds the lower word in S_LNEG (the
+// state before copied it into ir)
+logic [31:0] za_x, za_y; logic za_inv, za_cin, f2w_inc;
+always_comb begin
+    case (rmode)
+    2'd0: f2w_inc = fg && (zst || zmag[0]);
+    2'd1: f2w_inc = 1'b0;
+    2'd2: f2w_inc = !ax.s && (fg || zst);
+    default: f2w_inc = ax.s && (fg || zst);
+    endcase
+    za_x = 32'd0; za_y = zmag; za_inv = 1'b0; za_cin = 1'b0;
+    case (st)
+    S_ADD2:  begin za_x = {1'b0, 1'b1, add_lf, 7'd0}; za_y = za_b; za_inv = sub_eff; za_cin = sub_eff; end
+    S_DECIDE: begin za_y = ax; za_inv = ax[31]; za_cin = ax[31]; end
+    S_LNEG:  begin za_y = ax; za_inv = 1'b1; za_cin = 1'b1; end
+    S_LNEG2: begin za_inv = zs; za_cin = zs && lcar; end
+    S_F2W2:  begin za_inv = ax.s; za_cin = f2w_inc ^ ax.s; end
+    default: ;
+    endcase
+end
+wire [31:0] za_s = za_x + (za_y ^ {32{za_inv}}) + {31'd0, za_cin};
 
 // round (zmag normalised: bit 31 set) and pack; FTZ, overflow to infinity
 wire [24:0] rm = {1'b0, zmag[31:8]} + {24'd0, zmag[7] && (zst || zmag[6:0] != 0 || zmag[8])};
@@ -305,10 +330,10 @@ always_ff @(posedge clk) begin
             kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
             if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
             else if (zmag == 32'd0) begin zs <= 0; zmag <= ax; st <= S_NORM; end                    // an unsigned word
-            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; zmag <= ax[31] ? -ax : ax; st <= S_NORM; end   // a word
+            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; zmag <= za_s; st <= S_NORM; end   // a word
             else begin zs <= zmag[31]; ir <= ax; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
-            kind <= K_CVT; zs <= ax.s; zmag <= ax.s ? -ax : ax; zexp <= 12'sd158; zst <= 0;
+            kind <= K_CVT; zs <= ax.s; zmag <= za_s; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
         end else if (fn >= 6'h30) begin                   // c.cond
             logic un, eq, lt;
@@ -389,11 +414,8 @@ always_ff @(posedge clk) begin
     end
     S_ADDA: begin zmag <= sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]}; st <= S_ADD2; end
     S_ADD2: begin                                         // align, add: the larger at [30:7]
-        logic [31:0] a, b, sum;
-        a = {1'b0, 1'b1, add_lf, 7'd0};
-        b = sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]};   // the shifted-out bits as a sticky LSB
-        if (FAST) b = zmag;
-        sum = a + (b ^ {32{sub_eff}}) + {31'd0, sub_eff};
+        logic [31:0] sum;
+        sum = za_s;
         zmag <= sum; zst <= 0; zexp <= 12'(add_le) + 12'sd1;
         if (FAST) st <= S_NORM;                                   // (x - x: S_NORM's)
         else if (sum == 32'd0) begin res <= 32'd0; st <= S_DONE; end   // x - x: +0
@@ -424,12 +446,12 @@ always_ff @(posedge clk) begin
     // its carry), then shifted left a bit a cycle until its top bit is set (at most 32 cycles), the bits below the upper
     // word kept as the sticky
     S_LNEG: begin
-        if (zs) begin ir <= -ir; lcar <= ir == 32'd0; end
+        if (zs) begin ir <= za_s; lcar <= ir == 32'd0; end
         st <= S_LNEG2;
     end
     S_LNEG2: begin
         logic [31:0] h;
-        h = zs ? ~zmag + 32'(lcar) : zmag;
+        h = za_s;
         if (h == 32'd0) begin zmag <= ir; st <= S_NORM; end
         else begin zmag <= h; zexp <= 12'sd190; st <= S_LSH1; end
     end
@@ -452,16 +474,8 @@ always_ff @(posedge clk) begin
         st <= S_DONE;
     end
     S_F2W2: begin
-        logic [31:0] i; logic inc;
-        case (rmode)
-        2'd0: inc = fg && (zst || zmag[0]);
-        2'd1: inc = 1'b0;
-        2'd2: inc = !ax.s && (fg || zst);
-        default: inc = ax.s && (fg || zst);
-        endcase
-        // (the rounded magnitude, negated for a negative: -(m + inc) is ~m + !inc -- one adder)
-        i = (zmag ^ {32{ax.s}}) + {31'd0, inc ^ ax.s};
-        res <= i;
+        // (the rounded magnitude, negated for a negative: -(m + inc) is ~m + !inc -- the shared adder)
+        res <= za_s;
         st <= S_DONE;
     end
     S_DONE: if (valid) st <= S_IDLE;
