@@ -192,12 +192,16 @@ module rdp_mem (
     reg        l_out;                     // mode 2: a read is out (one at a time: an entry takes two cycles to write)
     // a load: its aligned words (a TLUT entry is half of one), and one more
     // memory word when it does not start on one
-    wire [10:0] ld_words = (rd_lmode == 2'd2) ? {1'b0, rd_ln[10:1]} + {10'd0, rd_ln[0]} : rd_ln;
-    wire [11:0] ld_reads = {1'b0, ld_words} + {11'd0, rd_cbase[1:0] != 2'd0};
+    // (the entries' pairs, rounded up, and one more where the source is not aligned: one adder for the two carries)
+    wire        ld_c1    = rd_lmode == 2'd2 && rd_ln[0];
+    wire        ld_c2    = rd_cbase[1:0] != 2'd0;
+    wire [10:0] ld_words = (rd_lmode == 2'd2) ? {1'b0, rd_ln[10:1]} : rd_ln;
+    wire [11:0] ld_reads = {1'b0, ld_words} + {10'd0, ld_c1 && ld_c2, ld_c1 != ld_c2};
     wire [31:0] l_aligned = (lo == 2'd0) ? m_rdata
                           : (lo == 2'd1) ? {lprev[23:0], m_rdata[31:24]}
                           : (lo == 2'd2) ? {lprev[15:0], m_rdata[31:16]}
                           :                {lprev[7:0],  m_rdata[31:8]};
+    wire [10:0] ldst_n = ldst + (lmode[0] ? 11'd1 : 11'd2);   // (modes 1 and 3 step a texel, the others two)
     wire [9:0]  l_w = ldst[10:1];         // modes 0, 2: the TMEM word (pair of 16-bit words)
     wire [15:0] l_ev = lt[1] ? la[15:0] : la[31:16];   // mode 2: this entry
 
@@ -262,8 +266,10 @@ module rdp_mem (
     // through its pixel)
     wire        w_wide = w_c32 && !w_pz;
     wire [10:0] w_res  = w_set ? res_b : res_a;
-    wire [10:0] w_end  = w_wide ? {1'b0, w_idx} + 11'd1
-                       : ({1'b0, w_idx[8:0], 1'b0} + 11'd2 > w_x1) ? w_x1 : {1'b0, w_idx[8:0], 1'b0} + 11'd2;
+    // (the word after this one: the counter's step, and twice it for a word of two pixels -- w_idx is below 512 until the
+    // span's last word has gone, and w_rdy is only wanted before that)
+    wire [10:0] w_idx1 = {1'b0, w_idx} + 11'd1;
+    wire [10:0] w_end  = w_wide ? w_idx1 : ({w_idx1[9:0], 1'b0} > w_x1) ? w_x1 : {w_idx1[9:0], 1'b0};
     wire        w_rdy  = w_fillm || w_pz || w_res >= (w_end - {1'b0, w_x0});
     wire [12:0] w_hgw  = w_cb[12:0] + {3'd0, w_idx};       // (the word's address: its group, for the raw hidden buffer)
 
@@ -301,8 +307,10 @@ module rdp_mem (
     // group goes out after its last word, or the span's, when a pixel of it
     // was written. A fill: the quad pattern {a, a} by the colour's bit 0 (bits
     // 16 and 0), each quad touched enabled
-    wire [29:0] h_cw    = w_cb + {21'd0, h_idx};
-    wire [2:0]  h_j     = h_cw[2:0];
+    // the write command's word address: one adder for the colour and the depth span (the group's hidden word, which only a
+    // 16-bit image has, is addressed from the colour word's)
+    wire [29:0] h_wa    = ((h_c || !h_zz) ? w_cb : w_zb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
+    wire [2:0]  h_j     = w_cb[2:0] + h_idx[2:0];
     wire        h_first = h_j == 3'd0 || h_idx == {1'b0, w_x0[9:1]};
     wire [31:0] h_base  = h_first ? h_hold : hacc;
     wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_base[{h_j, 2'b10} +: 2],
@@ -356,9 +364,7 @@ module rdp_mem (
                 end else if (wr_want) begin
                     m_cmd_valid <= 1'b1;
                     m_cmd_we <= 1'b1;
-                    m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_cw[20:3], 2'b00}
-                                                        : {h_c ? w_cb + (w_c8 ? {21'd0, h_idx[9:1]} : {20'd0, h_idx})
-                                                               : w_zb + {20'd0, h_idx}, 2'b00};
+                    m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_wa[20:3], 2'b00} : {h_wa, 2'b00};
                     wf[wf_wr[WF-1:0]] <= (h_c && w_c8) ? {h_c8be, h_c8d}
                                        : h_c ? {h_csel, w_fc ? w_fillc : h_cdata}
                                        : h_zz ? {h_zsel, h_zdata}
@@ -415,7 +421,7 @@ module rdp_mem (
                         2'd0: begin
                             tm_we <= l_w[9] ? 4'b1100 : 4'b0011; tm_wa <= {l_w[8:1], l_w[0] ^ lsw};
                             tm_wd0 <= la[31:16]; tm_wd1 <= la[15:0]; tm_wd2 <= la[31:16]; tm_wd3 <= la[15:0];
-                            ldst <= ldst + 11'd2; lleft <= lleft - 11'd1;
+                            ldst <= ldst_n; lleft <= lleft - 11'd1;
                             lhalf <= ~lhalf; if (lhalf) lacc <= lacc + ldxt;
                             if (!m_rdata_valid || lfirst) la_v <= 1'b0;
                         end
@@ -423,14 +429,14 @@ module rdp_mem (
                             tm_we <= ldst[0] ? 4'b1010 : 4'b0101; tm_wa <= {ldst[9:2], ldst[1] ^ lsw};
                             tm_wd0 <= lmode[1] ? {la[31:24], la[15:8]} : la[31:16]; tm_wd1 <= lmode[1] ? {la[31:24], la[15:8]} : la[31:16];
                             tm_wd2 <= lmode[1] ? {la[23:16], la[7:0]} : la[15:0];   tm_wd3 <= lmode[1] ? {la[23:16], la[7:0]} : la[15:0];
-                            ldst <= ldst + 11'd1; lleft <= lleft - 11'd1;
+                            ldst <= ldst_n; lleft <= lleft - 11'd1;
                             lhalf <= ~lhalf; if (lhalf) lacc <= lacc + ldxt;
                             if (!m_rdata_valid || lfirst) la_v <= 1'b0;
                         end
                         default: begin
                             tm_we <= l_w[9] ? 4'b1100 : 4'b0011; tm_wa <= l_w[8:0];
                             tm_wd0 <= l_ev; tm_wd1 <= l_ev; tm_wd2 <= l_ev; tm_wd3 <= l_ev;
-                            ldst <= ldst + 11'd2;
+                            ldst <= ldst_n;
                             lt <= lt + 2'd1;
                             if (lt[0]) lleft <= lleft - 11'd1;
                             if (lt == 2'd3 || (lt == 2'd1 && lleft == 11'd1)) la_v <= 1'b0;
@@ -511,7 +517,7 @@ module rdp_mem (
                     p1 <= 1'b1;
                     p1_idx <= w_idx;
                     if (w_idx == w_lastw) w_all <= 1'b1;
-                    w_idx <= w_idx + 10'd1;
+                    w_idx <= w_idx1[9:0];
                 end else begin
                     p1 <= 1'b0;
                 end

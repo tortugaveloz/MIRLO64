@@ -271,8 +271,10 @@ module rdp_top (
     wire [31:0] cur_s = cur[4] + (lpass ? dy_s : 32'd0);
     wire [31:0] cur_t = cur[5] + (lpass ? dy_t : 32'd0);
     wire [31:0] cur_w = {cur[6][31:15] + ((lpass && !p_direct) ? ldy_w : 17'd0), cur[6][14:0]};
-    wire [31:0] pr_s = p_direct ? asr(cur_s, {2'b0, shS}) : cur_s;
-    wire [31:0] pr_t = p_direct ? asr(cur_t, 5'd5) : cur_t;
+    // (rdp_pix takes the 16 bits of each: a rectangle's s10.5 after the shift, a triangle's integer half)
+    wire [31:0] pr_sd = asr(cur_s, {2'b0, shS}), pr_td = asr(cur_t, 5'd5);
+    wire [15:0] pr_s = p_direct ? pr_sd[15:0] : cur_s[31:16];
+    wire [15:0] pr_t = p_direct ? pr_td[15:0] : cur_t[31:16];
     // The pass's tile's fields, registered: indexing tile[p_tile] straight
     // into the pixel pipe was the worst path of the first fit (-4 ns). rdp_pix
     // names the tile a clock before its P5 takes the fields (tl_ra): the
@@ -452,6 +454,18 @@ module rdp_top (
                     : (tflags[2] ? 6'd16 : 6'd0) + (tflags[1] ? 6'd16 : 6'd0);
     wire        vz = vi == 3'd7;
     wire [15:0] vhalf = vi[0] ? vr_q[15:0] : vr_q[31:16];      // (R, B, S, W: the first half)
+    // The value, DaDx and DaDe come from the words in halves (Z: whole words); each register is loaded, a half at a time, from
+    // the one choice of the half an attribute takes, or a Z's, at the step it takes them -- a source a register, not two.
+    wire [15:0] vsrc_hi = vz ? vr_q[31:16] : vhalf, vsrc_lo = vz ? vr_q[15:0] : vhalf;
+    wire        vs_on = !rst && st == S_VSET;
+    always @(posedge clk) begin
+        if (vs_on && vs == 4'd2) vval[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd2 && vz) || (vs == 4'd3 && !vz))) vval[15:0] <= vsrc_lo;
+        if (vs_on && ((vs == 4'd3 && vz) || (vs == 4'd4 && !vz))) vgx[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd3 && vz) || (vs == 4'd5 && !vz))) vgx[15:0] <= vsrc_lo;
+        if (vs_on && ((vs == 4'd4 && vz) || (vs == 4'd6 && !vz))) vde[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd4 && vz) || (vs == 4'd7 && !vz))) vde[15:0] <= vsrc_lo;
+    end
     function automatic [5:0] voff;           // the word read at step k
         input [2:0] k;
         input       z;
@@ -469,7 +483,11 @@ module rdp_top (
         input [2:0] a;
         attr_on = a < 3'd4 ? fl[2] : a < 3'd7 ? fl[1] : fl[0];
     endfunction
-    reg [31:0] row_off;            // y * width * 2 (color / Z images; an 8-bit colour image's y * width)
+    // The row's offset into the images, y * width pixels (row_h), and in bytes (row_off): twice that for the 16- and
+    // 32-bit images, as they are (an 8-bit one's is the pixels'). The first row's is the product of the span setup, as 0 +
+    // it through the step's adder (the next rows' step: + the width), so that the register has the one source.
+    reg [31:0] row_h;
+    wire [31:0] row_off = cimg8 ? row_h : {row_h[30:0], 1'b0};
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
     reg [9:0]  px_cnt;
@@ -484,12 +502,12 @@ module rdp_top (
     function automatic [10:0] load_words;
         input [12:0] n;
         input [1:0]  sz;
-        reg [15:0] bytes, b7;
+        reg [16:0] m;
         reg [12:0] w;
         begin
-            bytes = (({3'd0, n} << sz) + 16'd1) >> 1;
-            b7 = bytes + 16'd7;
-            w = b7[15:3];
+            // (the 64-bit words of n texels: ceil(ceil(n << sz / 2) / 8) = ceil((n << sz) / 16))
+            m = ({4'd0, n} << sz) + 17'd15;
+            w = m[16:4];
             load_words = (w >= 13'd512) ? 11'd1024 : {w[9:0], 1'b0};
         end
     endfunction
@@ -606,6 +624,9 @@ module rdp_top (
     // ---- e[] / ade[] RAM ports
     reg  [3:0]  es;                 // row step: attribute es, 8 when idle
     reg         es_done;            // this row's step finished
+    wire        rw_ld  = (st == S_TRI_INIT && mi == 5'd13) || (st == S_RECT_INIT && mi == 5'd2);
+    wire        rw_stp = st == S_NEXT && (!kind_tri || es_done);
+    always @(posedge clk) if (rw_ld || rw_stp) row_h <= (rw_ld ? 32'd0 : row_h) + (rw_ld ? mul_p[31:0] : {21'd0, cimg_width});
     reg  [2:0]  ea;                 // read address
     always @(*) begin
         case (st)
@@ -696,6 +717,38 @@ module rdp_top (
         // the span's progress past the ends (S_PIX: a pixel issued)
         if (st == S_AASPAN) begin aa_pl <= 4'd0; aa_pr <= 4'd0; end
         else if (st == S_PIX && row_wq && pix_go) begin aa_pl <= aa_pl | aa_eql; aa_pr <= aa_pr | aa_eqr; end
+    end
+
+    // cur: the span setup's first values (a triangle's e + the product, one attribute a clock; a texrect's S and T) and the
+    // pixels' step. A triangle's load goes through the step's adder, as 0 + the value in place of cur + adx: each attribute
+    // has one adder and nothing behind it (the fitter put a second source of a register's behind its own adder in a
+    // route-through LUT a bit: 170 of them, and a mux).
+    wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp;
+    // (a texrect's S and T are t_xl's halves, shifted, plus the product: the same adder as a triangle's e + the product)
+    wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
+    wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
+    wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
+    wire [7:0]  cur_ld;
+    genvar cg;
+    generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
+        assign cur_ld[cg] = st == S_SETUP && (kind_tri ? mi == cg + 2 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
+    end endgenerate
+    // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
+    // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
+    wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
+    wire        ax_stp = st == S_AASUB && !aa_j[2];
+    wire        ex_ld  = st == S_TRI_INIT && mi == 5'd2;
+    wire        ex_stp = st == S_NEXT && (!kind_tri || es_done);
+    integer ci;
+    always @(posedge clk) begin
+        if (ax_ldh || ax_stp) ax_h <= (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
+        if (ax_ldm || ax_stp) ax_m <= (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
+        if (ax_ldl || ax_stp) ax_l <= (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
+        if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
+        for (ci = 0; ci < 8; ci = ci + 1) begin
+            if (cur_ld[ci] || cur_stp)
+                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
+        end
     end
 
     integer i;
@@ -929,21 +982,18 @@ module rdp_top (
                     4'd1: begin vr_ra <= vgb + voff(3'd1, vz) + (vz ? 6'd0 : {5'd0, vi[1]}); vs <= 4'd2; end
                     4'd2: begin
                         vr_ra <= vgb + voff(3'd2, vz) + (vz ? 6'd0 : {5'd0, vi[1]}); vs <= 4'd3;
-                        if (vz) vval <= vr_q; else vval[31:16] <= vhalf;
                     end
                     4'd3: begin
                         vr_ra <= vz ? vgb + 6'd3 : vgb + voff(3'd3, vz) + {5'd0, vi[1]}; vs <= 4'd4;
-                        if (vz) vgx <= vr_q; else vval[15:0] <= vhalf;
                     end
                     4'd4: begin
                         vr_ra <= vgb + voff(3'd4, vz) + {5'd0, vi[1]};
-                        if (vz) begin vde <= vr_q; vs <= 4'd5; end
-                        else begin vgx[31:16] <= vhalf; vs <= 4'd5; end
+                        vs <= 4'd5;
                     end
                     4'd5: if (vz) begin zdy <= vr_q; vs <= 4'd15; end
-                          else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vgx[15:0] <= vhalf; vs <= 4'd6; end
-                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
-                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
+                          else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vs <= 4'd6; end
+                    4'd6: begin vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
+                    4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
                         adx[vi] <= vgx;
                         if (!vz) case (vi)
@@ -966,9 +1016,7 @@ module rdp_top (
                     // (the operands: mul_ad / mul_bd)
                     // products come back two cycles later
                     case (mi)
-                        5'd2:  exh <= aa_init;
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
-                        5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
                     endcase
                     mi <= mi + 5'd1;
@@ -984,9 +1032,8 @@ module rdp_top (
             S_AAINIT: begin
                 case (mi)
                     5'd0, 5'd1: ;
-                    5'd2: ax_h <= aa_init;
-                    5'd3: ax_m <= aa_init;
-                    default: begin ax_l <= aa_init; st <= S_ROW; end
+                    5'd2, 5'd3: ;
+                    default: st <= S_ROW;
                 endcase
                 mi <= mi + 5'd1;
             end
@@ -1021,9 +1068,6 @@ module rdp_top (
 
             // ---- AA_EN: the row's four subscanlines (and a clock for the last's stage 2)
             S_AASUB: begin
-                if (!aa_j[2]) begin
-                    ax_h <= ax_h + aq_h; ax_m <= ax_m + aq_m; ax_l <= ax_l + aq_l;
-                end
                 aa_j <= aa_j + 3'd1;
                 aa_lo <= (aa_yq + 14'sd1) < ym_s;
                 if (aa_j == 3'd4) st <= S_AASPAN;
@@ -1048,8 +1092,6 @@ module rdp_top (
             // the S/T accumulators (texrects)
             S_SETUP: begin
                 if (kind_tri) begin
-                    if (mi >= 5'd2 && mi < 5'd10)
-                        cur[mi - 5'd2] <= e_q + mul_p[47:16];                // ea = mi - 2
                     mi <= mi + 5'd1;
                     if (mi == 5'd9) begin
                         st <= S_PIX;
@@ -1058,13 +1100,7 @@ module rdp_top (
                 end else begin
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
-                        reg [2:0] ds;
-                        reg signed [31:0] sv, tv;
-                        ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
-                        sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
-                        if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[33:2];
-                        if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[33:2];
-                        shS <= ds;
+                        shS <= rs_ds;
                         adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
                         adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
@@ -1097,7 +1133,6 @@ module rdp_top (
                     // follows it there: no step then; walking left, the span's first pixel is the next place)
                     pix_valid <= 1'b1; pix_ghost <= 1'b1; pix_mask <= 8'h00;
                     if (pix_stp) begin
-                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
                     end
                     pix_stp <= pix_g0; pix_g0 <= 1'b0; pix_fol <= 1'b0;
                     if (pix_end) begin
@@ -1109,9 +1144,6 @@ module rdp_top (
                     pix_valid <= 1'b1; pix_ghost <= 1'b0;
                     pix_x <= xs + px_cnt;
                     pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
-                    if (pix_stp) begin
-                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
-                    end
                     pix_stp <= 1'b1;
                     pix_fol <= lod_on && lod_lft;
                     px_cnt <= px_cnt + 10'd1;
@@ -1159,15 +1191,13 @@ module rdp_top (
             // its setup, or here when the row had none)
             S_NEXT: if (!kind_tri || es_done) begin
                 y <= y + 12'sd1;
-                row_off <= row_off + (cimg8 ? {21'd0, cimg_width} : {20'd0, cimg_width, 1'b0});
-                exh <= exh + t_dxh;
                 es_done <= 1'b0;
                 st <= S_ROW;
             end else if (es == 4'd8) es <= 4'd0;
 
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
-                if (mi == 5'd2) begin row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0}; st <= S_ROW; end
+                if (mi == 5'd2) st <= S_ROW;
                 mi <= mi + 5'd1;
             end
 

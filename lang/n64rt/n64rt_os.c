@@ -62,10 +62,10 @@ static inline void gset(n64rt_ctx_t *x, u32 r, u32 v) { if (r) { x->g[r].l = v; 
 /* a register's lower word (register 0's place is EPC and Status: it reads as 0) */
 static inline u32 g32(const n64rt_ctx_t *x, u32 r) { return r ? x->g[r].l : 0u; }
 u32 n64rt_cpu64;                    /* the CPU has the VR4300's 64-bit integers (probed at the start) */
-u32 n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md;   /* ... and runs dadd, dsub and the 64-bit logic; the d-shifts; dmult(u) with a
-                                     * HI and LO of 64 bits (mips_core's W64_ALU, W64_SH, W64_MD: COP0 7's bits 31-29, so one build
-                                     * runs on every bitstream). ddiv(u) is the runtime's on all of them (W64_DIV is
-                                     * not in the SoC) */
+u32 n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md, n64rt_cpu_div;   /* ... and runs dadd, dsub and the 64-bit logic; the d-shifts; dmult(u) with a
+                                     * HI and LO of 64 bits; ddiv(u) (mips_core's W64_ALU, W64_SH, W64_MD, W64_DIV: COP0 7's bits 31-28,
+                                     * so one build runs on every bitstream). What a CPU does not do is a Reserved Instruction, done
+                                     * here (emulate_64) */
 static volatile u32 s_probe;
 #ifndef N64RT_OWN
 _Static_assert(sizeof(n64rt_ctx_t) <= sizeof(((OSThread *)0)->context), "context area");
@@ -1850,7 +1850,7 @@ void n64rt_os_init(void)
     s_probe = 0;
     if (n64rt_cpu64) {                              /* (which 64-bit levels: COP0 7's top bits, 0 on a core before them) */
         u32 m; __asm__ volatile("mfc0 %0, $7" : "=r"(m));
-        n64rt_cpu_alu = m >> 31 & 1u; n64rt_cpu_sh = m >> 30 & 1u; n64rt_cpu_md = m >> 29 & 1u;
+        n64rt_cpu_alu = m >> 31 & 1u; n64rt_cpu_sh = m >> 30 & 1u; n64rt_cpu_md = m >> 29 & 1u; n64rt_cpu_div = m >> 28 & 1u;
     }
     /* and its translation tables: COP0 23 reads their mark, or 0 */
     {
@@ -1861,8 +1861,8 @@ void n64rt_os_init(void)
         tr_flush();
     }
 #ifdef N64RT_DEBUG
-    n64rt_log("n64rt: the CPU %s the 64-bit integers (alu %lu, shifts %lu, dmult %lu), %s translation tables\n", n64rt_cpu64 ? "has" : "is without",
-              (unsigned long)n64rt_cpu_alu, (unsigned long)n64rt_cpu_sh, (unsigned long)n64rt_cpu_md, n64rt_tlbram ? "has" : "no");
+    n64rt_log("n64rt: the CPU %s the 64-bit integers (alu %lu, shifts %lu, dmult %lu, ddiv %lu), %s translation tables\n", n64rt_cpu64 ? "has" : "is without",
+              (unsigned long)n64rt_cpu_alu, (unsigned long)n64rt_cpu_sh, (unsigned long)n64rt_cpu_md, (unsigned long)n64rt_cpu_div, n64rt_tlbram ? "has" : "no");
     if (s_count_q8 < 250u || s_count_q8 > 262u)
         n64rt_log("n64rt: the CPU's clock is %lu.%02lu times the SoC's\n", (unsigned long)(s_count_q8 >> 8), (unsigned long)(((s_count_q8 & 255u) * 100u) >> 8));
 #endif

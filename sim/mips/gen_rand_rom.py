@@ -10,10 +10,12 @@ and around it (KSEG1) on the same memory, branches and their likely forms on
 64-bit operands, traps (a handler steps over them), multiplies and divides
 back to back with the moves from HI and LO.
 
-    gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|nomd|alu|base]
+    gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|div|i32|i32d|nomd|alu|base]
 
 A last argument "k1" has the program run from KSEG1 (its own code fetched
-uncached, a word at a time; the trap handler stays in KSEG0).
+uncached, a word at a time; the trap handler stays in KSEG0). An argument "ua"
+adds ldl, ldr, sdl and sdr (the core's W64_UA) at every byte address, through
+the cache and around it, and as often as ld and sd.
 """
 import random
 import struct
@@ -34,18 +36,24 @@ def main():
     seed, out = int(sys.argv[1]), sys.argv[2]
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 120000
     # what the core under test has (mips_core's levels): "full" W64_ALU + SH +
-    # MD; "nodiv" without ddiv / ddivu (W64_DIV off); "nomd" without dmult / ddiv; "alu" without the d-shifts too; "base"
+    # MD; "nodiv" without ddiv / ddivu (W64_DIV off); "div" the same as "full" but mostly divides, on the values where a divider
+    # goes wrong (zero, one, the limits, powers of two and their neighbours, equal operands, a quotient of one bit or of 64);
+    # "i32" and "i32d": "base" (every register but 20 to 25 holds a 32-bit value) with the multiplies and divides too, dmult(u)
+    # ("i32") or ddiv ("i32d") among them -- to compare the cycles of a core with those of another, an instruction a core
+    # does not do being the point of the other modes;
+    # "nomd" without dmult / ddiv; "alu" without the d-shifts too; "base"
     # W64 alone -- 64-bit values come from ld and lwu only, into registers 20
     # to 25, and nothing the core leaves to the runtime reads those
     mode = sys.argv[4] if len(sys.argv) > 4 else "full"
-    assert mode in ("full", "nodiv", "nomd", "alu", "base")
-    nomd, base = mode not in ("full", "nodiv"), mode == "base"
+    assert mode in ("full", "nodiv", "div", "i32", "i32d", "nomd", "alu", "base")
+    nomd, base = mode not in ("full", "nodiv", "div", "i32", "i32d"), mode in ("base", "i32", "i32d")
     WIDE = list(range(20, 26))
     # "e2e": the program as a game under the runtime (n64rt) on the SoC -- no
     # traps and no handler of its own, and at the end every register, HI and
     # LO stored at RESULT with a mark after them, to compare with the model's
     e2e = len(sys.argv) > 5 and sys.argv[5] == "e2e"
     k1 = sys.argv[-1] == "k1"
+    ua = "ua" in sys.argv[5:] and not base
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -101,26 +109,49 @@ def main():
             imm = rnd.choice([0, 1, 0xFFFF, 0x8000, 0x7FFF]) if rnd.random() < 0.3 else rnd.randrange(0x10000)
             if base and op in (0x18, 0x19): op = 0x09
             I(op, 0 if op == 0x0F else src() if op in (0x09, 0x0C, 0x18, 0x19) else nsrc(), nreg(), imm)
-        elif k < 0.84:                          # multiply, divide, HI and LO
+        elif k < (0.95 if mode == "div" else 0.84):   # multiply, divide, HI and LO
             fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
+            if mode == "i32": fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1A, 0x1B, 0x1C, 0x1D, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
+            if mode == "i32d": fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1A, 0x1B, 0x1E, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
+            if mode == "div" and rnd.random() < 0.8: fn = rnd.choice([0x1A, 0x1B, 0x1E, 0x1F, 0x1E, 0x1F, 0x10, 0x12])
             if nomd and fn in (0x1C, 0x1D, 0x1E, 0x1F): fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B])
             if mode == "nodiv" and fn in (0x1E, 0x1F): fn = rnd.choice([0x1C, 0x1D, 0x1C, 0x1D, 0x10, 0x12])   # (more dmult: back to back, and mfhi / mflo right behind)
             if fn in (0x10, 0x12): R(0, 0, nreg(), 0, fn)
             elif fn in (0x11, 0x13):            # (HI and LO are 32 bits without dmult: a 32-bit value)
-                R(src() if mode in ("full", "nodiv") else nreg() if base else rnd.choice([0, CACHED, UNC]), 0, 0, 0, fn)
+                R(src() if mode in ("full", "nodiv", "div") else nreg() if base else rnd.choice([0, CACHED, UNC]), 0, 0, 0, fn)
+            elif mode in ("i32", "i32d"): R(nsrc(), nsrc(), 0, 0, fn)
             else: R(src(), src(), 0, 0, fn)
         else:                                   # a 64-bit value again
             I(0x37, TAB, wreg(), 8 * rnd.randrange(32))
 
+    def mem_pair():
+        # ("ua") a store and, right behind it, an access to the same doubleword at any byte: the store's second word may be the
+        # one the next access reads first (the cache's write against its read, and the write buffer's)
+        base = UNC if rnd.random() < 0.3 else CACHED
+        o = rnd.randrange(64) * 8
+        s = rnd.choice([0x2C, 0x2D, 0x2C, 0x2D, 0x3F, 0x2B, 0x2A, 0x2E, 0x28, 0x29])
+        l = rnd.choice([0x1A, 0x1B, 0x1A, 0x1B, 0x37, 0x23, 0x22, 0x26, 0x20, 0x25])
+        so, lo = o + rnd.randrange(8), o + rnd.randrange(8)
+        if s in (0x3F,): so = o
+        elif s in (0x2B,): so = o + 4 * rnd.randrange(2)
+        elif s in (0x29,): so = o + 2 * rnd.randrange(4)
+        if l == 0x37: lo = o
+        elif l == 0x23: lo = o + 4 * rnd.randrange(2)
+        I(s, base, src(), so)
+        I(l, base, wreg() if l in (0x1A, 0x1B, 0x37) else nreg(), lo)
+
     def mem():
+        if ua and rnd.random() < 0.3: return mem_pair()
         base = UNC if rnd.random() < 0.3 else CACHED
         op = rnd.choice([0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x37, 0x37,
                          0x28, 0x29, 0x2A, 0x2B, 0x2E, 0x3F, 0x3F, 0x2B])
+        if ua and rnd.random() < 0.3:
+            op = rnd.choice([0x1A, 0x1B, 0x2C, 0x2D])
         off = rnd.randrange(512)
         if op in (0x37, 0x3F): off &= ~7
         elif op in (0x23, 0x27, 0x2B): off &= ~3
         elif op in (0x21, 0x25, 0x29): off &= ~1
-        I(op, base, (wreg() if op in (0x27, 0x37) else nreg()) if op < 0x28 or op == 0x37 else src(), off)
+        I(op, base, (wreg() if op in (0x27, 0x37, 0x1A, 0x1B) else nreg()) if op < 0x28 or op == 0x37 else src(), off)
 
     def trap():
         # (on 32-bit values: with any other the core has a Reserved Instruction)
@@ -187,8 +218,21 @@ def main():
     o = 0x1000 + SCRATCH - ENTRY
     rom[o:o + 512] = bytes(rnd.getrandbits(8) for _ in range(512))
     o = 0x1000 + TABLE - ENTRY
+    def edge():
+        # (a divider's trouble: the operand is 0, 1, -1, near a power of two, short, or the other's multiple)
+        k = rnd.randrange(8)
+        sh = rnd.randrange(64)
+        if k == 0: v = (1 << sh) + rnd.choice([-1, 0, 1])
+        elif k == 1: v = -((1 << sh) + rnd.choice([-1, 0, 1]))
+        elif k == 2: v = rnd.getrandbits(rnd.randrange(1, 65))
+        elif k == 3: v = -rnd.getrandbits(rnd.randrange(1, 65))
+        elif k == 4: v = rnd.choice(SPECIAL)
+        elif k == 5: v = rnd.getrandbits(32) << rnd.choice([0, 32])
+        elif k == 6: v = rnd.getrandbits(rnd.randrange(1, 33)) * rnd.getrandbits(rnd.randrange(1, 33))
+        else: v = (rnd.getrandbits(32) ^ 0x80000000) - 0x80000000
+        return v & 0xFFFFFFFFFFFFFFFF
     for i in range(32):
-        v = rnd.choice(SPECIAL) if rnd.random() < 0.4 else rnd.getrandbits(64)
+        v = (edge() if mode == "div" else rnd.choice(SPECIAL)) if rnd.random() < (0.9 if mode == "div" else 0.4) else rnd.getrandbits(64)
         if rnd.random() < 0.15: v = (rnd.getrandbits(32) ^ 0x80000000) - 0x80000000 & 0xFFFFFFFFFFFFFFFF   # a 32-bit value
         struct.pack_into(">Q", rom, o + 8 * i, v)
     open(out, "wb").write(rom)

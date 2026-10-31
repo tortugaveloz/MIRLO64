@@ -10,7 +10,11 @@ their branches, the moves to and from the integer registers, FCR31's
 rounding mode, and loads and stores of both sizes through the cache and
 around it.
 
-    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000]
+    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64]
+
+"w64" adds the 64-bit side of COP1 (dmtc1 and dmfc1 through a 64-bit integer loaded from memory, cvt.s.l, cvt.d.l and the
+conversions to a 64-bit integer, on integers of every size class); a build whose model leaves 64-bit instructions to the
+runtime (TB_NO64) cannot run them.
 """
 import random
 import struct
@@ -34,6 +38,7 @@ SPECIAL_D = [0x0000000000000000, 0x8000000000000000, 0x3FF0000000000000, 0xBFF00
 def main():
     seed, out = int(sys.argv[1]), sys.argv[2]
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 120000
+    w64 = "w64" in sys.argv[4:]
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -121,7 +126,46 @@ def main():
         elif k == 2: I(0x35, base, dreg(), rnd.randrange(512) & ~7)             # ldc1
         else: I(0x3D, base, dreg(), rnd.randrange(512) & ~7)                    # sdc1
 
+    T2 = 10
+
+    def lval():                                 # a 64-bit integer of every size class
+        k = rnd.randrange(8)
+        if k == 0: return rnd.choice([0, 1, (1 << 64) - 1, 1 << 63, (1 << 63) - 1, 1 << 31, (1 << 32) - 1, 1 << 32, (1 << 24) + 1, (1 << 53) + 1])
+        if k == 1: return rnd.getrandbits(32)                                   # an unsigned word
+        if k == 2: return (rnd.getrandbits(32) | -(rnd.getrandbits(1) << 32)) & ((1 << 64) - 1)   # a word, sign-extended
+        if k == 3: return (1 << rnd.randrange(64)) + rnd.randrange(-2, 3) & ((1 << 64) - 1)
+        if k == 4: return (rnd.getrandbits(64) >> rnd.randrange(64)) & ((1 << 64) - 1)             # few significant bits
+        if k == 5: return (rnd.getrandbits(64) << rnd.randrange(64)) & ((1 << 64) - 1)             # trailing zeros
+        if k == 6: return (-(rnd.getrandbits(64) >> rnd.randrange(64))) & ((1 << 64) - 1)
+        return rnd.getrandbits(64)
+
+    def wide():
+        k = rnd.randrange(5)
+        if k <= 1:                                                              # dmtc1 of a 64-bit integer from memory
+            v = lval(); off = rnd.randrange(0, 512, 8)
+            li32(T0, v >> 32); I(0x2B, CACHED, T0, off)
+            li32(T0, v & 0xFFFFFFFF); I(0x2B, CACHED, T0, off + 4)
+            I(0x37, CACHED, T2, off)
+            emit(C1 | 5 << 21 | T2 << 16 | dreg() << 11)
+        elif k == 2: emit(C1 | 1 << 21 | T2 << 16 | dreg() << 11)               # dmfc1
+        elif k == 3:                                                            # cvt.s.l, cvt.d.l
+            if rnd.random() < 0.6: op(0x15, 0, dreg(), freg(), 0x20)
+            else: op(0x15, 0, dreg(), dreg(), 0x21)
+        else:                                                                   # to a 64-bit integer: of a value that a word holds
+            d = rnd.random() < 0.4                                              # (the unit makes a larger one a word's saturation, the model does not)
+            fs = dreg() if d else freg()
+            e = rnd.randrange(100, 158)
+            if d:
+                v = rnd.getrandbits(1) << 63 | (e + 896) << 52 | rnd.getrandbits(52)
+                li32(T0, v & 0xFFFFFFFF); mtc1(T0, fs); li32(T0, v >> 32); mtc1(T0, fs + 1)
+            else:
+                li32(T0, rnd.getrandbits(1) << 31 | e << 23 | rnd.getrandbits(23)); mtc1(T0, fs)
+            op(0x11 if d else 0x10, 0, fs, dreg(), rnd.choice([0x08, 0x09, 0x0A, 0x0B, 0x25]))
+
     while len(code) < n:
+        if w64 and rnd.random() < 0.15:
+            wide()
+            continue
         k = rnd.random()
         if k < 0.45: arith()
         elif k < 0.62: convert()

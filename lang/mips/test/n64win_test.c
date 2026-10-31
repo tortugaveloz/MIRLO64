@@ -58,9 +58,42 @@ int main(void)
     check("store epc", s_epc, 0x80001010u);
     (void)ld(0xB0000000u, 0);                                       /* the cartridge */
     check("cart trap", s_traps, 3);
+    /* ldl, ldr, sdl, sdr (a core with them: MCTL bit 27) are the game's accesses as well: RDRAM goes through at any byte, the
+     * RCP's registers are the same address error (the load's code 4, the store's 5) */
+    uint32_t mctl; __asm__ volatile("mfc0 %0, $7" : "=r"(mctl));
+    if (mctl >> 27 & 1) {
+        code[8]  = 0x00A01021u; code[9]  = 0x68820000u; code[10] = 0x03E00008u; code[11] = 0x00021000u;   /* v0 = a1; ldl v0, 0(a0); (sll v0, v0, 0 in the slot: v0 a 32-bit value) */
+        code[12] = 0x00A01021u; code[13] = 0x6C820000u; code[14] = 0x03E00008u; code[15] = 0x00021000u;   /* v0 = a1; ldr v0, 0(a0); sll v0, v0, 0 */
+        code[16] = 0xB0850000u; code[17] = 0x03E00008u; code[18] = 0x00001025u;                          /* sdl a1, 0(a0) */
+        code[20] = 0xB4850000u; code[21] = 0x03E00008u; code[22] = 0x00001025u;                          /* sdr a1, 0(a0) */
+        fn_t ldl = (fn_t)0x80001020u, ldr = (fn_t)0x80001030u, sdl = (fn_t)0x80001040u, sdr = (fn_t)0x80001050u;
+        uint32_t t0 = s_traps;
+        rd[4] = 0x01234567u; rd[5] = 0x89ABCDEFu;                                                   /* the doubleword at 0x80000210 */
+        check("ldl rdram", ldl(0x80000213u, 0), 0xEF000000u);                                       /* byte 3 on: the last four bytes' first, at the top */
+        check("ldr rdram", ldr(0x80000213u, 0), 0x01234567u);                                       /* bytes 0 to 3, at the bottom */
+        sdl(0x80000215u, 0xAABBCCDDu);                                                              /* a1 is 0xFFFFFFFF_AABBCCDD: its top three bytes to bytes 5 to 7 */
+        check("sdl rdram", rd[5], 0x89FFFFFFu);
+        check("sdl rdram, the other word", rd[4], 0x01234567u);
+        sdr(0x80000212u, 0x12345678u);                                                              /* its low three bytes to bytes 0 to 2 */
+        check("sdr rdram", rd[4], 0x34567867u);
+        check("sdr rdram, the other word", rd[5], 0x89FFFFFFu);
+        check("no trap 3", s_traps, t0);
+        (void)ldl(0xA4040010u, 0);
+        check("ldl trap", s_traps, t0 + 1);
+        check("ldl code", s_cause >> 2 & 31, 4);
+        check("ldl badv", s_badv, 0xA4040010u);
+        check("ldl epc", s_epc, 0x80001024u);
+        sdr(0xA4400013u, 1);
+        check("sdr trap", s_traps, t0 + 2);
+        check("sdr code", s_cause >> 2 & 31, 5);
+        check("sdr badv", s_badv, 0xA4400013u);
+        check("sdr epc", s_epc, 0x80001050u);
+        check("sdl trap, the cartridge", (sdl(0xB0000004u, 1), s_traps), t0 + 3);
+    }
     /* native code still reaches the device window */
+    uint32_t traps_now = s_traps;
     check("native regs", ctrl_scratch_read(), 0x12345678u);
-    check("native trap free", s_traps, 3);
+    check("native trap free", s_traps, traps_now);
     puts_(fails ? "n64win_test: FAILED\n" : "n64win_test: PASS\n");
     putc_(4);
     for (;;);

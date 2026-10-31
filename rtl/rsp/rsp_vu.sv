@@ -194,7 +194,8 @@ function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] 
 endfunction
 
 // what the lanes' adder does, by the instruction (kept with it, x_am: the adder is the start of EX's longest path):
-// 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t)
+// 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t); and with one pass 7, 0 - t (VABS's, and the clips' second
+// cycle: their compare is over by then, the flags it made are in fl_r, and -t is what they and VABS pick)
 function automatic logic [2:0] amode(input logic [5:0] f);
     unique case (f)
     6'h10:   return 3'd1;
@@ -205,6 +206,7 @@ function automatic logic [2:0] amode(input logic [5:0] f);
     6'h25:   return 3'd4;
     6'h24:   return 3'd5;
     6'h26:   return 3'd6;
+    6'h13:   return NP == 1 ? 3'd7 : 3'd0;
     default: return 3'd0;
     endcase
 endfunction
@@ -228,9 +230,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     // 17-bit signed result's top bit (b16) and the carry (unsigned: no borrow)
     logic        sub, cin, cout, b16, zero, ones;
     logic        cout_c, b16_c, zero_c, ones_c, z17_c, eq_c;            // (VCL, VCH and VCR's: below)
-    logic [15:0] bb, lo, nt;
+    logic [15:0] bb, lo, nt, sa;
     logic        cin_x;
-    nt = -t;
     sign = s[15] ^ t[15];
     unique case (am)
     3'd1:    begin sub = 1'b0;   cin = co_lo;  end          // VADD
@@ -239,10 +240,12 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     3'd4:    begin sub = !sign;  cin = !sign;  end          // VCH: s + t if the signs differ, else s - t
     3'd5:    begin sub = !co_lo; cin = !co_lo; end          // VCL: the same, by VCO
     3'd6:    begin sub = !sign;  cin = 1'b1;   end          // VCR: s + t + 1, or s - t
-    default: begin sub = 1'b1;   cin = 1'b1;   end          // VSUBC, the compares
+    default: begin sub = 1'b1;   cin = 1'b1;   end          // VSUBC, the compares, -t (7)
     endcase
     bb = sub ? ~t : t;
-    {cout, lo, cin_x} = {1'b0, s, 1'b1} + {1'b0, bb, cin};               // (s + bb + cin: the carry in as the chain's own bit)
+    sa = (NP == 1 && am == 3'd7) ? 16'd0 : s;
+    {cout, lo, cin_x} = {1'b0, sa, 1'b1} + {1'b0, bb, cin};              // (s + bb + cin: the carry in as the chain's own bit)
+    nt = NP == 1 ? lo : -t;                                  // (one pass: the adder is free for it where -t is picked)
     b16 = s[15] ^ bb[15] ^ cout;
     zero = lo == 16'd0; ones = &lo;
     o.fl = {cout, b16, zero, ones};
@@ -266,6 +269,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         s4 = f[2:0] == 3'd4;
         s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
         s7 = f[2:0] == 3'd7;
+        // (one pass: VSAR reads the accumulator through this adder -- the product is no term of it)
+        if (NP == 1 && f[5:4] != 2'b00) begin s1 = 1'b0; s4 = 1'b0; s5 = 1'b0; s7 = 1'b0; end
         term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
     end
     accn = term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
@@ -331,17 +336,23 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
             tt = tt ^ {4{f[0]}};
         end
         a_nt = !c_x && pk == 2'd2;
-        for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? nt[i] : tt[{s[i], t[i]}];
+        for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? nt[i] : (NP == 1 && f == 6'h1D) ? accn[i] : tt[{s[i], t[i]}];
         o.acc[15:0] = accl;
         // vd: the clamped result, or VSAR's word of the accumulator
-        abs_sat = f == 6'h13 && s[15] && t == 16'h8000;
+        // (VABS of a negative s with t = 8000: -t is 8000 again. One pass: that is t and -t, from the adder, both negative)
+        abs_sat = f == 6'h13 && s[15] && (NP == 1 ? (t[15] && lo[15]) : t == 16'h8000);
         ovf = (f == 6'h10 || f == 6'h11) && (b16 ^ lo[15]);
         rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
         c15 = !abs_sat && b16;                               // (abs_sat: 7FFF; ovf: b16, then its inverse)
         clo = abs_sat || !b16;
         if (is_resv(f)) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
         // (VSAR: the accumulator's word e names -- vs, the lane's -- or 0)
-        if (f == 6'h1D) begin rsel = (e == 4'd8 || e == 4'd9 || e == 4'd10) ? 2'd2 : 2'd3; c15 = 1'b0; clo = 1'b0; end
+        // (one pass: the accumulator's word from the multiply adder, which adds 0 to it: the high word (2), the middle (1) or the low (0, accl))
+        if (f == 6'h1D) begin
+            if (NP == 1) rsel = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
+            else         rsel = (e == 4'd8 || e == 4'd9 || e == 4'd10) ? 2'd2 : 2'd3;
+            c15 = 1'b0; clo = 1'b0;
+        end
         // the flags
         unique case (f)
         6'h10, 6'h11:  o.co_w = 1'b1;                                                                    // VADD, VSUB
@@ -366,7 +377,7 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         unique case (rsel)
         2'd0:    o.res[i] = o.acc[i];
         2'd1:    o.res[i] = accn[16 + i];
-        2'd2:    o.res[i] = vs[i];
+        2'd2:    o.res[i] = NP == 1 ? accn[32 + i] : vs[i];
         default: o.res[i] = (i == 15) ? c15 : clo;
         endcase
     return o;
@@ -821,7 +832,10 @@ always_ff @(posedge clk) begin
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;
 
         // ---- EX
-        if (x_v && x_wait) x_wait <= 1'b0;
+        if (x_v && x_wait) begin
+            x_wait <= 1'b0;
+            if (NP == 1 && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;   // (a clip's flags are in fl_r: the adder makes -t)
+        end
         for (int l = 0; l < LANES; l++) fl_r[l] <= ex[l].fl;
         if (x_exec) begin
             for (int l = 0; l < LANES; l++) begin
