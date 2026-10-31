@@ -17,10 +17,9 @@
 //               halves on the DSP block the 32-bit multiply has, summed a
 //               word a time (8 cycles in the background, as the VR4300's);
 //               HI and LO of 64 bits
-//      W64_DIV  (with W64_MD) ddiv(u), a bit a cycle on a divider twice as
-//               wide: left out (a Reserved Instruction), the runtime divides
-//    Without W64_DIV, a ddiv of two words and a ddivu of two unsigned words
-//    are done on the 32-bit divider; another is a Reserved Instruction.
+//      W64_DIV  (with W64_MD) ddiv(u), a bit a cycle on a divider of 64 bits
+//               (the 32-bit div(u) go through it too): left out, they are
+//               Reserved Instructions and the runtime divides
 //    Never in the core: ldl, ldr, sdl, sdr, lld, scd, a trap on a 64-bit
 //    operand. COP0 register 7 (MCTL)
 //    reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV), 0 on
@@ -188,8 +187,8 @@ module mips_core #(
     parameter bit W64_ALU = 0,
     parameter bit W64_SH = 0,
     parameter bit W64_MD = 0,
-    // (with W64_MD) ddiv and ddivu, a bit a cycle on a divider twice as wide: left out (a Reserved
-    // Instruction, the runtime's) unless this is set -- dmult(u) are the DSP's either way
+    // (with W64_MD) ddiv and ddivu, a bit a cycle on a divider of 64 bits (div and divu run on it too): left out (a
+    // Reserved Instruction, the runtime's) unless this is set -- dmult(u) are the DSP's either way
     parameter bit W64_DIV = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
@@ -393,7 +392,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         if (fn == 6'h10 || fn == 6'h12) begin c.use_rs = 0; c.use_rt = 0; end
         if (fn == 6'h08 || fn == 6'h09 || fn == 6'h11 || fn == 6'h13) c.use_rt = 0;
         if (c.x64 != X_NONE && (!XALU || (!XSH && (c.x64 == X_SLL || c.x64 == X_SRL || c.x64 == X_SRA)))) begin c = '0; c.ri = 1; end
-        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && fn == 6'h1F)) begin c = '0; c.ri = 1; end   // (ddiv without XDIV: d_cx)
+        if ((!XMD && (fn >= 6'h1C && fn <= 6'h1F)) || (!XDIV && (fn == 6'h1E || fn == 6'h1F))) begin c = '0; c.ri = 1; end
     end
     6'h01: begin
         c.use_rs = 1;
@@ -871,9 +870,6 @@ always_comb begin
         // (... and while the runtime keeps them, either of the two: the other stays its)
         if ((d_c.md == MD_MTHI || d_c.md == MD_MTLO) && !XMD && (aw || hilo_soft)) d_cx.ri = 1'b1;
         if (d_c.trap != 3'd0 && (aw || bw)) begin d_cx.trap = 3'd0; d_cx.ri = 1'b1; end
-        // (ddiv without XDIV: two words' (32-bit operands) on the 32-bit divider, the quotient and the remainder as they
-        // are; a 64-bit operand is the runtime's)
-        if (!XDIV && d_c.md == MD_DDIV && (aw || bw)) d_cx.ri = 1'b1;
     end
     // TLB_RAM with the monitor: the game's own TLB instructions (tlbwi, tlbwr, tlbr, tlbp) are a Reserved Instruction for the
     // monitor level, which does them on the entries it keeps (the translation tables hold no VR4300 entries to write, read or
@@ -1113,14 +1109,24 @@ always_comb begin
 end
 
 // multiply / divide (runs in the background; HI/LO interlocked)
-localparam bit MD64 = XDIV;
-localparam int MW = MD64 ? 64 : 32;         // the divider's width
 logic [6:0]      md_cnt;
-logic [2*MW-1:0] md_acc;                     // divide: {remainder, quotient}
-logic [MW-1:0]   md_dv;
+logic [63:0]     md_acc;                     // (no XDIV) divide: {remainder, quotient}
+logic [31:0]     md_dv;
 logic            md_nq, md_nr;
 logic            md_w;                       // the quotient and remainder are 64 bits
-logic            md_dd;                      // (no XDIV) a ddiv of two words: its quotient may be 2^31
+// XDIV: the 64-bit divider, restoring, on the magnitudes. The dividend, then the quotient, are in {md_ah, md_ma}, the divisor
+// in {md_bh, md_bl} (the multiplier's registers: they hold what M had as the divide started, md_dvon), the remainder in md_r.
+// A 32-bit div(u) works on md_ma alone (the dividend's magnitude is below 2^32 there): 32 steps. The sign changes (the dividend's
+// before, the quotient's and the remainder's after) are the one negation, dv_n, which takes the register it is told to.
+//   DV_PRE   the signs of the results kept; md_r cleared, or (a negative dividend) its magnitude put there
+//   DV_XFER  (a negative dividend) that magnitude shifted from md_r into {md_ah, md_ma}, md_cnt bits
+//   DV_STEP  md_cnt steps
+//   DV_Q     LO written (the quotient, negated if its sign is)
+//   DV_R     HI written (the remainder, negated if the dividend was)
+typedef enum logic [2:0] { DV_PRE, DV_XFER, DV_STEP, DV_Q, DV_R } dvp_t;
+logic            md_dvon;
+dvp_t            md_ph;
+logic [63:0]     md_r;
 logic            md_m32, md_m32b;            // FAST: mult(u)'s product, from its operands kept, and kept itself
 // The multiplier: one 33 x 33 signed product (the DSP's), its operands and its result
 // in registers, a product two cycles behind M's operands. mult(u) is one of it (FAST);
@@ -1143,6 +1149,21 @@ logic            md_mt, md_mth;              // an mthi (md_mth) or mtlo is bein
 logic [2:0]      md_c;
 logic [66:0]     md_ac;
 logic [31:0]     md_ah, md_bh, md_bl;        // the operands' words that are no longer at M (and in no register of the multiplier)
+// the divider's step and negation (see md_r)
+wire         dv_sa  = md_sgn && md_ah[31];                  // the dividend is negative
+wire         dv_neg = md_sgn && md_bh[31];                  // the divisor is
+wire         dv_tap = md_w ? md_ah[31] : md_ma[31];         // the dividend's next bit (a 32-bit divide has it in md_ma)
+wire [64:0]  dv_x   = {md_r, dv_tap};
+wire [65:0]  dv_y   = {{2{dv_neg}}, md_bh, md_bl} ^ {66{!dv_neg}};      // |divisor|, subtracted: -divisor if it is negative
+wire [65:0]  dv_t   = {1'b0, dv_x} + dv_y + 66'(!dv_neg);
+wire         dv_ok  = !dv_t[65];                             // the remainder so far has the divisor in it
+wire         dv_nneg = md_ph == DV_PRE ? dv_sa : md_ph == DV_Q ? md_nq : md_nr;
+wire [63:0]  dv_nin = md_ph == DV_R ? md_r : {md_ah, md_ma};
+wire         dv_rtop = md_w ? md_r[63] : md_r[31];
+wire [63:0]  dv_n   = (dv_nin ^ {64{dv_nneg}}) + 64'(dv_nneg);
+// (div(u): the operands' lower words only, extended by their sign (div) or by zeros)
+wire         dv_32  = XDIV && (m_c.md == MD_DIV || m_c.md == MD_DIVU);
+wire         dv_s32 = m_c.md == MD_DIV;
 
 // =============================================================== M
 logic        fpu_valid, fpu_busy;
@@ -1780,15 +1801,23 @@ assign fpu_valid = (FAST ? m_commit_e : m_commit) && m_fpu;    // (FAST: a load'
 // DSP's): taken every cycle, the product two cycles behind M's operands. One
 // multiplier, signed, of 33 bits: an operand's 33rd is its sign, or 0 (multu)
 always_ff @(posedge clk) begin
-    if (!(XMD && md_dm && (md_c == 3'd1 || md_c == 3'd3))) md_ma <= (XMD && md_dm && md_c == 3'd2) ? md_ah : m_a_lo;
+    if (XDIV && md_dvon) begin
+        if (md_ph == DV_XFER || md_ph == DV_STEP) md_ma <= {md_ma[30:0], md_ph == DV_XFER ? dv_rtop : dv_ok};
+    end
+    else if (!(XMD && md_dm && (md_c == 3'd1 || md_c == 3'd3))) md_ma <= (XMD && md_dm && md_c == 3'd2) ? md_ah : m_a_lo;
     md_mb <= !(XMD && md_dm) ? m_st_lo : md_c == 3'd2 ? md_bl : md_c == 3'd0 ? m_st_lo : md_bh;
     md_p <= 64'($signed({md_sa & md_ma[31], md_ma}) * $signed({md_sb & md_mb[31], md_mb}));
     md_psg <= md_sa | md_sb;
     md_p2 <= md_p; md_psg2 <= md_psg;
     // dmult(u): the words of M's operands that pass 0 does not take, kept as it starts: they follow M's
     // until then (no enable of M's to wait for) and stay as md_dm says so
-    if (XMD && !md_dm) begin
-        md_ah <= m_a64[63:32]; md_bh <= m_b64[63:32]; md_bl <= m_st_lo; md_sgn <= m_c.md == MD_DMULT;
+    if (XDIV && md_dvon) begin
+        if ((md_ph == DV_XFER || md_ph == DV_STEP) && md_w) md_ah <= {md_ah[30:0], md_ma[31]};
+    end
+    else if (XMD && !md_dm) begin
+        md_ah <= dv_32 ? {32{dv_s32 && m_a_lo[31]}} : m_a64[63:32]; md_bl <= m_st_lo;
+        md_bh <= dv_32 ? {32{dv_s32 && m_st_lo[31]}} : m_b64[63:32];
+        md_sgn <= m_c.md == MD_DMULT || (XDIV && (m_c.md == MD_DIV || m_c.md == MD_DDIV));
     end
 end
 
@@ -1805,7 +1834,7 @@ always_ff @(posedge clk) begin
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
-        md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
+        md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_PRE; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
         ms <= MS_IDLE; ms_cnt <= 0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
         sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0;
@@ -2273,19 +2302,13 @@ always_ff @(posedge clk) begin
         // ---------------------------------------------------- multiply / divide (started as M completes)
         // mult(u): the DSP's product, at once (FAST: two cycles on). dmult(u): the DSP's
         // too, four products of the operands' halves and their sum (see md_ma). The rest a
-        // bit a cycle on md_acc and one adder: div(u) and ddiv(u) restoring, on the magnitudes
-        // (a 32-bit dividend starts 32 bits up: 32 steps).
+        // bit a cycle, restoring, on the magnitudes: div(u) and ddiv(u) on the divider of the declarations (XDIV), or (no
+        // XDIV) div(u) on md_acc and one adder.
         if (XMD && !md_dm) md_ac <= '0;                           // (the sum's start, with no wait for M)
         if (m_commit_e && m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) begin
-            logic sgn, w, sa, sb;
-            logic [MW-1:0] a, b, ma;
+            logic sgn, w;
             w = XDIV && (m_c.md == MD_DDIV || m_c.md == MD_DDIVU);
-            sgn = m_c.md == MD_DIV || m_c.md == MD_MULT || m_c.md == MD_DDIV || m_c.md == MD_DMULT;
-            a = w ? MW'(m_a64) : MW'({{32{sgn && m_a_lo[31]}}, m_a_lo});
-            b = w ? MW'(m_b64) : MW'({{32{sgn && m_st_lo[31]}}, m_st_lo});
-            sa = sgn && a[MW-1]; sb = sgn && b[MW-1];
-            ma = sa ? -a : a;
-            md_w <= w; md_dd <= !XDIV && m_c.md == MD_DDIV;
+            md_w <= w;
             if (FAST && (m_c.md == MD_MULT || m_c.md == MD_MULTU)) begin
                 md_sa <= m_c.md == MD_MULT; md_sb <= m_c.md == MD_MULT; md_m32 <= 1'b1; md_busy <= 1'b1;
             end else if (m_c.md == MD_MULT || m_c.md == MD_MULTU) begin
@@ -2296,11 +2319,16 @@ always_ff @(posedge clk) begin
                 // (aL and bL are in md_ma and md_mb: pass 0)
                 md_sa <= 1'b0; md_sb <= 1'b0;
                 md_dm <= 1'b1; md_c <= 3'd1; md_busy <= 1'b1;
-            end else begin                                         // (by zero too: the quotient of all ones, the remainder the dividend, as the VR4300 leaves)
-                md_acc <= {MW'(0), (MD64 && !w) ? MW'({ma[31:0], 32'd0}) : ma};
-                md_dv <= sb ? -b : b;
+            end else if (XDIV) begin                               // (by zero too: the quotient of all ones, the remainder the dividend, as the VR4300 leaves)
+                md_dvon <= 1'b1; md_ph <= DV_PRE; md_cnt <= w ? 7'd64 : 7'd32; md_busy <= 1'b1;
+            end else begin
+                logic sa, sb;
+                sgn = m_c.md == MD_DIV;
+                sa = sgn && m_a_lo[31]; sb = sgn && m_st_lo[31];
+                md_acc <= {32'd0, sa ? -m_a_lo : m_a_lo};
+                md_dv <= sb ? -m_st_lo : m_st_lo;
                 md_nq <= sa ^ sb; md_nr <= sa;
-                md_cnt <= w ? 7'd64 : 7'd32; md_busy <= 1'b1;
+                md_cnt <= 7'd32; md_busy <= 1'b1;
             end
         end else if (md_busy && md_mt) begin
             md_mt <= 1'b0; md_busy <= 1'b0;
@@ -2336,24 +2364,46 @@ always_ff @(posedge clk) begin
             end
             default: ;
             endcase
-        end else if (md_busy) begin
+        end else if (XDIV && md_busy && md_dvon) begin
+            case (md_ph)
+            DV_PRE: begin                                                  // (dv_n is -{md_ah, md_ma})
+                md_r <= dv_sa ? dv_n : 64'd0; md_nq <= dv_sa ^ dv_neg; md_nr <= dv_sa;
+                md_ph <= dv_sa ? DV_XFER : DV_STEP;
+            end
+            DV_XFER: begin
+                md_r <= {md_r[62:0], 1'b0};
+                md_cnt <= md_cnt - 7'd1;
+                if (md_cnt == 7'd1) begin md_r <= 64'd0; md_cnt <= md_w ? 7'd64 : 7'd32; md_ph <= DV_STEP; end
+            end
+            DV_STEP: begin
+                md_r <= dv_ok ? dv_t[63:0] : dv_x[63:0];
+                md_cnt <= md_cnt - 7'd1;
+                if (md_cnt == 7'd1) md_ph <= DV_Q;
+            end
+            DV_Q: begin
+                lo_r <= dv_n[31:0]; lo_up <= dv_n[63:32]; lo_wide <= md_w;
+                md_ph <= DV_R;
+            end
+            default: begin
+                hi_r <= dv_n[31:0]; hi_up <= dv_n[63:32]; hi_wide <= md_w;
+                md_busy <= 1'b0; md_dvon <= 1'b0; md_ph <= DV_PRE;
+            end
+            endcase
+        end else if (!XDIV && md_busy) begin
             if (md_cnt != 0) begin
-                logic [MW:0] x, y, t;
-                x = {1'b0, md_acc[2*MW-2:MW-1]};
+                logic [32:0] x, y, t;
+                x = {1'b0, md_acc[62:31]};
                 y = {1'b0, md_dv};
                 t = x - y;
-                md_acc <= t[MW] ? {x[MW-1:0], md_acc[MW-2:0], 1'b0} : {t[MW-1:0], md_acc[MW-2:0], 1'b1};
+                md_acc <= t[32] ? {x[31:0], md_acc[30:0], 1'b0} : {t[31:0], md_acc[30:0], 1'b1};
                 md_cnt <= md_cnt - 7'd1;
             end else begin
-                logic [MW-1:0] q, r;
+                logic [31:0] q, r;
                 md_busy <= 1'b0;
-                q = md_nq ? -md_acc[MW-1:0] : md_acc[MW-1:0];
-                r = md_nr ? -md_acc[2*MW-1:MW] : md_acc[2*MW-1:MW];
-                lo_r <= q[31:0]; hi_r <= r[31:0];
-                lo_up <= 32'(64'(q) >> 32); hi_up <= 32'(64'(r) >> 32);
-                lo_wide <= md_w; hi_wide <= md_w;
-                // (ddiv of two words: only -2^31 / -1 leaves the 32 bits, a positive 2^31 -- its upper half 0)
-                if (!md_w && md_dd && !md_nq && q[31]) begin lo_up <= 32'd0; lo_wide <= 1'b1; end
+                q = md_nq ? -md_acc[31:0] : md_acc[31:0];
+                r = md_nr ? -md_acc[63:32] : md_acc[63:32];
+                lo_r <= q; hi_r <= r;
+                lo_wide <= 1'b0; hi_wide <= 1'b0;
             end
         end
     end
