@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Writes fpu_d64_vec.h: add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d of the operand pairs below as the FPU's FPD64 level does
+them -- exact integers (Fractions), round to nearest even with an unbounded exponent, a result below the normals a zero of its
+sign and one above them infinity, an input below the normals a zero of its sign, the default NaN 0x7FF7FFFFFFFFFFFF.
+    fpu_d64_vec.py > fpu_d64_vec.h"""
+import random
+from fractions import Fraction as F
+
+QNAN = 0x7FF7FFFFFFFFFFFF
+INF = 0x7FF0000000000000
+M64 = (1 << 64) - 1
+
+
+def flush(x):
+    return x & (1 << 63) if (x >> 52) & 0x7FF == 0 else x
+
+
+def isnan(x): return (x >> 52) & 0x7FF == 0x7FF and x & ((1 << 52) - 1) != 0
+def isinf(x): return x & ~(1 << 63) == INF
+
+
+def val(x):                                       # an exact value of a finite, flushed double
+    e, f = (x >> 52) & 0x7FF, x & ((1 << 52) - 1)
+    if e == 0: return F(0)
+    v = F((1 << 52) | f) * F(2) ** (e - 1075)
+    return -v if x >> 63 else v
+
+
+def pack(v, sign):                                # round v (a Fraction, nonzero) to 53 bits, unbounded exponent, then pack
+    a = abs(v)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if F(2) ** e > a: e -= 1                       # 2^e <= a < 2^(e+1)
+    q = a / F(2) ** (e - 52)                       # in [2^52, 2^53)
+    m = int(q)
+    r = q - m
+    if r > F(1, 2) or (r == F(1, 2) and m & 1): m += 1
+    if m >> 53: m >>= 1; e += 1
+    be = e + 1023
+    if be >= 2047: return sign << 63 | INF
+    if be <= 0: return sign << 63
+    return sign << 63 | be << 52 | (m & ((1 << 52) - 1))
+
+
+def ref(fn, x, y):
+    if fn == 5: return QNAN if isnan(x) else flush(x) & ~(1 << 63)
+    if fn == 7: return QNAN if isnan(x) else flush(x) ^ (1 << 63)
+    x, y = flush(x), flush(y)
+    if fn >= 0x30:
+        if isnan(x) or isnan(y): un, eq, lt = 1, 0, 0
+        else:
+            a = float('inf') * (1 if x >> 63 == 0 else -1) if isinf(x) else float(val(x))
+            b = float('inf') * (1 if y >> 63 == 0 else -1) if isinf(y) else float(val(y))
+            un, eq, lt = 0, int(a == b), int(a < b)
+        return int(bool((fn & 1 and un) or (fn & 2 and eq) or (fn & 4 and lt)))
+    if fn == 1: y ^= 1 << 63
+    if isnan(x) or isnan(y): return QNAN
+    if fn in (0, 1):
+        if isinf(x) and isinf(y): return QNAN if x != y else x
+        if isinf(x): return x
+        if isinf(y): return y
+        v = val(x) + val(y)
+        if v == 0: return (x & y) & (1 << 63) if val(x) == 0 and val(y) == 0 else 0
+        return pack(v, int(v < 0))
+    s = (x ^ y) >> 63
+    if isinf(x) or isinf(y):
+        if val(x) == 0 and not isinf(x) or val(y) == 0 and not isinf(y): return QNAN
+        return s << 63 | INF
+    v = val(x) * val(y)
+    if v == 0: return s << 63
+    return pack(v, s)
+
+
+SP = [0, 1 << 63, 0x3FF0000000000000, 0xBFF0000000000000, INF, INF | 1 << 63, 0x7FF8000000000000, 0x7FF0000000000001,
+      0x0010000000000000, 0x000FFFFFFFFFFFFF, 1, 0x7FEFFFFFFFFFFFFF, 0x4000000000000000, 0x3FE0000000000000, 0x3FF0000000000001,
+      0x3FEFFFFFFFFFFFFF, 0x4330000000000000, 0x433FFFFFFFFFFFFF, 0x3CA0000000000000, 0x3CB0000000000000, 0x3C90000000000000,
+      0x7FE0000000000000, 0x2000000000000000, 0x5FE0000000000000, 0x1FF0000000000000, 0x4008000000000000, 0x400921FB54442D18,
+      0x7FE8000000000000, 0x0018000000000000, 0x3FFFFFFFFFFFFFFF, 0x3FF0000000000002]
+
+
+def main():
+    rnd = random.Random(64)
+    vec = []
+    # directed: every pair of the special values, both signs, add / sub / mul and the compares
+    for x in SP:
+        for y in SP:
+            for fn in (0, 1, 2):
+                vec.append((fn, x, y))
+            if rnd.random() < 0.25: vec.append((0x30 + rnd.randrange(16), x ^ (rnd.getrandbits(1) << 63), y))
+        vec.append((5, x, 0)); vec.append((7, x, 0))
+    # ties, cancellation, carry-out, the exponents' extremes, a product at the smallest normal and the largest
+    for k in range(400):
+        e = rnd.choice([rnd.randrange(1, 60), rnd.randrange(1020, 1030), rnd.randrange(1990, 2047), rnd.randrange(1, 2047)])
+        f = rnd.choice([rnd.getrandbits(52), (1 << 52) - 1 - rnd.getrandbits(rnd.randrange(1, 53)), rnd.getrandbits(rnd.randrange(1, 53)), 0])
+        x = rnd.getrandbits(1) << 63 | e << 52 | f
+        m = rnd.randrange(6)
+        if m == 0: y = x ^ (1 << 63)
+        elif m == 1: y = (x + rnd.randrange(-2, 3)) & M64
+        elif m == 2: y = (x & (1 << 63)) | (min(2046, max(1, e - 53 + rnd.randrange(-2, 3))) << 52) | rnd.getrandbits(52)
+        elif m == 3: y = rnd.getrandbits(1) << 63 | min(2046, max(1, 2046 - e + rnd.randrange(-2, 3))) << 52 | rnd.getrandbits(52)
+        elif m == 4: y = rnd.getrandbits(1) << 63 | min(2046, max(1, 1024 - e + rnd.randrange(-2, 3))) << 52 | rnd.getrandbits(52)
+        else: y = rnd.getrandbits(64)
+        vec.append((rnd.choice([0, 1, 2, 2, 0, 1, 5, 7, 0x30 + rnd.randrange(16)]), x, y))
+    print("/* generated by fpu_d64_vec.py: fn (the function field), x (fs), y (ft), the result (a compare: its condition) */")
+    print("static const struct { uint32_t fn; uint64_t x, y, want; } vec[] = {")
+    for fn, x, y in vec:
+        print(f"  {{0x{fn:02x}, 0x{x:016x}ull, 0x{y:016x}ull, 0x{ref(fn, x, y):016x}ull}},")
+    print("};")
+
+
+main()
