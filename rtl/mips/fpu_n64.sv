@@ -394,12 +394,12 @@ always_ff @(posedge clk) begin
             if (nx || (ax.s && !zx)) res <= QNAN;
             else if (zx || ix) res <= ax;
             else begin
-                logic signed [11:0] t;
-                t = 12'(ax.e) - 12'sd150;                 // value = m * 2^t
                 ir <= 0; zmag <= 0; icnt <= 5'd27; zs <= 0;
-                // the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit root
-                if (t[0]) begin mp <= {1'd0, 1'b1, ax.f, 31'd0}; zexp <= ((t - 12'sd1) >>> 1) + 12'sd143; end
-                else      begin mp <= {2'd0, 1'b1, ax.f, 30'd0}; zexp <= (t >>> 1) + 12'sd143; end
+                // value = m * 2^t, t = e - 150 (as odd as e is); the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit
+                // root, whose exponent is t / 2 rounded down, + 143: e / 2 rounded down, + 68
+                if (ax.e[0]) mp <= {1'd0, 1'b1, ax.f, 31'd0};
+                else         mp <= {2'd0, 1'b1, ax.f, 30'd0};
+                zexp <= 12'(ax.e[7:1]) + 12'sd68;
                 st <= S_ITER;
             end
         end
