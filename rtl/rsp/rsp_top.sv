@@ -94,9 +94,10 @@ module rsp_top #(
 // ---------------------------------------------------------------- units --
 logic        su_run, su_brk, su_idle, pc_load;
 logic [11:0] pc_next;
-logic [9:0]  i_addr;
+logic [9:0]  i_addr, i_addr1;
 logic [31:0] i_data, i_data2;
-logic        i2_ok;
+logic        i2_ok, p2_ok, pw_ok;
+logic [31:0] iw_prev, iw_data;
 logic        sm_valid, sm_we;       logic [11:0] sm_addr; logic [1:0] sm_n; logic [31:0] sm_wdata;
 logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; logic [127:0] vm_wdata; logic [3:0] vm_rot;
 logic [31:0] m_rdata;
@@ -110,7 +111,7 @@ logic        dm_valid /* verilator public_flat_rd */, dm_we;       logic [11:0] 
 logic        tr_e_mem;
 
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
-    .i_addr, .i_data, .i_data2, .i2_ok,
+    .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
     .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
@@ -140,9 +141,9 @@ always_ff @(posedge clk) rom_q <= div_rom[rom_addr];
 logic [31:0] imem [0:1023];
 logic        iw_we;
 logic [9:0]  iw_addr;
-logic [31:0] iw_data, ia_q;
+logic [31:0] ia_q;
 logic        im_dma;                  // (below: a DMA of IMEM runs)
-wire  [9:0]  ib_addr = im_dma ? iw_addr : i_addr + 10'd1;    // (one address for the port: a write is a DMA's, im_dma)
+wire  [9:0]  ib_addr = im_dma ? iw_addr : i_addr1;    // (one address for the port: a write is a DMA's, im_dma)
 always_ff @(posedge clk) begin
     if (iw_we) begin imem[ib_addr] <= iw_data; ia_q <= iw_data; end
     else ia_q <= imem[ib_addr];
@@ -150,6 +151,26 @@ always_ff @(posedge clk) begin
 end
 always_ff @(posedge clk) i_data <= imem[i_addr];
 assign i_data2 = ia_q;
+// Whether a word and the one before can be a pair, made as the word is written (the DMA writes IMEM in order): one bit a
+// word, read with the second port's word. A word written after the previous address's, with the previous word, has the rule's
+// answer; a word alone has none, nor does the word after the last one a transfer wrote (its answer was of the word before,
+// which is not the same now) -- a pair lost for the performance, never a wrong one
+// (iw_prev: the word written last, and its address)
+logic [9:0]  iw_pa;
+logic        iw_pv, im_dma_q;
+logic        pair_mem [0:1023];
+logic        p2_q;
+wire         iw_zero = !iw_we && im_dma_q && !im_dma && iw_pv;      // the transfer is over: the word after its last
+always_ff @(posedge clk) begin
+    if (iw_we) pair_mem[iw_addr] <= iw_pv && iw_pa == iw_addr - 10'd1 && pw_ok;
+    else if (iw_zero) pair_mem[iw_pa + 10'd1] <= 1'b0;
+    p2_q <= pair_mem[ib_addr];
+    im_dma_q <= im_dma;
+    if (rst) iw_pv <= 1'b0;
+    else if (iw_we) begin iw_prev <= iw_data; iw_pa <= iw_addr; iw_pv <= 1'b1; end
+    else if (iw_zero) iw_pv <= 1'b0;
+end
+assign p2_ok = p2_q;
 
 // ----------------------------------------------------------------- DMEM --
 // one access a cycle: the DMA engine's, the vector unit's or the scalar

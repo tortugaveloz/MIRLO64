@@ -46,9 +46,14 @@ module rsp_su #(
     output logic        idle,           // nothing in E, M (the unit has stopped)
 
     output logic [9:0]  i_addr,         // IMEM word address
+    output logic [9:0]  i_addr1,        // ... and the next word's (IMEM's second port)
     input  wire  [31:0] i_data,
     input  wire  [31:0] i_data2,        // the word after i_data's (IMEM's second port) ...
     input  wire         i2_ok,          // ... when that port read it (not the DMA's)
+    input  wire         p2_ok,          // ... and the two words can be a pair (by the rule alone: pw_ok of the two when IMEM was written)
+    input  wire  [31:0] pw_a,           // two words, for pw_ok
+    input  wire  [31:0] pw_b,
+    output logic        pw_ok,          // pw_a, pw_b can be a pair (the rule, not the rest of what it takes)
 
     // DMEM: bytes m_addr .. m_addr + m_n, first byte in [31:24]; the read
     // data the next cycle
@@ -260,10 +265,16 @@ endfunction
 wire  [31:0] ins_d = i_data;
 logic        stall_e /* verilator public_flat_rd */;
 wire         v_first = is_vc(ins_d);
-// (not behind a branch or jump in E: D's instruction is its delay slot; a branch only second)
-wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr))
-                   && (v_first ? is_plain(i_data2) || is_br(i_data2) || is_c0(i_data2) || (x_ok(i_data2) && pair_cx(ins_d, i_data2))
-                               : (is_plain(ins_d) || is_c0(ins_d) || (x_ok(ins_d) && pair_xc(ins_d, i_data2))) && is_vc(i_data2));
+// The rule for two words to be a pair is a function of the two (pair_rule): the IMEM's second port brings its result with
+// the second word (p2_ok, made when the word was written), so that it is not in front of the fetch's address. What is left is
+// the unit's own state: D holds an instruction and IMEM's second port read the next, the unit runs, and D's instruction is not
+// a branch's delay slot (a branch or jump in E).
+function automatic logic pair_rule(input logic [31:0] w0, input logic [31:0] w1);
+    return is_vc(w0) ? is_plain(w1) || is_br(w1) || is_c0(w1) || (x_ok(w1) && pair_cx(w0, w1))
+                     : (is_plain(w0) || is_c0(w0) || (x_ok(w0) && pair_xc(w0, w1))) && is_vc(w1);
+endfunction
+assign pw_ok = pair_rule(pw_a, pw_b);
+wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr)) && p2_ok;
 wire  [31:0] s_ins_d = (pair_d && v_first) ? i_data2 : ins_d;   // the scalar unit's instruction entering E
 wire  [31:0] v_ins_d = v_first ? ins_d : i_data2;               // a pair's computation
 wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocessors' instruction entering E
@@ -413,7 +424,13 @@ end
 wire [31:0] m_out = m_c.load ? ld : m_c.cf ? c_res_l : m_res;
 
 // ---- sequencing
-assign i_addr = stall_e ? d_pc[11:2] : pair_go ? pc_f[11:2] + 10'd1 : pc_f[11:2];
+// (the fetch pointer's next words are kept: pf1 = pc_f's word + 1, pf2 = + 2, dp1 = D's word + 1, so that the address is a
+// choice between registers by the stall and the pair)
+logic [9:0]  pf1, dp1;
+wire  [9:0]  rd1 = redirect_pc[11:2] + 10'd1;
+wire  [9:0]  pf2 = pc_f[11:2] + 10'd2;
+assign i_addr  = stall_e ? d_pc[11:2] : pair_go ? pf1 : pc_f[11:2];
+assign i_addr1 = stall_e ? dp1        : pair_go ? pf2 : pf1;
 assign pc_next = d_valid ? d_pc : pc_f;
 assign idle = !e_valid && !m_valid_r;
 
@@ -440,21 +457,25 @@ always_ff @(posedge clk) begin
         if (!stall_e) c_rd <= vrb_d;
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
+            pf1 <= pc_in[11:2] + 10'd1;
         end else if (brk) begin
             // what follows the BREAK was not run: fetch it again when resumed
             pc_f <= redirect ? redirect_pc : d_valid ? d_pc : pc_f;
+            pf1  <= redirect ? rd1 : d_valid ? dp1 : pf1;
             d_valid <= 1'b0;
         end else if (!run && !redirect) begin
             // stopped: D's instruction (not run) is the next one
             if (!stall_e) begin
-                if (d_valid) pc_f <= d_pc;
+                if (d_valid) begin pc_f <= d_pc; pf1 <= dp1; end
                 d_valid <= 1'b0;
             end
         end else if (!stall_e) begin
             // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
             d_pc <= pair_go ? pc_f + 12'd4 : pc_f;
+            dp1  <= pair_go ? pf2 : pf1;
             pc_f <= redirect ? redirect_pc : pair_go ? pc_f + 12'd8 : pc_f + 12'd4;
+            pf1  <= redirect ? rd1 : pair_go ? pc_f[11:2] + 10'd3 : pf2;
         end
     end
 end
