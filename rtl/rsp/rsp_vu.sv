@@ -788,7 +788,8 @@ wire sel_fire /* verilator public_flat_rd */ = sel0;
 wire x_free   = !(m_v && m_vdn == rb_live) && !(x_v && x_vdn == rb_live) && !(y_v && y_vdn == rb_live) && !(wp && w_vdn == rb_live);
 wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load into the register a computation is to write would be written over by it, put off or not)
-wire [4:0] l_reg = mtc2 ? li[15:11] : ltn;
+logic [4:0] l_reg;                                            // (the register a load or MTC2 writes: registered with the instruction)
+always_ff @(posedge clk) if (adv) l_reg <= ldecode(lins_n).mtc2 ? lins_n[15:11] : lins_n[20:16];
 wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
 wire ls_go    = ld.go;
 wire m_stall  = swc2 ? m_stall_st : m_stall_ld;                              // (the port, for the load or store of E)
@@ -912,10 +913,7 @@ always_ff @(posedge clk) begin
                     if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; end
                     kc_r[l] <= kc1[l];    // (a clip's second cycle makes -t: its flags are the first's)
                 end
-                if (x_wait && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;
             end
-            if (x_wait) x_wait <= 1'b0;
-            else x_v <= 1'b0;
         end
         x_sec <= x_v && x_wait;
 
@@ -929,13 +927,6 @@ always_ff @(posedge clk) begin
             r_sqrt <= fn[2];
         end
         if (sel_fire) begin
-            if (!fn_mul && !fn_fast) begin                     // (a multiply enters EX1 from the MUL stage, a fast one skips it)
-                x_v <= 1'b1; x_mul <= 1'b0; x_st <= fn_cmp;
-                // a clip takes its adder's flags in one cycle and makes -t in the next; a reciprocal's second cycle is
-                // its normalisation
-                x_wait <= fn_ch || fn_rcp;
-                x_fn <= fn; x_am <= cd.am; x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
-            end
             if (fn_rcp) begin
                 // the divide registers' state after it (in program order, as the SEL's are)
                 dph <= fn[1:0] == 2'd2;
@@ -943,12 +934,22 @@ always_ff @(posedge clk) begin
             end
         end
 
-        // ---- the MUL stage, and a multiply's start of EX1 behind it
+        // ---- the MUL stage, and EX1's control: a computation in EX1 for a second cycle keeps it (a clip's second cycle makes
+        // -t); otherwise it is taken from the MUL stage, or from SEL -- a multiply goes to the MUL stage and a fast
+        // one to EX2, and what EX1 then holds is not valid (x_v): SEL's decision is only in x_v and m_v
         m_v <= sel0 && fn_mul;
-        if (sel0) begin m_fn <= fn; m_vdn <= vdn; end
-        if (m_v) begin
-            x_v <= 1'b1; x_mul <= 1'b1; x_wait <= 1'b0; x_one <= 1'b0; x_rcp <= 1'b0; x_st <= 1'b0;
-            x_fn <= m_fn; x_vdn <= m_vdn; x_am <= 3'd0; x_ve <= 4'd0; x_de <= 3'd0;
+        m_fn <= fn; m_vdn <= vdn;
+        if (x_v && x_wait) begin
+            x_wait <= 1'b0;
+            if (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6) x_am <= 3'd7;
+        end else begin
+            x_v <= m_v || (sel0 && !fn_mul && !fn_fast);
+            x_mul <= m_v;
+            x_st <= !m_v && fn_cmp;
+            x_wait <= !m_v && (fn_ch || fn_rcp);
+            x_fn <= m_v ? m_fn : fn; x_vdn <= m_v ? m_vdn : vdn;
+            x_am <= m_v ? 3'd0 : cd.am; x_ve <= m_v ? 4'd0 : ve; x_de <= m_v ? 3'd0 : de;
+            x_one <= !m_v && fn_one; x_rcp <= !m_v && fn_rcp;
         end
 
         // ---- the others
