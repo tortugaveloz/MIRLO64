@@ -322,6 +322,12 @@ function automatic logic [2:0] lane_pk(input logic [5:0] f, input logic [15:0] s
     return {1'b0, !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2};
 endfunction
 
+// EX1, VADD, VSUB and VABS: whether the result is a clamp's constant (the sum overflowed; -t of -8000), from the adder's flags and
+// sum of this cycle, registered (kc_r)
+function automatic logic lane_kc(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input add_t a);
+    return ((f == 6'h10 || f == 6'h11) && (a.fl[2] ^ a.lo[15])) || (f == 6'h13 && s[15] && t[15] && a.lo[15]);
+endfunction
+
 // EX1, a multiply: the product into the accumulator (all 48 bits)
 function automatic logic [47:0] lane_mac(input logic [5:0] f, input logic signed [33:0] p, input logic [47:0] accm);
     logic signed [47:0] term;
@@ -372,7 +378,7 @@ endfunction
 // EX2, any computation but a multiply: from the registered sum (lo) and flags (fr, the adder's {carry, b16, zero,
 // ones} of its compare) the result, the accumulator's low word, the flags and the register write's data
 function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
-                                  input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input ydec_t yd,
+                                  input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input logic kc_in, input ydec_t yd,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);
     lane_t o = '0;
@@ -430,9 +436,8 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
     o.acc[15:0] = accl;
     // vd: the clamped result, or VSAR's word of the accumulator
     // (VABS of a negative s with t = 8000: -t is 8000 again: that is t and -t, from the adder, both negative)
-    abs_sat = yd.abs_ && s[15] && t[15] && lo[15];
-    ovf = yd.vas && (b16 ^ lo[15]);
-    rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
+    abs_sat = yd.abs_;
+    rsel = (kc_in && (yd.vas || yd.abs_)) ? 2'd3 : 2'd0;     // (kc_in: made in EX1: VADD, VSUB overflow, VABS of -8000)
     c15 = !abs_sat && b16;                                   // (abs_sat: 7FFF; ovf: b16, then its inverse)
     clo = abs_sat || !b16;
     if (yd.resv) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
@@ -528,13 +533,16 @@ logic [4:0]         x_vdn;
 logic [2:0]         x_de;
 logic [15:0]        lo_r [LANES];             // the adder's sum, and its flags (the first cycle's)
 logic [3:0]         fl_r [LANES];
+logic [LANES-1:0]   kc_r;                     // the clamp's constant is the result
 logic [2:0]         pk_r [LANES];             // a compare's or a clip's choice among s, t and -t
 add_t               ad [LANES];
 logic [2:0]         pk1 [LANES];
+logic [LANES-1:0]   kc1;
 logic [47:0]        mac [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
         ad[l]  = lane_x1(x_am, s_r[l], t_r[l], vco[l]);
+        kc1[l] = lane_kc(x_fn, s_r[l], t_r[l], ad[l]);
         pk1[l] = lane_pk(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
         mac[l] = lane_mac(x_fn, p_r[l], {acc_h[l], acc_m[l], acc_l[l]});
     end
@@ -552,7 +560,7 @@ lane_t ex2 [LANES];
 logic [15:0] mres [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
         mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]});
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
@@ -901,7 +909,8 @@ always_ff @(posedge clk) begin
             end else begin
                 for (int l = 0; l < LANES; l++) begin
                     lo_r[l] <= ad[l].lo;
-                    if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; end    // (a clip's second cycle makes -t: its flags are the first's)
+                    if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; end
+                    kc_r[l] <= kc1[l];    // (a clip's second cycle makes -t: its flags are the first's)
                 end
                 if (x_wait && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;
             end

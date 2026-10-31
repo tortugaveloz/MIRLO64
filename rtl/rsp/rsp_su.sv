@@ -88,6 +88,7 @@ module rsp_su #(
     output logic [31:0] c_ins_n,
     output logic [31:0] c_lins_n,
     output logic        c_adv,
+    output logic        c_vls,          // E's instruction is a vector load or store (LWC2, SWC2): registered
 
     // (simulation) each instruction as it leaves E, and each register write
     output logic        tr_e,
@@ -321,15 +322,11 @@ wire hazard /* verilator public_flat_rd */ = m_valid_r && m_we_r && (m_c.load ||
 wire [31:0] imm_sx = {{16{e_ins[15]}}, e_ins[15:0]};
 wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : eb;
 wire [4:0]  shamt  = e_c.sh_imm ? e_ins[10:6] : ea[4:0];
-// one shifter: SRL/SRA directly, SLL as a right shift of the bit-reversed value
-function automatic logic [31:0] rev32(input logic [31:0] v);
-    for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
-endfunction
-wire        sh_left = e_c.alu == A_SLL;
-wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], sh_left ? rev32(eb) : eb};
+// two shifters: SLL, and SRL / SRA (a right shift of the sign-extended value)
+wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], eb};
 wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
 wire [31:0] sh_r    = sh_out[31:0];
-wire [31:0] sh_l    = rev32(sh_out[31:0]);
+wire [31:0] sh_l    = eb << shamt;
 // one adder for add, subtract and both compares: ea + op_b, or ea - op_b = ea + ~op_b + 1,
 // whose carry out is "no borrow" (ea >= op_b unsigned) and whose sign decides a signed
 // compare when the signs agree
@@ -393,6 +390,9 @@ assign c_lins = e_ins;
 assign c_ins_n = c_ins_d;
 assign c_lins_n = s_ins_d;
 assign c_adv = !stall_e;
+logic e_vls;
+always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
+assign c_vls = e_vls;
 assign c_a = ea;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd

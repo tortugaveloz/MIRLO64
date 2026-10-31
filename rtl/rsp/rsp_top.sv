@@ -104,7 +104,7 @@ logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
 logic [31:0] c_ins, c_a, c_b, c_res, c_lins, c_ins_n, c_lins_n;
-logic        c_adv;
+logic        c_adv, c_vls;
 logic        c_pr;
 logic [4:0]  c_ra_n, c_rb_n, c_rd_n, c_rd;
 logic [31:0] v_res_l;
@@ -114,7 +114,7 @@ logic        tr_e_mem;
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv,
+    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
@@ -184,7 +184,7 @@ assign p2_ok = p2_q;
 // bytes in the top word; writes go by the byte's address mod 16 (x_be16,
 // x_wd: byte b in [127 - 8b -: 8]).
 // the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
-wire         vu_own = c_valid && (c_lins[31:26] == 6'h32 || c_lins[31:26] == 6'h3A);
+wire         vu_own = c_vls;                                  // (E's instruction is the vector unit's load or store: a register; the unit's request is its own)
 logic        x_valid, x_we;
 logic [11:0] x_addr, x_addr16;
 logic [15:0] x_be16;
