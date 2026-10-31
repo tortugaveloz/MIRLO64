@@ -283,7 +283,6 @@ void n64rt_resched(void);                  /* switch if a higher-priority thread
 OSTime n64rt_time(void);                   /* the N64's Count rate, 46.875 MHz, 64-bit */
 void n64rt_tick(void);                     /* the timer interrupt: VI fields, timers */
 void n64rt_io_init(void);
-extern u32 n64rt_cpu64, n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md, n64rt_cpu_div;   /* what the game CPU does of the VR4300's 64-bit integers (n64rt_os.c) */
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* the accessories of controllers 1 and 2 (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */

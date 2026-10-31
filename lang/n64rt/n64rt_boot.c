@@ -78,137 +78,6 @@ static void hooks_arm(void);
 
 
 #ifdef N64RT_OWN
-/* ---- libultra's 64-bit helpers, done here (n64rt_llsigs.h) ------------------------
- * The game's code calls them with the O32 ABI as the compiler made them: a
- * long long in a register pair, the high word first (this is big-endian), the
- * result in v0 (high) and v1 (low). The originals `break 7` on a zero divisor
- * and `break 6` on a quotient that overflows (a fault of the game's own): done
- * here as 0 -- this code runs at the game's level, where a break would reach the
- * runtime's vector, not the game's.
- *
- * Each runs behind a wrapper (llw_*, below) with the game's interrupts off: this
- * CPU takes the game's interrupt for the runtime's vector, not the game's, when
- * the instruction it interrupts is not in the game's window (KSEG0), and the
- * runtime is not. The game's Status goes back in the delay slot of the return,
- * where the next instruction is the game's again. */
-#define LL_BREAK(n) ((void)(n))
-#include "n64rt_div64.h"
-u64 ll_ull_rshift(u64 a, u64 b) { return a >> (b & 63u); }
-u64 ll_ll_lshift(u64 a, u64 b)  { return a << (b & 63u); }
-u64 ll_ll_rshift(u64 a, u64 b)  { return (u64)((s64)a >> (b & 63u)); }
-u64 ll_ll_mul(u64 a, u64 b)     { return a * b; }
-/* (the divisions: n64rt_div64.h's, by words on the CPU's divu -- the C library's is a loop of a bit a step) */
-static s64 ll_sdiv(s64 a, s64 b, s64 *r)
-{
-    u64 ur, q = udiv64(a < 0 ? -(u64)a : (u64)a, b < 0 ? -(u64)b : (u64)b, &ur);
-    *r = a < 0 ? -(s64)ur : (s64)ur;                    /* (the remainder has the dividend's sign, as C's) */
-    return (a < 0) != (b < 0) ? -(s64)q : (s64)q;
-}
-u64 ll_ull_div(u64 a, u64 b)
-{
-    u64 r;
-    if (!b) { LL_BREAK(7); return 0; }
-    return udiv64(a, b, &r);
-}
-u64 ll_ull_rem(u64 a, u64 b)
-{
-    u64 r;
-    if (!b) { LL_BREAK(7); return 0; }
-    (void)udiv64(a, b, &r);
-    return r;
-}
-u64 ll_ll_rem(u64 a, u64 b) { return ll_ull_rem(a, b); }       /* (libultra's __ll_rem is an unsigned remainder) */
-u64 ll_ll_div(u64 a, u64 b)
-{
-    if (!b) { LL_BREAK(7); return 0; }
-    if (b == ~0ull && a == 0x8000000000000000ull) { LL_BREAK(6); return 0; }
-    s64 r;
-    return (u64)ll_sdiv((s64)a, (s64)b, &r);
-}
-/* the remainder with the divisor's sign: added back when the two differ */
-u64 ll_ll_mod(u64 a, u64 b)
-{
-    if (!b) { LL_BREAK(7); return 0; }
-    if (b == ~0ull && a == 0x8000000000000000ull) { LL_BREAK(6); return 0; }
-    s64 r;
-    (void)ll_sdiv((s64)a, (s64)b, &r);
-    if ((r < 0 && (s64)b > 0) || (r > 0 && (s64)b < 0)) r += (s64)b;
-    return (u64)r;
-}
-/* *q = a / d, *r = a % d, d a 16-bit number the original sign-extends and divides by as unsigned */
-void ll_ull_divremi(u64 *q, u64 *r, u64 a, s32 d)
-{
-    u64 b = (u64)(s64)(s16)d;
-    if (!b) { LL_BREAK(7); return; }
-    *q = udiv64(a, b, r);
-}
-#include "n64rt_llsigs.h"
-
-#define LL_WRAP(name) \
-    ".globl llw_" #name "\n" \
-    "llw_" #name ":\n" \
-    "    addiu $sp, $sp, -32\n" \
-    "    sw    $ra, 28($sp)\n" \
-    "    sw    $t7, 24($sp)\n"               /* (the game's Status: the patch has it there) */ \
-    "    lw    $t6, 48($sp)\n"               /* (the caller's fifth word, where the C function looks) */ \
-    "    sw    $t6, 16($sp)\n" \
-    "    jal   ll_" #name "\n" \
-    "    nop\n" \
-    "    lw    $ra, 28($sp)\n" \
-    "    lw    $t7, 24($sp)\n" \
-    "    addiu $sp, $sp, 32\n" \
-    "    jr    $ra\n" \
-    "    mtc0  $t7, $12\n"
-__asm__(".text\n.set push\n.set noreorder\n.set noat\n.set mips3\n"
-        LL_WRAP(ull_rshift) LL_WRAP(ull_rem) LL_WRAP(ull_div) LL_WRAP(ll_lshift) LL_WRAP(ll_rem)
-        LL_WRAP(ll_div) LL_WRAP(ll_mul) LL_WRAP(ull_divremi) LL_WRAP(ll_mod) LL_WRAP(ll_rshift)
-        ".set pop\n");
-#define LL_DECL(name) void llw_##name(void);
-LL_DECL(ull_rshift) LL_DECL(ull_rem) LL_DECL(ull_div) LL_DECL(ll_lshift) LL_DECL(ll_rem)
-LL_DECL(ll_div) LL_DECL(ll_mul) LL_DECL(ull_divremi) LL_DECL(ll_mod) LL_DECL(ll_rshift)
-static const struct { const u32 *w; u32 n; void *f; const char *name; } s_ll_sigs[] = { LL_SIGS };
-/* The patch goes into the runtime's code with interrupts off (an interrupt of the game's would arrive at the runtime's
- * vector) and Status bit 4 (KSU's, which the game's code never sets) on: while the game runs, 0x2000_0000 - 0x4FFF_FFFF are
- * the game's mapped addresses (mips_core, game_view: a game can map an overlay at 0x4000_0000 and run it there), and bit 4
- * gives the runtime's code back its own SDRAM there. The wrapper's mtc0 puts the game's Status back. */
-static void ll_patch(u32 vram, u32 len)
-{
-    u32 patched = 0;
-    for (u32 a = vram; a + 4u <= vram + len; a += 4u) {
-        const u32 *w = rd32(a);
-        for (u32 k = 0; k < sizeof s_ll_sigs / sizeof s_ll_sigs[0]; k++) {
-            const u32 n = s_ll_sigs[k].n;
-            if (w[0] != s_ll_sigs[k].w[0] || a + 4u * n > vram + len) continue;
-            /* a CPU that does the function's 64-bit instruction itself runs the original: shifts (W64_SH), dmultu (W64_MD), ddiv and
-             * ddivu (W64_DIV: some seventy cycles, where this C is a hundred and fifty) */
-            if (n64rt_cpu_sh && (s_ll_sigs[k].w == s_sig_ull_rshift || s_ll_sigs[k].w == s_sig_ll_lshift || s_ll_sigs[k].w == s_sig_ll_rshift)) continue;
-            if (n64rt_cpu_md && s_ll_sigs[k].w == s_sig_ll_mul) continue;
-            if (n64rt_cpu_div && (s_ll_sigs[k].w == s_sig_ull_rem || s_ll_sigs[k].w == s_sig_ull_div || s_ll_sigs[k].w == s_sig_ll_rem ||
-                                  s_ll_sigs[k].w == s_sig_ll_div || s_ll_sigs[k].w == s_sig_ull_divremi || s_ll_sigs[k].w == s_sig_ll_mod)) continue;
-            u32 i = 1;
-            while (i < n && w[i] == s_ll_sigs[k].w[i]) i++;
-            if (i < n) continue;
-            u32 f = (u32)(uintptr_t)s_ll_sigs[k].f;
-            u32 *d = rd32(a);
-            d[0] = 0x400F6000u;                      /* mfc0 t7, Status                  (the wrapper gives it back) */
-            d[1] = 0x35EE0011u;                      /* ori  t6, t7, 0x11 */
-            d[2] = 0x39CE0001u;                      /* xori t6, t6, 1                   (interrupts off; bit 4: below) */
-            d[3] = 0x408E6000u;                      /* mtc0 t6, Status */
-            d[4] = 0;
-            d[5] = 0x3C190000u | (f >> 16);          /* lui  t9, hi */
-            d[6] = 0x37390000u | (f & 0xFFFFu);      /* ori  t9, t9, lo */
-            d[7] = 0x03200008u;                      /* jr   t9 */
-            d[8] = 0;
-            patched++;
-#ifdef N64RT_DEBUG
-            n64rt_log("n64rt: __%s at %08lx done in the runtime\n", s_ll_sigs[k].name, (unsigned long)a);
-#endif
-            break;
-        }
-    }
-    (void)patched;
-}
-
 /* ---- libultra's envelope rate, done here ------------------------------------------
  * The audio library's envelope mixer turns each volume ramp into a rate, a 16.16 factor the microcode applies every
  * eight samples: (target / volume)^(8 / samples). Its function for it takes the power as (1 + l) to the n, squared three
@@ -222,7 +91,7 @@ static void ll_patch(u32 vram, u32 len)
  * eight samples) is the same 16.16 value or one 2^-16 off; above that, a float's 24 bits leave a relative 1e-6.
  * The function is found by its words, those that a link relocates masked (a lui's half, the offsets and immediates
  * off a register a lui set, a jump's target: ul_mask), through a hash. Three builds of it are known (s_ul_fns), and
- * ul_patch puts the 64-bit helpers' jump over each, so it runs as they do:
+ * ul_patch puts a jump to a wrapper over each:
  *  - two take the O32 ABI's arguments, the two doubles in $f12 / $f14, the count and the rate's lower half's address in
  *    the caller's fifth and sixth words;
  *  - one, from a compiler that allocates registers across a module, takes the count in $a0, the volume in $f16, the
@@ -313,6 +182,11 @@ static const struct { u32 first, last2, last1, words, hash; void (*fn)(void); } 
     { 0x27BDFF48u, 0x03E00008u, 0x27BD00B8u, 121u, 0xB31A06F9u, ulw_getrate },
     { 0x27BDFF18u, 0x03E00008u, 0x00000000u, 116u, 0x23CA9D96u, ulw_getrate_r },
 };
+/* The patch goes into the runtime's code with interrupts off (an interrupt of the game's would arrive at the runtime's
+ * vector) and Status bit 4 (KSU's, which the game's code never sets) on: while the game runs, 0x2000_0000 - 0x4FFF_FFFF are
+ * the game's mapped addresses (mips_core, game_view: a game can map an overlay at 0x4000_0000 and run it there), and bit 4
+ * gives the runtime's code back its own SDRAM there. The wrapper's mtc0 puts the game's Status back in the delay slot of the
+ * return, where the next instruction is the game's again. */
 static void ul_patch(u32 vram, u32 len)
 {
     for (u32 a = vram; a + 4u * 116u <= vram + len; a += 4u) {
@@ -328,7 +202,7 @@ static void ul_patch(u32 vram, u32 len)
             if (h != s_ul_fns[k].hash) continue;
             const u32 f = (u32)(uintptr_t)s_ul_fns[k].fn;
             u32 *d = rd32(a);
-            d[0] = 0x400F6000u;                  /* mfc0 t7, Status                  (as ll_patch, bit 4 too) */
+            d[0] = 0x400F6000u;                  /* mfc0 t7, Status                  (the wrapper gives it back; bit 4 too) */
             d[1] = 0x35EE0011u;                  /* ori  t6, t7, 0x11 */
             d[2] = 0x39CE0001u;                  /* xori t6, t6, 1 */
             d[3] = 0x408E6000u;                  /* mtc0 t6, Status */
@@ -354,8 +228,8 @@ static void ul_patch(u32 vram, u32 len)
  * M * 2^(E - 134) in 16.16, shifted left (mod 2^32, as the lower word wraps) or right, rounded to nearest with ties to
  * even (FCR31's mode, which games keep), 0 when below a half; the halves stored as the Mtx has them, the integer parts'
  * 16 halfwords then the fractions'. It writes only registers the original writes ($t0 - $t7, $a0, $a1), so callers that
- * keep values in the others see no difference, and it needs no 64-bit instruction (the original's ld, sd and dsll trap to
- * the monitor). Found as ul_patch finds its functions. */
+ * keep values in the others see no difference, and it needs no 64-bit instruction
+ * (the original's ld, sd and dsll are the CPU's, but a conversion by integers is shorter). Found as ul_patch finds its functions. */
 __asm__(".text\n.set push\n.set noreorder\n.set noat\n"
         ".globl mf_f2l\n.globl mf_f2l_end\n"
         "mf_f2l:\n"
@@ -562,9 +436,8 @@ void n64rt_run(const n64rt_game_t *g)
 
     n64rt_os_init();
 #ifdef N64RT_OWN
-    /* (after the CPU is probed: what it does itself stays the game's) */
-    ll_patch(g->boot_vram, g->boot_len);               /* (but the compiler's 64-bit helpers: n64rt_llsigs.h) */
-    ul_patch(g->boot_vram, g->boot_len);               /* (and the audio library's envelope rate) */
+    /* (the game's code is its own but for two functions that compute in doubles, which the FPU does as floats) */
+    ul_patch(g->boot_vram, g->boot_len);               /* (the audio library's envelope rate) */
     mf_patch(g->boot_vram, g->boot_len);               /* (and a matrix conversion through a double's mantissa) */
     flush_cpu_dcache();
     flush_cpu_icache();
@@ -696,6 +569,7 @@ void n64rt_rom_copy(void *dst, u32 off, u32 size)
         d[i] = (u8)(w >> (24u - 8u * (a & 3u)));
     }
 }
+#define CPU_LEVELS 0xF8000000u          /* COP0 7: ALU, SH, MD, DIV and UA (the 64-bit adds, shifts, multiplies, divides and unaligned accesses) */
 /* what both ways in begin with */
 static void boot_checks(void)
 {
@@ -704,6 +578,14 @@ static void boot_checks(void)
      * run on it, so the Pocket reads back from them what it loaded. */
     if (*(const volatile u32 *)(uintptr_t)(0xBFC00000u + LAYOUT_MARK_OFS) != LAYOUT_MARK)
         no_rom("This program needs a newer Mirlo core, with its data.json: nothing was started. The saves are as they were.");
+    /* The bitstream and this program are a pair: the CPU does every 64-bit integer instruction itself (the runtime does none for
+     * it), and says which levels it has in COP0 7's bits 31..27 -- ALU, SH, MD, DIV, UA (mips_core's W64_*); a core before them
+     * reads 0 there. */
+    {
+        u32 mctl; __asm__ volatile("mfc0 %0, $7" : "=r"(mctl));
+        if ((mctl & CPU_LEVELS) != CPU_LEVELS)
+            no_rom("This program needs a newer Mirlo core, whose CPU does the 64-bit instructions: nothing was started. The saves are as they were.");
+    }
     /* (the ROM in the PSRAM and its window: MONITOR.ID bit 7, and the chips set up, bit 8) */
     while ((monitor_id_read() & 0xFFFF0180u) != 0x4D4F0180u) {
         if ((monitor_id_read() & 0xFFFF0080u) != 0x4D4F0080u) no_rom("This program needs a newer Mirlo core: nothing was started.");
