@@ -12,7 +12,7 @@
 # whole design's synthesis moves a unit that was not touched by tens of ALUTs (rsp_vu by a hundred) from one run to
 # the next; a unit alone gives the same count for the same source. Prints its ALUTs, registers, memory ALUTs, DSPs.
 # The RSP and the video are instantiated as rtl/soc/mirlo_mips.sv does (MIRLO_RSP_LANES lanes with MULW; the
-# video's 24-bit origin mask). In the Quartus container: QUARTUS=/opt/intelFPGA_lite/23.1/quartus/bin.
+# video's 24-bit origin mask). EXTRA_MACROS="A=1 B=2" adds MIRLO_A=1 ... (fit.sh's). In the Quartus container: QUARTUS=/opt/intelFPGA_lite/23.1/quartus/bin.
 set -e
 W=$(cd "$(dirname "$0")/../.." && pwd)
 tag=$1; unit=$2; T=${3:-$W}
@@ -115,7 +115,7 @@ esac
   echo "set_global_assignment -name NUM_PARALLEL_PROCESSORS 2"
   echo "set_global_assignment -name SEARCH_PATH rtl/soc"
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
-  for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9; do
+  for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9 ${EXTRA_MACROS:-}; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
