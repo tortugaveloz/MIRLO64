@@ -682,36 +682,28 @@ module rdp_pix (
         input  [11:0] lo, hi;
         input  clampbit, mirror;
         input  [3:0] mask;
-        input        cpy;              // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped
-        input  [2:0] cm;
+        input        cpy;              // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped,
+        input  [2:0] cm;               // its mask at most 10 bits
         output [10:0] c0, c1;
         output [4:0]  fr;
         reg signed [18:0] i, j, mx, m;
         reg [4:0] f;
-        reg [3:0] mc;
+        reg [3:0] mq;
         begin
             i = v >>> 5;
             f = v[4:0];
-            if (cpy) i = i + $signed({16'd0, cm});
-            j = i + 19'sd1;
-            if (cpy) begin
-                // (at most 10 bits of the mask count; none without one)
-                mc = mask > 4'd10 ? 4'd10 : mask;
-                if (mask != 4'd0) begin
-                    if (mirror && ((i >>> mc) & 19'sd1)) i = ~i;
-                    i = i & (((19'sd1 <<< mask) - 19'sd1) & 19'sd1023);
-                end
-                j = i; f = 5'd0;
-            end else
-            if (clampbit || mask == 4'd0) begin
+            mq = (cpy && mask > 4'd10) ? 4'd10 : mask;
+            if (cpy) begin i = i + $signed({16'd0, cm}); f = 5'd0; end
+            j = cpy ? i : i + 19'sd1;
+            if (!cpy && (clampbit || mask == 4'd0)) begin
                 mx = ($signed({7'd0, hi}) - $signed({7'd0, lo})) >>> 2;
                 if (i < 0) begin i = 0; j = 0; f = 0; end
                 else if (i >= mx) begin i = mx; j = mx; f = 0; end
             end
             if (mask != 4'd0) begin
-                m = (19'sd1 <<< mask) - 19'sd1;
-                if (mirror && ((i >>> mask) & 19'sd1)) i = ~i;
-                if (mirror && ((j >>> mask) & 19'sd1)) j = ~j;
+                m = (19'sd1 <<< mq) - 19'sd1;
+                if (mirror && ((i >>> mq) & 19'sd1)) i = ~i;
+                if (mirror && ((j >>> mq) & 19'sd1)) j = ~j;
                 i = i & m;
                 j = j & m;
             end

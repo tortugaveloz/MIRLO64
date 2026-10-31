@@ -444,7 +444,6 @@ module rdp_top (
     reg signed [11:0] ry0;         // rect / texrect top row
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
     reg [1:0]  rxf;                // XH's quarter pixels (outside copy mode: the column-stepped attribute's origin)
-    reg [31:0] exh;                 // the major edge's x at the row's top (the attributes' reference)
     // S_VSET: attribute vi (R G B A, S T W, Z) out of the staging RAM. The
     // N64 sends a group's four (shade, texture) as 16 words -- value, DaDx,
     // DaDe, DaDy, each as two words of four 16-bit integer halves and, four
@@ -666,13 +665,51 @@ module rdp_top (
     wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ada];
     wire [31:0] e_add = e_q + (tinit_w ? mul_p[31:0] : ade_q);
     wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0) : e_add;
+    // The span's start value, as the console takes it (docs/rdp_exact.md, rule 4): ((e & ~0x1FF) + dif - xfrac * ((DaDx >> 8) & ~1)) &
+    // ~0x3FF + (the pixel's distance from the major edge's pixel) * DaDx (low 5 bits cleared, Z whole). dif: 0, or when the edge
+    // leans away from the walk (the attributes are taken on the bottom subscanline) 3/4 of DaDe - DaDy, each with its low 9 bits
+    // cleared, one value an attribute for the whole triangle (dif_ram, written as the attribute's DaDy comes in).
+    reg  [11:0] unscrx;             // the major edge's pixel and 8-bit fraction on that subscanline, from the walker
+    reg  [7:0]  xfrac;
+    wire        aa_ld3 = !(t_dxh[31] ^ t_lft);
+    always @(posedge clk) if (st == S_AASUB && !aa_j[2] && aa_j[1:0] == (aa_ld3 ? 2'd3 : 2'd0)) begin
+        unscrx <= ax_h[27:16]; xfrac <= ax_h[15:8];
+    end
+    (* ramstyle = "MLAB, no_rw_check" *) reg [31:0] dif_ram [0:7];
+    reg  [15:0] vgy_hi;
+    wire        dz_s = vs == 4'd15 && vz;            // (Z's own step: its DaDy is zdy; at step 0 of vi = 7 it is W's that arrives)
+    wire [31:0] dy_c = dz_s ? zdy : {vgy_hi, vi[0] ? vr_q[31:16] : vr_q[15:0]};
+    // (de - de >> 2 - dy + dy >> 2 with 32-bit wrap, as the console's: two terms that each fit, not (de - dy) >> 2)
+    wire [31:0] dq   = (vde & 32'hFFFFFE00) - (dy_c & 32'hFFFFFE00);
+    wire [31:0] dq2  = asr(vde & 32'hFFFFFE00, 5'd2) - asr(dy_c & 32'hFFFFFE00, 5'd2);
+    wire [31:0] dif_d = dq - dq2;
+    wire [2:0]  dif_a = dz_s ? 3'd7 : vi - 3'd1;
+    wire        dif_w = st == S_VSET && (dz_s || (vs == 4'd0 && vi != 3'd0));
+    always @(posedge clk) begin
+        if (st == S_VSET && vs == 4'd15 && !vz) vgy_hi <= vhalf;
+        // (one write port: Z's, when it is off, is zeroed at the triangle's first step after S_VSET, which writes none of it)
+        if (dif_w || (st == S_TRI_INIT && mi == 5'd0 && !tflags[0]))
+            dif_ram[dif_w ? dif_a : 3'd7] <= (dif_w && aa_ld3 && attr_on(tflags, dif_a)) ? dif_d : 32'd0;
+    end
+    wire [31:0] dif_q = dif_ram[ea];
+    reg  signed [23:0] pf_a;
+    reg  signed [8:0]  pf_b;
+    (* multstyle = "dsp" *) reg signed [32:0] pf_p;
+    reg  [31:0] s1r, p_d;
+    always @(posedge clk) begin
+        pf_a <= (cyc == 2'd2 || !attr_on(tflags, mi[2:0])) ? 24'sd0 : $signed({ade_q[31:9], 1'b0});
+        pf_b <= {1'b0, xfrac};
+        pf_p <= pf_a * pf_b;
+        s1r <= ((e_q & 32'hFFFFFE00) + dif_q - pf_p[31:0]) & 32'hFFFFFC00;
+        p_d <= mul_p[31:0];
+    end
     always @(posedge clk) begin
         if (vset_w || tinit_w || step_w) e_ram[e_wa] <= e_wd;
         // DaDx goes in at a step of S_VSET after vgx is complete and before
         // the step that writes DaDe (Z: 5, the others: 7); an attribute that
         // is off is not written, and its product is 0 (S_SETUP)
         if (vset_w) ade_ram[{1'b0, vi}] <= vset_on ? vde : 32'd0;
-        else if (vgx_w) ade_ram[{1'b1, vi}] <= vgx;
+        else if (vgx_w) ade_ram[{1'b1, vi}] <= vz ? vgx : {vgx[31:5], 5'd0};     // (the pixels step by DaDx without its low 5 bits, Z whole)
     end
 
     // ---- the shared multiplier's operands, by state and step. A product is
@@ -684,7 +721,9 @@ module rdp_top (
     // a texrect's DsDx / DtDy and its row / column distances are one choice each
     // the span's start from the H edge, 16.16 (the LOD walking left: from its ghost, a pixel before)
     wire [10:0] xs_g = {1'b0, xs} - {10'd0, lod_on && !lod_lft};
-    wire [31:0] dxs = {{5{xs_g[10]}}, xs_g, 16'd0} - exh;
+    // (the pixels' distance from the major edge's pixel on the subscanline the attributes are taken on: 13 bits)
+    wire signed [12:0] dist13 = $signed({{2{xs_g[10]}}, xs_g}) - $signed({unscrx[11], unscrx});
+    wire [31:0] dxs = {{19{dist13[12]}}, dist13};
     wire [31:0] r_dsdx = {{16{t_dxl[31]}}, t_dxl[31:16]}, r_dtdy = {{16{t_dxl[15]}}, t_dxl[15:0]};
     wire signed [10:0] r_dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
     // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns from XH itself
@@ -750,24 +789,21 @@ module rdp_top (
     // (a texrect's S and T are t_xl's halves, shifted, plus the product: the same adder as a triangle's e + the product)
     wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
     wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
-    wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : (cyc == 2'd2 && op == 6'h25 && !mi[0]) ? mul_p[31:0] : mul_p[33:2]);
+    wire [31:0] cur_ldv = (kind_tri ? s1r : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? p_d : (cyc == 2'd2 && op == 6'h25 && !mi[0]) ? mul_p[31:0] : mul_p[33:2]);
     wire [7:0]  cur_ld;
     genvar cg;
     generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
-        assign cur_ld[cg] = st == S_SETUP && (kind_tri ? mi == cg + 2 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
+        assign cur_ld[cg] = st == S_SETUP && (kind_tri ? mi == cg + 3 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
     end endgenerate
     // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
     // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
     wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
     wire        ax_stp = st == S_AASUB && !aa_j[2];
-    wire        ex_ld  = st == S_TRI_INIT && mi == 5'd2;
-    wire        ex_stp = st == S_NEXT && (!kind_tri || es_done);
     integer ci;
     always @(posedge clk) begin
         if (ax_ldh || ax_stp) ax_h <= (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
         if (ax_ldm || ax_stp) ax_m <= (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
         if (ax_ldl || ax_stp) ax_l <= (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
-        if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
                 cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
@@ -1020,7 +1056,7 @@ module rdp_top (
                     4'd6: begin vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
                     4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
-                        adx[vi] <= vgx;
+                        adx[vi] <= vz ? vgx : {vgx[31:5], 5'd0};
                         if (vi < 3'd4) sdy[vi][12:2] <= vhalf[10:0];
                         if (!vz) case (vi)
                             3'd4: ldy_s[16:1] <= vhalf;
@@ -1119,7 +1155,7 @@ module rdp_top (
             S_SETUP: begin
                 if (kind_tri) begin
                     mi <= mi + 5'd1;
-                    if (mi == 5'd9) begin
+                    if (mi == 5'd10) begin
                         st <= S_PIX;
                         es <= 4'd0;                 // e[] no longer needed this row: step it
                     end
