@@ -83,7 +83,7 @@ module mirlo_mips #(
     input  wire   [31:0] apf_input_cont4_joy,
     input  wire   [31:0] apf_input_cont4_key,
     input  wire   [31:0] apf_input_cont4_trig,
-    input  wire    [4:0] apf_interact_address,
+    input  wire    [3:0] apf_interact_address,
     input  wire   [31:0] apf_interact_data,
     output logic  [31:0] apf_interact_q,
     input  wire          apf_interact_wr,
@@ -425,7 +425,7 @@ logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
 logic [15:0] gbc_addr;
 logic [7:0]  gbc_wdata, gbc_rdata;
-mirlo_regs #(.RSP_OC(RSP_OC)) regs (.clk, .rst,
+mirlo_regs regs (.clk, .rst,
     .r_req(bus_r_req || xr_go), .r_we(bus_r_req ? br_we : x_we), .r_addr(bus_r_req ? br_addr : x_addr[15:0]),
     .r_wdata(bus_r_req ? br_wdata : x_wdata), .r_rdata,
     .aud_out(aud_out_r), .aud_wr(aud_wr_r), .aud_playback_en(apf_audio_playback_en),
@@ -445,7 +445,7 @@ mirlo_regs #(.RSP_OC(RSP_OC)) regs (.clk, .rst,
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
     .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
-    .bus_errors, .rsp_duty, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
+    .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
     .rdp_sync_count(rdp_sync), .rdp_load_count(rdp_load), .rdp_unknown_ops(rdp_unknown), .rdp_idle,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
@@ -501,7 +501,7 @@ logic        dpc_start_ok;
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
 // The RSP. RSP_OC = 0: the faithful RSP (rtl/rsp), on clk_sys, as it has always been. RSP_OC = 1: the pipelined one (rtl/rsp_oc), on
-// clk_cpu with edges left out (rsp_clk.sv, chosen by RSPDUTY: all of them is the overclock), and rsp_xing.sv takes everything
+// clk_cpu, every edge but the few that rsp_clk.sv leaves out while a write of its to the DPC goes across, and rsp_xing.sv takes everything
 // across: the host registers, the DMA's port of the arbiter, the DPC's writes (in order with the DMA, the RSP waiting for
 // them) and registers; its interrupt and state are sampled here.
 logic        rsp_ck, rsp_rst, rsp_h_we, rsp_h_rd, rsp_r_ready, rsp_r_rvalid;
@@ -514,7 +514,6 @@ logic [31:0] rsp_dpc_wdata_i;
 logic        sx_valid, sx_we;
 logic [22:2] sx_addr;
 logic [31:0] sx_wdata;
-logic [7:0]  rsp_duty;
 generate if (RSP_OC) begin : oc
     logic        gclk, dpa_t, s_dp_go;
     logic [2:0]  s_dp_k;
@@ -522,7 +521,7 @@ generate if (RSP_OC) begin : oc
     logic        r_irq_q, r_halt_q, r_unimpl_q;
     assign rsp_ck = gclk;
     assign rsp_rst = rst_cpu;
-    rsp_clk clkgen (.clk_c(clk_cpu), .rst_c(rst_cpu), .duty_n(rsp_duty[3:0]), .duty_d(rsp_duty[7:4]),
+    rsp_clk clkgen (.clk_c(clk_cpu), .rst_c(rst_cpu),
         .strobe(rsp_dpc_start_we_i || rsp_dpc_end_we_i || rsp_dpc_status_we_i), .dpa_t, .gclk);
     rsp_xing xing (.clk_r(gclk), .rst_r(rst_cpu), .clk_c(clk_cpu),
         .h_we(rsp_h_we), .h_rd(rsp_h_rd), .h_addr(rsp_h_addr), .h_wdata(rsp_h_wdata), .h_rdata(rsp_h_rdata_i), .h_ready(rsp_h_ready),

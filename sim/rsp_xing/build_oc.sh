@@ -1,6 +1,6 @@
 #!/bin/bash
 # The real RSP across the clock crossing, against the model (tb_ocdpc.cpp): ./build_oc.sh -> obj_oc/tb_ocdpc
-#   TB_DUTY=2,3 obj_oc/tb_ocdpc task.bin ...
+#   TB_CREADY=50 obj_oc/tb_ocdpc task.bin ...
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"; R="$(cd "$HERE/../.." && pwd)"
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"

@@ -163,13 +163,6 @@
 #define CSR_CTRL_BUS_ERRORS_OFS 0x508
 #define CSR_CTRL_BUS_ERRORS_ADDR (CSR_BASE + 0x508)
 #define CSR_CTRL_BUS_ERRORS_SIZE 1
-#define CSR_CTRL_RSPDUTY_OFS 0x50c
-#define CSR_CTRL_RSPDUTY_ADDR (CSR_BASE + 0x50c)
-#define CSR_CTRL_RSPDUTY_SIZE 1
-#define CSR_CTRL_RSPDUTY_N_OFFSET 0
-#define CSR_CTRL_RSPDUTY_N_SIZE 4
-#define CSR_CTRL_RSPDUTY_D_OFFSET 4
-#define CSR_CTRL_RSPDUTY_D_SIZE 4
 
 /* MAILBOX */
 #define CSR_MAILBOX_BASE (CSR_BASE + 0x600)
@@ -480,16 +473,6 @@ static inline void ctrl_reset_write(uint32_t v) { csr_write_simple(v, CSR_CTRL_R
 static inline uint32_t ctrl_scratch_read(void) { return csr_read_simple(CSR_CTRL_SCRATCH_ADDR); }
 static inline void ctrl_scratch_write(uint32_t v) { csr_write_simple(v, CSR_CTRL_SCRATCH_ADDR); }
 static inline uint32_t ctrl_bus_errors_read(void) { return csr_read_simple(CSR_CTRL_BUS_ERRORS_ADDR); }
-static inline uint32_t ctrl_rspduty_read(void) { return csr_read_simple(CSR_CTRL_RSPDUTY_ADDR); }
-static inline void ctrl_rspduty_write(uint32_t v) { csr_write_simple(v, CSR_CTRL_RSPDUTY_ADDR); }
-static inline uint32_t ctrl_rspduty_n_extract(uint32_t r) { return (r >> 0) & 0xfu; }
-static inline uint32_t ctrl_rspduty_n_read(void) { return ctrl_rspduty_n_extract(ctrl_rspduty_read()); }
-static inline uint32_t ctrl_rspduty_n_replace(uint32_t r, uint32_t v) { return (r & ~(0xfu << 0)) | ((v & 0xfu) << 0); }
-static inline void ctrl_rspduty_n_write(uint32_t v) { ctrl_rspduty_write(ctrl_rspduty_n_replace(ctrl_rspduty_read(), v)); }
-static inline uint32_t ctrl_rspduty_d_extract(uint32_t r) { return (r >> 4) & 0xfu; }
-static inline uint32_t ctrl_rspduty_d_read(void) { return ctrl_rspduty_d_extract(ctrl_rspduty_read()); }
-static inline uint32_t ctrl_rspduty_d_replace(uint32_t r, uint32_t v) { return (r & ~(0xfu << 4)) | ((v & 0xfu) << 4); }
-static inline void ctrl_rspduty_d_write(uint32_t v) { ctrl_rspduty_write(ctrl_rspduty_d_replace(ctrl_rspduty_read(), v)); }
 
 /* MAILBOX */
 static inline uint32_t mailbox_game_msg_read(void) { return csr_read_simple(CSR_MAILBOX_GAME_MSG_ADDR); }

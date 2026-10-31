@@ -105,7 +105,7 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 ## APF_INTERACT
 
 The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 16) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -133,7 +133,6 @@ each setting has an address of its own and needs no mask.
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
-| 16 | `0x1000_0140` | `INTERACT1[26]` | RSP Overclock (a core built with `RSP_OC` only: [mips.md](mips.md)) |
 
 ## APF_VIDEO
 
@@ -152,7 +151,6 @@ One register, `VIDEO`, at offset `0x00`:
 | `RESET` | `0x00` | W | No effect: there is no soft reset (quit the core and launch it again) |
 | `SCRATCH` | `0x04` | RW | A word (`0x1234_5678` after reset) |
 | `BUS_ERRORS` | `0x08` | R | The CPU's accesses to addresses nothing answers (16 bits) |
-| `RSPDUTY` | `0x0C` | RW | A core built with `RSP_OC` ([mips.md](mips.md)): the RSP gets `N` (bits 3:0) of every `D` (bits 7:4) edges of the game CPU's clock; `N` at least `D` is every edge. 5 of 6 after reset. 0 in any other core |
 
 ## RDP command port
 
@@ -230,7 +228,7 @@ The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's 
 
 | Register | Offset | Dir | What |
 |---|---|---|---|
-| `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads, 9 the RSP on the game CPU's clock (`CTRL.RSPDUTY`) |
+| `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads |
 | `CTL` | `0x04` | RW | Bit 0 `OWN`: the game's interrupt line is the one below, not the RSP's own. Bit 1 `RCP`: that line. Bit 2 `MI`: the game's interrupt is the MI's line. Bit 3 `VI`: the VI is the hardware's. Bit 4 `AI`: the AI is the hardware's |
 | `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run; bit 5 the Pocket asks for a save state or for its load (`APF_BRIDGE.SAVESTATE`) |
 | `MASK` | `0x0C` | RW | Which of them interrupt the monitor |

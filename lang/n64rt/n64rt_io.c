@@ -1304,10 +1304,6 @@ void n64rt_mi_init(void)
 {
     u32 id = monitor_id_read(), m;
     if (!(id & 2u)) return;
-    /* The core's "RSP Overclock" setting (interact.json: INTERACT1's bit 26, read when the game starts like the Pak's): a core built
-     * with it (MONITOR.ID bit 9, rtl/soc/rsp_clk.sv) gives the RSP every edge of the CPU's clock, 93.75 MHz, instead of the share
-     * CTRL.RSPDUTY resets to (N of every D edges: the rate the RSP had on the system clock). The RSP is idle here: the game has not begun */
-    if ((id & 0x200u) && ((apf_interact_interact1_read() >> 26) & 1u)) ctrl_rspduty_write(0x11u);
     __asm__ volatile("mfc0 %0, $7" : "=r"(m));
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */

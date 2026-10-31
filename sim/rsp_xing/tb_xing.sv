@@ -8,7 +8,7 @@
 //   - the RSP's DPC writes arrive once each, in order, after every DMA request before them has been taken by the arbiter,
 //     and the RSP's next read of the DPC's registers finds them (the RSP waits for that)
 //   - no FIFO overflows
-// Plusargs: +dn=<duty_n> +dd=<duty_d> +pr=<p_ready %> +preq=<RSP request %> +pdpc=<DPC write per mille> +ph=<host access %> +lat=<read latency>
+// Plusargs: +pr=<p_ready %> +preq=<RSP request %> +pdpc=<DPC write per mille> +ph=<host access %> +lat=<read latency>
 //           +cycles=<sys cycles> +reset=<mid-run resets>
 `default_nettype none
 
@@ -17,9 +17,9 @@ module tb_xing (
     output logic [31:0] errors,
     output logic [31:0] st_dma_w, st_dma_r, st_host, st_dpc, st_maxq, st_maxb, st_edges, st_dpc_stall, st_lat
 );
-integer dn = 1, dd = 1, pr = 100, preq = 100, pdpc = 5, ph = 5, lat = 8, rd_pct = 50;
+integer pr = 100, preq = 100, pdpc = 5, ph = 5, lat = 8, rd_pct = 50;
 initial begin
-    void'($value$plusargs("dn=%d", dn)); void'($value$plusargs("dd=%d", dd)); void'($value$plusargs("pr=%d", pr));
+    void'($value$plusargs("pr=%d", pr));
     void'($value$plusargs("preq=%d", preq)); void'($value$plusargs("pdpc=%d", pdpc)); void'($value$plusargs("ph=%d", ph));
     void'($value$plusargs("lat=%d", lat)); void'($value$plusargs("rd=%d", rd_pct));
     errors = 0;
@@ -40,9 +40,7 @@ logic s_h_req, s_h_we; logic [3:0] s_h_addr; logic [31:0] s_h_wdata; wire s_h_do
 wire p_valid, p_we; wire [22:2] p_addr; wire [31:0] p_wdata; logic p_ready, p_rvalid; logic [31:0] p_rdata;
 wire s_dp_go; wire [2:0] s_dp_k; wire [31:0] s_dp_wdata;
 logic [23:0] s_dpc_start, s_dpc_end, s_dpc_current; logic [31:0] s_dpc_status;
-logic [3:0] duty_n, duty_d;
-always @(posedge clk_c) begin duty_n <= 4'(dn); duty_d <= 4'(dd); end
-rsp_clk clkgen (.clk_c, .rst_c, .duty_n, .duty_d, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
+rsp_clk clkgen (.clk_c, .rst_c, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
 rsp_xing xing (.clk_r(gclk), .rst_r(rst_c), .clk_c, .h_we, .h_rd, .h_addr, .h_wdata, .h_rdata, .h_ready,
     .r_valid, .r_we, .r_addr, .r_wdata, .r_ready, .r_rvalid, .r_rdata,
     .dpc_start_we, .dpc_end_we, .dpc_status_we, .dpc_wdata, .dpc_start_r, .dpc_end_r, .dpc_current_r, .dpc_status_r, .dq_t,

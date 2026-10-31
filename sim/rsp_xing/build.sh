@@ -1,6 +1,6 @@
 #!/bin/bash
 # The RSP's clock crossing's bench (tb_xing.sv): ./build.sh -> obj_xing/tb_xing
-#   obj_xing/tb_xing +dn=5 +dd=6 +pr=50 +preq=100 +pdpc=10 +ph=10 +lat=12 +cycles=300000 +reset=3 +seed=7
+#   obj_xing/tb_xing +pr=50 +preq=100 +pdpc=10 +ph=10 +lat=12 +cycles=300000 +reset=3 +seed=7
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"; R="$(cd "$HERE/../.." && pwd)"
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"

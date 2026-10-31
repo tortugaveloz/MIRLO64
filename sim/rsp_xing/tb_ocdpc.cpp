@@ -2,7 +2,7 @@
 // sim/rdp's tb_dpc does without it: a task -- a real one's dump, or gen_xbus_task.py's -- runs on both, and the command words
 // the fetch hands on must be the model's, in order. clk_sys is 6 ticks a cycle and clk_c 4 (3:2, rising together every two
 // cycles of clk_sys), the memory answers with random latency and stalls, and the RDP's words are taken with random back-pressure.
-//   tb_ocdpc task.bin ...     TB_DUTY=<n>,<d> the RSP's edges (1,1: every one), TB_CREADY=<percent>
+//   tb_ocdpc task.bin ...     TB_CREADY=<percent> (the RDP takes a word)
 #include "Vrsp_oc_wrap.h"
 #include "verilated.h"
 #include <cstdio>
@@ -91,7 +91,7 @@ int main(int argc, char **argv)
         if (boot_size > 4096 || boot_size == 0) boot_size = 4096;
 
         Tb tb;
-        tb.t = new Vrsp_oc_wrap; { int dn = 1, dd = 1; if (const char *e = getenv("TB_DUTY")) sscanf(e, "%d,%d", &dn, &dd); tb.t->duty_n = dn; tb.t->duty_d = dd; }
+        tb.t = new Vrsp_oc_wrap;
         tb.ram = mram;
         // the model
         static rsp_t m;

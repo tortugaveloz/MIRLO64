@@ -4,7 +4,6 @@
 `default_nettype none
 module rsp_oc_wrap #(parameter DIV_ROM = "rsp_div_rom.hex") (
     input  wire         clk, clk_c, rst, rst_c,
-    input  wire  [3:0]  duty_n, duty_d,
     // the CPU's access to the SP registers (clk_sys)
     input  wire         s_h_req, s_h_we,
     input  wire  [3:0]  s_h_addr,
@@ -36,7 +35,7 @@ wire irq, halted_i, unimpl_i;
 wire s_dp_go; wire [2:0] s_dp_k; wire [31:0] s_dp_wdata;
 logic [9:0] dx_addr; logic [31:0] dx_data;
 logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current; logic [31:0] dpc_status;
-rsp_clk clkgen (.clk_c, .rst_c, .duty_n, .duty_d, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
+rsp_clk clkgen (.clk_c, .rst_c, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
 rsp_xing xing (.clk_r(gclk), .rst_r(rst_c), .clk_c,
     .h_we, .h_rd, .h_addr, .h_wdata, .h_rdata, .h_ready,
     .r_valid, .r_we, .r_addr, .r_wdata, .r_ready, .r_rvalid, .r_rdata,

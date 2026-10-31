@@ -68,10 +68,6 @@ BLOCKS = [
         ("RESET",      0x00, W,  1, []),            # (no soft reset: Quit + relaunch)
         ("SCRATCH",    0x04, RW, 1, []),
         ("BUS_ERRORS", 0x08, R,  1, []),            # the game CPU's accesses to nothing
-        # the RSP on the game CPU's clock (MIRLO_RSP_OC; MONITOR.ID bit 9, rtl/soc/rsp_clk.sv): [3:0] N, [7:4] D, the RSP gets N of every
-        # D edges of the 93.75 MHz clock. N >= D (1 and 1, say) is every edge, the overclock; the reset value is the calibration that
-        # gives the RSP about the rate it had on the system clock. Set while the RSP is idle (a game's start-up)
-        ("RSPDUTY",    0x0C, RW, 1, [("N", 0, 4), ("D", 4, 4)]),
     ]),
     ("MAILBOX", 0x0600, [
         ("GAME_MSG",  0x00, RW, 1, []),

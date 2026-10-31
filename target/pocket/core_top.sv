@@ -1027,7 +1027,7 @@ module core_top (
       .apf_input_cont4_joy (cont4_joy),
       .apf_input_cont4_trig(cont4_trig),
 
-      .apf_interact_address(interact_addr[4:0]),
+      .apf_interact_address(interact_addr),
       .apf_interact_data(interact_data),
       .apf_interact_q(interact_q),
       .apf_interact_wr(interact_wr),

@@ -1,7 +1,7 @@
 // ooc.sh's "xing" unit: the RSP's clock gate, its enable and its crossings with clk_sys (rtl/soc/rsp_clk.sv, rsp_xing.sv),
 // a pseudo-random stand-in for the RSP on the gated clock and one for the SoC around it on clk. Every output is folded
 // into one bit, so nothing is removed.
-module ooc_xing (input wire clk, clk_c, rst, rst_c, input wire [3:0] duty_n, duty_d, output wire o);
+module ooc_xing (input wire clk, clk_c, rst, rst_c, output wire o);
     wire gclk, dq_t, dpa_t;
     wire h_we, h_rd, h_ready, r_ready, r_rvalid, dpc_start_we, dpc_end_we, dpc_status_we;
     wire [3:0] h_addr; wire [31:0] h_wdata, r_rdata, dpc_start_r, dpc_end_r, dpc_current_r, dpc_status_r;
@@ -17,7 +17,7 @@ module ooc_xing (input wire clk, clk_c, rst, rst_c, input wire [3:0] duty_n, dut
     wire r_valid = lf[0], r_we = lf[1];
     wire [23:2] r_addr = lf[23:2];
     assign dpc_start_we = lf[10:8] == 3'd0, dpc_end_we = lf[10:8] == 3'd1, dpc_status_we = lf[10:8] == 3'd2;
-    rsp_clk clkgen (.clk_c, .rst_c, .duty_n, .duty_d, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
+    rsp_clk clkgen (.clk_c, .rst_c, .strobe(dpc_start_we || dpc_end_we || dpc_status_we), .dpa_t, .gclk);
     // the stand-in SoC, on clk
     logic s_h_req; logic s_h_we; logic [3:0] s_h_addr; logic [31:0] s_h_wdata;
     wire s_h_done, p_valid, p_we, s_dp_go; wire [31:0] s_h_rdata, p_wdata, s_dp_wdata; wire [22:2] p_addr; wire [2:0] s_dp_k;
@@ -39,10 +39,10 @@ module ooc_xing (input wire clk, clk_c, rst, rst_c, input wire [3:0] duty_n, dut
 endmodule
 
 // ... behind the Pocket's PLL (74.25 MHz in; clk_sys and clk_cpu out, as core_top.sv has them)
-module ooc_xingpll (input wire refclk, rst, rst_c, input wire [3:0] duty_n, duty_d, output wire o);
+module ooc_xingpll (input wire refclk, rst, rst_c, output wire o);
     wire clk_sys, clk_cpu, o1, o2, o3, o4, lk;
     mf_pllbase mp1 (.refclk, .rst(1'b0), .outclk_0(clk_sys), .outclk_1(o1), .outclk_2(o2), .outclk_3(o3), .outclk_4(o4), .outclk_5(clk_cpu), .locked(lk));
     wire x;
-    ooc_xing xing (.clk(clk_sys), .clk_c(clk_cpu), .rst, .rst_c, .duty_n, .duty_d, .o(x));
+    ooc_xing xing (.clk(clk_sys), .clk_c(clk_cpu), .rst, .rst_c, .o(x));
     assign o = x ^ o1 ^ o2 ^ o3 ^ o4 ^ lk;
 endmodule
