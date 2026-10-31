@@ -317,7 +317,7 @@ endfunction
 
 // ---- a load's value (and CFC2's) comes in M: the instruction behind it that reads it waits a cycle, then has it
 // from W. Every other value is forwarded; what the vector unit's own instructions wait for it keeps itself
-wire hazard /* verilator public_flat_rd */ = m_valid_r && m_we_r && (m_c.load || m_c.cf) && (m_c.wr == e_rs || m_c.wr == e_rt);
+logic hazard /* verilator public_flat_rd */;
 
 wire [31:0] imm_sx = {{16{e_ins[15]}}, e_ins[15:0]};
 wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : eb;
@@ -375,6 +375,9 @@ end
 wire [11:0] br_tgt = e_spc + 12'd4 + {imm_sx[9:0], 2'b00};
 wire [11:0] j_tgt  = {e_ins[9:0], 2'b00};
 wire        e_go   = e_valid && !stall_e;                 // E's instruction leaves it
+// (a register: made a cycle ahead, when the load leaves E, from the registers of the instruction that takes E's place -- D's; a
+// load that leaves E is always followed by the cycle in which M has it, and E's stall does not repeat the check)
+always_ff @(posedge clk) hazard <= !rst && e_go && e_c.we && (e_c.load || e_c.cf) && (e_c.wr == s_ins_d[25:21] || e_c.wr == s_ins_d[20:16]);
 wire        redirect = e_go && ((e_c.br && taken) || e_c.j || e_c.jr);
 wire [11:0] redirect_pc = e_c.jr ? {ea[11:2], 2'b00} : e_c.j ? j_tgt : br_tgt;
 
@@ -444,6 +447,12 @@ assign i_addr1 = stall_e ? dp1        : pair_go ? pf2 : r_fix ? pf1c : pf1;
 assign pc_next = d_valid ? d_pc : pc_f;
 assign idle = !e_valid && !m_valid_r;
 
+// the fetch pointer, if no branch is taken (brk: where the BREAK stopped it; stopped: D's instruction; else the next word, or two)
+wire [11:0] pc_nr = brk       ? (d_valid ? d_pc : pc_f)
+                  : !run      ? ((!stall_e && d_valid) ? d_pc : pc_f)
+                  : !stall_e  ? (pair_go ? pc_f + 12'd8 : pc_f + 12'd4)
+                  :             pc_f;
+wire        br_go = e_valid && !stall_e && ((e_c.br && taken) || e_c.j || e_c.jr);      // (= redirect)
 always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0; r_fix <= 1'b0;
@@ -475,21 +484,24 @@ always_ff @(posedge clk) begin
             pf1 <= pc_in[11:2] + 10'd1;
         end else if (brk) begin
             // what follows the BREAK was not run: fetch it again when resumed
-            pc_f <= redirect ? redirect_pc : d_valid ? d_pc : pc_f;
+            pc_f <= pc_nr;
             pf1  <= d_valid ? dp1 : pf1;
             d_valid <= 1'b0;
         end else if (!run && !redirect) begin
             // stopped: D's instruction (not run) is the next one
             if (!stall_e) begin
-                if (d_valid) begin pc_f <= d_pc; pf1 <= dp1; end
+                if (d_valid) begin pf1 <= dp1; end
                 d_valid <= 1'b0;
             end
         end else if (!stall_e) begin
             // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
-            pc_f <= redirect ? redirect_pc : pair_go ? pc_f + 12'd8 : pc_f + 12'd4;
             pf1  <= pair_go ? pc_f[11:2] + 10'd3 : pf2;
         end
+        // (the fetch pointer: a taken branch's target over what the rest would make -- the branch's condition is late, so it is
+        // the last choice)
+        if (!pc_load && br_go) pc_f <= redirect_pc;
+        else if (!pc_load) pc_f <= pc_nr;
     end
 end
 
