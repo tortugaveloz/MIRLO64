@@ -15,7 +15,9 @@ back to back with the moves from HI and LO.
 An argument "tlb" adds the TLB: windows at 0x0800_0000, 0x0A00_0000, 0x0C00_0000 and 0x0E00_0000 whose pages are the scratch
 memory (pairs of 4, 16 and 64 KiB pages, an ASID or global, valid / dirty / uncached as the program makes them), loads and stores
 through them -- ll, sc, ld, sd, ldl, sdl among them -- and random tlbwi, tlbwr, tlbp, tlbr, ASID changes and reads of the TLB's
-registers; a TLB exception's handler (at both vectors) steps over the instruction.
+registers; a TLB exception's handler (at both vectors) steps over the instruction. "tlbx" (with "tlb") runs the program from a mapped alias
+of itself, at 0x1000_0000 (two pairs of global 64 KiB pages, entries 0 and 1, which the random TLB writes leave alone: Wired is 2): its fetches go through
+the TLB, a TLB write and an ASID change in the middle of them.
 A last argument "k1" has the program run from KSEG1 (its own code fetched
 uncached, a word at a time; the trap handler stays in KSEG0). An argument "ua"
 adds ldl, ldr, sdl and sdr (the core's W64_UA) at every byte address, through
@@ -65,6 +67,7 @@ def main():
     k1 = sys.argv[-1] == "k1"
     ua = "ua" in sys.argv[5:] and not base
     tlb = "tlb" in sys.argv[5:] and not e2e
+    tlbx = tlb and "tlbx" in sys.argv[5:]
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -118,7 +121,7 @@ def main():
         def lo(pa):
             if rnd.random() < 0.1: return 0
             return LO(pa, rnd.choice([2, 3, 3]), int(rnd.random() < 0.8), int(rnd.random() < 0.9), int(g))
-        idx = rnd.randrange(4) if rnd.random() < 0.15 else rnd.randrange(4, 32)
+        idx = rnd.randrange(2 if tlbx else 0, 4) if rnd.random() < 0.15 else rnd.randrange(4, 32)
         tlbent(2 if "wr" in TLBOFF else rnd.choice([2, 2, 2, 6]), idx, pm, w | asid, lo(FRAME), lo(FRAME + size))
 
     TLBOFF = os.environ.get("TLBGEN_OFF", "")           # (for finding a difference: "ops", "asid", "wr", "p", "r" leave that out)
@@ -147,6 +150,18 @@ def main():
         for i, (pm, size, w, asid, g) in enumerate([(*WSIZE[0], WINDOWS[0], 0, 1), (*WSIZE[1], WINDOWS[1], 1, 0),
                                                     (*WSIZE[2], WINDOWS[2], 0, 0), (*WSIZE[3], WINDOWS[3], 0, 1)]):
             tlbent(2, i, pm, w | asid, LO(FRAME, 3, 1, 1, g), LO(FRAME + size, 3 if i != 2 else 2, 1, 1, g))
+    if tlbx:                                    # the code's own pages, global, then a jump into them
+        tlbent(2, 0, 0x1E000, 0x10000000, LO(0, 3, 1, 1, 1), LO(0x10000, 3, 1, 1, 1))
+        tlbent(2, 1, 0x1E000, 0x10020000, LO(0x20000, 3, 1, 1, 1), LO(0x30000, 3, 1, 1, 1))
+        li32(K0, 0)
+        mtc0(K0, 5)                             # (PageMask back to 4 KiB for what follows)
+        li32(K0, 2)
+        mtc0(K0, 6)                             # (Wired 2: a tlbwr leaves entries 0 and 1 alone -- a write over the page being fetched is the
+                                                # VR4300's TLB hazard, undefined for the instructions behind it)
+        here = len(code)
+        li32(K0, 0x10000000 + (ENTRY & 0x1FFFFFFF) + 4 * (here + 4))
+        R(K0, 0, 0, 0, 0x08)                    # jr k0
+        emit(0)
     li32(UNC, SCRATCH | 0x20000000)
     li32(CACHED, SCRATCH)
     li32(TAB, TABLE)
