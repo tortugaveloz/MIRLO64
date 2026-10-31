@@ -213,8 +213,9 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 
 Nothing a cache tag says reaches the pipeline's advance. Multiplies and divides run in the background with HI and LO
 interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` and `ddiv(u)` are a bit a cycle
-(32 and 64 steps; a negative dividend's magnitude takes as many cycles again to move into place). HI and LO keep the
-upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them.
+(32 and 64 steps, from the cycle after M completes the instruction: `div(u)` is done as it always was, `ddiv(u)` a little over two
+times that; the dividend's magnitude is what the multiplier's registers take from M). HI and LO keep the
+upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them; which words of HI and LO are 32-bit values is a flag set as they are written.
 
 ### Caches and memory
 
