@@ -464,6 +464,12 @@ always_ff @(posedge clk) begin
         end
         if (!stall_e) c_rd <= vrb_d;
         if (redirect) r_fix <= 1'b1; else if (!stall_e) r_fix <= 1'b0;      // (until the cycle that moves the pointer on)
+        // (D's address follows the pointer whatever the rest does: where D is not valid it is not looked at -- a redirect, a
+        // stop, a BREAK, a new PC all empty it -- so the redirect is not in front of it)
+        if (!stall_e) begin
+            d_pc <= pair_go ? pc_f + 12'd4 : pc_f;
+            dp1  <= pair_go ? pf2 : r_fix ? pf1c : pf1;
+        end
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
             pf1 <= pc_in[11:2] + 10'd1;
@@ -481,8 +487,6 @@ always_ff @(posedge clk) begin
         end else if (!stall_e) begin
             // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
-            d_pc <= pair_go ? pc_f + 12'd4 : pc_f;
-            dp1  <= pair_go ? pf2 : r_fix ? pf1c : pf1;
             pc_f <= redirect ? redirect_pc : pair_go ? pc_f + 12'd8 : pc_f + 12'd4;
             pf1  <= pair_go ? pc_f[11:2] + 10'd3 : pf2;
         end
