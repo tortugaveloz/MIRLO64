@@ -63,8 +63,13 @@ logic        hwx_on;
 // Mario 64's title-screen head at 0x0400_0000); a miss is the N64's
 // exception, at Mirlo's vector. mips_core's translation table is in block
 // RAM, which the runtime fills from what the game maps (~75 ALMs, 4 M10K).
+`ifdef MIRLO_TLB_REAL
+localparam bit CPU_TLB = 1'b1;
+localparam bit CPU_TLB_RAM = 1'b0;
+`else
 localparam bit CPU_TLB = 1'b0;
 localparam bit CPU_TLB_RAM = 1'b1;
+`endif
 // mips_core's FPG: two page registers on the fetch side, so that code run from a mapped page whose table entry is
 // cacheable (COP0 23's bit 5) goes through the I-cache. MIRLO_NO_FPG: a mapped fetch is the slow path (A/B in the sim)
 `ifdef MIRLO_NO_FPG

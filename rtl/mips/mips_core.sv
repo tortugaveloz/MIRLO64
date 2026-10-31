@@ -287,7 +287,7 @@ localparam bit XSH  = XALU && W64_SH;        // its shifter
 localparam bit XMD  = XALU && W64_MD;        // dmult(u); HI and LO of 64 bits
 localparam bit XDIV = XMD && W64_DIV;        // ddiv(u)
 localparam bit XUA  = XSH && W64_UA && FAST && XWB && BIG;   // ldl, ldr, sdl, sdr: the d-shifter's register, a byte a cycle
-localparam bit PG   = FPG && TLB_RAM && FAST && FLAT && N64WIN;     // the fetch page registers
+localparam bit PG   = FPG && (TLB_RAM || TLB_EN) && FAST && FLAT && N64WIN;     // the fetch page registers
 
 // =============================================================== decode
 typedef enum logic [4:0] {
@@ -502,7 +502,7 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // KUSEG, 0x2000_0000 - 0x4FFF_FFFF: a game can map code at 0x4000_0000, unpack an overlay into it and jump there. The
 // monitor level (ERL) and the runtime's helpers that the game's code calls (n64rt_boot.c, ul_patch: they set bit 4) see
 // the RSP and the SDRAM there, as the runtime itself does.)
-localparam bit MAP_HI = TLB_RAM && MON;
+localparam bit MAP_HI = (TLB_RAM || TLB_EN) && MON;
 function automatic logic map_hi(input logic [31:0] va);
     return MAP_HI && (va[31:29] == 3'b011 || va[31:28] == 4'b0101 || va[31:29] == 3'b110 || va[31:28] == 4'b1110);
 endfunction
@@ -525,9 +525,9 @@ function automatic logic [31:0] tphys(input logic [31:0] pa);
     return (FLAT && N64WIN) ? {N64_RDRAM[31:23], pa[22:0]} : pa;
 endfunction
 // an instruction of the N64 game's (fetched from KSEG0's window)
-// (TLB_RAM: and from a page the game mapped)
+// (TLB_RAM, TLB_EN: and from a page the game mapped)
 function automatic logic n64code(input logic [31:0] pc, input logic gv);
-    return N64WIN && (pc[31:23] == 9'h100 || (TLB_RAM && FLAT && (pc[31:29] == 3'b000 || map_hi(pc) || map_lo(pc, gv))));
+    return N64WIN && (pc[31:23] == 9'h100 || ((TLB_RAM || TLB_EN) && FLAT && (pc[31:29] == 3'b000 || map_hi(pc) || map_lo(pc, gv))));
 endfunction
 // a physical address the D-cache may hold (FLAT: pa == va there)
 function automatic logic pa_cached(input logic [31:0] pa);
@@ -617,7 +617,7 @@ function automatic tlbx_t tlb_xlat(input tlbe_t e, input logic [31:0] va);
     om = {1'b0, e.mask};                                     // (page - 1) >> 12
     pb = {1'b0, e.mask} + 13'd1;                             // the bit choosing the odd page
     lo = (va[24:12] & pb) != 0 ? e.lo1 : e.lo0;
-    x.v = lo[0]; x.d = lo[1]; x.c = 1'b0;                    // EntryLo bits 1, 2
+    x.v = lo[0]; x.d = lo[1]; x.c = lo[4:2] != 3'd2;         // EntryLo bits 1, 2, and the C field (5:3): 2 is uncached
     x.om = om;
     x.vpage = va[31:12] & ~{7'd0, om};
     x.pfn = lo[24:5] & ~{7'd0, om};                          // EntryLo[25:6]
@@ -646,6 +646,8 @@ logic [4:0]  sc_k;                           // the entry in tlb_q
 logic [31:0] sc_va;
 logic [7:0]  sc_asid;
 logic        sc_hit;
+logic        sc_stale;                       // (TLB_EN) a translation changed during the search: its result is not to be used
+logic        tlb_inval, tlb_chg;             // (TLB_EN, this cycle) something changed a translation (tlb_chg: an entry; tlb_inval: or the ASID)
 logic [4:0]  sc_idx;
 tlbx_t       sc_x;
 tlbe_t       sc_e;                           // tlbr's entry
@@ -1202,8 +1204,13 @@ logic        m_xc1;                          // (PGD) MS_XLAT's second cycle: th
 logic        m_wq;                           // MS_WALK: the scanner took the request
 wire m_mapped = FAST ? m_k_mapped : m_mem && !m_kseg;
 wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]});   // (the offset: the address's own)
-wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]));
-wire [4:0] m_tlb_code = (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
+// TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
+// RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
+// monitor level, which answers it -- with COP0 22 holding the physical address the page gave
+wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && m_tlbq[34] && m_tlbq[33] &&
+              !(m_st && !m_tlbq[32]) && (m_tlbq[31:23] != 9'd0 || (mon_mem4 && m_tlbq[22]));
+wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]) || m_tdev);
+wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
               (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D) ||   // ldc1, sdc1
               (W64 && (m_c.ld == M_LD || m_c.st == S_SD));
@@ -1378,8 +1385,10 @@ always_comb begin
     5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
     // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
     5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
-    5'd23: c0_rd = TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;     // (bit 0: the game's TLB instructions are the monitor's)
-    5'd22: c0_rd = (TLB_RAM && MON) ? mon_badv : 32'd0;
+    // (TLB_RAM: bit 0, the game's TLB instructions are the monitor's; TLB_EN: 'T' 'L' 'B', bit 2 cached fetches from mapped pages
+    // (FPG), bit 1 the real TLB, bit 0 the monitor)
+    5'd23: c0_rd = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
+    5'd22: c0_rd = ((TLB_RAM || TLB_EN) && MON) ? mon_badv : 32'd0;
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
     5'd10: c0_rd = c0_entryhi; 5'd11: c0_rd = c0_compare;
     5'd12: c0_rd = c0_status;  5'd13: c0_rd = cause_now;  5'd14: c0_rd = c0_epc;   // (Cause: IP2 live, as the model)
@@ -1405,13 +1414,17 @@ wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE 
 wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
-wire m_refill = !m_exc_v && m_tlb_fault && !m_tlbq[34];
+wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
+wire m_refill = (!m_exc_v && m_tlb_fault && !m_tlbq[34]) || m_fxr;
+wire [4:0] m_ccode = m_fxr ? 5'd2 : m_code;                  // Cause.ExcCode
+// a TLB exception: BadVAddr, Context and EntryHi take the page
+wire m_tlbx = TLB_EN && ((!m_exc_v && m_tlb_fault && !m_tdev) || (m_exc_v && (m_exc_code == 5'd2 || m_fxr)));
 // MON: what goes to the monitor level -- the interrupt of its own; a device
 // access, an instruction the core lacks (RI), a translation fault (its entry is
 // the runtime's to fill); nothing already in it
 wire m_mon_int = MON && (FAST ? int_mon_r : int_mon);
 wire m_to_mon  = MON && mon_game && !c0_status[2] &&
-                 (m_take_int ? m_mon_int : (m_take_exc && (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : 1'b1)));
+                 (m_take_int ? m_mon_int : (m_take_exc && (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : (TLB_RAM || m_tdev))));   // (TLB_EN: a TLB exception is the game's)
 // a translation fault (a fetch's, code 2 from E, or an access's, found here) that the monitor level takes
 wire m_tr_mon  = TLB_RAM && m_to_mon && m_take_exc && (!m_exc_v || m_exc_code == 5'd2);
 // (the game's own handler: an exception of the game's code that a console takes)
@@ -1505,7 +1518,7 @@ logic [31:0] flush_pc;
 always_comb begin
     if (FAST && rp_pend) flush_pc = rp_m ? m_pc : w_pc;
     else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
-    else if (m_to_game) flush_pc = 32'h8000_0180;
+    else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
 end
 
@@ -1527,7 +1540,7 @@ wire f_cached = cacheable(f_pc, game_view);
 // Aliases: the index comes from the virtual address, so one physical line can sit under two indexes when a page is
 // mapped at a virtual address whose bits [IW+1:12] differ from the physical ones (the VR4300's cache has this
 // with its two colour bits too); a hit-type cache op on the I-cache then drops the line under every colour (ic_alias).
-typedef struct packed { logic [19:0] vp; logic g; logic [7:0] asid; logic [10:0] pfn; } pg_t;
+typedef struct packed { logic [19:0] vp; logic [11:0] om; logic g; logic [7:0] asid; logic [10:0] pfn; } pg_t;     // (om: a page of the TLB_EN's that is bigger than 4 KiB: the offset bits above 11; 0 for the tables')
 pg_t         pg [2];
 logic [1:0]  pg_v;
 logic        pg_mru;                         // the register hit or loaded last
@@ -1535,11 +1548,13 @@ logic        pg_inv_r;                       // a table write last cycle
 wire         f_xmap = PG && !f_kseg;
 wire         f_cx = f_cached || f_xmap;
 wire [19:0]  f_vp = f_pc[31:12];
-wire         f_mhit0 = PG && pg_v[0] && pg[0].vp == f_vp && (pg[0].g || pg[0].asid == c0_entryhi[7:0]);
-wire         f_mhit1 = PG && pg_v[1] && pg[1].vp == f_vp && (pg[1].g || pg[1].asid == c0_entryhi[7:0]);
+wire         f_mhit0 = PG && pg_v[0] && ((pg[0].vp ^ f_vp) & ~{8'd0, pg[0].om}) == 0 && (pg[0].g || pg[0].asid == c0_entryhi[7:0]);
+wire         f_mhit1 = PG && pg_v[1] && ((pg[1].vp ^ f_vp) & ~{8'd0, pg[1].om}) == 0 && (pg[1].g || pg[1].asid == c0_entryhi[7:0]);
 // (physical address bits [28:12] -- the tag, TLO: the RDRAM's place in the SDRAM, then pa[22:12])
-wire [16:0]  pg0_tag = {N64_RDRAM[28:23], pg[0].pfn};
-wire [16:0]  pg1_tag = {N64_RDRAM[28:23], pg[1].pfn};
+// (a page bigger than 4 KiB has the address's own bits in the physical page number below its size)
+wire [10:0]  pg0_pfn = pg[0].pfn | (f_pc[22:12] & pg[0].om[10:0]), pg1_pfn = pg[1].pfn | (f_pc[22:12] & pg[1].om[10:0]);
+wire [16:0]  pg0_tag = {N64_RDRAM[28:23], pg0_pfn};
+wire [16:0]  pg1_tag = {N64_RDRAM[28:23], pg1_pfn};
 logic        d_fmap, d_fphit;                // D's word: a mapped fetch; a page register held its page
 logic [10:0] d_fpfn;                         // (and its physical page)
 logic [IW+1:12] f_fill_col;                  // the index bits above the page offset of the line that is coming in
@@ -1547,10 +1562,11 @@ logic [IW+1:12] f_fill_col;                  // the index bits above the page of
 logic [34:0] f_tlbq;
 logic        f_wq;                           // FS_WALK: the scanner took the request
 logic        f_xfault;                       // FS_READY holds a translation fault, not an instruction
+logic        f_xrefill;                      // ... (TLB_EN) no entry named the page (the refill vector; code 18 is TLBL's, as the pipeline carries it)
 logic        f_tc;                           // FS_XLAT: the page is cacheable
 wire f_misal = f_pc[1:0] != 2'd0;
 wire f_fault = f_misal || (fs == FS_READY && f_xfault);
-wire [4:0] f_fault_code = f_misal ? 5'd4 : 5'd2;
+wire [4:0] f_fault_code = f_misal ? 5'd4 : f_xrefill ? 5'd18 : 5'd2;
 logic [31:0] f_slow_insn;
 logic [2:0]  f_cnt;
 logic [31:0] f_fill_pa;
@@ -1661,6 +1677,11 @@ always_comb begin
     tlb_wdata.lo1  = c0_entrylo1[31:1];
 end
 
+// what can change a translation: a write of the TLB, tlbr (it loads EntryHi), a new ASID. The micro-TLBs are emptied and a search under
+// way is stale (F's: its page is searched again)
+assign tlb_chg = TLB_EN && ((m_commit_e && (m_c.tlbwi || m_c.tlbwr)) || (sc == SC_RUN && sc_mode == SCM_READ));
+assign tlb_inval = tlb_chg || (TLB_EN && m_commit_e && m_c.mtc0 && m_insn[15:11] == 5'd10 && m_st_lo[7:0] != c0_entryhi[7:0]);
+
 // =============================================================== memory port
 typedef enum logic [2:0] { P_IDLE, P_WB, P_ILINE, P_DLINE, P_SLOW } port_t;
 port_t port;
@@ -1699,17 +1720,20 @@ assign mem_wrun = !XWB && port == P_WB;
 wire port_done = (port == P_SLOW || port == P_WB) ? ((mem_we && mem_ack) || (!mem_we && mem_rvalid)) : 1'b0;
 
 // =============================================================== the page registers (PG; see above F)
-wire pg_ld = PG && sc_done_f && sc_hit && sc_x.c;                    // F's own walk found a cacheable page
+// (TLB_EN: the page is valid, in the RDRAM -- the registers keep pa[22:12] -- and the search was not overtaken by a write)
+wire sc_pgok = sc_x.c && (!TLB_EN || (sc_x.v && sc_x.pfn[19:11] == 9'd0));
+wire pg_ld = PG && sc_done_f && sc_hit && sc_pgok && !sc_stale && !tlb_inval;       // F's own walk found a cacheable page
+wire [10:0] sc_ppg = sc_x.pfn[10:0] | (sc_va[22:12] & sc_x.om[10:0]);              // (the page's physical number for the address)
 wire pg_vic = !pg_v[0] ? 1'b0 : !pg_v[1] ? 1'b1 : !pg_mru;          // the register to load: a free one, else the older
 always_ff @(posedge clk) begin
     if (rst) begin pg_v <= 2'b00; pg_mru <= 1'b0; pg_inv_r <= 1'b0; ic_alias <= 1'b0; end
     else if (PG) begin
-        pg_inv_r <= tr_we_i || tr_we_d;
+        pg_inv_r <= tr_we_i || tr_we_d || tlb_chg;
         if (f_mhit1) pg_mru <= 1'b1; else if (f_mhit0) pg_mru <= 1'b0;
         if (pg_ld) begin
-            pg[pg_vic] <= '{vp: sc_va[31:12], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
+            pg[pg_vic] <= '{vp: sc_va[31:12] & ~{8'd0, sc_x.om[11:0]}, om: sc_x.om[11:0], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
             pg_v[pg_vic] <= 1'b1; pg_mru <= pg_vic;
-            if (sc_va[IW+1:12] != sc_x.pfn[IW-11:0]) ic_alias <= 1'b1;
+            if (sc_va[IW+1:12] != sc_ppg[IW-11:0]) ic_alias <= 1'b1;
         end
         if (pg_inv_r) pg_v <= 2'b00;                                 // (a table entry was written: whatever the registers hold may be stale)
     end
@@ -1825,7 +1849,7 @@ always_comb begin
     tr_exc = m_take_int || m_take_exc;
     tr_exc_int = m_take_int;
     tr_exc_pc = m_pc;
-    tr_exc_code = m_take_int ? 5'd0 : m_code;
+    tr_exc_code = m_take_int ? 5'd0 : m_ccode;
 end
 
 // COP1: at M; its results are written as the instruction completes
@@ -1881,7 +1905,7 @@ always_ff @(posedge clk) begin
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_STEP; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
         ms <= MS_IDLE; ms_cnt <= 0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
-        sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0;
+        sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0; sc_stale <= 0; f_xrefill <= 0;
         d_fmiss <= 0; rd_res <= 0; rd_fix <= 0; rp_pend <= 0; m_w1 <= 0;
     end else begin
         // ---------------------------------------------------- Count / Compare
@@ -1932,7 +1956,7 @@ always_ff @(posedge clk) begin
                     c0_epc <= m_dly ? m_pc - 32'd4 : m_pc;
                     c0_cause[31] <= m_dly;
                 end
-                c0_cause[6:2] <= m_take_int ? 5'd0 : m_code;
+                c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
                 c0_cause[29:28] <= (!m_take_int && m_exc_v && m_code == 5'd11) ? 2'd1 : 2'd0;   // CE: COP1
                 c0_status[1] <= 1'b1;
             end
@@ -1944,10 +1968,17 @@ always_ff @(posedge clk) begin
                 if (TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
                 // (the monitor level's: the game's BadVAddr and EntryHi stay as they are)
                 if (m_tr_mon) mon_badv <= m_exc_v ? m_badv : m_addr;
-                if (!m_exc_v && !m_tr_mon) begin                    // a TLB fault
+                // (TLB_EN, a device behind a mapped page: the monitor level reads the page's physical address)
+                if (m_tdev) mon_badv <= {m_tlbq[31:12], m_addr[11:0]};
+                if (!TLB_EN && !m_exc_v && !m_tr_mon) begin         // a TLB fault
                     c0_badvaddr <= m_addr;
                     if (!TLB_RAM) c0_context <= (c0_context & 32'hFF800000) | ((m_addr >> 13) << 4);
                     c0_entryhi <= (m_addr & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
+                end
+                if (m_tlbx) begin                                   // a TLB exception: BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address
+                    c0_badvaddr <= m_badv;
+                    c0_context <= (c0_context & 32'hFF800000) | ((m_badv >> 13) << 4);
+                    c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
                 end
             end
         end
@@ -1980,11 +2011,11 @@ always_ff @(posedge clk) begin
                              if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[6:2] <= m_st_lo[6:2]; end end
                 // the VR4300's writable bits (the constant rest is not stored; BadVAddr,
                 // XContext, TagHi and the reserved registers take no write)
-                // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game)
-                5'd8:  if (TLB_RAM && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
+                // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game -- and to put the game's back, a state loaded)
+                5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0];
                              // (the monitor does the game's tlbp: its P bit, which no mtc0 of the game's reaches)
-                             if (TLB_RAM && MON && c0_status[2]) c0_index[31] <= m_st_lo[31]; end
+                             if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_index[31] <= m_st_lo[31]; end
                 5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
                 5'd4:  begin c0_context[31:23] <= m_st_lo[31:23];
                              // (likewise its BadVPN2: the tables' faults do not set it)
@@ -2008,7 +2039,6 @@ always_ff @(posedge clk) begin
                 if (c0_status[2]) c0_status[2] <= 1'b0; else c0_status[1] <= 1'b0;
                 ll_bit <= 1'b0;
             end
-            if (m_c.tlbwi || m_c.tlbwr) begin utlb_f.valid <= 0; utlb_m.valid <= 0; end   // (the RAM: tlb_we)
             if (m_c.tlbr) begin
                 c0_pagemask <= {7'd0, sc_e.mask, 13'd0};
                 c0_entryhi  <= {sc_e.vpn, 5'd0, sc_e.asid};
@@ -2169,7 +2199,7 @@ always_ff @(posedge clk) begin
                 d_dly <= ds_now;
                 d_fexc <= f_fault; d_fexc_code <= f_fault_code;
                 d_fmiss <= FAST && fs == FS_RUN && !f_misal && !f_hit;
-                d_fmap <= f_xmap; d_fphit <= f_mhit0 || f_mhit1; d_fpfn <= f_mhit0 ? pg[0].pfn : pg[1].pfn;
+                d_fmap <= f_xmap; d_fphit <= f_mhit0 || f_mhit1; d_fpfn <= f_mhit0 ? pg0_pfn : pg1_pfn;
                 if (FAST) begin
                     ctl_t fc;
                     fc = decode(f_fault ? 32'd0 : f_insn);
@@ -2202,7 +2232,7 @@ always_ff @(posedge clk) begin
         FS_RUN: if (f_ok && !f_have && !f_kill) begin
             f_cnt <= 0; f_discard <= 0; f_xfault <= 0;
             if (!f_kseg) begin
-                if (TLB_EN && utlb_hit(utlb_f, f_pc, c0_entryhi[7:0])) begin fs <= FS_XLAT; f_tlbq <= utlb_res(utlb_f.x, f_pc); end
+                if (TLB_EN && utlb_hit(utlb_f, f_pc, c0_entryhi[7:0])) begin fs <= FS_XLAT; f_tlbq <= utlb_res(utlb_f.x, f_pc); f_tc <= utlb_f.x.c && utlb_f.x.pfn[19:11] == 9'd0; end
                 else begin fs <= FS_WALK; f_wq <= 0; end
             end
             else begin f_fill_pa <= kphys(f_pc); f_fill_col <= f_pc[IW+1:12]; fs <= f_cached ? FS_REFILL : FS_SLOW; end
@@ -2211,18 +2241,18 @@ always_ff @(posedge clk) begin
             if (f_kill) f_discard <= 1;
             if (sc_start && !sc_req_m) f_wq <= 1;
             if (sc_done_f) begin
-                if (f_discard || f_kill) fs <= FS_RUN;
+                if (f_discard || f_kill || sc_stale) fs <= FS_RUN;
                 else begin
                     fs <= FS_XLAT;
                     f_tlbq <= sc_hit ? utlb_res(sc_x, f_pc) : 35'd0;
-                    f_tc <= sc_x.c;
+                    f_tc <= sc_pgok;
                     if (sc_hit) begin utlb_f.valid <= 1; utlb_f.x <= sc_x; end
                 end
             end else if (!f_wq && !sc_start && (f_discard || f_kill)) fs <= FS_RUN;   // not started: just go
         end
         FS_XLAT:
             if (f_kill) fs <= FS_RUN;
-            else if (!f_tlbq[34] || !f_tlbq[33]) begin fs <= FS_READY; f_xfault <= 1; f_ok <= 1; end
+            else if (!f_tlbq[34] || !f_tlbq[33]) begin fs <= FS_READY; f_xfault <= 1; f_ok <= 1; f_xrefill <= TLB_EN && !f_tlbq[34]; end
             else if (PG && f_tc) fs <= FS_RUN;              // (a page register has it now: the I-cache's from here)
             else begin f_fill_pa <= tphys({f_tlbq[31:12], f_pc[11:0]}); fs <= FS_SLOW; end
         FS_REFILL: if (port == P_ILINE && mem_rvalid) begin
@@ -2319,8 +2349,10 @@ always_ff @(posedge clk) begin
             sc_mode <= !sc_req_m ? SCM_LOOKUP : m_c.tlbp ? SCM_PROBE : m_c.tlbr ? SCM_READ : SCM_LOOKUP;
             sc_va <= !sc_req_m ? f_pc : m_c.tlbp ? c0_entryhi : m_addr;
             sc_asid <= c0_entryhi[7:0];
+            sc_stale <= tlb_inval;
         end
         SC_RUN: begin                                 // tlb_q holds entry sc_k
+            if (tlb_inval) sc_stale <= 1'b1;
             sc_e <= TLB_EN ? tlb_q : TLBE_RESET;
             sc_idx <= sc_k; sc_x <= tlb_xlat(tlb_q, sc_va);
             if (sc_mode == SCM_READ) sc <= SC_DONE;
@@ -2334,6 +2366,7 @@ always_ff @(posedge clk) begin
         end
         default: sc <= SC_IDLE;                       // SC_DONE: the result, for one cycle
         endcase
+        if (TLB_EN && tlb_inval) begin utlb_f.valid <= 1'b0; utlb_m.valid <= 1'b0; end
 
         // ---------------------------------------------------- the memory port
         case (port)
