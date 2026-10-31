@@ -452,6 +452,10 @@ wire [11:0] pc_nr = brk       ? (d_valid ? d_pc : pc_f)
                   : !run      ? ((!stall_e && d_valid) ? d_pc : pc_f)
                   : !stall_e  ? (pair_go ? pc_f + 12'd8 : pc_f + 12'd4)
                   :             pc_f;
+wire [9:0]  pc_nf1 = brk       ? (d_valid ? dp1 : pf1)
+                   : !run      ? ((!stall_e && d_valid) ? dp1 : pf1)
+                   : !stall_e  ? (pair_go ? pc_f[11:2] + 10'd3 : pf2)
+                   :             pf1;
 wire        br_go = e_valid && !stall_e && ((e_c.br && taken) || e_c.j || e_c.jr);      // (= redirect)
 always_ff @(posedge clk) begin
     if (rst) begin
@@ -480,26 +484,19 @@ always_ff @(posedge clk) begin
             dp1  <= pair_go ? pf2 : r_fix ? pf1c : pf1;
         end
         if (pc_load) begin
-            pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
-            pf1 <= pc_in[11:2] + 10'd1;
+            d_valid <= 1'b0;
         end else if (brk) begin
             // what follows the BREAK was not run: fetch it again when resumed
-            pc_f <= pc_nr;
-            pf1  <= d_valid ? dp1 : pf1;
             d_valid <= 1'b0;
         end else if (!run && !redirect) begin
             // stopped: D's instruction (not run) is the next one
-            if (!stall_e) begin
-                if (d_valid) begin pf1 <= dp1; end
-                d_valid <= 1'b0;
-            end
+            if (!stall_e) d_valid <= 1'b0;
         end else if (!stall_e) begin
-            // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
-            pf1  <= pair_go ? pc_f[11:2] + 10'd3 : pf2;
         end
-        // (the fetch pointer: a taken branch's target over what the rest would make -- the branch's condition is late, so it is
-        // the last choice)
+        // (the fetch pointer and the word after it: a taken branch's target over what the rest would make -- the branch's condition
+        // is late, so it is the last choice. After a redirect pf1 is not made: r_fix has the next cycle's address from pc_f)
+        pf1 <= pc_load ? pc_in[11:2] + 10'd1 : pc_nf1;
         if (!pc_load && br_go) pc_f <= redirect_pc;
         else if (!pc_load) pc_f <= pc_nr;
     end
