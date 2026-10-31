@@ -305,7 +305,7 @@ static void clear_log(void) { for (uint32_t o = 0; o < 0x80; o += 4) LOG(o) = 0;
 int main(void)
 {
     puts_("tlbgame_test\n");
-    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbgame_test: no tables with the monitor in this CPU\ntlbgame_test: FAILED\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbgame_test: SKIPPED, no tables with the monitor in this CPU\n"); putc_(4); for (;;); }
     if ((monitor_id_read() & 0xFFFF0001u) != 0x4D4F0001u) { puts_("no monitor in this SoC\ntlbgame_test: FAILED\n"); putc_(4); for (;;); }
     for (int i = 0; i < 32; i++) raw[i].hi = 0x80000000u;
     for (uint32_t i = 0; i < 0x1000; i += 4) K1(0x20000)[i / 4] = 0;

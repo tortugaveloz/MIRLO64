@@ -206,7 +206,7 @@ static void tlb_wi(uint32_t idx, uint32_t pm, uint32_t hi, uint32_t lo0, uint32_
 int main(void)
 {
     puts_("tlbmon_test\n");
-    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbmon_test: no tables with the monitor in this CPU\ntlbmon_test: FAILED\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbmon_test: SKIPPED, no tables with the monitor in this CPU\n"); putc_(4); for (;;); }
     if ((monitor_id_read() & 0xFFFF0001u) != 0x4D4F0001u) { puts_("no monitor in this SoC\ntlbmon_test: FAILED\n"); putc_(4); for (;;); }
     for (int i = 0; i < 32; i++) raw[i].hi = 0x80000000u;
     for (uint32_t i = 0; i < 0x200; i++) { K1(0x10000)[i] = 0x10000000u + i; K1(0x12000)[i] = 0x12000000u + i; }

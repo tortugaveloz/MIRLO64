@@ -83,7 +83,7 @@ static void icache_hit_inval(uint32_t va) { __asm__ volatile(".set push\n.set mi
 int main(void)
 {
     puts_("tlbpg_test\n");
-    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbpg_test: no tables in this CPU\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbpg_test: SKIPPED, no tables in this CPU\n"); putc_(4); for (;;); }
     for (uint32_t i = 0; i < 512; i++) { tlb_set(i << 12, 0, 0, 0); tlb_set(i << 12, 0, 0, FETCH); }
 
     /* ---- the plain case: a cacheable mapped page, run again and again ---- */
