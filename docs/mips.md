@@ -186,7 +186,7 @@ instantiates it with the boot ROM and these parameters:
 | `EXC_BASE` | `0x4000_0000` | The runtime's vector is `EXC_BASE + 0x180` |
 | `TLB_EN` / `TLB_RAM` / `FPG` | 0 / 1 / 1 | No VR4300 TLB; translation tables in block RAM; fetch page registers |
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
-| `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels |
+| `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
@@ -212,8 +212,9 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
   registers set one stage ahead.
 
 Nothing a cache tag says reaches the pipeline's advance. Multiplies and divides run in the background with HI and LO
-interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` is a bit a cycle.
-HI and LO keep the upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them.
+interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` and `ddiv(u)` are a bit a cycle
+(32 and 64 steps; a negative dividend's magnitude takes as many cycles again to move into place). HI and LO keep the
+upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them.
 
 ### Caches and memory
 
@@ -260,10 +261,10 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_ALU` | yes | `dadd(i)(u)`, `dsub(u)`, and `and` / `or` / `xor` / `nor` / `slt(u)` when an operand is not a 32-bit value: E does the lower word, M the upper word with E's carry |
 | `W64_SH` | yes | The d-shifts, a byte or a bit a cycle |
 | `W64_MD` | yes | `dmult(u)`: four products of the operands' halves on the 32-bit multiply's DSP block, summed a word at a time; HI and LO of 64 bits |
-| `W64_DIV` | no | `ddiv(u)` of any operand; without it, a `ddiv` of two words and a `ddivu` of two unsigned words are done on the 32-bit divider |
+| `W64_DIV` | yes | `ddiv(u)`, a bit a cycle (64 steps; `div(u)` run on the same divider, 32 steps); without it `ddiv(u)` are Reserved Instructions, and `div(u)` have a 32-bit divider of their own |
 
-What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ddiv(u)`
-of a 64-bit operand and `ldl` / `ldr` / `sdl` / `sdr`. A trap instruction on a 64-bit operand, `lld` and
+What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ldl` / `ldr` /
+`sdl` / `sdr` (and, on a core without a level, that level's instructions). A trap instruction on a 64-bit operand, `lld` and
 `scd` are Reserved Instructions that the runtime does not do.
 
 ### The FPU
@@ -370,7 +371,7 @@ The loader then:
 5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
 6. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
    runtime takes what the core has from these and from `MONITOR.ID`, not from its own build.
-7. Replaces the dividing 64-bit helpers and the audio library's envelope rate in the boot segment (below).
+7. Replaces the dividing 64-bit helpers (on a CPU without `W64_DIV`) and the audio library's envelope rate in the boot segment (below).
 8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
@@ -528,8 +529,8 @@ the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code 
 
 ### 64-bit instructions and the helpers
 
-`emulate_64` does the Reserved Instructions on the context's 64-bit registers: `ddiv(u)` of a 64-bit operand, the
-unaligned doubleword loads and stores, and -- on a core without them in hardware -- the FPU's `dmfc1`, `dmtc1`,
+`emulate_64` does the Reserved Instructions on the context's 64-bit registers: the unaligned doubleword loads and
+stores, and -- on a core without them in hardware -- `ddiv(u)`, the FPU's `dmfc1`, `dmtc1`,
 conversions from `.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU register pair;
 the arithmetic is the FPU's single precision). An entry costs far
 more than the instruction it stands for, which matters for code that divides in a loop. A compiler's conversions
@@ -540,10 +541,10 @@ A compiler's 64-bit support routines are such code: `__ull_div`, `__ll_mod` and 
 64-bit instruction and a return. `lang/n64rt/n64rt_llsigs.h` has their instruction words as the IDO 5.3 compiler makes
 them (generated by `tools/gen_llsigs.py` from `tools/llsigs/ll.c`). At boot `ll_patch` scans the boot segment and, where
 all the words of a routine match, writes a jump to the runtime's 32-bit version over its start. The routines that shift
-or multiply are left as they are, since the CPU runs their instruction; the ones that divide (`__ull_div`, `__ull_rem`,
-`__ll_div`, `__ll_rem`, `__ll_mod`, `__ull_divremi`) are replaced. Their division (and the monitor's `ddiv(u)`) is
-`n64rt_div64.h`'s: long division by words on the CPU's `divu` -- three or four of them, some 150 cycles where the C
-library's loop of a bit a step took 600; a game that divides 64-bit values by the thousand at its start spent most of
+or multiply, and with `W64_DIV` the ones that divide too, are left as they are, since the CPU runs their instruction (some 70
+cycles for a `ddivu`). On a core without `W64_DIV` the ones that divide (`__ull_div`, `__ull_rem`, `__ll_div`, `__ll_rem`,
+`__ll_mod`, `__ull_divremi`) are replaced. Their division (and the monitor's `ddiv(u)`) is `n64rt_div64.h`'s: long
+division by words on the CPU's `divu` -- three or four of them, some 150 cycles where the C library's loop of a bit a step took 600; a game that divides 64-bit values by the thousand at its start spent most of
 its fields there. A replacement runs with the game's interrupts off and restores Status in the delay
 slot of its return, because the CPU sends an interrupt to the game's handler only when the interrupted instruction is
 the game's.
@@ -1082,7 +1083,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | Program | What it checks |
 |---|---|
 | `cpu_test`, `libc_test` | Loads and stores of every width, the caches, the FPU, the divider; the C library |
-| `int64_test` | The 64-bit levels against a table |
+| `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
@@ -1102,8 +1103,9 @@ compares the output sample for sample.
 another copy given as `N64_MODEL=<dir>`). Both run the same ROM and must agree on every retired
 instruction's address, word and written register (64 bits), on every exception and on the FPU's registers.
 `GEN="-GFAST=1 -GXWB=1 -GW64_ALU=1 ..."` passes the core's parameters. `gen_rand_rom.py` writes random integer programs
-(every instruction on registers full of 64-bit values, through the cache and around it; its mode `nodiv` matches the
-SoC's levels) and `gen_rand_fpu_rom.py` random FPU programs.
+(every instruction on registers full of 64-bit values, through the cache and around it; its mode `full` matches the
+SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
+`ddiv(u)`) and `gen_rand_fpu_rom.py` random FPU programs.
 
 ### Single blocks
 
