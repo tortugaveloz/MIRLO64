@@ -273,7 +273,10 @@ always_comb begin
     default: ;
     endcase
 end
-wire [31:0] za_s = za_x + (za_y ^ {32{za_inv}}) + {31'd0, za_cin};
+wire [32:0] za_t = {za_x, 1'b1} + {za_y ^ {32{za_inv}}, za_cin};      // (the carry in as the low bit: one carry chain)
+wire [31:0] za_s = za_t[32:1];
+// S_LNEG2's sum is zero (the upper word is gone), found from zmag, not from the adder's sum: ~zmag + lcar, or zmag
+wire        za_z = zs ? (lcar ? zmag == 32'd0 : zmag == 32'hFFFFFFFF) : zmag == 32'd0;
 
 // (FAST) zmag's left shifts, one barrel: S_NORM2's by the count of leading zeros, and the shift by one of the quotient / root
 // (S_ITER: the bit of the iteration comes in) and of cvt.s.l's loop (S_LSH1: ir's top bit comes in)
@@ -304,7 +307,7 @@ always_comb begin
     S_ADD2:   z_za = 1;
     S_ITER:   z_zsh = 1;
     S_NORM:   if (FAST) z_mp = kind == K_MUL; else z_nf = 1;
-    S_LNEG2:  if (za_s == 32'd0) z_ir = 1; else z_za = 1;
+    S_LNEG2:  if (za_z) z_ir = 1; else z_za = 1;
     S_LSH1:   z_zsh = !zmag[31];
     S_NORM2:  z_zsh = 1;
     S_F2W:    z_sh = FAST;
@@ -333,7 +336,7 @@ always_comb begin
               else begin x_md = fn[5:1] == 5'b00001; x_sq = fn == 6'h04; end
     S_ADD2:   x_a1 = 1;
     S_NORM:   x_nf = !FAST;
-    S_LNEG2:  x_190 = za_s != 32'd0;
+    S_LNEG2:  x_190 = !za_z;
     S_LSH1:   x_dec = !zmag[31];
     S_NORM2:  x_dec = 1;
     default: ;
@@ -594,7 +597,7 @@ always_ff @(posedge clk) begin
         st <= S_LNEG2;
     end
     S_LNEG2: begin
-        if (za_s == 32'd0) st <= S_NORM;
+        if (za_z) st <= S_NORM;
         else st <= S_LSH1;
     end
     S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
