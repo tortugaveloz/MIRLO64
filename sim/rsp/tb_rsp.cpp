@@ -301,30 +301,27 @@ int main(int argc, char **argv)
                 if (verbose && ins <= 200) printf("  %6ld  pc %03x  %08x\n", ins, m.last_pc, m.last_ins);
                 if (brk) ended = 1;
             }
-            for (; vdone > 1 && !vexp.empty(); vdone--) vexp.pop_front();   // (two finished: the state is the later one's)
-            if (vdone && !bad) {
-                // the vector unit's state, against the model's after the instruction that just finished
-                if (vexp.empty()) { printf("  !! the vector unit finished an instruction the model did not run (around %ld)\n", ins); bad = 1; }
-                else {
-                    Vs v = vexp.front(); vexp.pop_front();
-                    for (int r = 0; r < 32 && !bad; r++)
-                        for (int l = 0; l < 8; l++)
-                            if (R.rsp_top__DOT__vu__DOT__shadow[r][l] != v.vr[r][l]) {
-                                printf("  !! instruction %ld (pc %03x, %08x): v%d[%d] = %04x, the model %04x\n", v.ins, v.pc, v.in, r, l,
-                                       R.rsp_top__DOT__vu__DOT__shadow[r][l], v.vr[r][l]);
-                                bad = 1; break;
-                            }
-                    for (int l = 0; l < 8 && !bad && !vpart; l++)
-                        if (R.rsp_top__DOT__vu__DOT__acc_h[l] != v.ah[l] || R.rsp_top__DOT__vu__DOT__acc_m[l] != v.am[l] || R.rsp_top__DOT__vu__DOT__acc_l[l] != v.al[l]) {
-                            printf("  !! instruction %ld (pc %03x, %08x): acc[%d] = %04x %04x %04x, the model %04x %04x %04x\n", v.ins, v.pc, v.in, l,
-                                   R.rsp_top__DOT__vu__DOT__acc_h[l], R.rsp_top__DOT__vu__DOT__acc_m[l], R.rsp_top__DOT__vu__DOT__acc_l[l], v.ah[l], v.am[l], v.al[l]);
-                            bad = 1;
+            // The vector unit is a pipeline: its state is compared when it is quiescent (tr_v: nothing under way and nothing
+            // starting), against the model's after the last vector instruction that left E
+            if (vdone && !bad && !vexp.empty()) {
+                Vs v = vexp.back(); vexp.clear();
+                for (int r = 0; r < 32 && !bad; r++)
+                    for (int l = 0; l < 8; l++)
+                        if (R.rsp_top__DOT__vu__DOT__shadow[r][l] != v.vr[r][l]) {
+                            printf("  !! after instruction %ld (pc %03x, %08x): v%d[%d] = %04x, the model %04x\n", v.ins, v.pc, v.in, r, l,
+                                   R.rsp_top__DOT__vu__DOT__shadow[r][l], v.vr[r][l]);
+                            bad = 1; break;
                         }
-                    if (!bad && !vpart && (R.rsp_top__DOT__vu__DOT__vco != v.vco || R.rsp_top__DOT__vu__DOT__vcc != v.vcc || R.rsp_top__DOT__vu__DOT__vce != v.vce)) {
-                        printf("  !! instruction %ld (pc %03x, %08x): vco %04x vcc %04x vce %02x, the model %04x %04x %02x\n", v.ins, v.pc, v.in,
-                               R.rsp_top__DOT__vu__DOT__vco, R.rsp_top__DOT__vu__DOT__vcc, R.rsp_top__DOT__vu__DOT__vce, v.vco, v.vcc, v.vce);
+                for (int l = 0; l < 8 && !bad; l++)
+                    if (R.rsp_top__DOT__vu__DOT__acc_h[l] != v.ah[l] || R.rsp_top__DOT__vu__DOT__acc_m[l] != v.am[l] || R.rsp_top__DOT__vu__DOT__acc_l[l] != v.al[l]) {
+                        printf("  !! after instruction %ld (pc %03x, %08x): acc[%d] = %04x %04x %04x, the model %04x %04x %04x\n", v.ins, v.pc, v.in, l,
+                               R.rsp_top__DOT__vu__DOT__acc_h[l], R.rsp_top__DOT__vu__DOT__acc_m[l], R.rsp_top__DOT__vu__DOT__acc_l[l], v.ah[l], v.am[l], v.al[l]);
                         bad = 1;
                     }
+                if (!bad && (R.rsp_top__DOT__vu__DOT__vco != v.vco || R.rsp_top__DOT__vu__DOT__vcc != v.vcc || R.rsp_top__DOT__vu__DOT__vce != v.vce)) {
+                    printf("  !! after instruction %ld (pc %03x, %08x): vco %04x vcc %04x vce %02x, the model %04x %04x %02x\n", v.ins, v.pc, v.in,
+                           R.rsp_top__DOT__vu__DOT__vco, R.rsp_top__DOT__vu__DOT__vcc, R.rsp_top__DOT__vu__DOT__vce, v.vco, v.vcc, v.vce);
+                    bad = 1;
                 }
             }
             // (after the BREAK the vector unit may still have an instruction's

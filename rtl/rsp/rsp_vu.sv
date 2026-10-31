@@ -644,13 +644,21 @@ always_comb begin
     for (int b = 0; b < 16; b++) sb[b]  = sr1[(b + 4 * int'(st_rot[3:2])) & 15];
 end
 
+// MFC2's bytes: those of D's copy at e and e + 1 (mod 16), not through the store's rotation
+logic [127:0] qd_flat;
+always_comb for (int g = 0; g < 8; g++) qd_flat[127 - 16 * g -: 16] = qd[g];
+wire  [3:0]  el1  = el + 4'd1;
+wire  [7:0]  mf_b0 = qd_flat[127 - 8 * int'(el) -: 8];
+wire  [7:0]  mf_b1 = qd_flat[127 - 8 * int'(el1) -: 8];
+
 // the bytes a load (or MTC2) brings, and where they go. A load's data comes
 // the cycle after its address -- by then the instruction may have left E, so
 // what the write needs is kept (lw_*)
 logic        lw_v /* verilator public_flat_rd */, lw_last, lw_packed, lw_p6;
 // the write leaves half of a lane as it was (an odd byte at an end): a store
 // or MFC2 does not start under it (l_free)
-logic        lw_merge;
+logic        lw_mgf;                  // the write leaves half a lane whatever its bytes: MTC2's, LTV's
+wire         lw_merge = lw_mgf || (!lw_packed && |((lw_be ^ (lw_be >> 1)) & 16'h5555));
 logic [4:0]  lw_reg;
 logic [15:0] lw_be;                   // the register's bytes written
 logic        lw_mt;                   // ... MTC2's: rt's two bytes (lw_mb: the even byte's and the odd one's)
@@ -740,6 +748,8 @@ logic        ct_v, ct_p;              // CTC2 started last cycle (its write is n
 logic [1:0]  ct_r;
 logic [15:0] ct_d;
 logic [1:0]  cf_r;
+logic        mf_q;                // MFC2 started last cycle: its value (mf_val) is res_l
+logic [31:0] mf_val;
 logic [15:0] f_vco, f_vcc;
 logic [7:0]  f_vce;
 always_comb begin
@@ -751,7 +761,7 @@ always_comb begin
             if (ex[l].cc_w) begin f_vcc[li] = ex[l].cc_lo; f_vcc[8 + li] = ex[l].cc_hi; end
             if (ex[l].ce_w) f_vce[li] = ex[l].ce;
         end
-    res_l = cf_r == 2'd0 ? {{16{f_vco[15]}}, f_vco} : cf_r == 2'd1 ? {{16{f_vcc[15]}}, f_vcc} : {24'd0, f_vce};
+    res_l = mf_q ? mf_val : cf_r == 2'd0 ? {{16{f_vco[15]}}, f_vco} : cf_r == 2'd1 ? {{16{f_vcc[15]}}, f_vcc} : {24'd0, f_vce};
 end
 
 always_comb begin
@@ -773,7 +783,7 @@ always_comb begin
         if (lp && !(sel0r || none_ok)) done = 1'b0;             // (a pair: not without its computation)
     end
     if (in_tv && tv_n == 4'd15 && !m_stall) done = 1'b1;
-    res = {{16{sb[0][7]}}, sb[0], sb[1]};
+    res = 32'd0;
     // the register write: EX's last pass, a load's bytes, MTC2
     wr_reg = x_vdn; wr_be = 16'd0;
     for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
@@ -803,8 +813,8 @@ always_comb begin
            + 3'(ct_v && !ct_p);
     // (the computation whose write is late: it and what was kept behind it;
     // then the one in EX, if it is written now, with what is behind it)
-    commit = (wp ? 4'd1 + 4'(c_defw) : 4'd0) + (x_wr ? 4'd1 + 4'(x_pc) + 4'(c_def) + 4'(c_now) : !x_v ? 4'(c_now) : 4'd0);
-    commit_part = wp && x_exec;
+    commit = {3'd0, idle && !sel_fire && !start_nc};          // (simulation) quiescent: the registers, accumulator and flags are final
+    commit_part = 1'b0;
 end
 
 // The products' registers in a block of their own, with nothing but an
@@ -820,7 +830,7 @@ always_ff @(posedge clk)
 always_ff @(posedge clk) begin
     if (rst) begin
         st <= V_IDLE; lw_v <= 1'b0; unimpl <= 1'b0; x_v <= 1'b0; x_wait <= 1'b0; b1 <= 1'b0; c_def <= 3'd0;
-        wp <= 1'b0; c_defw <= 3'd0;
+        wp <= 1'b0; c_defw <= 3'd0; mf_q <= 1'b0; lw_mgf <= 1'b0;
         vco <= 16'd0; vcc <= 16'd0; vce <= 8'd0; dph <= 1'b0; div_out <= 32'd0; div_in_h <= 16'd0;
         for (int g = 0; g < 8; g++) begin acc_h[g] <= 16'd0; acc_m[g] <= 16'd0; acc_l[g] <= 16'd0; end
     end else begin
@@ -907,6 +917,8 @@ always_ff @(posedge clk) begin
         default: st <= V_IDLE;
         endcase
         // CFC2: its flags the cycle after
+        // MFC2: the two bytes of the register from byte e on (D's copy), the cycle after
+        mf_q <= start_nc && mfc2; mf_val <= {{16{mf_b0[7]}}, mf_b0, mf_b1};
         cf_v <= start_nc && cfc2; cf_r <= li[12:11]; cf_x <= x_v && x_wait;
         nop_l <= lp && none_ok && start_nc && (lw_nx || ctc2);
         // CTC2: the flag register written the cycle after (over an older EX's write then)
@@ -920,16 +932,16 @@ always_ff @(posedge clk) begin
         if (mtc2 && start_nc) begin
             lw_v <= 1'b1; lw_reg <= li[15:11]; lw_be <= mt_be; lw_packed <= 1'b0; lw_last <= 1'b1; lw_mt <= 1'b1;
             lw_mb <= el[0] ? {b[7:0], b[15:8]} : b[15:0];
-            lw_merge <= 1'b1;
+            lw_mgf <= 1'b1;
         end
         // a load's bytes: on m_rdata the next cycle
         if (lwc2 && m_valid) begin
             lw_v <= 1'b1; lw_reg <= ltn; lw_be <= ld_mask; lw_mt <= 1'b0;
             lw_packed <= ls_packed; lw_p6 <= lsop == 5'd6; lw_last <= 1'b1;
-            lw_merge <= !ls_packed && |((ld_mask ^ (ld_mask >> 1)) & 16'h5555);   // (a packed load writes whole lanes)
+            lw_mgf <= 1'b0;                                                   // (a packed load writes whole lanes)
             if (in_tv) begin
                 lw_be <= 16'd1 << tv_n; lw_reg <= tv_reg; lw_packed <= 1'b0; lw_last <= tv_n == 4'd15;
-                lw_merge <= 1'b1;
+                lw_mgf <= 1'b1;
             end
         end
     end

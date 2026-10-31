@@ -157,7 +157,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h0E: begin c.we = 1'b1; c.wr = rt; c.b_imm = 1'b1; c.imm_zx = 1'b1; c.alu = A_XOR; end
     6'h0F: begin c.we = 1'b1; c.wr = rt; c.b_imm = 1'b1; c.alu = A_LUI; end
     6'h10: begin c.cop = rs == 5'd0 || rs == 5'd4; c.we = rs == 5'd0; c.wr = rt; end          // MFC0, MTC0
-    6'h12: begin c.cop = 1'b1; c.we = !i[25] && (rs == 5'd0 || rs == 5'd2); c.wr = rt; c.cf = !i[25] && rs == 5'd2; end   // MFC2, CFC2 write rt
+    6'h12: begin c.cop = 1'b1; c.we = !i[25] && (rs == 5'd0 || rs == 5'd2); c.wr = rt; c.cf = !i[25] && (rs == 5'd0 || rs == 5'd2); end   // MFC2, CFC2 write rt, their value in M
     6'h32, 6'h3A: c.cop = 1'b1;                                                            // LWC2, SWC2
     6'h20: begin c.we = 1'b1; c.wr = rt; c.load = 1'b1; c.size = 2'd0; end
     6'h21: begin c.we = 1'b1; c.wr = rt; c.load = 1'b1; c.size = 2'd1; end
@@ -273,26 +273,44 @@ wire         pair_go = pair_d && !stall_e;
 logic [31:0] rf_a [0:31];
 logic [31:0] rf_b [0:31];
 logic [31:0] rf_qa, rf_qb;
-wire  [4:0]  ra_d = stall_e ? e_ins[25:21] : s_ins_d[25:21];
-wire  [4:0]  rb_d = stall_e ? e_ins[20:16] : s_ins_d[20:16];
+wire  [4:0]  ra_d = s_ins_d[25:21];
+wire  [4:0]  rb_d = s_ins_d[20:16];
 always_ff @(posedge clk) begin
     if (w_we) begin rf_a[w_wr] <= w_res; rf_b[w_wr] <= w_res; end
     rf_qa <= rf_a[ra_d]; rf_qb <= rf_b[rb_d];
 end
 
-// ---- E
+// ---- E: the operands. Where each comes from is chosen by registers, set the cycle before for the instruction that will
+// be in E (D's, or E's own if it waits): one of the three writers behind (M, W, X -- the youngest first), the register
+// file, or the operand E held (hold_*: what it had last cycle, once its writer has left X)
 wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
+logic        fa_m, fa_w, fa_x, fa_h, fb_m, fb_w, fb_x, fb_h;       // (neither: the register file's)
+logic [31:0] hold_a, hold_b;
 logic [31:0] ea, eb;
 always_comb begin
-    ea = rf_qa;
-    if (x_we && x_wr == e_rs) ea = x_res;
-    if (w_we && w_wr == e_rs) ea = w_res;
-    if (m_we_r && m_c.wr == e_rs) ea = m_res;
-    eb = rf_qb;
-    if (x_we && x_wr == e_rt) eb = x_res;
-    if (w_we && w_wr == e_rt) eb = w_res;
-    if (m_we_r && m_c.wr == e_rt) eb = m_res;
+    ea = ({32{fa_m}} & m_res) | ({32{fa_w}} & w_res) | ({32{fa_x}} & x_res) | ({32{fa_h}} & hold_a)
+       | ({32{!(fa_m | fa_w | fa_x | fa_h)}} & rf_qa);
+    eb = ({32{fb_m}} & m_res) | ({32{fb_w}} & w_res) | ({32{fb_x}} & x_res) | ({32{fb_h}} & hold_b)
+       | ({32{!(fb_m | fb_w | fb_x | fb_h)}} & rf_qb);
 end
+// next cycle's choice, for a register number r read by D's instruction (the cycle's E goes: the writer is E's, now in M then)
+// or by E's own (it waits: M's writer is in W then, W's in X, and what came from X, the file or hold is held)
+function automatic logic [3:0] fsel(input logic [4:0] r_d, input logic [4:0] r_e, input logic stall,
+                                    input logic e_wr_v, input logic [4:0] e_wr, input logic m_wr_v, input logic [4:0] m_wr,
+                                    input logic w_wr_v, input logic [4:0] w_wr_);
+    logic nm, nw, nx;
+    // D's instruction (E goes)
+    nm = e_wr_v && e_wr == r_d;
+    nw = !nm && m_wr_v && m_wr == r_d;
+    nx = !nm && !nw && w_wr_v && w_wr_ == r_d;
+    if (!stall) return {nm, nw, nx, 1'b0};
+    // E's own, waiting: from M it is in W next, from W in X; from anywhere else it is held
+    nm = 1'b0;
+    nw = m_wr_v && m_wr == r_e;
+    nx = !nw && w_wr_v && w_wr_ == r_e;
+    return {1'b0, nw, nx, !nw && !nx};
+endfunction
+
 // ---- a load's value (and CFC2's) comes in M: the instruction behind it that reads it waits a cycle, then has it
 // from W. Every other value is forwarded; what the vector unit's own instructions wait for it keeps itself
 wire hazard /* verilator public_flat_rd */ = m_valid_r && m_we_r && (m_c.load || m_c.cf) && (m_c.wr == e_rs || m_c.wr == e_rt);
@@ -406,6 +424,9 @@ always_ff @(posedge clk) begin
         m_we_r <= 1'b0; w_we <= 1'b0; x_we <= 1'b0;
     end else begin
         x_we <= w_we; x_wr <= w_wr; x_res <= w_res;
+        hold_a <= ea; hold_b <= eb;
+        {fa_m, fa_w, fa_x, fa_h} <= fsel(ra_d, e_rs, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr, w_we, w_wr);
+        {fb_m, fb_w, fb_x, fb_h} <= fsel(rb_d, e_rt, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr, w_we, w_wr);
         w_we <= m_valid_r && m_we_r; w_wr <= m_c.wr; w_res <= m_out;
         m_valid_r <= e_go;
         m_c <= e_c; m_res <= e_res;

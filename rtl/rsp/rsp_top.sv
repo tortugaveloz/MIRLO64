@@ -327,7 +327,7 @@ assign iw_we    = sp_wr && sp_addr[12];
 assign iw_addr  = ds == D_OUT ? {np, iq != 2'd0} : sp_word;
 assign iw_data  = wq_d;
 
-assign c_res  = is_cop0 ? cop0_rd(c0r) : v_res;
+assign c_res  = cop0_rd(c0r);                      // (MFC2's value comes the cycle after, as CFC2's: v_res_l)
 assign c_done = (c_pr || !is_cop0) ? v_done : 1'b1;
 
 // one writer of the SP registers a cycle: the microcode (MTC0) first, the
