@@ -176,6 +176,7 @@ int main(int argc, char **argv)
         std::deque<std::pair<int, uint32_t>> expect;  // register writes the RTL owes
         struct Vs { long ins; uint32_t pc, in; uint16_t vr[32][8], ah[8], am[8], al[8], vco, vcc; uint8_t vce; };
         std::deque<Vs> vexp;                          // vector-unit instructions the RTL has not finished
+        static const bool vstat = getenv("VSTAT") != nullptr; long vs_n[4] = {0, 0, 0, 0}, vk[3][32] = {};
         int drain = 0, dmem_late = 0; uint64_t dmas_late = 0;
         static const bool cyc_on = getenv("CYCLES") != nullptr;
         rsp_time_t ct;
@@ -228,6 +229,13 @@ int main(int argc, char **argv)
             if (getenv("VTRACE") && ins >= atol(getenv("VTRACE")) && ins <= atol(getenv("VTRACE")) + 12)
                 printf("  [%ld] ins %ld e%d%d epc %03x | sel %d m_v %d x_v %d x_wait %d y_v %d lw_v %d wp %d\n", tb.cyc - c0, ins, e, e2, epc, (int)R.rsp_top__DOT__vu__DOT__sel_fire, (int)R.rsp_top__DOT__vu__DOT__m_v,
                        (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__y_v, (int)R.rsp_top__DOT__vu__DOT__lw_v, (int)R.rsp_top__DOT__vu__DOT__wp);
+            if (vstat && R.rsp_top__DOT__vu__DOT__cmp && !R.rsp_top__DOT__vu__DOT__sel0r) {   // (VSTAT=1: why a computation in E waits)
+                vs_n[R.rsp_top__DOT__vu__DOT__dep ? 0 : R.rsp_top__DOT__vu__DOT__ldep ? 1 : !R.rsp_top__DOT__vu__DOT__go_k ? 2 : 3]++;
+                if (!R.rsp_top__DOT__vu__DOT__go_k && !R.rsp_top__DOT__vu__DOT__dep) {
+                    int cl = R.rsp_top__DOT__vu__DOT__fn_fast ? 0 : R.rsp_top__DOT__vu__DOT__fn_mul ? 1 : 2;
+                    vk[cl][(R.rsp_top__DOT__vu__DOT__x_v ? 1 : 0) | (R.rsp_top__DOT__vu__DOT__x_mul ? 2 : 0) | (R.rsp_top__DOT__vu__DOT__x_st ? 4 : 0) | (R.rsp_top__DOT__vu__DOT__x_wait ? 8 : 0) | (R.rsp_top__DOT__vu__DOT__m_v ? 16 : 0)]++;
+                }
+            }
             tb.tick();
             if (dmem_late && !bad && !R.rsp_top__DOT__sw_v) {
                 dmem_late = 0;
@@ -361,6 +369,9 @@ int main(int argc, char **argv)
         }
         printf("%s: %s -- %ld instructions (%ld pairs), %ld cycles (%.2f a instruction, %.2f ms at 62.5 MHz), %zu RDP words\n", argv[ai],
                bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, pairs, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62500.0, rtl_rdp.size());
+        if (vstat) for (int c = 0; c < 3; c++) for (int j = 0; j < 32; j++) if (vk[c][j] > 50)
+            printf("    go_k false: %s, EX1 %s%s%s%s, MUL %s: %ld\n", c == 0 ? "fast" : c == 1 ? "multiply" : "other", (j & 1) ? "busy" : "empty", (j & 2) ? " (multiply)" : "", (j & 4) ? " (s,t kept)" : "", (j & 8) ? " (kept)" : "", (j & 16) ? "busy" : "empty", vk[c][j]);
+        if (vstat) printf("  VSTAT: cycles a computation waited: %ld on a register (dep), %ld on a load (ldep), %ld on the pipeline (go_k), %ld other\n", vs_n[0], vs_n[1], vs_n[2], vs_n[3]);
         tot_cyc += cycles; tot_ins += ins;
         cy_con += (double)ct.now;
         bad_tasks += bad || !ended;

@@ -188,7 +188,7 @@ wire [4:0] vdn  = ins[10:6];
 wire [5:0] fn   = ins[5:0];
 wire [2:0] de   = ins[13:11];           // VRCP.., VMOV: the lane of vd written
 
-wire fn_mul  = cd.mul;
+wire fn_mul  /* verilator public_flat_rd */ = cd.mul;
 wire fn_rcp  = cd.rcp;
 wire fn_one  = cd.one;
 wire fn_none = cd.none;
@@ -502,6 +502,7 @@ wire  fn_ch = cd.ch;
 
 logic [15:0]        s_n [LANES], t_n [LANES];
 logic [15:0]        s_r [LANES], t_r [LANES];
+logic [15:0]        s_y [LANES], t_y [LANES];     // EX2's copies: of s_r and t_r as EX1 had them, or SEL's (a computation with no EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin s_n[l] = qa[l]; t_n[l] = tv[l]; end
 
@@ -518,8 +519,8 @@ always_ff @(posedge clk)
     for (int l = 0; l < LANES; l++) p_r[l] <= $signed({m_ssgn & s_r[l][15], s_r[l]}) * $signed({m_tsgn & t_r[l][15], t_r[l]});
 
 // EX1's registers
-logic               x_v /* verilator public_flat_rd */, x_wait /* verilator public_flat_rd */, x_sec, x_mul, x_one, x_rcp;
-logic               x_st;                     // EX1 holds a computation that uses s and t in EX2
+logic               x_v /* verilator public_flat_rd */, x_wait /* verilator public_flat_rd */, x_sec, x_mul /* verilator public_flat_rd */, x_one, x_rcp;
+logic               x_st /* verilator public_flat_rd */;                     // EX1 holds a computation that uses s and t in EX2
 logic [5:0]         x_fn;
 logic [2:0]         x_am;                     // (amode of it)
 logic [3:0]         x_ve;
@@ -555,7 +556,7 @@ logic [15:0] mres [LANES];
 logic [LANES-1:0] mgt_r, mlt_r;               // a multiply's sum is above / below what a word holds (made as it was: EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        ex2[l]  = lane_x2(y_fn, y_ve, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
         mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
@@ -757,28 +758,28 @@ always_comb
 // ----------------------------------------------------------- the controls --
 // a computational instruction's SEL: not under a computation that writes what it reads (in MUL, EX1 or EX2), nor under a
 // load's write of what it reads; not behind a computation in EX1 (above), nor, if it is not a multiply, behind one in MUL
-wire cmp      = valid && vec && fn_known && !fn_none;
-wire dep      = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn || x_vdn == vtn))
+wire cmp      /* verilator public_flat_rd */ = valid && vec && fn_known && !fn_none;
+wire dep      /* verilator public_flat_rd */ = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn || x_vdn == vtn))
              || (y_v && (y_vdn == vsn || y_vdn == vtn)) || (wp && (w_vdn == vsn || w_vdn == vtn));
 // (a load's write of another register is no matter: the operands come from
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
-wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
+wire ldep     /* verilator public_flat_rd */ = lw_v && (lw_reg == vsn || lw_reg == vtn);
 wire pipe_e   = !m_v && !x_v && !y_v && !wp;          // no computation is under way
 // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
-wire fn_fast  = cd.fast;
+wire fn_fast  /* verilator public_flat_rd */ = cd.fast;
 wire fn_cmp   = cd.cmp;
-wire fn_cin   = cd.cin;
+wire fn_cin   /* verilator public_flat_rd */ = cd.cin;
 wire x_kept   = x_v && x_wait;                                                // EX1 holds its computation another cycle
-wire go_k     = fn_fast ? !x_v && !m_v
-              : fn_mul  ? !(x_v && x_st) && !x_kept
-              :           !(x_v && x_st) && !x_kept && !m_v && !(fn_cin && x_v && !x_mul);
+wire go_k     /* verilator public_flat_rd */ = fn_fast ? !x_kept && !m_v          // (a fast one goes to EX2 at once if EX1 is empty, else through EX1)
+              : fn_mul  ? !x_kept
+              :           !x_kept && !m_v && !(fn_cin && x_v && !x_mul);
 `ifdef VERILATOR
 logic dbg_drain /* verilator public_flat_rw */;                              // (simulation) wait for the pipeline to empty before each computation
 `else
 wire dbg_drain = 1'b0;
 `endif
-wire sel0r    = cmp && st == V_IDLE && !ldep && go_k && !dep && !(dbg_drain && !pipe_e);
+wire sel0r    /* verilator public_flat_rd */ = cmp && st == V_IDLE && !ldep && go_k && !dep && !(dbg_drain && !pipe_e);
 wire none_ok  = valid && vec && (fn_none || !fn_known);                       // (one that does nothing: done at once)
 wire sel_fire /* verilator public_flat_rd */ = sel0;
 // the others: a load's first cycle reads no register, so it starts under anything that writes another register (its
@@ -877,7 +878,7 @@ always_ff @(posedge clk) begin
 
         // ---- EX2
         // (EX2 takes EX1's computation, or SEL's -- a fast one, when EX1 is empty -- whatever SEL does: only y_v is its choice)
-        y_v <= x_ex2 || (sel0 && fn_fast);
+        y_v <= x_ex2 || (sel0 && fn_fast && !x_v);
         if (x_v) begin
             y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
         end else begin
@@ -919,9 +920,9 @@ always_ff @(posedge clk) begin
         x_sec <= x_v && x_wait;
 
         // ---- SEL
-        // (s and t are taken every cycle but while EX1 holds a computation that uses them in EX2: no SEL is in front of
-        // their enable)
-        if (!(x_v && x_st)) begin
+        // (s and t are taken every cycle but while EX1 holds a computation for another cycle: no SEL is in front of their enable)
+        for (int l = 0; l < LANES; l++) begin s_y[l] <= x_v ? s_r[l] : s_n[l]; t_y[l] <= x_v ? t_r[l] : t_n[l]; end
+        if (!(x_v && x_wait)) begin
             for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
             // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left
             rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
@@ -944,10 +945,10 @@ always_ff @(posedge clk) begin
             x_wait <= 1'b0;
             if (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6) x_am <= 3'd7;
         end else begin
-            x_v <= m_v || (sel0 && !fn_mul && !fn_fast);
+            x_v <= m_v || (sel0 && !fn_mul && (!fn_fast || x_v));
             x_mul <= m_v;
             x_st <= !m_v && fn_cmp;
-            x_wait <= !m_v && (fn_ch || fn_rcp);
+            x_wait <= !m_v && (fn_ch || (fn_rcp && !fn_fast));
             x_fn <= m_v ? m_fn : fn; x_vdn <= m_v ? m_vdn : vdn;
             x_am <= m_v ? 3'd0 : cd.am; x_ve <= m_v ? 4'd0 : ve; x_de <= m_v ? 3'd0 : de;
             x_one <= !m_v && fn_one; x_rcp <= !m_v && fn_rcp;
