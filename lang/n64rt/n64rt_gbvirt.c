@@ -10,7 +10,8 @@
  * not a cartridge here (it is not there for the game). The ROM's banks are its size rounded up to a power of two; its bytes
  * beyond the file read as 0xFF. The RAM's size is the header's (0x149; MBC2's 512 half-bytes are its own).
  *
- * The save is the file <ROM's name>.sav, in Saves/gbc/common for a .gbc ROM and Saves/gb/common for a .gb, which a Game Boy core also keeps:
+ * The save is the file <ROM's name>.sav which a Game Boy core also keeps: in Saves/gbc/common for a .gbc ROM, and for a .gb in Saves/gb/common, else in
+ * Saves/gbc/common (where the file is found it is written back; with none, it is made in gbc):
  * the cartridge's RAM as the emulators have it; with MBC3's clock, 48 bytes follow it: the clock as
  * 10 little-endian words (seconds, minutes, hours, days, days' control, then the same latched) and a 64-bit time that is
  * left 0. The clock runs while the core does and is not kept for the time it is off (the core has no calendar).
@@ -134,8 +135,8 @@ static void rtc_write(u32 reg, u8 v)
  * the ROM's slot (the one picked for it: APF_BRIDGE.REQUEST_GETFILE writes a 256-byte NUL-ended absolute path, with its extension, to the
  * parameter struct), makes the .sav's path from its name, and has the Pocket open that path into FILE_SLOT (a slot of data.json with no file, not
  * read-only: REQUEST_OPENFILE; the struct has the path, then 32-bit flags -- bit 0 creates a file that is not there -- and a size), then read it
- * (REQUEST_READ) or write it (REQUEST_WRITE) at the offset 0. The folder is the one the ROM's path decides, with no other tried (a .gbc: gbc; a
- * .gb: gb; any other extension: Assets/gbc or Assets/gb in its path), and the Pocket opens files only in the platform folders core.json lists.
+ * (REQUEST_READ) or write it (REQUEST_WRITE) at the offset 0. The folders are the ones the ROM's path decides (a .gbc: gbc; a
+ * .gb: gb, then gbc if the file is not in gb; any other extension: Assets/gbc or Assets/gb in its path, as the .gbc or the .gb), and the Pocket opens files only in the platform folders core.json lists.
  * The parameter struct is LAYOUT_GS_PARAM, which the GameShark's codes use as well: the two are run by the same monitor, one after the other. */
 #define IMP_PARAM ((volatile u8 *)(uintptr_t)LAYOUT_GS_PARAM)
 static void imp_settle(void) { for (volatile int i = 0; i < 256; i++) { } }
@@ -167,7 +168,7 @@ static int imp_open(const char *path, u32 flags)
     return r;
 }
 /* The ROM slot's file: the path of its save in g.sav ("" if the Pocket does not give the ROM's path or it says neither gb nor gbc) */
-static void sav_path(void)
+static int sav_path(void)
 {
     char *out = g.sav, path[256];
     out[0] = 0;
@@ -177,7 +178,7 @@ static void sav_path(void)
     apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
     imp_settle();
     int r = imp_command(apf_bridge_request_getfile_write);
-    if (r != 0) { n64rt_log("n64rt: Game Boy save: the ROM's file name: %s (%d)\n", r < 0 ? "no answer" : "refused", r); return; }
+    if (r != 0) { n64rt_log("n64rt: Game Boy save: the ROM's file name: %s (%d)\n", r < 0 ? "no answer" : "refused", r); return 0; }
     imp_settle();
     flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
     u32 len = 0, base = 0, dot = ~0u;
@@ -189,7 +190,7 @@ static void sav_path(void)
     path[len] = 0;
     n64rt_log("n64rt: Game Boy save: the ROM is %s\n", path);
     const u32 end = dot != ~0u && dot > base ? dot : len;
-    if (end == base) return;
+    if (end == base) return 0;
     const int gbc = dot != ~0u && imp_ci_eq(path + dot, ".gbc"), gb = dot != ~0u && imp_ci_eq(path + dot, ".gb");
     int kind = gbc ? 2 : gb ? 1 : 0;
     for (u32 i = 0; !kind && i + 4u <= len; i++) {      /* (another extension: the folder the file is in) */
@@ -197,15 +198,26 @@ static void sav_path(void)
         if (path[i + 3] == '/') kind = 1;
         else if ((path[i + 3] | 32) == 'c' && path[i + 4] == '/') kind = 2;
     }
-    if (!kind) { n64rt_log("n64rt: Game Boy save: neither a .gb, a .gbc nor in a gb or gbc folder\n"); return; }
+    if (!kind) { n64rt_log("n64rt: Game Boy save: neither a .gb, a .gbc nor in a gb or gbc folder\n"); return 0; }
     const char *dir = kind == 2 ? "/Saves/gbc/common/" : "/Saves/gb/common/";
     u32 o = 0;
     for (const char *q = dir; *q; ) out[o++] = *q++;
-    if (o + (end - base) + 4u >= 256u) { n64rt_log("n64rt: Game Boy save: the name is too long\n"); out[0] = 0; return; }
+    if (o + 1u + (end - base) + 4u >= 256u) { n64rt_log("n64rt: Game Boy save: the name is too long\n"); out[0] = 0; return 0; }
     for (u32 i = base; i < end; i++) out[o++] = path[i];
     for (const char *q = ".sav"; *q; ) out[o++] = *q++;
     out[o] = 0;
+    return kind;
 }
+/* the gb folder's path in g.sav made the gbc folder's */
+static void sav_to_gbc(void)
+{
+    u32 n = 0;
+    while (g.sav[n]) n++;
+    for (u32 i = n + 1u; i > 17u; i--) g.sav[i] = g.sav[i - 1u];       /* ("/Saves/gb/common/" is 17 bytes, "/Saves/gbc/common/" 18) */
+    const char *d = "/Saves/gbc/common/";
+    for (u32 i = 0; i < 18u; i++) g.sav[i] = d[i];
+}
+
 /* The RAM (and the clock's footer) from the file: `total` bytes at RAM_MEM, g.wr set if the file may be written. The file there and as long as
  * the RAM or longer: read (of a longer one, only the first `total` bytes), and written back later; not there: the RAM stays 0xFF and the first write back
  * makes it; shorter than the RAM, or any other answer (the folder refused, no answer): left alone, the RAM is not kept. Each outcome is logged. */
@@ -213,9 +225,14 @@ static void sav_read(u32 total)
 {
     const u32 prev_slot = apf_bridge_slot_id_read(), prev_len = apf_bridge_transfer_length_read();
     g.wr = 0; g.dirty = 0; g.fails = g.noans = 0; g.wcount = g.wseen = 0;
-    sav_path();
+    const int kind = sav_path();
     if (g.sav[0]) {
         int r = imp_open(g.sav, 0);
+        if (r == 3 && kind == 1) {                  /* (a .gb's save may be in gbc too: where a Game Boy core that has both kinds keeps it) */
+            n64rt_log("n64rt: Game Boy save: %s is not there\n", g.sav);
+            sav_to_gbc();
+            r = imp_open(g.sav, 0);
+        }
         if (r == 3) { g.wr = 1; n64rt_log("n64rt: Game Boy save: %s is not there: it is made at the first write\n", g.sav); }
         else if (r != 0) n64rt_log("n64rt: Game Boy save: %s: %s (%d): not used\n", g.sav, r < 0 ? "no answer" : r == 4 ? "refused (is its platform in core.json?)" : "not opened", r);
         else {
