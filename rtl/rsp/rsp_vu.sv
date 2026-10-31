@@ -194,7 +194,8 @@ function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] 
 endfunction
 
 // what the lanes' adder does, by the instruction (kept with it, x_am: the adder is the start of EX's longest path):
-// 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t)
+// 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t); and with one pass 7, 0 - t (VABS's, and the clips' second
+// cycle: their compare is over by then, the flags it made are in fl_r, and -t is what they and VABS pick)
 function automatic logic [2:0] amode(input logic [5:0] f);
     unique case (f)
     6'h10:   return 3'd1;
@@ -205,6 +206,7 @@ function automatic logic [2:0] amode(input logic [5:0] f);
     6'h25:   return 3'd4;
     6'h24:   return 3'd5;
     6'h26:   return 3'd6;
+    6'h13:   return NP == 1 ? 3'd7 : 3'd0;
     default: return 3'd0;
     endcase
 endfunction
@@ -228,9 +230,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     // 17-bit signed result's top bit (b16) and the carry (unsigned: no borrow)
     logic        sub, cin, cout, b16, zero, ones;
     logic        cout_c, b16_c, zero_c, ones_c, z17_c, eq_c;            // (VCL, VCH and VCR's: below)
-    logic [15:0] bb, lo, nt;
+    logic [15:0] bb, lo, nt, sa;
     logic        cin_x;
-    nt = -t;
     sign = s[15] ^ t[15];
     unique case (am)
     3'd1:    begin sub = 1'b0;   cin = co_lo;  end          // VADD
@@ -239,10 +240,12 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     3'd4:    begin sub = !sign;  cin = !sign;  end          // VCH: s + t if the signs differ, else s - t
     3'd5:    begin sub = !co_lo; cin = !co_lo; end          // VCL: the same, by VCO
     3'd6:    begin sub = !sign;  cin = 1'b1;   end          // VCR: s + t + 1, or s - t
-    default: begin sub = 1'b1;   cin = 1'b1;   end          // VSUBC, the compares
+    default: begin sub = 1'b1;   cin = 1'b1;   end          // VSUBC, the compares, -t (7)
     endcase
     bb = sub ? ~t : t;
-    {cout, lo, cin_x} = {1'b0, s, 1'b1} + {1'b0, bb, cin};               // (s + bb + cin: the carry in as the chain's own bit)
+    sa = (NP == 1 && am == 3'd7) ? 16'd0 : s;
+    {cout, lo, cin_x} = {1'b0, sa, 1'b1} + {1'b0, bb, cin};              // (s + bb + cin: the carry in as the chain's own bit)
+    nt = NP == 1 ? lo : -t;                                  // (one pass: the adder is free for it where -t is picked)
     b16 = s[15] ^ bb[15] ^ cout;
     zero = lo == 16'd0; ones = &lo;
     o.fl = {cout, b16, zero, ones};
@@ -821,7 +824,10 @@ always_ff @(posedge clk) begin
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;
 
         // ---- EX
-        if (x_v && x_wait) x_wait <= 1'b0;
+        if (x_v && x_wait) begin
+            x_wait <= 1'b0;
+            if (NP == 1 && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;   // (a clip's flags are in fl_r: the adder makes -t)
+        end
         for (int l = 0; l < LANES; l++) fl_r[l] <= ex[l].fl;
         if (x_exec) begin
             for (int l = 0; l < LANES; l++) begin
