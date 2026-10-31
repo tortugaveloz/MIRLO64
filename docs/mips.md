@@ -1084,6 +1084,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 |---|---|
 | `cpu_test`, `libc_test` | Loads and stores of every width, the caches, the FPU, the divider; the C library |
 | `int64_test` | The 64-bit levels against a table |
+| `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
