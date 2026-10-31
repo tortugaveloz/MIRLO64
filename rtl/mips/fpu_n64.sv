@@ -277,9 +277,45 @@ wire [31:0] za_s = za_x + (za_y ^ {32{za_inv}}) + {31'd0, za_cin};
 
 // (FAST) zmag's left shifts, one barrel: S_NORM2's by the count of leading zeros, and the shift by one of the quotient / root
 // (S_ITER: the bit of the iteration comes in) and of cvt.s.l's loop (S_LSH1: ir's top bit comes in)
-wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1) ? 6'd1 : nzc;
+wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1 || !FAST) ? 6'd1 : nzc;
 wire        zsh_in = (st == S_ITER && it_ge) || (st == S_LSH1 && ir[31]);
 wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
+
+// zmag's next value: one-hot selects (z_*) of the sources AND-ORed, written when any is selected (or cleared: z_clr)
+//   xo     S_IDLE: cvt.s.l's upper word, a double's upper half
+//   ax     S_DECIDE, cvt.s.l of an unsigned word
+//   za     the adder's sum: the add (S_ADD2), an integer's magnitude (S_DECIDE), the upper word's (S_LNEG2)
+//   sh     the align shifter's output, with the sticky in bit 0 for the add (S_ADDA), as it is for to-int (S_F2W)
+//   zsh    the barrel (above)
+//   mp     the product's upper word (S_NORM of mul)
+//   ir     S_LNEG2: the lower word when the upper one has none left
+//   nf     (!FAST) S_NORM's shift
+// S_DECIDE writes it for every operation that is not cvt.s.l (a cleared zmag is what div and sqrt start from; for the others it
+// is not read before it is written again)
+logic z_xo, z_ax, z_za, z_sh, z_zsh, z_mp, z_ir, z_nf, z_clr;
+always_comb begin
+    z_xo = 0; z_ax = 0; z_za = 0; z_sh = 0; z_zsh = 0; z_mp = 0; z_ir = 0; z_nf = 0; z_clr = 0;
+    if (!rst && live) case (st)
+    S_IDLE:   z_xo = FAST ? ar_q : is_arith;
+    S_DECIDE: if (!sel_l) begin z_za = sel_w; z_clr = !sel_w; end
+              else if (zmag == 32'd0) z_ax = 1;
+              else if (zmag == {32{ax[31]}}) z_za = 1;
+    S_ADDA:   z_sh = 1;
+    S_ADD2:   z_za = 1;
+    S_ITER:   z_zsh = 1;
+    S_NORM:   if (FAST) z_mp = kind == K_MUL; else z_nf = 1;
+    S_LNEG2:  if (za_s == 32'd0) z_ir = 1; else z_za = 1;
+    S_LSH1:   z_zsh = !zmag[31];
+    S_NORM2:  z_zsh = 1;
+    S_F2W:    z_sh = FAST;
+    default: ;
+    endcase
+end
+wire [31:0] zm_nf = (kind == K_MUL ? mprod[47:16] : zmag);
+wire [31:0] zmag_d = ({32{z_xo}} & xo) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
+                   | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | (st == S_ADDA && (sh_o[2] | sh_o[1] | sh_o[0]))})
+                   | ({32{z_zsh}} & zsh) | ({32{z_mp}} & mprod[47:16]) | ({32{z_ir}} & ir) | ({32{z_nf}} & (zm_nf << lzc32(zm_nf)));
+always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mp || z_ir || z_nf || z_clr) zmag <= zmag_d;
 
 // round (zmag normalised: bit 31 set) and pack; FTZ, overflow to infinity
 wire [24:0] rm = {1'b0, zmag[31:8]} + {24'd0, zmag[7] && (zst || zmag[6:0] != 0 || zmag[8])};
@@ -309,9 +345,8 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
-        if (!FAST) zmag <= xo;                            // (cvt.s.l: the integer's upper half)
         if (FAST) begin
-            ax <= (isd_q || isl_q) ? xe : rfs; zmag <= xo; ay <= isd_q ? ye : rft; ir <= yo;
+            ax <= (isd_q || isl_q) ? xe : rfs; ay <= isd_q ? ye : rft; ir <= yo;
             st <= S_UNPX;
         end
         dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
@@ -335,11 +370,11 @@ always_ff @(posedge clk) begin
         if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
             kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
             if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
-            else if (zmag == 32'd0) begin zs <= 0; zmag <= ax; st <= S_NORM; end                    // an unsigned word
-            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; zmag <= za_s; st <= S_NORM; end   // a word
+            else if (zmag == 32'd0) begin zs <= 0; st <= S_NORM; end                    // an unsigned word
+            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; st <= S_NORM; end   // a word
             else begin zs <= zmag[31]; ir <= ax; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
-            kind <= K_CVT; zs <= ax.s; zmag <= za_s; zexp <= 12'sd158; zst <= 0;
+            kind <= K_CVT; zs <= ax.s; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
         end else if (fn >= 6'h30) begin                   // c.cond
             logic un, eq, lt;
@@ -390,7 +425,7 @@ always_ff @(posedge clk) begin
             else if (ix || zy) res <= {ax.s ^ ay.s, 8'hFF, 23'd0};
             else if (zx || iy) res <= {ax.s ^ ay.s, 31'd0};
             else begin
-                ir <= {8'd0, 1'b1, ax.f}; zmag <= 0; icnt <= 5'd27;
+                ir <= {8'd0, 1'b1, ax.f}; icnt <= 5'd27;
                 zs <= ax.s ^ ay.s; zexp <= 12'(ax.e) - 12'(ay.e) + 12'sd131;
                 st <= S_ITER;
             end
@@ -400,7 +435,7 @@ always_ff @(posedge clk) begin
             if (nx || (ax.s && !zx)) res <= QNAN;
             else if (zx || ix) res <= ax;
             else begin
-                ir <= 0; zmag <= 0; icnt <= 5'd27; zs <= 0;
+                ir <= 0; icnt <= 5'd27; zs <= 0;
                 // value = m * 2^t, t = e - 150 (as odd as e is); the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit
                 // root, whose exponent is t / 2 rounded down, + 143: e / 2 rounded down, + 68
                 if (ax.e[0]) mp <= {1'd0, 1'b1, ax.f, 31'd0};
@@ -418,13 +453,11 @@ always_ff @(posedge clk) begin
         end
         endcase
     end
-    S_ADDA: begin zmag <= sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]}; st <= S_ADD2; end
+    S_ADDA: st <= S_ADD2;
     S_ADD2: begin                                         // align, add: the larger at [30:7]
-        logic [31:0] sum;
-        sum = za_s;
-        zmag <= sum; zst <= 0; zexp <= 12'(add_le) + 12'sd1;
+        zst <= 0; zexp <= 12'(add_le) + 12'sd1;
         if (FAST) st <= S_NORM;                                   // (x - x: S_NORM's)
-        else if (sum == 32'd0) begin res <= 32'd0; st <= S_DONE; end   // x - x: +0
+        else if (za_s == 32'd0) begin res <= 32'd0; st <= S_DONE; end   // x - x: +0
         else st <= S_NORM;
     end
     S_MUL: begin
@@ -433,7 +466,6 @@ always_ff @(posedge clk) begin
         st <= S_NORM;
     end
     S_ITER: begin
-        zmag <= FAST ? zsh : {zmag[30:0], it_ge};
         if (kind == K_DIV) ir <= (it_ge ? it_d[31:0] : it_a) << 1;
         else begin ir <= it_ge ? it_d[31:0] : it_a; mp <= {mp[53:0], 2'b00}; end
         icnt <= icnt - 5'd1;
@@ -444,8 +476,8 @@ always_ff @(posedge clk) begin
         if (kind == K_MUL) begin m = mprod[47:16]; sti = mprod[15:0] != 0; end
         else if (kind == K_DIV || kind == K_SQRT) begin m = zmag; sti = ir != 0; end
         else begin m = zmag; sti = zst; end
-        if (FAST) begin zmag <= m; nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)
-        else begin zmag <= m << lzc32(m); zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
+        if (FAST) begin nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)
+        else begin zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
     end
     // cvt.s.l of one that is not a word: the magnitude {zmag, ir} a word at a time (the lower word, then the upper one with
@@ -456,16 +488,14 @@ always_ff @(posedge clk) begin
         st <= S_LNEG2;
     end
     S_LNEG2: begin
-        logic [31:0] h;
-        h = za_s;
-        if (h == 32'd0) begin zmag <= ir; st <= S_NORM; end
-        else begin zmag <= h; zexp <= 12'sd190; st <= S_LSH1; end
+        if (za_s == 32'd0) st <= S_NORM;
+        else begin zexp <= 12'sd190; st <= S_LSH1; end
     end
     S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
-            else begin zmag <= FAST ? zsh : {zmag[30:0], ir[31]}; ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
-    S_NORM2: begin zmag <= zsh; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
+            else begin ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
+    S_NORM2: begin zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
-    S_F2W: if (FAST) begin zmag <= sh_o[34:3]; fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
+    S_F2W: if (FAST) begin fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
     else begin                                            // |x| < 2^31
         logic [31:0] i; logic g, sk, inc;
         i = sh_o[34:3]; g = sh_o[2]; sk = sh_o[1] | sh_o[0];
