@@ -491,6 +491,7 @@ end
 
 // ============================================================ outputs, writes
 logic [63:0] res_d;
+logic [31:0] ld_lo;
 always_comb res_d = f2d(res);
 always_comb begin
     gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
@@ -498,24 +499,34 @@ always_comb begin
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];
 
-    we_e = 0; we_o = 0; widx = 0; wd_e = 0; wd_o = 0;
+    we_e = 0; we_o = 0; widx = 0;
     if (valid) begin
-        if (is_mtc1) begin widx = insn[15:12]; if (insn[11]) begin we_o = 1; wd_o = gpr_in; end else begin we_e = 1; wd_e = gpr_in; end end
-        if (is_dmtc1) begin widx = insn[15:12]; we_e = 1; we_o = 1; wd_e = gpr_in; wd_o = gpr_in_hi; end   // (FR=0: the pair)
-        if (is_lwc1) begin widx = insn[20:17]; if (insn[16]) begin we_o = 1; wd_o = mem_in[31:0]; end else begin we_e = 1; wd_e = mem_in[31:0]; end end
-        if (is_ldc1) begin widx = insn[20:17]; we_e = 1; we_o = 1; wd_e = mem_in[31:0]; wd_o = mem_in[63:32]; end
+        if (is_mtc1) begin widx = insn[15:12]; if (insn[11]) we_o = 1; else we_e = 1; end
+        if (is_dmtc1) begin widx = insn[15:12]; we_e = 1; we_o = 1; end   // (FR=0: the pair)
+        if (is_lwc1) begin widx = insn[20:17]; if (insn[16]) we_o = 1; else we_e = 1; end
+        if (is_ldc1) begin widx = insn[20:17]; we_e = 1; we_o = 1; end
         if (is_mov) begin
             widx = insn[10:7];
-            if (is_d) begin we_e = 1; we_o = 1; wd_e = xe; wd_o = xo; end
-            else if (insn[6]) begin we_o = 1; wd_o = rfs; end else begin we_e = 1; wd_e = rfs; end
+            if (is_d) begin we_e = 1; we_o = 1; end
+            else if (insn[6]) we_o = 1; else we_e = 1;
         end
         if (is_arith && kind != K_CMP) begin
             widx = insn[10:7];
-            if (dst_l) begin we_e = 1; we_o = 1; wd_e = res; wd_o = {32{res[31]}}; end
-            else if (dst_d) begin we_e = 1; we_o = 1; wd_e = res_d[63:32]; wd_o = res_d[31:0]; end
-            else if (insn[6]) begin we_o = 1; wd_o = res; end else begin we_e = 1; wd_e = res; end
+            if (dst_l || dst_d) begin we_e = 1; we_o = 1; end
+            else if (insn[6]) we_o = 1; else we_e = 1;
         end
     end
+    // the data of the registers written (what the others hold is not used: the write goes by we_e / we_o; the trace is read by
+    // them too). A load of a word is mtc1's data or lwc1's, one selection for the even and the odd register
+    ld_lo = (is_lwc1 || is_ldc1) ? mem_in[31:0] : gpr_in;
+    if (is_mtc1 || is_dmtc1 || is_lwc1 || is_ldc1) wd_e = ld_lo;
+    else if (is_mov) wd_e = (is_d || !insn[11]) ? xe : xo;
+    else wd_e = dst_d ? res_d[63:32] : res;
+    if (is_mtc1 || is_lwc1) wd_o = ld_lo;
+    else if (is_dmtc1) wd_o = gpr_in_hi;
+    else if (is_ldc1) wd_o = mem_in[63:32];
+    else if (is_mov) wd_o = (is_d || insn[11]) ? xo : xe;
+    else wd_o = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
 end
 
 // the trace: registered with the write, so it lines up with the core's retire (W)
