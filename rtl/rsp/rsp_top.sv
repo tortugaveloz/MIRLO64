@@ -294,8 +294,9 @@ function automatic logic [31:0] cop0_rd(input logic [3:0] r);
 endfunction
 
 // COP0, from the scalar unit's E stage (a pair's: in the cycle the vector unit takes its computation)
-wire         mfc0 = c_valid && c_done && is_cop0 && c_lins[25:21] == 5'd0;
-wire         mtc0 = c_valid && c_done && is_cop0 && c_lins[25:21] == 5'd4;
+// (a COP0 instruction is never a pair's scalar one -- rsp_su's pairing rule -- so it is done as it is in E)
+wire         mfc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd0;
+wire         mtc0 = c_valid && is_cop0 && c_lins[25:21] == 5'd4;
 wire  [3:0]  c0r  = c_lins[14:11];
 wire         mt_dma = mtc0 && (c0r == 4'd2 || c0r == 4'd3);
 
@@ -380,7 +381,7 @@ assign iw_addr  = ds == D_OUT ? {np, iq != 2'd0} : sp_word;
 assign iw_data  = wq_d;
 
 assign c_res  = cop0_rd(c0r);                      // (MFC2's value comes the cycle after, as CFC2's: v_res_l)
-assign c_done = (c_pr || !is_cop0) ? v_done : 1'b1;
+assign c_done = is_cop0 ? 1'b1 : v_done;
 
 // one writer of the SP registers a cycle: the microcode (MTC0) first, the
 // host when it is not there (h_ready)

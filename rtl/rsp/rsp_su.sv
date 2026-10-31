@@ -275,8 +275,8 @@ wire         v_first = is_vc(ins_d);
 // the unit's own state: D holds an instruction and IMEM's second port read the next, the unit runs, and D's instruction is not
 // a branch's delay slot (a branch or jump in E).
 function automatic logic pair_rule(input logic [31:0] w0, input logic [31:0] w1);
-    return is_vc(w0) ? is_plain(w1) || is_br(w1) || is_c0(w1) || (x_ok(w1) && pair_cx(w0, w1))
-                     : (is_plain(w0) || is_c0(w0) || (x_ok(w0) && pair_xc(w0, w1))) && is_vc(w1);
+    return is_vc(w0) ? is_plain(w1) || is_br(w1) || (x_ok(w1) && pair_cx(w0, w1))
+                     : (is_plain(w0) || (x_ok(w0) && pair_xc(w0, w1))) && is_vc(w1);
 endfunction
 assign pw_ok = pair_rule(pw_a, pw_b);
 wire         pair_d = d_valid && i2_ok && run && !(e_valid && (e_c.br || e_c.j || e_c.jr)) && p2_ok;

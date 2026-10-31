@@ -605,19 +605,24 @@ wire  [11:0] ls_win = {ls_addr[11:4], win_w, 2'b00};
 wire  [11:0] ls_win16 = {ls_addr16[11:4], win_w, 2'b00};
 // a load's register bytes: a run of the register's sixteen from e on -- its size's; to the 16-byte block's end
 // (LQV); or (LRV) from where the block's start comes, the bytes before the address, to the register's end
-logic [15:0] ld_mask;
-always_comb begin
+function automatic logic [15:0] ld_mask_f(input logic [3:0] o_, input logic [3:0] el_, input logic [4:0] op_);
     logic [4:0] n;
     logic [5:0] lo, hi;
-    n = 5'd16 - {1'b0, o};                                                        // the bytes from the address to its block's end
-    lo = {2'b00, el};
-    unique case (lsop)
-    5'd4:    hi = {2'b00, el} + {1'b0, n};                                        // LQV
-    5'd5:    begin lo = {2'b00, el} + {1'b0, n}; hi = 6'd16; end                  // LRV
-    default: hi = {2'b00, el} + {1'b0, size};                                     // LBV .. LDV
+    logic [15:0] mk;
+    n = 5'd16 - {1'b0, o_};                                                       // the bytes from the address to its block's end
+    lo = {2'b00, el_};
+    unique case (op_)
+    5'd4:    hi = {2'b00, el_} + {1'b0, n};                                       // LQV
+    5'd5:    begin lo = {2'b00, el_} + {1'b0, n}; hi = 6'd16; end                 // LRV
+    default: hi = {2'b00, el_} + {1'b0, 5'd1 << op_[1:0]};                        // LBV .. LDV
     endcase
-    for (int m = 0; m < 16; m++) ld_mask[m] = 6'(m) >= lo && 6'(m) < hi;
-end
+    for (int m = 0; m < 16; m++) mk[m] = 6'(m) >= lo && 6'(m) < hi;
+    return mk;
+endfunction
+// whether that mask leaves half of a lane written, from the parities of its ends (the end of a run cut at 16 is even): the
+// address's low bit, no sum, and the compare el < o that says LQV's run ends, and LRV's starts, inside the 16
+wire  ld_lt = el < o;
+wire  ld_mg = lsop == 5'd0 ? 1'b1 : lsop <= 5'd3 ? el[0] : lsop == 5'd4 ? (el[0] | (ld_lt & (el[0] ^ o[0]))) : lsop == 5'd5 ? (ld_lt & (el[0] ^ o[0])) : 1'b0;
 // a store's DMEM bytes (q: the byte's place from the address on; by lsop's low four bits -- the others are no store)
 logic [15:0] st_be;
 always_comb
@@ -695,14 +700,17 @@ logic        lw_v /* verilator public_flat_rd */, lw_last, lw_packed, lw_p6;
 // the write leaves half of a lane as it was (an odd byte at an end): a store
 // or MFC2 does not start under it (l_free)
 logic        lw_mgf;                  // the write leaves half a lane whatever its bytes: MTC2's, LTV's
-wire         lw_merge = lw_mgf || (!lw_packed && |((lw_be ^ (lw_be >> 1)) & 16'h5555));
+wire         lw_merge = lw_mgf;
 logic [4:0]  lw_reg;
-logic [15:0] lw_be;                   // the register's bytes written
+logic [1:0]  lw_k;                    // what it is: 0 a load, 1 MTC2, 2 a beat of LTV
+logic [3:0]  lw_o, lw_el;             // ... the load's address (low four bits) and element; MTC2's element; the beat's byte
+logic [4:0]  lw_op;
+logic [15:0] lw_be;                   // the register's bytes written: made from those, in the cycle of the write
 logic        lw_mt;                   // ... MTC2's: rt's two bytes (lw_mb: the even byte's and the odd one's)
 logic [15:0] lw_mb;
 wire         idle    = st == V_IDLE && !m_v && !x_v && !y_v && !lw_v && !wp;  // nothing under way: the registers and flags are final
 // MTC2: rt's two bytes at e and e + 1 (one at the register's end), written the cycle after it starts, as a load's
-wire  [15:0] mt_be   = (16'd1 << el) | (el == 4'd15 ? 16'd0 : 16'd2 << el);
+always_comb lw_be = lw_k == 2'd1 ? ((16'd1 << lw_el) | (lw_el == 4'd15 ? 16'd0 : 16'd2 << lw_el)) : lw_k == 2'd2 ? 16'd1 << lw_el : ld_mask_f(lw_o, lw_el, lw_op);
 wire  [15:0] in_be   = lw_be;
 wire         in_v    = lw_v;
 wire         in_pk   = lw_v && lw_packed;
@@ -781,7 +789,7 @@ always_comb
     res_l = mf_q ? mf_val : cf_r == 2'd0 ? {{16{vco[15]}}, vco} : cf_r == 2'd1 ? {{16{vcc[15]}}, vcc} : {24'd0, vce};
 
 // EX2's write (a load's write of this cycle goes first: EX2's is put off, whole, a cycle on)
-assign x_defer = y_v && (lw_v || wp);
+assign x_defer = y_v && (lw_v || wp || y_rcp);               // (a reciprocal always: its result comes from the ROM, late in the cycle)
 assign y_wr    = y_v && !x_defer;
 
 always_comb begin
@@ -815,7 +823,6 @@ always_comb begin
         wr_be = 16'hFFFF;
         if (y_one) begin
             wr_be = 16'd3 << {y_de, 1'b0};
-            if (y_rcp) for (int g = 0; g < 8; g++) wr_d[g] = y_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0];
         end
     end else if (in_v) begin
         wr_reg = lw_reg;
@@ -941,17 +948,17 @@ always_ff @(posedge clk) begin
         end
         // MTC2's bytes, written the cycle after
         if (mtc2 && start_nc) begin
-            lw_v <= 1'b1; lw_reg <= li[15:11]; lw_be <= mt_be; lw_packed <= 1'b0; lw_last <= 1'b1; lw_mt <= 1'b1;
+            lw_v <= 1'b1; lw_reg <= li[15:11]; lw_k <= 2'd1; lw_el <= el; lw_packed <= 1'b0; lw_last <= 1'b1; lw_mt <= 1'b1;
             lw_mb <= el[0] ? {b[7:0], b[15:8]} : b[15:0];
             lw_mgf <= 1'b1;
         end
         // a load's bytes: on m_rdata the next cycle
         if (lwc2 && m_valid) begin
-            lw_v <= 1'b1; lw_reg <= ltn; lw_be <= ld_mask; lw_mt <= 1'b0;
+            lw_v <= 1'b1; lw_reg <= ltn; lw_k <= 2'd0; lw_o <= o; lw_el <= el; lw_op <= lsop; lw_mt <= 1'b0;
             lw_packed <= ls_packed; lw_p6 <= lsop == 5'd6; lw_last <= 1'b1;
-            lw_mgf <= 1'b0;                                                   // (a packed load writes whole lanes)
+            lw_mgf <= ld_mg;                                                  // (a packed load writes whole lanes)
             if (in_tv) begin
-                lw_be <= 16'd1 << tv_n; lw_reg <= tv_reg; lw_packed <= 1'b0; lw_last <= tv_n == 4'd15;
+                lw_k <= 2'd2; lw_el <= tv_n; lw_reg <= tv_reg; lw_packed <= 1'b0; lw_last <= tv_n == 4'd15;
                 lw_mgf <= 1'b1;
             end
         end
