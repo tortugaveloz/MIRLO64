@@ -1139,6 +1139,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables' CPU: the tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers (each says SKIPPED on another CPU) |
 | `tlbreal_test` | The real TLB: the seven page sizes, the micro-TLBs, every register of the TLB exceptions and their vectors, `tlbp`, `tlbr`, Index, Wired, Random, the caches, `0x6000_0000` |
 | `tlbmon_real_test`, `tlbgame_real_test`, `tlbpg_real_test` | The same three subjects on the real TLB: the game's TLB instructions, its refill and general handlers, the cached fetches from mapped pages |
+| `tlbint_real_test` | An interrupt that comes while a fetch from a page no entry names is in M: it goes to the general vector (never the refill vector), with the fault coming again afterwards |
 | `tlbdev_test` | A page onto a device or past the RDRAM: the monitor's entry and COP0 22, the 4 MiB setting, the game's exceptions first, every range the game maps, the game's view |
 | `tlbcost_test` | What a mapped load and a refill cost in cycles (printed) |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
