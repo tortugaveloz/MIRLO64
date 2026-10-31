@@ -325,6 +325,7 @@ static void vi_field_common(void)
     }
 #endif
     n64rt_cheat_field();
+    n64rt_gbv_field();
 }
 
 /* (n64rt_tick, interrupts off) */

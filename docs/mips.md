@@ -102,7 +102,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4000_0000` | 1 MiB | The runtime, `n64rt.sys`, and its boot stack |
 | `0x4010_0000` | 34 MiB | A ROM's bytes from 30 MiB on (its first 30 MiB are in PSRAM: [The ROM](#the-rom)) |
 | `0x4230_0000` | up to 10 MiB | A save state ([Save states](#save-states)) |
-| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak 1's cartridge RAM, its save ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
+| `0x42D0_0000` | up to 132 KiB | The virtual Transfer Pak 1's cartridge RAM, read from and written to the Game Boy game's own `.sav` ([The virtual Transfer Pak](#the-virtual-transfer-pak)) |
 | `0x42D5_0000` | up to 132 KiB | The same for the virtual Transfer Pak 2 (controller 2's) |
 | `0x42E0_0000` | up to 3 MiB | The virtual Transfer Pak 2's Game Boy ROM |
 | `0x42D3_0000` | 4 KiB | The parameter struct of the runtime's open command ([GameShark codes](#gameshark-codes)) |
@@ -158,9 +158,9 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 2 | Controller Pak | `.mpk`, nonvolatile, 32 KiB | `0x0730_8000` | `0x3410_8000` |
 | 3 | Runtime | `n64rt.sys`, required | `0x0000_0000` | `0x4000_0000` |
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
-| 5 | Game Boy Save 1 | `.gbsav1`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
-| 6 | Game Boy Save 2 | `.gbsav2`, the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
-| 7 | Gameshark codes | no file at the start: the runtime opens one by path (the GameShark's codes, the Game Boy game's save), at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
+| 5 | Game Boy save file 1 | no file: the runtime opens the Game Boy game's `.sav` by path, writable (the file is at most 128 KiB + 48 bytes) | `0x06D0_0000` | `0x42D0_0000` |
+| 6 | Game Boy save file 2 | the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
+| 7 | Gameshark codes | no file at the start: the runtime opens one by path, read-only, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
 | 8 | Virtual Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
 | 9 | Virtual Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
 
@@ -827,18 +827,20 @@ The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one
   cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
   that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
   loaded after that.
-* **The RAM** is data slot 5, "Game Boy Save 1" (`.gbsav1`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav1`);
-  controller 2's is slot 6 (`.gbsav2`, `0x42D5_0000`): one Game Boy save for each N64 game and each pak. A Game Boy core's `.sav` has the same bytes. The Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file: the copy back to the Game Boy core is by hand. The copy in is done by the runtime (below). It is the cartridge's RAM as the emulators keep it (its size is the
-  header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is
-  left 0. With no file the RAM is `0xFF`. The slot takes a file size (what the Pocket writes back when the core quits) when the game first
-  writes to the RAM or the clock, so a game that never saves leaves no file.
-* **The import of the Game Boy game's own save** (`import_save`, in `ram_init`, when the cartridge is new to the pak): only if the save slot has no file (size 0), so an existing
-  `.gbsav` is never overwritten. The runtime asks the Pocket for the path of the file in the ROM's slot (`APF_BRIDGE.REQUEST_GETFILE`: the Pocket writes a 256-byte NUL-ended
-  path to `RAM_DATA_ADDRESS`; here `LAYOUT_GS_PARAM`), takes its name without the extension, and makes `/Saves/gbc/common/<name>.sav` for a `.gbc` and `/Saves/gb/common/<name>.sav` for a `.gb`
-  (any other extension: by `/gbc/` or `/gb/` in the path; with neither, no import). No other folder is tried. It has the Pocket open that path into slot 7 (`REQUEST_OPENFILE`, the slot the GameShark's codes use: they never run at once; the path
-  must be absolute, with the slash; the Pocket opens only files in the platform folders `core.json`'s `platform_ids` lists, so it lists `gbc` and `gb` besides `n64`: measured, with only `n64` the open of a `Saves/gbc/common` file fails with result code 4) and read it with `REQUEST_READ` straight into the save's memory. The checks: each command's result code is 0; the file is at least the cartridge's RAM
-  in bytes (a shorter one is not used, and the RAM starts as `0xFF`); of a longer one, only the RAM and the clock's footer are read (MBC3: a file of just the RAM leaves the clock at 0). Each outcome is logged
-  (`n64rt: Game Boy save: ...`). What is taken in is given the file size at once, so the Pocket writes `.gbsav` when the core quits, and it is the save from then on. The Game Boy `.sav` is only read, never written.
+* **The RAM** is memory only: `0x42D0_0000` (controller 2's: `0x42D5_0000`), the cartridge's RAM as the emulators keep it (its size is the header's, `0x149`) and for MBC3 with a clock 48 bytes after it: the clock's
+  registers and the latched ones as ten little-endian words, and a 64-bit time that is left 0. Its file is the Game Boy game's own save, which a Game Boy core keeps as well: `<ROM's name>.sav` in `Saves/gbc/common` for a `.gbc` ROM
+  and in `Saves/gb/common` for a `.gb`, read and written **by path** (below). The Pocket's own save files (the nonvolatile slots, named after the N64 game) are not used for it: they cannot name another game's file.
+* **The save file by path** (`sav_read` and `flush`, n64rt_gbvirt.c). When a cartridge is new to the pak (`ram_init`) the runtime asks the Pocket for the path of the file in the ROM's slot (`APF_BRIDGE.REQUEST_GETFILE`: the Pocket writes
+  a 256-byte NUL-ended path to `RAM_DATA_ADDRESS`, here `LAYOUT_GS_PARAM`; measured: absolute, with the extension, as `/Assets/n64/common/<name>.gbc`), takes its name without the extension, and makes `/Saves/gbc/common/<name>.sav` for a `.gbc` and
+  `/Saves/gb/common/<name>.sav` for a `.gb` (any other extension: by `/gbc/` or `/gb/` in the path; with neither, no save file). No other folder is tried. It has the Pocket open that path into data slot 5 (controller 2's: 6), a slot with no file that is not read-only
+  (`REQUEST_OPENFILE`: the parameter struct has the path, then the 32-bit flags, bit 0 creating a file that is not there, and a size; the path must be absolute, with the slash), and read it (`REQUEST_READ`) or write it (`REQUEST_WRITE`, the host's 0x0184)
+  from the offset 0. The Pocket opens only files in the platform folders `core.json`'s `platform_ids` lists, so it lists `gbc` and `gb` besides `n64`: measured, with only `n64` the open of a `Saves/gbc/common` file fails with result code 4.
+  Reading: the file there and as long as the RAM or longer (of a longer one only the RAM and the clock's footer are read): its bytes are the RAM, and it may be written; not there (result 3): the RAM is `0xFF` and the first write back makes the file; shorter than the RAM,
+  or any other answer (the folder refused, no answer): the RAM is `0xFF` and the file is never written. Each outcome is logged (`n64rt: Game Boy save: ...`). Writing is of the cartridge's RAM size (and the clock's footer), from the offset 0, never more (a longer file keeps its end),
+  and only if the game has written to the RAM or the clock since the last one. When: (a) the game powers the Transfer Pak's cartridge off (the Transfer Pak's `0xB000`; measured: a game does it at its cartridge check, and the file is written at once), (b) another ROM
+  is found in the slot, before the RAM is replaced, (c) 2 s after the last write to the RAM (`n64rt_gbv_field`, in every field), which also covers a state loaded (its RAM is not the file's: it is marked changed). Not with a save state's request: the Pocket answers no
+  target command while it makes the state (measured: none for some 15 s), and the state carries the RAM. Not when the core is quit: nothing tells the runtime (the Pocket's host command to write a data slot goes to the bridge in hardware and reaches no register). A write that
+  fails is tried again 5 s later; three failures with an answer, or twenty with none, end the write backs for that cartridge.
 * **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
   there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
   (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
@@ -894,7 +896,7 @@ while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with t
    registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits) and the FPU's condition bit, the MI's
    mode, interrupts and mask, the VI's registers, base, field and line, the AI's rate and its DMA enable, the PIF RAM, the
    SI's address and whether the PIF has run commands, DMEM, the RSP's status, PC and semaphore, the DPC's registers, and
-   the sizes the Pocket's table has for the saves' and the paks' slots (the Game Boy saves' too). Its header names the runtime (a sum of its code)
+   the sizes the Pocket's table has for the saves' and the paks' slots. Its header names the runtime (a sum of its code)
    and the ROM (its header's check words, title and ID): a state is refused by another `n64rt.sys` or another game.
    The game then goes on (a Memory) as from the moment the hardware came to rest: the VI's line is waited for and Count,
    Compare and the MI's interrupts are put back, so the copies' time is none of the game's.
