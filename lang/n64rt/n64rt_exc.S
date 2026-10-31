@@ -12,10 +12,7 @@
 # n64rt_ctx, at OSThread + 0x20 (n64rt_os.c):
 #   0x00 epc   0x04 status   8n gpr n (64 bits, upper word first; n = 1..25,
 #   28..31)   0xD0 hi   0xD8 lo   0x100 fcsr   0x104 fpr[32]
-# With n64rt_cpu64 the registers, HI and LO are saved and restored whole (sd,
-# ld); on the CPU without 64-bit integers their lower words only.
-# 0x18C soft: hi and lo are a 64-bit result of the runtime's making, the
-# CPU's own being 32 bits (its COP0 7: mfhi and mflo come to the runtime).
+# The registers, HI and LO are saved and restored whole (sd, ld): the CPU's are 64 bits.
     .set    noreorder
     .set    noat
     .set    mips3
@@ -608,16 +605,11 @@ n64rt_mon_slow:
     sw      $k1, 8*26+4($k0)
     sra     $k1, $k1, 31
     sw      $k1, 8*26($k0)
-    mfc0    $k1, $7                 # HI and LO, unless they are the runtime's (MCTL bit 0)
-    andi    $k1, $k1, 1
-    sw      $k1, 0x18C($k0)
-    bnez    $k1, 2f
-    nop
     mfhi    $k1
     sd      $k1, 0x190($k0)
     mflo    $k1
     sd      $k1, 0x198($k0)
-2:  li      $k1, 2                  # the monitor's own HI and LO now (bit 0 clear); the game's vector stays (bit 1)
+    li      $k1, 2                  # the game's vector stays (bit 1)
     mtc0    $k1, $7
     mfc0    $k1, $30
     sw      $k1, 0x00($k0)          # ErrorEPC
@@ -642,21 +634,11 @@ n64rt_mon_exit:                     # (n64rt_state_resume: a save state's game g
     mtc0    $k1, $30                # ErrorEPC
     lw      $k1, 0x04($k0)
     mtc0    $k1, $12                # (the game's Status; ERL stays set until the eret)
-    lw      $k1, 0x18C($k0)
-    bnez    $k1, 4f
-    nop
     ld      $k1, 0x190($k0)
     mthi    $k1
     ld      $k1, 0x198($k0)
     mtlo    $k1
-    b       5f
-    move    $k1, $0
-4:  lw      $k1, 0x194($k0)
-    mthi    $k1
-    lw      $k1, 0x19C($k0)
-    mtlo    $k1
-    li      $k1, 1
-5:  ori     $k1, $k1, 2
+    li      $k1, 2
     mtc0    $k1, $7
     .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
     ld      $\n, 8*\n($k0)
@@ -666,8 +648,7 @@ n64rt_mon_exit:                     # (n64rt_state_resume: a save state's game g
     # (__osSetTimerIntr, with its interrupts off; the timer's handler, at EXL) and Count would pass Compare, which then
     # waits a wrap (91 s). With its interrupts on the game is in neither, and Count keeps the monitor's time: it is the
     # console's clock, and what the monitor does for the game takes real time. (Frozen always, a game's wait by osGetTime
-    # lasted as much longer as the monitor worked in it: a wait of 3.8 s around a loop of 64-bit conversions, which are
-    # the monitor's, took 14 s.)
+    # lasted as much longer as the monitor worked in it: a wait of 3.8 s took 14 s when the monitor did most of its loop.)
     lw      $k1, 0x04($k0)          # the game's Status, as it goes back
     andi    $k1, $k1, 3
     xori    $k1, $k1, 1
@@ -720,31 +701,14 @@ exception_entry:
 #endif
     lui     $k0, %hi(n64rt_cur)
     lw      $k0, %lo(n64rt_cur)($k0)
-    lui     $k1, %hi(n64rt_cpu64)
-    lw      $k1, %lo(n64rt_cpu64)($k1)
-    beqz    $k1, 1f
     addiu   $k0, $k0, CTX
     .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
     sd      $\n, 8*\n($k0)
     .endr
-    mfc0    $k1, $7                 # HI and LO are the runtime's (a 64-bit product in the
-    sw      $k1, 0x18C($k0)         # context already): nothing of the CPU's to save
-    bnez    $k1, 2f
-    mtc0    $0, $7
     mfhi    $k1
     sd      $k1, 0xD0($k0)
     mflo    $k1
-    b       2f
     sd      $k1, 0xD8($k0)
-1:
-    .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
-    sw      $\n, 8*\n+4($k0)
-    .endr
-    mfhi    $k1
-    sw      $k1, 0xD4($k0)
-    mflo    $k1
-    sw      $k1, 0xDC($k0)
-2:
     mfc0    $k1, $14
     sw      $k1, 0x00($k0)
     mfc0    $k1, $12
@@ -775,27 +739,14 @@ n64rt_resume:                       # (also how the first thread starts)
 #endif
     lw      $k1, 0x04($k0)          # (EXL set: still at exception level until eret; OWN: ERL, as the monitor's own exit --
     mtc0    $k1, $12                #  with MCTL.GAME and ERL clear, 0x2000_0000 - 0x4FFF_FFFF are the game's: mips_core)
-    lui     $k1, %hi(n64rt_cpu64)
-    lw      $k1, %lo(n64rt_cpu64)($k1)
-    beqz    $k1, 1f
-    nop
-    lw      $k1, 0x18C($k0)
-    bnez    $k1, 4f                 # the runtime's HI and LO: the CPU's get their lower words
-    nop                             # (a 64-bit value into them would come back here)
     ld      $k1, 0xD0($k0)
     mthi    $k1
     ld      $k1, 0xD8($k0)
     mtlo    $k1
-    b       5f
-    move    $k1, $0
-4:  lw      $k1, 0xD4($k0)
-    mthi    $k1
-    lw      $k1, 0xDC($k0)
-    mtlo    $k1
-    li      $k1, 1
-5:
 #ifdef N64RT_OWN
-    ori     $k1, $k1, 2             # (the game's own vector from here: MCTL.GAME)
+    li      $k1, 2                  # (the game's own vector from here: MCTL.GAME)
+#else
+    move    $k1, $0
 #endif
     mtc0    $k1, $7
     .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
@@ -806,16 +757,6 @@ n64rt_resume:                       # (also how the first thread starts)
     lui     $k0, %hi(n64rt_stat_out)
     sw      $k1, %lo(n64rt_stat_out)($k0)
 #endif
-    eret
-    nop
-1:
-    lw      $k1, 0xD4($k0)
-    mthi    $k1
-    lw      $k1, 0xDC($k0)
-    mtlo    $k1
-    .irp    n, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
-    lw      $\n, 8*\n+4($k0)
-    .endr
     eret
     nop
 

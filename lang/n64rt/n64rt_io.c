@@ -1307,7 +1307,7 @@ void n64rt_mi_init(void)
     /* (bit 10, written with bit 11: the game's RDRAM is 4 MiB -- the console without its Expansion Pak, the core's setting:
      * the game's accesses to the upper half come here, and are answered as RDRAM that is not there, n64rt_os.c emulate_hw) */
     /* (bit 12, written with bit 13: 0x2000_0000 - 0x4FFF_FFFF are the game's mapped addresses while it runs -- not the monitor
-     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ll_patch --, as the rest of the VR4300's KUSEG: a game
+     * level, not a helper of the runtime's with Status bit 4, n64rt_boot.c ul_patch --, as the rest of the VR4300's KUSEG: a game
      * can map an overlay at 0x4000_0000 and run it there. A core without it reads the bit 0 and keeps them physical) */
     /* (bit 14, written with bit 15: the game's word accesses to the SP's registers, SP_PC and the DPC's -- but its stores of
      * DPC_STATUS, whose CLR_CLOCK_CTR keeps DPC_CLOCK here -- are the RSP's host port's, no trap: rcp_read_ / rcp_write_ pass
@@ -1452,7 +1452,6 @@ static void mon_field_log(void)
               (unsigned long)n64rt_mon_codes[10], (unsigned long)mi_intr(), (unsigned long)s_mi_mask, (unsigned long)s_mon_line,
               (unsigned long)(monitor_level_read() & 1u), (unsigned long)n64rt_mon_epc);
     rcp_hist_log();
-    { extern void n64rt_ri_hist_log(void); n64rt_ri_hist_log(); }
 }
 #endif
 

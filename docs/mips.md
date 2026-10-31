@@ -172,13 +172,14 @@ gap: the table of file sizes is indexed by a slot's place in `data.json`.
 A core and a program each carry the word `0x4D4C0007` (`LAYOUT_MARK`) 8 bytes from their start, at `0xBFC0_0008` and
 `0x4000_0008`. The boot ROM starts only a program that has it, and the runtime starts a game only on a core that has
 it; otherwise a notice is shown on the screen and memory is left as the Pocket loaded it, so the saves are written
-back unchanged.
+back unchanged. The same notice, with its own text, refuses a core whose CPU lacks any of the 64-bit levels (below).
 
 ## The CPU
 
 `rtl/mips/mips_core.sv` executes the VR4300's instructions with 32-bit addresses: MIPS II, the 64-bit integers by
 levels (below), `eret`, `ll` / `sc`, the trap instructions, the cache instruction and COP1. `rtl/soc/mips_sys.sv`
-instantiates it with the boot ROM and these parameters:
+instantiates it with the boot ROM and these parameters. The CPU does the instructions a game uses, the 64-bit
+integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below); the runtime does none of them on its behalf.
 
 | Parameter | Value | Meaning |
 |---|---|---|
@@ -263,12 +264,14 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_SH` | yes | The d-shifts, a byte or a bit a cycle |
 | `W64_MD` | yes | `dmult(u)`: four products of the operands' halves on the 32-bit multiply's DSP block, summed a word at a time; HI and LO of 64 bits |
 | `W64_DIV` | yes | `ddiv(u)`, a bit a cycle (64 steps; `div(u)` run on the same divider, 32 steps); without it `ddiv(u)` are Reserved Instructions, and `div(u)` have a 32-bit divider of their own |
-| `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back; the runtime's version took hundreds). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
+| `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
-What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: on a core
-without a level, that level's instructions. A trap instruction on a 64-bit operand, `lld` and `scd` are Reserved
-Instructions that the runtime does not do. COP0 register 7 reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD),
-28 (DIV) and 27 (UA).
+The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
+is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
+register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
+Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
+runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand, `lld`, `scd`.
 
 ### The FPU
 
@@ -372,9 +375,10 @@ The loader then:
 4. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
    address, as IPL3 does.
 5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
-6. Probes the CPU: an `ld` that runs or traps, the levels in COP0 register 7, the tables' mark in register 23. The
-   runtime takes what the core has from these and from `MONITOR.ID`, not from its own build.
-7. Replaces the dividing 64-bit helpers (on a CPU without `W64_DIV`) and the audio library's envelope rate in the boot segment (below).
+6. Checks the CPU (before anything else, with the layout mark): the five 64-bit levels in COP0 register 7 must all be
+   present, or a notice is shown and nothing is started. Reads the translation tables' mark in register 23. The runtime
+   takes what else the core has from `MONITOR.ID` and from this, not from its own build.
+7. Replaces the audio library's envelope rate and a matrix conversion in the boot segment (below).
 8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
@@ -455,7 +459,7 @@ the game's registers saved in the context for the work.
 | 31, the monitor's interrupt | `n64rt_rcp_events`: the hardware's wake-ups (below) |
 | 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge |
 | 1, 2, 3 (TLB) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
-| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction; else `emulate_64`: a 64-bit instruction |
+| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction |
 
 Anything else stops the game with a message on the UART.
 
@@ -526,31 +530,20 @@ the SDRAM, where the runtime is, and `0xF000_0000` - `0xFFFF_FFFF` the registers
 but for the **game's view**. With MCTL bit 12 set (the runtime sets it at start-up), `0x2000_0000` - `0x4FFF_FFFF` are mapped
 addresses as well while the game runs: MCTL.GAME set, Status.ERL clear (not the monitor level) and Status bit 4 clear. A game
 can then map code at `0x4000_0000`, unpack an overlay into it and jump there, as on the console. The monitor level, and the
-runtime's helpers that the game's code calls directly (the 64-bit helpers and the envelope rate, `n64rt_boot.c`: their entry
+runtime's helpers that the game's code calls directly (the envelope rate, `n64rt_boot.c`: its entry
 sets Status bit 4, a bit of KSU that the game's code never sets, and the wrapper puts the game's Status back), see the RSP and
 the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code before it is not in the game's view either.
 
 ### 64-bit instructions and the helpers
 
-`emulate_64` does the Reserved Instructions on the context's 64-bit registers: the unaligned doubleword loads and
-stores, and -- on a core without them in hardware -- `ddiv(u)`, the FPU's `dmfc1`, `dmtc1`,
-conversions from `.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU register pair;
-the arithmetic is the FPU's single precision). An entry costs far
-more than the instruction it stands for, which matters for code that divides in a loop. A compiler's conversions
-between a 64-bit integer and a float are two of the FPU's in a row (`dmtc1` and `cvt.d.l`, or `trunc.l.s` and
-`dmfc1`): the second, behind the first or in the delay slot of the `jr ra` behind it, is done on the same entry.
-
-A compiler's 64-bit support routines are such code: `__ull_div`, `__ll_mod` and the others are each a pair of `ld`, one
-64-bit instruction and a return. `lang/n64rt/n64rt_llsigs.h` has their instruction words as the IDO 5.3 compiler makes
-them (generated by `tools/gen_llsigs.py` from `tools/llsigs/ll.c`). At boot `ll_patch` scans the boot segment and, where
-all the words of a routine match, writes a jump to the runtime's 32-bit version over its start. The routines that shift
-or multiply, and with `W64_DIV` the ones that divide too, are left as they are, since the CPU runs their instruction (some 70
-cycles for a `ddivu`). On a core without `W64_DIV` the ones that divide (`__ull_div`, `__ull_rem`, `__ll_div`, `__ll_rem`,
-`__ll_mod`, `__ull_divremi`) are replaced. Their division (and the monitor's `ddiv(u)`) is `n64rt_div64.h`'s: long
-division by words on the CPU's `divu` -- three or four of them, some 150 cycles where the C library's loop of a bit a step took 600; a game that divides 64-bit values by the thousand at its start spent most of
-its fields there. A replacement runs with the game's interrupts off and restores Status in the delay
-slot of its return, because the CPU sends an interrupt to the game's handler only when the interrupted instruction is
-the game's.
+The CPU runs every 64-bit instruction of the games' code itself: the integer ones by the levels above (`ld`, `sd`, `lwu`,
+`ldl`, `ldr`, `sdl`, `sdr`, the d-adds, d-shifts, `dmult(u)`, `ddiv(u)`, the 64-bit logic and compares) and the FPU's
+`dmfc1`, `dmtc1`, `cvt.s.l`, `cvt.d.l` and the round / trunc / ceil / floor / cvt to `.l` (a 64-bit integer is an FPU
+register pair; the arithmetic is the FPU's single precision). The compiler's 64-bit support routines (`__ull_div`,
+`__ll_mod` and the others, each a pair of `ld`, one 64-bit instruction and a return) are the game's own code, run as they
+are: a `ddivu` takes some 70 cycles. The monitor saves and restores the registers at 64 bits and HI and LO whole; it
+reads the upper words only for an `sd` to an RCP register (`emulate_hw`) and for the compare of a branch whose delay slot it
+does for the game (`branch_next`), and writes them for an `ld` of one.
 
 The audio library's envelope mixer has a function that turns a volume ramp into the rate the microcode applies every
 eight samples, `(target / volume)^(8 / samples)` in 16.16, which it takes as `(1 + ln(target / volume) / 2^30)` to the
@@ -561,8 +554,12 @@ same jump over it. Three builds of the function are known: two take the O32 ABI'
 that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`) and is
 called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
 `ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
-of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. These
-two are the only changes the runtime makes to the game's code, and they are made in the RDRAM's copy.
+of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. The
+envelope rate is the one change the runtime makes to the game's arithmetic, made in the RDRAM's copy; it is entered with
+the game's interrupts off and Status bit 4 on, and the wrapper puts Status back in the delay slot of its return (the CPU
+sends an interrupt to the game's handler only when the interrupted instruction is the game's). The other patch of the same
+kind, `mf_patch`, replaces a hand-written float-matrix conversion that reads a double's mantissa (`guMtxF2L`: `cvt.d.s`,
+`add.d`, `mfc1` of the even register, which a float-computed double leaves zero) with the same conversion in integers.
 
 ### RCP registers the runtime emulates
 

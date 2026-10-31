@@ -500,7 +500,7 @@ function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}},
 // read there byte by byte. 0xF000_0000 - 0xFFFF_FFFF stay physical: the registers, the monitor RAM.)
 // (and, in the game's view only -- `gv`: MCTL bits 12 and 1 set, Status.ERL and Status.KSU's bit 4 clear, see game_view -- the rest of
 // KUSEG, 0x2000_0000 - 0x4FFF_FFFF: a game can map code at 0x4000_0000, unpack an overlay into it and jump there. The
-// monitor level (ERL) and the runtime's helpers that the game's code calls (n64rt_boot.c, ll_patch: they set bit 4) see
+// monitor level (ERL) and the runtime's helpers that the game's code calls (n64rt_boot.c, ul_patch: they set bit 4) see
 // the RSP and the SDRAM there, as the runtime itself does.)
 localparam bit MAP_HI = TLB_RAM && MON;
 function automatic logic map_hi(input logic [31:0] va);

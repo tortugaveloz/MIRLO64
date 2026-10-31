@@ -17,12 +17,10 @@
 #include <generated/csr.h>
 #include <generated/soc.h>
 #include "n64rt.h"
-#include "n64rt_div64.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
  * bits, upper word first; register 0's place holds EPC and Status, k0's and
- * k1's HI and LO. On the CPU without 64-bit integers (n64rt_cpu64 0) only the
- * lower words are saved and restored. */
+ * k1's HI and LO. */
 typedef struct { u32 h, l; } n64rt_reg_t;
 typedef struct {
 #ifdef N64RT_OWN
@@ -40,9 +38,8 @@ typedef struct {
 #endif
     u32 fcsr, fpr[32];
     u32 wait_ra, wait_q;            /* (debug) where in the game it last blocked, and on what */
-    u32 soft;                       /* hi and lo hold a 64-bit product or quotient of the runtime's
-                                     * making: the CPU's own HI and LO are 32 bits (its COP0 7) */
 #ifdef N64RT_OWN
+    u32 unused;                     /* (0x18C: keeps hi and lo on a doubleword, for n64rt_exc.S's sd / ld) */
     n64rt_reg_t hi, lo;             /* (0x190, 0x198) */
     u32 count_in;                   /* (0x1A0) Count on the way into the monitor: put back on the way out */
     /* the monitor's fast path (n64rt_exc.S): its scratch words -- ErrorEPC, the instruction, 8 for a load /
@@ -53,7 +50,8 @@ typedef struct {
 #endif
 } n64rt_ctx_t;
 #ifdef N64RT_OWN
-_Static_assert(__builtin_offsetof(n64rt_ctx_t, count_in) == 0x1A0 && __builtin_offsetof(n64rt_ctx_t, fast_epc) == 0x1A4 &&
+_Static_assert(__builtin_offsetof(n64rt_ctx_t, hi) == 0x190 && __builtin_offsetof(n64rt_ctx_t, lo) == 0x198 &&
+               __builtin_offsetof(n64rt_ctx_t, count_in) == 0x1A0 && __builtin_offsetof(n64rt_ctx_t, fast_epc) == 0x1A4 &&
                __builtin_offsetof(n64rt_ctx_t, fast_on) == 0x1B4 && __builtin_offsetof(n64rt_ctx_t, fast_n) == 0x1B8 &&
                __builtin_offsetof(n64rt_ctx_t, fast_next) == 0x1BC, "n64rt_exc.S's offsets");
 #endif
@@ -61,12 +59,9 @@ _Static_assert(__builtin_offsetof(n64rt_ctx_t, count_in) == 0x1A0 && __builtin_o
 static inline void gset(n64rt_ctx_t *x, u32 r, u32 v) { if (r) { x->g[r].l = v; x->g[r].h = (u32)((s32)v >> 31); } }
 /* a register's lower word (register 0's place is EPC and Status: it reads as 0) */
 static inline u32 g32(const n64rt_ctx_t *x, u32 r) { return r ? x->g[r].l : 0u; }
-u32 n64rt_cpu64;                    /* the CPU has the VR4300's 64-bit integers (probed at the start) */
-u32 n64rt_cpu_alu, n64rt_cpu_sh, n64rt_cpu_md, n64rt_cpu_div;   /* ... and runs dadd, dsub and the 64-bit logic; the d-shifts; dmult(u) with a
-                                     * HI and LO of 64 bits; ddiv(u) (mips_core's W64_ALU, W64_SH, W64_MD, W64_DIV: COP0 7's bits 31-28,
-                                     * so one build runs on every bitstream). What a CPU does not do is a Reserved Instruction, done
-                                     * here (emulate_64) */
-static volatile u32 s_probe;
+/* a register whole, and a 64-bit value into one (the CPU keeps the upper halves: the VR4300's 64-bit registers) */
+static inline u64 g64(const n64rt_ctx_t *x, u32 r) { return r ? (u64)x->g[r].h << 32 | x->g[r].l : 0u; }
+static inline void gset64(n64rt_ctx_t *x, u32 r, u64 v) { if (r) { x->g[r].l = (u32)v; x->g[r].h = (u32)(v >> 32); } }
 #ifndef N64RT_OWN
 _Static_assert(sizeof(n64rt_ctx_t) <= sizeof(((OSThread *)0)->context), "context area");
 #endif
@@ -591,8 +586,7 @@ void n64rt_tick(void)
  * Since the start, a few lines every 60 fields: each replaced function's
  * calls (n64rt_exc.S counts them on their way in), the exceptions by cause
  * with the time they took from the vector to eret (Count's ticks, two clocks
- * each; on the CPU with 64-bit integers), the switches from a thread to
- * another, and the registers the game reached itself -- each one's reads and
+ * each), the switches from a thread to another, and the registers the game reached itself -- each one's reads and
  * writes, and the time for them all. */
 u32 n64rt_stats[512] __attribute__((aligned(4096)));
 u32 n64rt_stat_in, n64rt_stat_out;
@@ -642,14 +636,12 @@ static void stat_exc(u32 code)
  * a word load or store to a register n64rt_hw_read/write know is done on
  * its behalf; anything else stays fatal. */
 static int branch_next(n64rt_ctx_t *x, u32 pc, u32 *next);
-static u64 r64(const n64rt_ctx_t *x, u32 r);
-static void w64(n64rt_ctx_t *x, u32 r, u64 v);
 /* the instruction at pc: in KSEG0 (the game's) or the runtime's own memory,
  * or in a page the game mapped -- read through what it maps to, not through
  * the CPU's tables: this is the exception handler */
 #ifdef N64RT_OWN
 extern n64rt_ctx_t n64rt_mon_ctx;
-/* pc is the runtime's own code: the SDRAM, from a helper the game's code called (n64rt_boot.c, ll_patch: the game's Status
+/* pc is the runtime's own code: the SDRAM, from a helper the game's code called (n64rt_boot.c, ul_patch: the game's Status
  * has bit 4 then). Otherwise, while the game runs, 0x2000_0000 - 0x4FFF_FFFF are addresses it maps (mips_core, game_view). */
 static int rt_code(u32 pc) { return (pc >> 28) == 0x4u && (n64rt_mon_ctx.status & 0x10u); }
 #else
@@ -669,7 +661,7 @@ static int emulate_none(n64rt_ctx_t *x, u32 op, u32 rt)
 {
     switch (op) {
     case 0x20: case 0x24: case 0x21: case 0x25: case 0x23: case 0x22: case 0x26: case 0x27: if (rt) gset(x, rt, 0); return 1;   /* loads */
-    case 0x37: w64(x, rt, 0); return 1;                                                                              /* ld */
+    case 0x37: gset64(x, rt, 0); return 1;                                                                           /* ld */
     case 0x28: case 0x29: case 0x2B: case 0x2A: case 0x2E: case 0x3F: case 0x39: case 0x3D: return 1;                /* stores */
     case 0x31: x->fpr[rt] = 0; return 1;                                                                             /* lwc1 */
     case 0x35: x->fpr[rt | 1u] = 0; x->fpr[rt & ~1u] = 0; return 1;                                                  /* ldc1 */
@@ -749,7 +741,7 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     case 0x37: {                                                        /* ld */
         u32 lo;
         if ((badv & 7u) || !n64rt_hw_read(badv, &v) || !n64rt_hw_read(badv + 4u, &lo)) return 0;
-        w64(x, rt, (u64)v << 32 | lo);
+        gset64(x, rt, (u64)v << 32 | lo);
         return 1;
     }
     case 0x31: if (k || !n64rt_hw_read(badv, &v)) return 0; x->fpr[rt] = v; return 1;                      /* lwc1 */
@@ -759,7 +751,7 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     case 0x29: return !(badv & 1u) && n64rt_hw_write(badv & ~3u, g32(x, rt) << (16u - 8u * (k & 2u)));   /* sh */
     case 0x2A: return n64rt_hw_write(badv & ~3u, g32(x, rt) >> (8u * k));                                 /* swl */
     case 0x2E: return n64rt_hw_write(badv & ~3u, g32(x, rt) << (8u * (3u - k)));                          /* swr */
-    case 0x3F: return !(badv & 7u) && n64rt_hw_write(badv, (u32)(r64(x, rt) >> 32));                      /* sd */
+    case 0x3F: return !(badv & 7u) && n64rt_hw_write(badv, (u32)(g64(x, rt) >> 32));                      /* sd */
     default: return 0;
     }
 }
@@ -1255,7 +1247,7 @@ static int branch_next(n64rt_ctx_t *x, u32 pc, u32 *next)
     u32 insn;
     if (!insn_at(pc, &insn)) return 0;
     u32 op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u;
-    s64 a = (s64)r64(x, rs), b = (s64)r64(x, rt);        /* (the VR4300 compares all 64 bits) */
+    s64 a = (s64)g64(x, rs), b = (s64)g64(x, rt);        /* (the VR4300 compares all 64 bits) */
     u32 rel = pc + 4u + ((u32)(s32)(s16)insn << 2);
     int take;
     switch (op) {
@@ -1365,271 +1357,6 @@ void n64rt_dump_threads(void)
 }
 
 /* ---- the exception handler (n64rt_exc.S, interrupts off) -------------------------- */
-/* ---- the 64-bit instructions ---------------------------------------------------------
- * The CPU is 32 bits wide: an N64 game's 64-bit instruction is a reserved one
- * here, and is done on its behalf. A register's upper half is kept beside it
- * from the 64-bit instruction that wrote it, and holds for as long as the
- * register's lower half is still what that left there; any other register is
- * the sign extension of its 32 bits, which is what a 32-bit instruction makes
- * of it on the N64. That covers what games do with them -- a long long
- * through its helper (ld, ddivu, mflo, dsll32, dsra32), a block moved eight
- * bytes at a time (ld, sd) -- at the price of a trap an instruction: for
- * the odd one, not for a loop a frame runs through. */
-static struct {
-    OSThread *th;
-    u32 hi[32], lo[32]; u8 v[32];
-    u32 mlo[2], mhi[2];             /* LO and HI of the last 64-bit multiply or divide: {lower, upper} */
-    u8 mv;                          /* they stand for this many instructions more */
-} s_w;
-static u32 s_w_count;
-static u64 r64(const n64rt_ctx_t *x, u32 r)
-{
-    u32 lo = x->g[r].l;
-    if (r == 0) return 0;
-    if (n64rt_cpu64) return (u64)x->g[r].h << 32 | lo;
-    if (s_w.th == n64rt_cur) {
-        if (s_w.v[r] && s_w.lo[r] == lo) return (u64)s_w.hi[r] << 32 | lo;
-        if (s_w.mv) {                               /* (an mflo / mfhi since: by the value it took) */
-            if (lo == s_w.mlo[0]) return (u64)s_w.mlo[1] << 32 | lo;
-            if (lo == s_w.mhi[0]) return (u64)s_w.mhi[1] << 32 | lo;
-        }
-    }
-    return (u64)(s64)(s32)lo;
-}
-static void w64(n64rt_ctx_t *x, u32 r, u64 v)
-{
-    if (!r) return;
-    x->g[r].l = (u32)v; x->g[r].h = (u32)(v >> 32);
-    if (n64rt_cpu64) return;
-    if (s_w.th != n64rt_cur) { memset(&s_w, 0, sizeof s_w); s_w.th = n64rt_cur; }
-    s_w.hi[r] = (u32)(v >> 32); s_w.lo[r] = (u32)v; s_w.v[r] = 1;
-}
-static int ram_addr(u32 a) { return (a >> 29) == 4u || (a >> 29) == 5u ? (a & 0x1FFFFFFFu) < 0x00800000u : 0; }
-static u64 rd64(u32 a) { const volatile u32 *p = (const volatile u32 *)(uintptr_t)(a & ~7u); return (u64)p[0] << 32 | p[1]; }
-static void wr64(u32 a, u64 v) { volatile u32 *p = (volatile u32 *)(uintptr_t)(a & ~7u); p[0] = (u32)(v >> 32); p[1] = (u32)v; }
-static u64 mulhu64(u64 a, u64 b)
-{
-    u64 al = (u32)a, ah = a >> 32, bl = (u32)b, bh = b >> 32;
-    u64 ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
-    u64 mid = (ll >> 32) + (u32)lh + (u32)hl;
-    return hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
-}
-/* The FPU's 64-bit integers: the CPU's FPU is single precision with no .l
- * formats and no dmfc1 / dmtc1 (a double is a pair of registers, computed as
- * a float), so these are done here, as the reference model does them: a
- * 64-bit integer is the pair {odd, even}; a conversion from it rounds to
- * nearest even into a float (widened for a .d result); one to it rounds the
- * float by the instruction or FCR31 and saturates, NaN to the largest. */
-static u32 l2f(s64 v)
-{
-    if (v == 0) return 0;
-    u32 s = v < 0;
-    u64 m = s ? (u64)0 - (u64)v : (u64)v;
-    int e = 63;
-    /* (normalised by halves: a bit a step was some 400 instructions of this 32-bit code a conversion) */
-    if (!(m >> 32)) { m <<= 32; e -= 32; }
-    if (!(m >> 48)) { m <<= 16; e -= 16; }
-    if (!(m >> 56)) { m <<= 8; e -= 8; }
-    if (!(m >> 60)) { m <<= 4; e -= 4; }
-    if (!(m >> 62)) { m <<= 2; e -= 2; }
-    if (!(m >> 63)) { m <<= 1; e -= 1; }
-    u32 mant = (u32)(m >> 40);
-    u64 rest = m & 0xFFFFFFFFFFull;
-    if (rest > 0x8000000000ull || (rest == 0x8000000000ull && (mant & 1u))) { mant++; if (mant >> 24) { mant >>= 1; e++; } }
-    return s << 31 | (u32)(e + 127) << 23 | (mant & 0x7FFFFFu);
-}
-static s64 f2l(u32 b, u32 rm)                       /* rm: 0 nearest even, 1 to zero, 2 up, 3 down */
-{
-    u32 s = b >> 31, m = (b & 0x7FFFFFu) | 0x800000u;
-    int e = (int)((b >> 23) & 0xFFu);
-    if (e == 0xFF && (b & 0x7FFFFFu)) return 0x7FFFFFFFFFFFFFFFll;
-    if (e == 0) return 0;                            /* (below the normals: zero, as the FPU takes it) */
-    int sh = e - 150;                                /* the value is m * 2^sh */
-    if (sh >= 40) return s ? (s64)0x8000000000000000ull : 0x7FFFFFFFFFFFFFFFll;
-    if (sh >= 0) { u64 v = (u64)m << sh; return s ? -(s64)v : (s64)v; }
-    u32 r = (u32)-sh, ip = 0, nz = 1, gt = 0, eq = 0;
-    if (r < 26u) {
-        u32 rem = m & ((1u << r) - 1u), half = 1u << (r - 1u);
-        ip = r < 25u ? m >> r : 0u; nz = rem != 0; gt = rem > half; eq = rem == half;
-    }
-    if (rm == 0u) { if (gt || (eq && (ip & 1u))) ip++; }
-    else if (rm == 2u) { if (!s && nz) ip++; }
-    else if (rm == 3u) { if (s && nz) ip++; }
-    return s ? -(s64)ip : (s64)ip;
-}
-static u32 d2f(u32 lo, u32 hi)                      /* a double's bits as the FPU takes them: a float's */
-{
-    u32 s = hi & 0x80000000u;
-    s32 e = (s32)((hi >> 20) & 0x7FFu);
-    if (e == 0x7FF) return s | 0x7F800000u | ((hi & 0xFFFFFu) << 3) | (lo >> 29) | ((lo & 0x1FFFFFFFu) != 0);
-    e += 127 - 1023;
-    if (e <= 0) return s;
-    if (e >= 255) return s | 0x7F800000u;
-    return (s | ((u32)e << 23) | ((hi & 0xFFFFFu) << 3) | (lo >> 29)) + ((lo >> 28) & 1u);
-}
-static int emulate_fpu64(n64rt_ctx_t *x, u32 insn)
-{
-    u32 fmt = (insn >> 21) & 31u, rt = (insn >> 16) & 31u, fs = (insn >> 11) & 31u, fd = (insn >> 6) & 31u, fn = insn & 63u;
-    u32 *lo = &x->fpr[fs & ~1u], *hi = &x->fpr[fs | 1u];
-    if (fmt == 0x01u) { w64(x, rt, (u64)*hi << 32 | *lo); return 1; }                        /* dmfc1 */
-    if (fmt == 0x05u) { u64 v = r64(x, rt); *lo = (u32)v; *hi = (u32)(v >> 32); return 1; }  /* dmtc1 */
-    if (fmt == 0x15u) {                                                                      /* cvt.s.l, cvt.d.l */
-        u32 f = l2f((s64)((u64)*hi << 32 | *lo));
-        if (fn == 0x20u) { x->fpr[fd] = f; return 1; }
-        if (fn != 0x21u) return 0;
-        u32 e = (f >> 23) & 0xFFu, m = f & 0x7FFFFFu;
-        x->fpr[fd | 1u] = e == 0 ? f & 0x80000000u : (f & 0x80000000u) | ((e == 0xFFu ? 0x7FFu : e - 127u + 1023u) << 20) | (m >> 3);
-        x->fpr[fd & ~1u] = e == 0 ? 0 : m << 29;
-        return 1;
-    }
-    if ((fmt == 0x10u || fmt == 0x11u) && ((fn >= 0x08u && fn <= 0x0Bu) || fn == 0x25u)) {   /* round / trunc / ceil / floor / cvt .l */
-        u32 f = fmt == 0x11u ? d2f(*lo, *hi) : x->fpr[fs];
-        s64 v = f2l(f, fn == 0x25u ? x->fcsr & 3u : fn & 3u);
-        x->fpr[fd & ~1u] = (u32)v; x->fpr[fd | 1u] = (u32)((u64)v >> 32);
-        return 1;
-    }
-    return 0;
-}
-
-#ifdef N64RT_DEBUG
-#define RI_HIST 64u
-static u32 s_ri_pc[RI_HIST], s_ri_n[RI_HIST];
-void n64rt_ri_hist_log(void)
-{
-    u32 tot = 0, shown = 0;
-    for (u32 i = 0; i < RI_HIST; i++) tot += s_ri_n[i];
-    for (u32 k = 0; k < 12u; k++) {                  /* the twelve most used */
-        u32 b = RI_HIST;
-        for (u32 i = 0; i < RI_HIST; i++) if (s_ri_n[i] && (b == RI_HIST || s_ri_n[i] > s_ri_n[b])) b = i;
-        if (b == RI_HIST) break;
-        n64rt_log("n64rt:   done for the game at %08lx: %lu of %lu\n", (unsigned long)s_ri_pc[b], (unsigned long)s_ri_n[b], (unsigned long)tot);
-        s_ri_n[b] = 0; shown++;
-    }
-    for (u32 i = 0; i < RI_HIST; i++) { s_ri_n[i] = 0; s_ri_pc[i] = 0; }
-}
-#endif
-static int emulate_64(n64rt_ctx_t *x, u32 cause)
-{
-    u32 bd = cause >> 31, pc = x->epc + (bd ? 4u : 0u), next = pc + 4u;
-    u32 insn;
-    if (rt_code(pc) || !insn_at(pc, &insn)) return 0;           /* (the game's code only) */
-    u32 op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u, rd = (insn >> 11) & 31u, sa = (insn >> 6) & 31u, fn = insn & 63u;
-    s32 imm = (s16)insn;
-    u32 ea = g32(x, rs) + (u32)imm;
-    if (bd && !branch_next(x, x->epc, &next)) return 0;
-    if (s_w.th != n64rt_cur) { memset(&s_w, 0, sizeof s_w); s_w.th = n64rt_cur; }
-    u8 mv = s_w.mv ? (u8)(s_w.mv - 1u) : 0u;
-    switch (op) {
-    case 0x37: if (!ram_addr(ea) || (ea & 7u)) return 0; w64(x, rt, rd64(ea)); break;                 /* ld */
-    case 0x3F: if (!ram_addr(ea) || (ea & 7u)) return 0; wr64(ea, r64(x, rt)); break;                 /* sd */
-    case 0x27: if (!ram_addr(ea) || (ea & 3u)) return 0; w64(x, rt, *(volatile u32 *)(uintptr_t)ea); break;   /* lwu */
-    case 0x1A: case 0x1B: case 0x2C: case 0x2D: {                                                      /* ldl ldr sdl sdr */
-        if (!ram_addr(ea)) return 0;
-        u32 n = ea & 7u;
-        u64 m = rd64(ea), r = r64(x, rt);
-        if (op == 0x1A) w64(x, rt, n ? ((r & ((1ull << (8u * n)) - 1ull)) | (m << (8u * n))) : m);
-        else if (op == 0x1B) w64(x, rt, n == 7u ? m : ((r & (~0ull << (8u * (n + 1u)))) | (m >> (8u * (7u - n)))));
-        else if (op == 0x2C) wr64(ea, n ? ((m & (~0ull << (8u * (8u - n)))) | (r >> (8u * n))) : r);
-        else wr64(ea, n == 7u ? r : ((m & ((1ull << (8u * (7u - n))) - 1ull)) | (r << (8u * (7u - n)))));
-        break;
-    }
-    case 0x11:
-        if (!emulate_fpu64(x, insn)) return 0;
-        /* The compiler's conversions between a 64-bit integer and a float (libultra's __ll_to_d, __f_to_ll ...) are two of
-         * these in a row -- dmtc1 / jr ra / cvt.d.l in its delay slot, or trunc.l.s / dmfc1 -- and some games call them
-         * a hundred times a field: the ones behind this one -- a nop or two between them, as hand-written code has them
-         * (dmtc1 / nop / cvt.s.l) -- or the one in the delay slot of the `jr ra` behind it, are done on the same entry. */
-        if (!bd) {
-            u32 n1, n2;
-            const u32 ra = g32(x, 31);
-            for (int k = 0; k < 4; k++) {
-                u32 p = next;
-                if (!insn_at(p, &n1)) break;
-                for (int z = 0; z < 2 && n1 == 0u; z++) { p += 4u; if (!insn_at(p, &n1)) { n1 = 0u; break; } }
-                if ((n1 >> 26) == 0x11u && emulate_fpu64(x, n1)) { next = p + 4u; continue; }
-                if (p == next && n1 == 0x03E00008u && insn_at(next + 4u, &n2) && (n2 >> 26) == 0x11u && emulate_fpu64(x, n2)) next = ra;
-                break;
-            }
-        }
-        break;
-    case 0x18: case 0x19: w64(x, rt, r64(x, rs) + (u64)(s64)imm); break;                             /* daddi(u) */
-    /* (what the CPU hands over when an operand is not a 32-bit value) */
-    case 0x0A: w64(x, rt, (s64)r64(x, rs) < (s64)imm); break;                                        /* slti */
-    case 0x0B: w64(x, rt, r64(x, rs) < (u64)(s64)imm); break;                                        /* sltiu */
-    case 0x0D: w64(x, rt, r64(x, rs) | (u16)insn); break;                                            /* ori */
-    case 0x0E: w64(x, rt, r64(x, rs) ^ (u16)insn); break;                                            /* xori */
-    case 0x00: {
-        u64 a = r64(x, rs), b = r64(x, rt);
-        switch (fn) {
-        case 0x14: w64(x, rd, b << (g32(x, rs) & 63u)); break;                                       /* dsllv */
-        case 0x16: w64(x, rd, b >> (g32(x, rs) & 63u)); break;                                       /* dsrlv */
-        case 0x17: w64(x, rd, (u64)((s64)b >> (g32(x, rs) & 63u))); break;                           /* dsrav */
-        case 0x24: w64(x, rd, a & b); break;
-        case 0x25: w64(x, rd, a | b); break;
-        case 0x26: w64(x, rd, a ^ b); break;
-        case 0x27: w64(x, rd, ~(a | b)); break;
-        case 0x2A: w64(x, rd, (s64)a < (s64)b); break;                                               /* slt */
-        case 0x2B: w64(x, rd, a < b); break;                                                         /* sltu */
-        /* mthi, mtlo of a 64-bit value: kept here, the CPU's own being 32 bits
-         * (the other of the two is in the context as the CPU had it) */
-        case 0x11: if (!n64rt_cpu64) return 0; x->hi.l = (u32)a; x->hi.h = (u32)(a >> 32); x->soft = 1; break;
-        case 0x13: if (!n64rt_cpu64) return 0; x->lo.l = (u32)a; x->lo.h = (u32)(a >> 32); x->soft = 1; break;
-        case 0x10: if (!x->soft) return 0; w64(x, rd, (u64)x->hi.h << 32 | x->hi.l); mv = s_w.mv; break;   /* mfhi, mflo of the */
-        case 0x12: if (!x->soft) return 0; w64(x, rd, (u64)x->lo.h << 32 | x->lo.l); mv = s_w.mv; break;   /* runtime's HI and LO */
-        case 0x2C: case 0x2D: w64(x, rd, a + b); break;                                              /* dadd(u) */
-        case 0x2E: case 0x2F: w64(x, rd, a - b); break;                                              /* dsub(u) */
-        case 0x38: w64(x, rd, b << sa); break;                                                       /* dsll */
-        case 0x3A: w64(x, rd, b >> sa); break;                                                       /* dsrl */
-        case 0x3B: w64(x, rd, (u64)((s64)b >> sa)); break;                                           /* dsra */
-        case 0x3C: w64(x, rd, b << (sa + 32u)); break;                                               /* dsll32 */
-        case 0x3E: w64(x, rd, b >> (sa + 32u)); break;                                               /* dsrl32 */
-        case 0x3F: w64(x, rd, (u64)((s64)b >> (sa + 32u))); break;                                   /* dsra32 */
-        case 0x1C: case 0x1D: case 0x1E: case 0x1F: {                                                 /* dmult(u) ddiv(u) */
-            u64 lo = 0, hi = 0;
-            if (fn == 0x1D) { lo = a * b; hi = mulhu64(a, b); }
-            else if (fn == 0x1C) {
-                lo = a * b; hi = mulhu64(a, b);
-                if ((s64)a < 0) hi -= b;
-                if ((s64)b < 0) hi -= a;
-            } else if (b == 0) {                      /* (what the VR4300 leaves) */
-                lo = fn == 0x1E && (s64)a < 0 ? 1ull : ~0ull; hi = a;
-            } else {
-                if (fn == 0x1F) lo = udiv64(a, b, &hi);
-                else if (!(a == 0x8000000000000000ull && b == ~0ull)) {     /* (on the magnitudes: the remainder has the dividend's sign) */
-                    u64 ur, q = udiv64((s64)a < 0 ? -a : a, (s64)b < 0 ? -b : b, &ur);
-                    lo = ((s64)a < 0) != ((s64)b < 0) ? -q : q; hi = (s64)a < 0 ? -ur : ur;
-                }
-                else { lo = a; hi = 0; }
-            }
-            x->lo.l = (u32)lo; x->lo.h = (u32)(lo >> 32); x->hi.l = (u32)hi; x->hi.h = (u32)(hi >> 32);
-            x->soft = n64rt_cpu64 && !n64rt_cpu_md;   /* (the exception path loads them -- with a CPU whose HI and LO are 32 bits,
-                                                       * the lower words, and tells it to trap mfhi / mflo) */
-            s_w.mlo[0] = (u32)lo; s_w.mlo[1] = (u32)(lo >> 32); s_w.mhi[0] = (u32)hi; s_w.mhi[1] = (u32)(hi >> 32);
-            mv = 12;
-            break;
-        }
-        default: return 0;
-        }
-        break;
-    }
-    default: return 0;
-    }
-    s_w.mv = mv;
-    x->epc = next;
-#ifdef N64RT_DEBUG
-    {   /* a histogram of where the instructions done for the game are (n64rt_ri_hist_log) */
-        u32 i = 0;
-        while (i < RI_HIST && s_ri_pc[i] != pc && s_ri_n[i]) i++;
-        if (i < RI_HIST) { s_ri_pc[i] = pc; s_ri_n[i]++; }
-    }
-    if (++s_w_count <= 6u || (s_w_count & (s_w_count - 1u)) == 0u)
-        n64rt_log("n64rt: a 64-bit instruction (%08lx at %08lx), done for the game: %lu so far\n", (unsigned long)insn, (unsigned long)pc, (unsigned long)s_w_count);
-#else
-    s_w_count++;
-#endif
-    return 1;
-}
-
 static const char *const s_exc_name[32] = {
     "Int", "Mod", "TLBL", "TLBS", "AdEL", "AdES", "IBE", "DBE", "Sys", "Bp", "RI", "CpU", "Ov", "Tr",
 };
@@ -1672,10 +1399,6 @@ void n64rt_exception(void)
         /* a page the game mapped, entered in the CPU's tables: the instruction again */
     } else if (code >= 2 && code <= 5 && emulate_mapped(x, cause)) {
         /* a page the game mapped (osMapTLB) */
-    } else if (code == 10 && s_probe) {
-        s_probe = 2; x->epc += 4;                     /* the probe's instruction: this CPU has none */
-    } else if (code == 10 && emulate_64(x, cause)) {
-        /* a 64-bit instruction */
     } else {
         u32 badv; __asm__ volatile("mfc0 %0, $8" : "=r"(badv));
         u32 epc = x->epc + ((cause >> 31) ? 4u : 0u);
@@ -1780,14 +1503,10 @@ void n64rt_mon_exception(void)
         /* a page the game mapped, entered in the CPU's tables (the instruction again), or the exception for the game's handler */
     } else if (code >= 2 && code <= 5 && emulate_mapped(x, cause)) {
         /* a page the game mapped (osMapTLB) */
-    } else if (code == 10 && s_probe) {
-        s_probe = 2; x->epc += 4;
     } else if (code == 10 && n64rt_tlbi && tlb_insn(x, (int)bd)) {
         /* the game's own tlbwi / tlbwr / tlbr / tlbp */
     } else if (code == 10 && !bd && own_tlb_call(x)) {
         /* osMapTLB / osUnmapTLB / osUnmapTLBAll, the runtime's (n64rt_boot.c: a core that does not take the TLB instructions) */
-    } else if (code == 10 && emulate_64(x, cause)) {
-        /* a 64-bit instruction */
     } else {
         u32 epc = x->epc + (bd ? 4u : 0u), insn;
         if (!insn_at(epc, &insn)) insn = 0;
@@ -1841,18 +1560,7 @@ void n64rt_os_init(void)
     s_boot.state = OS_STATE_RUNNING;
     s_boot.id = -1;
     n64rt_cur = &s_boot;
-    /* which CPU: a 64-bit instruction runs, or traps (the exception path
-     * saves and restores the registers' upper halves only on the first) */
-    static u64 s_probe_mem __attribute__((aligned(8)));
-    s_probe = 1;
-    __asm__ volatile(".set push\n.set mips3\nld $2, 0(%0)\n.set pop" : : "r"(&s_probe_mem) : "$2");
-    n64rt_cpu64 = s_probe == 1;
-    s_probe = 0;
-    if (n64rt_cpu64) {                              /* (which 64-bit levels: COP0 7's top bits, 0 on a core before them) */
-        u32 m; __asm__ volatile("mfc0 %0, $7" : "=r"(m));
-        n64rt_cpu_alu = m >> 31 & 1u; n64rt_cpu_sh = m >> 30 & 1u; n64rt_cpu_md = m >> 29 & 1u; n64rt_cpu_div = m >> 28 & 1u;
-    }
-    /* and its translation tables: COP0 23 reads their mark, or 0 */
+    /* the CPU's translation tables: COP0 23 reads their mark, or 0 */
     {
         u32 v;
         __asm__ volatile("mfc0 %0, $23" : "=r"(v));
@@ -1861,8 +1569,7 @@ void n64rt_os_init(void)
         tr_flush();
     }
 #ifdef N64RT_DEBUG
-    n64rt_log("n64rt: the CPU %s the 64-bit integers (alu %lu, shifts %lu, dmult %lu, ddiv %lu), %s translation tables\n", n64rt_cpu64 ? "has" : "is without",
-              (unsigned long)n64rt_cpu_alu, (unsigned long)n64rt_cpu_sh, (unsigned long)n64rt_cpu_md, (unsigned long)n64rt_cpu_div, n64rt_tlbram ? "has" : "no");
+    n64rt_log("n64rt: the CPU %s translation tables\n", n64rt_tlbram ? "has" : "has no");
     if (s_count_q8 < 250u || s_count_q8 > 262u)
         n64rt_log("n64rt: the CPU's clock is %lu.%02lu times the SoC's\n", (unsigned long)(s_count_q8 >> 8), (unsigned long)(((s_count_q8 & 255u) * 100u) >> 8));
 #endif
