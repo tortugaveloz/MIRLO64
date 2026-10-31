@@ -284,6 +284,8 @@ wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1 || !FAST) ? 6'd1 : nzc;
 wire        zsh_in = (st == S_ITER && it_ge) || (st == S_LSH1 && ir[31]);
 wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
 
+// The data registers below (zmag, ir, res, zexp) are written whether or not the instruction is live (a flushed one starts again from
+// S_IDLE, which loads or clears what its operation reads): the core's flush does not enter their enables.
 // zmag's next value: one-hot selects (z_*) of the sources AND-ORed, written when any is selected (or cleared: z_clr)
 //   xo     S_IDLE: cvt.s.l's upper word, a double's upper half
 //   ax     S_DECIDE, cvt.s.l of an unsigned word
@@ -298,7 +300,7 @@ wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
 logic z_xo, z_ax, z_za, z_sh, z_zsh, z_mp, z_ir, z_nf, z_clr;
 always_comb begin
     z_xo = 0; z_ax = 0; z_za = 0; z_sh = 0; z_zsh = 0; z_mp = 0; z_ir = 0; z_nf = 0; z_clr = 0;
-    if (!rst && live) case (st)
+    case (st)
     S_IDLE:   z_xo = FAST ? ar_q : is_arith;
     S_DECIDE: if (!sel_l) begin z_za = sel_w; z_clr = !sel_w; end
               else if (zmag == 32'd0) z_ax = 1;
@@ -331,7 +333,7 @@ always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mp || z_
 logic x_158, x_md, x_sq, x_a1, x_190, x_dec, x_nf;
 always_comb begin
     x_158 = 0; x_md = 0; x_sq = 0; x_a1 = 0; x_190 = 0; x_dec = 0; x_nf = 0;
-    if (!rst && live) case (st)
+    case (st)
     S_DECIDE: if (sel_l || sel_w) x_158 = 1;
               else begin x_md = fn[5:1] == 5'b00001; x_sq = fn == 6'h04; end
     S_ADD2:   x_a1 = 1;
@@ -358,7 +360,7 @@ always_ff @(posedge clk) if (x_158 || x_md || x_sq || x_a1 || x_190 || x_dec || 
 logic i_yo, i_ax, i_dv, i_it, i_za, i_sh, i_clr;
 always_comb begin
     i_yo = 0; i_ax = 0; i_dv = 0; i_it = 0; i_za = 0; i_sh = 0; i_clr = 0;
-    if (!rst && live) case (st)
+    case (st)
     S_IDLE:   i_yo = FAST && ar_q;
     S_DECIDE: if (sel_l) i_ax = zmag != 32'd0 && zmag != {32{ax[31]}};
               else if (fn == 6'h03) i_dv = 1;
@@ -394,7 +396,7 @@ wire dsy = ay.s ^ fn[0];
 logic r_ax, r_y, r_abs, r_neg, r_qnan, r_satp, r_satn, r_inf, r_zsg, r_rb, r_za, r_nf, r_zero;
 always_comb begin
     r_ax = 0; r_y = 0; r_abs = 0; r_neg = 0; r_qnan = 0; r_satp = 0; r_satn = 0; r_inf = 0; r_zsg = 0; r_rb = 0; r_za = 0; r_nf = 0; r_zero = 0;
-    if (!rst && live) case (st)
+    case (st)
     S_DECIDE:
         if (sel_l) r_zero = zmag == 32'd0 && ax == 32'd0;
         else if (sel_w) r_zero = ax == 32'd0;
