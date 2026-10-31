@@ -339,7 +339,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? nt[i] : (NP == 1 && f == 6'h1D) ? accn[i] : tt[{s[i], t[i]}];
         o.acc[15:0] = accl;
         // vd: the clamped result, or VSAR's word of the accumulator
-        abs_sat = f == 6'h13 && s[15] && t == 16'h8000;
+        // (VABS of a negative s with t = 8000: -t is 8000 again. One pass: that is t and -t, from the adder, both negative)
+        abs_sat = f == 6'h13 && s[15] && (NP == 1 ? (t[15] && lo[15]) : t == 16'h8000);
         ovf = (f == 6'h10 || f == 6'h11) && (b16 ^ lo[15]);
         rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
         c15 = !abs_sat && b16;                               // (abs_sat: 7FFF; ovf: b16, then its inverse)
