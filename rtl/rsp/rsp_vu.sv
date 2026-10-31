@@ -85,7 +85,7 @@ module rsp_vu #(
     output logic        commit_part     // ... but the accumulator and flags already have a later one's first pass
 );
 
-if (LANES != 8) $error("rsp_vu: eight lanes only");
+// (eight lanes only: LANES stays a parameter for the ports)
 localparam bit LPAIR = 1'b1;            // a computation and a load may come together (rsp_su's pairs)
 
 // ---------------------------------------------------------------- decode --
@@ -370,14 +370,20 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
 endfunction
 
 // ------------------------------------------------- the computational pipeline --
-// SEL takes the operands from the registers (vt through its element's broadcast) into s_r and t_r. A multiply then has a
-// stage (MUL: the products, the DSP blocks, into p_r), EX1 (the accumulator, 48 bits) and EX2 (the clamp, and vd). Any other
-// computation has EX1 (the adder: its sum and flags into lo_r and fl_r; two cycles for a clip, whose second takes -t, and
-// for a reciprocal, whose second is the normalisation and the ROM's address) and EX2 (the result, the accumulator's low
-// word and the flags, and vd). A computation that is not a multiply keeps SEL from the next one in its EX1 -- its operands
-// are used again in EX2, and the flags it reads are the last one's -- and does not start behind a multiply in MUL (they
-// would reach EX1 together). So the accumulator and the flags are read and written in order with no forwarding: a
-// multiply reads and writes the accumulator in its EX1 and a non-multiply in its EX2, two cycles or more apart.
+// SEL takes the operands from the registers (vt through its element's broadcast) into s_r and t_r. Three kinds of
+// computation follow:
+//   a multiply: MUL (the products, in the DSP blocks, into p_r), EX1 (the accumulator, 48 bits), EX2 (the clamp, and vd);
+//   a "fast" one -- VMRG, VMOV, the logic operations, VSAR, VRCPH and VRSQH, which have no adder in them -- goes to EX2 at once;
+//   any other: EX1 (the adder: its sum and flags into lo_r and fl_r; two cycles for a clip, whose second takes -t, and for
+//     a reciprocal, whose second is the normalisation and the ROM's address) and EX2 (the result, the accumulator's low
+//     word and the flags, and vd).
+// EX2 takes one a cycle, in the order of SEL, so vd, the accumulator and the flags are written in order with no
+// forwarding: the accumulator is read and written by a multiply in its EX1 and by the rest in EX2, and the flags in EX2
+// (and read for their carry by VADD, VSUB and VCL in EX1, which therefore does not start while another computation is
+// in EX1). A computation that uses s and t again in EX2 (a compare, a clip, VABS) keeps SEL from replacing them.
+// Which computations can start, by what is in MUL and EX1: a fast one when both are empty; a multiply unless EX1 holds
+// one that needs s and t; any other when MUL is empty, EX1 is not kept (a clip, a reciprocal), and the first is not
+// busy with s and t.
 // A computation that reads the register another is writing waits for its write.
 // vt's element broadcast, for every lane at once: lane i takes the register's lane
 // ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]), {i[2:1], ve[0]} (ve[1]) or i. The sources are shared between lanes: one eight-way choice for a
@@ -400,7 +406,7 @@ always_comb
     for (int l = 0; l < LANES; l++) begin s_n[l] = qa[l]; t_n[l] = tv[l]; end
 
 // the MUL stage
-logic               m_v;
+logic               m_v /* verilator public_flat_rd */;
 logic [5:0]         m_fn;
 logic [4:0]         m_vdn;
 wire  m_ssgn = m_fn[2:0] == 3'd0 || m_fn[2:0] == 3'd1 || m_fn[2:0] == 3'd5 || m_fn[2:0] == 3'd7;
@@ -413,6 +419,7 @@ always_ff @(posedge clk)
 
 // EX1's registers
 logic               x_v /* verilator public_flat_rd */, x_wait /* verilator public_flat_rd */, x_sec, x_mul, x_one, x_rcp;
+logic               x_st;                     // EX1 holds a computation that uses s and t in EX2
 logic [5:0]         x_fn;
 logic [2:0]         x_am;                     // (amode of it)
 logic [3:0]         x_ve;
@@ -640,14 +647,27 @@ wire dep      = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
 wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
-wire sel0r    = cmp && st == V_IDLE && !ldep && !x_nm && !(m_v && !fn_mul) && !dep;
+wire pipe_e   = !m_v && !x_v && !y_v && !wp;          // no computation is under way
+// the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
+wire fn_fast  = fn == 6'h27 || fn == 6'h33 || (fn >= 6'h28 && fn <= 6'h2D) || fn == 6'h1D || (fn_rcp && fn[1:0] == 2'd2);
+wire fn_cmp   = fn == 6'h13 || (fn >= 6'h20 && fn <= 6'h23) || fn_ch || fn_rcp;   // (a reciprocal's accumulator word is vt, too)
+wire fn_cin   = fn == 6'h10 || fn == 6'h11 || fn == 6'h24;                  // (reads VCO in EX1: VADD and VSUB for their carry, VCL for its compare)
+wire x_kept   = x_v && x_wait;                                                // EX1 holds its computation another cycle
+wire go_k     = fn_fast ? !x_v && !m_v
+              : fn_mul  ? !(x_v && x_st) && !x_kept
+              :           !(x_v && x_st) && !x_kept && !m_v && !(fn_cin && x_v && !x_mul);
+`ifdef VERILATOR
+logic dbg_drain /* verilator public_flat_rw */;                              // (simulation) wait for the pipeline to empty before each computation
+`else
+wire dbg_drain = 1'b0;
+`endif
+wire sel0r    = cmp && st == V_IDLE && !ldep && go_k && !dep && !(dbg_drain && !pipe_e);
 wire none_ok  = valid && vec && (fn_none || !fn_known);                       // (one that does nothing: done at once)
-wire sel_fire = sel0;
+wire sel_fire /* verilator public_flat_rd */ = sel0;
 // the others: a load's first cycle reads no register, so it starts under anything that writes another register (its
 // write, a cycle on, may meet a computation's, which is put off); a store or MFC2 under a computation that writes
 // another register than the one it reads, and under a load's write of another that is of whole lanes; MTC2 as a load;
 // CFC2 and CTC2 when no computation is under way (the flags they read and write are final then)
-wire pipe_e   = !m_v && !x_v && !y_v && !wp;
 wire x_free   = !(m_v && m_vdn == rb_live) && !(x_v && x_vdn == rb_live) && !(y_v && y_vdn == rb_live) && !(wp && w_vdn == rb_live);
 wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load into the register a computation is to write would be written over by it, put off or not)
@@ -725,7 +745,7 @@ end
 
 always_ff @(posedge clk) begin
     if (rst) begin
-        st <= V_IDLE; m_v <= 1'b0; x_v <= 1'b0; y_v <= 1'b0; lw_v <= 1'b0; unimpl <= 1'b0; x_wait <= 1'b0; x_sec <= 1'b0;
+        st <= V_IDLE; m_v <= 1'b0; x_st <= 1'b0; x_v <= 1'b0; y_v <= 1'b0; lw_v <= 1'b0; unimpl <= 1'b0; x_wait <= 1'b0; x_sec <= 1'b0;
         wp <= 1'b0; mf_q <= 1'b0; lw_mgf <= 1'b0;
         vco <= 16'd0; vcc <= 16'd0; vce <= 8'd0; dph <= 1'b0; div_out <= 32'd0; div_in_h <= 16'd0;
         for (int g = 0; g < 8; g++) begin acc_h[g] <= 16'd0; acc_m[g] <= 16'd0; acc_l[g] <= 16'd0; end
@@ -777,29 +797,35 @@ always_ff @(posedge clk) begin
         // ---- SEL
         if (sel_fire) begin
             for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
-            if (!fn_mul) x_v <= 1'b1;                          // (a multiply enters EX1 from the MUL stage)
-            x_mul <= 1'b0;
-            // a clip takes its adder's flags in one cycle and makes -t in the next; a reciprocal's second cycle is
-            // its normalisation (VRCPH and VRSQH have none)
-            x_wait <= fn_ch || (fn_rcp && fn[1:0] != 2'd2);
-            if (sel0) begin
+            if (!fn_mul && !fn_fast) begin                     // (a multiply enters EX1 from the MUL stage, a fast one skips it)
+                x_v <= 1'b1; x_mul <= 1'b0; x_st <= fn_cmp;
+                // a clip takes its adder's flags in one cycle and makes -t in the next; a reciprocal's second cycle is
+                // its normalisation
+                x_wait <= fn_ch || fn_rcp;
                 x_fn <= fn; x_am <= amode(fn); x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
+            end
+            if (fn_rcp) begin
                 // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left; and the divide registers'
                 // state after it (in program order, as the SEL's are)
-                rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
-                r_sqrt <= fn[2];
-                if (fn_rcp) begin
-                    dph <= fn[1:0] == 2'd2;
-                    if (fn[1:0] == 2'd2) div_in_h <= qc[ve[2:0]];
+                if (fn[1:0] != 2'd2) begin
+                    rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
+                    r_sqrt <= fn[2];
                 end
+                dph <= fn[1:0] == 2'd2;
+                if (fn[1:0] == 2'd2) div_in_h <= qc[ve[2:0]];
             end
+        end
+
+        // ---- a fast computation goes to EX2 from SEL (EX1 and MUL are empty then)
+        if (sel0 && fn_fast) begin
+            y_v <= 1'b1; y_fn <= fn; y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
         end
 
         // ---- the MUL stage, and a multiply's start of EX1 behind it
         m_v <= sel0 && fn_mul;
         if (sel0) begin m_fn <= fn; m_vdn <= vdn; end
         if (m_v) begin
-            x_v <= 1'b1; x_mul <= 1'b1; x_wait <= 1'b0; x_one <= 1'b0; x_rcp <= 1'b0;
+            x_v <= 1'b1; x_mul <= 1'b1; x_wait <= 1'b0; x_one <= 1'b0; x_rcp <= 1'b0; x_st <= 1'b0;
             x_fn <= m_fn; x_vdn <= m_vdn; x_am <= 3'd0; x_ve <= 4'd0; x_de <= 3'd0;
         end
 

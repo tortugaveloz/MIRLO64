@@ -183,6 +183,9 @@ int main(int argc, char **argv)
         bool ct_go = false, ct_ok = false;           // (ct_ok: the slot the model is at has met the rules: it stays let go)
         auto &R = *t->rootp;
         for (long n = 0; n < 2000000000L && !bad; n++) {
+            // (VDRAIN=a,b: the vector unit takes one computation at a time for the instructions a to b, to find where a state goes wrong)
+            { static long da = getenv("VDRAIN") ? atol(getenv("VDRAIN")) : -1, db = getenv("VDRAIN") && strchr(getenv("VDRAIN"), ',') ? atol(strchr(getenv("VDRAIN"), ',') + 1) : 1L << 40;
+              R.rsp_top__DOT__vu__DOT__dbg_drain = da >= 0 && ins >= da && ins <= db; }
             // the cycle's events are sampled before its edge
             t->eval();
             bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we, mw = t->tr_mw; int vdone = t->tr_v;
@@ -222,6 +225,9 @@ int main(int argc, char **argv)
                        (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__lw_v,
                        (int)R.rsp_top__DOT__vu__DOT__wp, (int)R.rsp_top__DOT__vu__DOT__x_defer);
             }
+            if (getenv("VTRACE") && ins >= atol(getenv("VTRACE")) && ins <= atol(getenv("VTRACE")) + 12)
+                printf("  [%ld] ins %ld e%d%d epc %03x | sel %d m_v %d x_v %d x_wait %d y_v %d lw_v %d wp %d\n", tb.cyc - c0, ins, e, e2, epc, (int)R.rsp_top__DOT__vu__DOT__sel_fire, (int)R.rsp_top__DOT__vu__DOT__m_v,
+                       (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__y_v, (int)R.rsp_top__DOT__vu__DOT__lw_v, (int)R.rsp_top__DOT__vu__DOT__wp);
             tb.tick();
             if (dmem_late && !bad) {
                 dmem_late = 0;
@@ -304,7 +310,7 @@ int main(int argc, char **argv)
             // The vector unit is a pipeline: its state is compared when it is quiescent (tr_v: nothing under way and nothing
             // starting), against the model's after the last vector instruction that left E
             if (vdone && !bad && !vexp.empty()) {
-                Vs v = vexp.back(); vexp.clear();
+                Vs v = vexp.back(); std::vector<Vs> win(vexp.begin(), vexp.end()); vexp.clear();
                 for (int r = 0; r < 32 && !bad; r++)
                     for (int l = 0; l < 8; l++)
                         if (R.rsp_top__DOT__vu__DOT__shadow[r][l] != v.vr[r][l]) {
@@ -323,6 +329,7 @@ int main(int argc, char **argv)
                            R.rsp_top__DOT__vu__DOT__vco, R.rsp_top__DOT__vu__DOT__vcc, R.rsp_top__DOT__vu__DOT__vce, v.vco, v.vcc, v.vce);
                     bad = 1;
                 }
+                if (bad && getenv("VWIN")) for (auto &w : win) printf("      window: instruction %ld pc %03x %08x\n", w.ins, w.pc, w.in);
             }
             // (after the BREAK the vector unit may still have an instruction's
             // execute to run: its state is compared like any other's)
