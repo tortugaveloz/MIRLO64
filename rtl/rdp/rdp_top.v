@@ -469,7 +469,11 @@ module rdp_top (
         input [2:0] a;
         attr_on = a < 3'd4 ? fl[2] : a < 3'd7 ? fl[1] : fl[0];
     endfunction
-    reg [31:0] row_off;            // y * width * 2 (color / Z images; an 8-bit colour image's y * width)
+    // The row's offset into the images, y * width pixels (row_h), and in bytes (row_off): twice that for the 16- and
+    // 32-bit images, as they are (an 8-bit one's is the pixels'). The first row's is the product of the span setup, as 0 +
+    // it through the step's adder (the next rows' step: + the width), so that the register has the one source.
+    reg [31:0] row_h;
+    wire [31:0] row_off = cimg8 ? row_h : {row_h[30:0], 1'b0};
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
     reg [9:0]  px_cnt;
@@ -606,6 +610,9 @@ module rdp_top (
     // ---- e[] / ade[] RAM ports
     reg  [3:0]  es;                 // row step: attribute es, 8 when idle
     reg         es_done;            // this row's step finished
+    wire        rw_ld  = (st == S_TRI_INIT && mi == 5'd13) || (st == S_RECT_INIT && mi == 5'd2);
+    wire        rw_stp = st == S_NEXT && (!kind_tri || es_done);
+    always @(posedge clk) if (rw_ld || rw_stp) row_h <= (rw_ld ? 32'd0 : row_h) + (rw_ld ? mul_p[31:0] : {21'd0, cimg_width});
     reg  [2:0]  ea;                 // read address
     always @(*) begin
         case (st)
@@ -1001,7 +1008,6 @@ module rdp_top (
                     // products come back two cycles later
                     case (mi)
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
-                        5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
                     endcase
                     mi <= mi + 5'd1;
@@ -1176,14 +1182,13 @@ module rdp_top (
             // its setup, or here when the row had none)
             S_NEXT: if (!kind_tri || es_done) begin
                 y <= y + 12'sd1;
-                row_off <= row_off + (cimg8 ? {21'd0, cimg_width} : {20'd0, cimg_width, 1'b0});
                 es_done <= 1'b0;
                 st <= S_ROW;
             end else if (es == 4'd8) es <= 4'd0;
 
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
-                if (mi == 5'd2) begin row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0}; st <= S_ROW; end
+                if (mi == 5'd2) st <= S_ROW;
                 mi <= mi + 5'd1;
             end
 
