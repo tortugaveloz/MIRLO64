@@ -275,6 +275,12 @@ always_comb begin
 end
 wire [31:0] za_s = za_x + (za_y ^ {32{za_inv}}) + {31'd0, za_cin};
 
+// (FAST) zmag's left shifts, one barrel: S_NORM2's by the count of leading zeros, and the shift by one of the quotient / root
+// (S_ITER: the bit of the iteration comes in) and of cvt.s.l's loop (S_LSH1: ir's top bit comes in)
+wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1) ? 6'd1 : nzc;
+wire        zsh_in = (st == S_ITER && it_ge) || (st == S_LSH1 && ir[31]);
+wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
+
 // round (zmag normalised: bit 31 set) and pack; FTZ, overflow to infinity
 wire [24:0] rm = {1'b0, zmag[31:8]} + {24'd0, zmag[7] && (zst || zmag[6:0] != 0 || zmag[8])};
 wire signed [11:0] rexp = zexp + 12'(rm[24]);
@@ -427,7 +433,7 @@ always_ff @(posedge clk) begin
         st <= S_NORM;
     end
     S_ITER: begin
-        zmag <= {zmag[30:0], it_ge};
+        zmag <= FAST ? zsh : {zmag[30:0], it_ge};
         if (kind == K_DIV) ir <= (it_ge ? it_d[31:0] : it_a) << 1;
         else begin ir <= it_ge ? it_d[31:0] : it_a; mp <= {mp[53:0], 2'b00}; end
         icnt <= icnt - 5'd1;
@@ -456,8 +462,8 @@ always_ff @(posedge clk) begin
         else begin zmag <= h; zexp <= 12'sd190; st <= S_LSH1; end
     end
     S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
-            else begin zmag <= {zmag[30:0], ir[31]}; ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
-    S_NORM2: begin zmag <= zmag << nzc; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
+            else begin zmag <= FAST ? zsh : {zmag[30:0], ir[31]}; ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
+    S_NORM2: begin zmag <= zsh; zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
     S_F2W: if (FAST) begin zmag <= sh_o[34:3]; fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
     else begin                                            // |x| < 2^31
