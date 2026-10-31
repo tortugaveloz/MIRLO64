@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "n64.h"
+#include "fpd64.h"
 
 #define RS(i) (((i) >> 21) & 31)
 #define RT(i) (((i) >> 16) & 31)
@@ -226,6 +227,7 @@ static int fp_denorm(float x) { fu_t u = { .f = x }; return (u.u & 0x7F800000u) 
  * every NaN result the default one, 0x7FBFFFFF; arithmetic rounds to nearest
  * even whatever FCR31.RM says (games keep the default). */
 extern int n64_no64;
+int n64_fpd64;      /* the CPU has FPD64: add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d are exact doubles (fpd64.h) */
 static float ftz(float x) { fu_t u = { .f = x }; if (!(u.u & 0x7F800000u)) u.u &= 0x80000000u; return u.f; }
 static float canon(float x) { fu_t u = { .f = x }; if (x != x) u.u = 0x7FBFFFFFu; return u.f; }
 /* an arithmetic result: rounded to 24 bits with an unbounded exponent, then
@@ -257,6 +259,23 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
         case 0x06: if (fs == 31) c->fcr31 = rt32 & 0x0183FFFFu; break;              /* ctc1 */
         case 0x10: case 0x11: {                                                     /* .s / .d */
             int dbl = fmt == 0x11;
+            if (dbl && n64_fpd64) {                                                 /* (the doubles fpd64.h does: raw pairs, no float) */
+                uint32_t fn = insn & 63;
+                uint64_t dx = (uint64_t)c->f[fs | 1] << 32 | c->f[fs & ~1], dy = (uint64_t)c->f[ft | 1] << 32 | c->f[ft & ~1], dr;
+                if (fn <= 2 || fn == 5 || fn == 7) {
+                    dr = fn == 0 ? fpd_add(dx, dy, 0) : fn == 1 ? fpd_add(dx, dy, 1) : fn == 2 ? fpd_mul(dx, dy) : fn == 5 ? fpd_abs(dx) : fpd_neg(dx);
+                    c->f[fd & ~1] = (uint32_t)dr; c->f[fd | 1] = (uint32_t)(dr >> 32);
+                    break;
+                }
+                if (fn >= 0x30) {
+                    double x, y; uint64_t fx = fpd_ftz(dx), fy = fpd_ftz(dy);
+                    memcpy(&x, &fx, 8); memcpy(&y, &fy, 8);          /* (a NaN compares unordered as it is) */
+                    int un = x != x || y != y;
+                    int cond = ((fn & 1) && un) || ((fn & 2) && !un && x == y) || ((fn & 4) && !un && x < y);
+                    c->fcr31 = cond ? (c->fcr31 | 0x00800000u) : (c->fcr31 & ~0x00800000u);
+                    break;
+                }
+            }
             float x = dbl ? fpd_get(c, fs) : fs_get(c, fs);
             float y = dbl ? fpd_get(c, ft) : fs_get(c, ft);
             float res;
