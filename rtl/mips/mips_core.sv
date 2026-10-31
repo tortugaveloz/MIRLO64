@@ -43,7 +43,7 @@
 //    vector (0x8000_0000 with Status.EXL clear), one that an entry names with V clear the same codes, a store to a page with D
 //    clear Mod (1), at the general vector; BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address, EPC / Cause.BD /
 //    Status.EXL as for any exception. A mapped access takes the slow path (one uncached word; a store through the write
-//    buffer, dropping a line it may shadow), a mapped fetch too unless FPG gives the CPU its page registers. With MON a valid
+//    buffer, dropping a line it may shadow), a mapped fetch from a cacheable page runs through the I-cache by the page registers (PG). With MON a valid
 //    page whose physical address is not the game's RDRAM (the RCP, the cartridge, nothing; with MCTL's bit 10 the RDRAM's
 //    upper half too) is the device access of an unmapped address -- an address error (4, 5) for the monitor level, with
 //    COP0 register 22 holding the physical address the page gave. COP0 register 23 reads 'T' 'L' 'B' | PG << 2 | 1 << 1 | MON
@@ -70,7 +70,7 @@
 //    entry is written through COP0 register 23: a write stores the entry of
 //    EntryHi's page (the pair's page by the value's bit 4) and ASID:
 //      bits 28-12 pa[28:12]    bit 4 va[12]    bit 3 the table (1: fetches)
-//      bit 5 cacheable (a fetch from the page may use the I-cache: FPG)
+//      bit 5 cacheable (a fetch from the page may use the I-cache: the page registers)
 //      bit 2 global    bit 1 dirty (a store is allowed)    bit 0 valid
 //    and it reads 0x5442_0000, with bit 3 set when the last TLB exception
 //    was a fetch's (its entry is the fetch table's) and bit 0 set on a core
@@ -85,7 +85,7 @@
 //    the monitor delivers (the CPU's own EPC / Cause / vector work, done by
 //    software: lang/n64rt/n64rt_os.c, tlb_deliver). With N64WIN code fetched
 //    from a mapped page is the game's, as KSEG0's. A fetch from a mapped page runs through the I-cache when its
-//    fetch-table entry has the cacheable bit and FPG gave the CPU its page registers (see "The page registers"
+//    fetch-table entry has the cacheable bit and the CPU has its page registers (see "The page registers"
 //    above F): two registers keep the last two such pages, so the table is read (four cycles) only when a fetch
 //    changes to a third page; any write to COP0 23 empties them.
 //  - Five stages: F (I-cache), D (decode, registers, branches -- a delay slot
@@ -99,7 +99,7 @@
 //    empty. ld, sd, ldc1 and sdc1 to cached memory are two words in two
 //    cycles, through the cache and the write buffer as any other. Uncached,
 //    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,
-//    FPG, and a load from one, PGD) take the slow path (one single-word access; two for a 64-bit one).
+//    the page registers, and a load from one, PGD) take the slow path (one single-word access; two for a 64-bit one).
 //  - ldl, ldr, sdl, sdr (XUA) are accesses to the doubleword the address is in, as ld's and sd's are -- cached, uncached and
 //    mapped alike, a device's the same address error -- with no alignment requirement, done on the d-shifter's register (sh_r)
 //    a byte a cycle. A store rotates rt left by 8 - n bytes (sdl) or 7 - n (sdr), n the address' low three bits, and writes
@@ -227,8 +227,7 @@ module mips_core #(
     // TLB_RAM or TLB_EN with FAST (FLAT, N64WIN): two page registers on the fetch side -- the last two pages that a search
     // (TLB_EN) or the fetch table (TLB_RAM) found cacheable (TLB_EN: C is not 2, and the page is in the RDRAM; TLB_RAM: the
     // entry's C bit, COP0 23's bit 5) -- and a fetch from such a page runs through the I-cache like KSEG0's (see "The page
-    // registers" above F). 0: a mapped fetch is always the slow path.
-    parameter bit FPG = 0,
+    // registers" above F). With FLAT, N64WIN and FAST they are always there (PG): a mapped fetch is otherwise the slow path.
     // the D-cache drops a line another master writes into (FLAT, the SDRAM's 64 MiB): sn_t turns over for each of
     // those writes, sn_line is its line (pa[25:4]); see "The snoop" below the cache RAM writes
     parameter bit SNOOP = 0,
@@ -297,7 +296,7 @@ localparam bit XSH  = XALU && W64_SH;        // its shifter
 localparam bit XMD  = XALU && W64_MD;        // dmult(u); HI and LO of 64 bits
 localparam bit XDIV = XMD && W64_DIV;        // ddiv(u)
 localparam bit XUA  = XSH && W64_UA && FAST && XWB && BIG;   // ldl, ldr, sdl, sdr: the d-shifter's register, a byte a cycle
-localparam bit PG   = FPG && (TLB_RAM || TLB_EN) && FAST && FLAT && N64WIN;     // the fetch page registers
+localparam bit PG   = (TLB_RAM || TLB_EN) && FAST && FLAT && N64WIN;     // the fetch page registers
 
 // =============================================================== decode
 typedef enum logic [4:0] {
@@ -1399,7 +1398,7 @@ always_comb begin
     // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
     5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     // (TLB_RAM: bit 0, the game's TLB instructions are the monitor's; TLB_EN: 'T' 'L' 'B', bit 2 cached fetches from mapped pages
-    // (FPG), bit 1 the real TLB, bit 0 the monitor)
+    // (the page registers), bit 1 the real TLB, bit 0 the monitor)
     5'd23: c0_rd = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
     5'd22: c0_rd = ((TLB_RAM || TLB_EN) && MON) ? mon_badv : 32'd0;
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)

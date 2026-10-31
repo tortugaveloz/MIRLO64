@@ -185,7 +185,7 @@ integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below
 |---|---|---|
 | `FLAT`, `BIG`, `N64WIN` | 1 | The map above; big-endian; the RDRAM window, and the address error for the game's other accesses |
 | `EXC_BASE` | `0x4000_0000` | The runtime's vector is `EXC_BASE + 0x180` |
-| `TLB_EN` / `TLB_RAM` / `FPG` | 1 / 0 / 0 | The VR4300's TLB, 32 entries in block RAM; no translation tables; no fetch page registers (`MIRLO_FPG`: with them) |
+| `TLB_EN` / `TLB_RAM` | 1 / 0 | The VR4300's TLB, 32 entries in block RAM; no translation tables (`MIRLO_TLB_TABLES`: the tables) |
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD`, `W64_UA` / `W64_DIV` | 1 / 1 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
@@ -318,8 +318,8 @@ under way when that happens is dropped and made again. The costs, in cycles of t
 
 A mapped load or store takes the slow path: one uncached word (two for a 64-bit one), and a store through a mapped page
 drops the line it may shadow in the D-cache. A mapped `lw`, `sw`, `ld`, `sd`, `ldl`, `sdl`, `ll` and `sc` are the same as an unmapped
-one's in what they do (`LLAddr` is the physical address). A mapped fetch is the slow path as well, a word at a time, unless the CPU has
-the **fetch page registers** (`FPG`, off in the SoC's default build, `MIRLO_FPG` turns it on): two registers keep the last two pages
+one's in what they do (`LLAddr` is the physical address). A mapped fetch is the slow path as well, a word at a time, unless the page is held by one of
+the **fetch page registers**: two registers keep the last two pages
 a search found that are cacheable (the entry's C field is not 2) and in the RDRAM -- the virtual page with its size, the ASID or global, the
 physical page -- and a fetch from one runs through the I-cache like KSEG0's. The I-cache is indexed by the virtual address and tagged by
 the physical one, `{valid, pa[28:12]}`; F delivers the cache's word and D checks it a cycle later against the register's page. A
@@ -368,7 +368,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 | 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:27]` read the 64-bit levels present: ALU, SH, MD, DIV, UA |
 | 22 | Read only: the physical address a page gave to the last device access through the TLB that the monitor level took; with the tables, the address of the last translation fault it took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
-| 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (`FPG`), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
+| 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (1 in the SoC), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
 | 0 (Index) | Bit 31 (P) is writable by `mtc0` while ERL is set |
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
@@ -1093,8 +1093,7 @@ All benches use Verilator. `VERILATOR` and `VERILATOR_ROOT` name the installatio
 `build.sh soc` verilates the SoC with an SDRAM chip model that checks the chip's timing in nanoseconds, and a model of
 a Game Boy cartridge (`gb_cart_model.sv`); it needs the images of `tools/mips_inits.py`. `build.sh sdr` builds a bench
 of the SDRAM controller, PHY and arbiter alone. The bench makes `clk_sys` at 62.5 MHz and the CPU's clock at 3/2 of it,
-in the PLL's phase. `EXTRA_DEFS="+define+MIRLO_TLB_TABLES"` builds it with the tables' CPU instead of the TLB, `+define+MIRLO_FPG` (TLB) or
-`+define+MIRLO_NO_FPG` (tables) turns the fetch page registers on or off; the tests that need what a CPU lacks say SKIPPED.
+in the PLL's phase. `EXTRA_DEFS="+define+MIRLO_TLB_TABLES"` builds it with the tables' CPU instead of the TLB; the tests that need what a CPU lacks say SKIPPED.
 
 ```
 obj_soc/tb_soc <program.bin> [-c Mcycles] [-o dir] [-e every_n_frames]

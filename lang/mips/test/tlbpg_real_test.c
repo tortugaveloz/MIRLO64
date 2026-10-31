@@ -1,4 +1,4 @@
-/* Cached fetches from mapped pages (mips_core's FPG with the real TLB; sim/mips_soc): code run from a mapped page whose entry
+/* Cached fetches from mapped pages (mips_core's page registers, with the real TLB; sim/mips_soc): code run from a mapped page whose entry
  * has a C field that is not 2 goes through the I-cache -- indexed by the virtual address, tagged by the physical one that the
  * fetch micro-TLB's entry gives -- instead of one uncached word at a time. Checked here:
  *   - the speed: a loop on a cacheable mapped page runs within 1.3x of the same loop in KSEG0; on a page with C = 2 it
@@ -12,7 +12,7 @@
  *   - a straight line of code across a page boundary, and a call between pages.
  * The exceptions are the game's (a mapped pc): vectors in the RDRAM (tlbtest.h) that end in this program's trap_handler, which
  * maps the faulting page as a game's refill handler does (tlbwr, or tlbp and tlbwi for an entry that is there but invalid).
- * On a CPU without the cached fetches (COP0 23's bit 2) the same program passes but for the speed check. */
+ */
 #include "tlbtest.h"
 
 enum { V = 1, D = 2, G = 4, C = 32 };
@@ -197,8 +197,7 @@ int main(void)
     code_page(0x09004000u, 0x34000, C);                              /* colour 4, the frame's own: the same lines as KSEG0's */
     const uint32_t al[4] = { 0x09000000u, 0x09003000u, 0x09004000u, 0x80034000u };
     for (int i = 0; i < 4; i++) check("alias, old code", ((fn_t)al[i])(0), 0x700);
-    for (int k = 0; k < 4 && (MFC0(23) & 4u); k++) {                 /* the code rewritten, dropped through alias k alone (a CPU without
-                                                                      * the page registers fetches a mapped page uncached, which no cache holds a line of) */
+    for (int k = 0; k < 4; k++) {                                    /* the code rewritten, dropped through alias k alone */
         mkfn(0x34000, 0x710 + k);
         icache_hit_inval(al[k]);
         for (int i = 0; i < 4; i++) check("alias, new code", ((fn_t)al[(i + k) & 3])(0), 0x710 + k);

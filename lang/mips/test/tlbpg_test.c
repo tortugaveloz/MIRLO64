@@ -1,4 +1,4 @@
-/* The fetch page registers (mips_core's FPG, with TLB_RAM; sim/mips_soc): code run from a mapped page whose entry in the fetch
+/* The fetch page registers (mips_core's page registers, with TLB_RAM; sim/mips_soc): code run from a mapped page whose entry in the fetch
  * table has its C bit set (COP0 23's bit 5) goes through the I-cache -- indexed by the virtual address, tagged by the physical
  * one that the page register gives -- instead of one uncached word at a time. Checked here:
  *   - the speed: a loop on a cacheable mapped page runs within 1.3x of the same loop in KSEG0; on a page without the C bit it
