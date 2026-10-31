@@ -1009,3 +1009,33 @@ With the CPU's 64-bit division and unaligned doubleword accesses (+77 and +122 A
 and the two changes above, `tools/area2/fit.sh` gives 17,507 to 17,575 ALMs (95 %) over four seeds, against 18,197 to 18,213 on
 main (98 %), and every one of the 128 timing analyses is at or above zero in each (the worst +0.039 to +0.092 ns). Without
 the FPU's changes the same tree fits at 17,740 to 17,799, and one seed of four misses.
+
+## Round 7: the console's rules in the RDP (docs/rdp_exact.md, rules 2, 4 and 6's copy mode)
+
+The RDP alone (`ooc.sh rdp`, every pin virtual, `FIT="1 2 3"`, from main `cb446a5`): 7,377 ALUTs, 6,340 registers, 39 DSP blocks,
+fitted 4,881 / 4,892 / 4,900 ALMs (mean 4,891), worst setup slack of the 16 ns unit +1.265 ns (seed 3). Each step is the tree
+as committed, measured the same way:
+
+| step | ALUTs | registers | DSP | fitted ALMs, seeds 1 / 2 / 3 | mean (against main) |
+|---|---|---|---|---|---|
+| copy mode by groups, a rectangle's LOD next line | 7,539 | 6,349 | 39 | 5,001 / 5,008 / 4,991 | 5,000 (+109) |
+| and the shade and Z at the first covered sample, the dz code | 7,829 | 6,360 | 37 | 5,132 / 5,140 / 5,142 | 5,138 (+247) |
+| and the span's start (first version: `dif` in registers, the copy mode's mask twice) | 7,977 | 6,652 | 37 | 5,245 / 5,241 / 5,249 | 5,245 (+354) |
+| the same, `dif` a MLAB with one write port, the copy mode's mask shared | 7,892 | 6,452 | 37 | 5,181 / 5,179 / 5,186 | 5,182 (+291) |
+
+Worst setup slack of the last: +1.10 ns (seed 3), the same path as main's (the texture decode into `texA9`). Where it went:
+
+* **Shade and Z at the first covered sample** (+131 ALMs, +290 ALUTs): the shade's `(A >> 14) * 4 + ox * DaDx' + oy * DaDy'` for four channels and
+  the Z's of 22 bits. A first version with `*` of the 2-bit factors took 8 more DSP blocks and missed timing by up to 0.6 ns at the 16 ns
+  unit clock (the shade from the mask to `shade0` in one stage); as shifts and adds it takes none (and Z's two DSP blocks are
+  gone: 39 to 37) and the slack is +0.84 ns. DaDy of the four shade attributes is 52 registers.
+* **The span's start** (+54 ALMs after the sharing): three 32-bit subtractors for `dif`, the adders of the start value, the x fraction's
+  24 x 9 product (in logic: Quartus puts a multiplier this small there); `exh` and its adder are gone. A row's setup takes one clock
+  more (the setup state: 8.9 to 9.7 million clocks on the 138 captured tasks), the whole run of them 95,115,501 to 95,126,383 clocks (+0.01 %: the
+  row's step of `e[]` starts with the setup's last clock now).
+* **Copy mode and the rectangle's next line** (+109 ALMs before the sharing of the mask logic): the pixel's place in its group
+  goes down the pipe (15 registers), the texel's add and the 10-bit mask. A first estimate in rdp_exact.md was 20 ALUTs.
+
+Verification: `rdp_regress.sh` 80 runs, 0 failed (63 before: the new ones are `TB_COPY` and `TB_LOD` with `TB_RECT`); the 138 captured
+tasks RTL == model, also per command; with the model built without the rules each of the new seeds fails (the benches see them).
+
