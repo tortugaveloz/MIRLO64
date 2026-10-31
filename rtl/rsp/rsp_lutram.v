@@ -7,7 +7,6 @@
 `default_nettype none
 module rsp_lutram (
     input  wire         clk,
-    input  wire         en,                 // some byte is written (the OR of we, made by the caller)
     input  wire [15:0]  we,
     input  wire [4:0]   wa,
     input  wire [127:0] wd,
@@ -49,7 +48,7 @@ module rsp_lutram (
     ) ram (
         .inclock        (clk),
         .outclock       (clk),
-        .wren           (en),
+        .wren           (|we),
         .byteena        (we),
         .data           (wd),
         .wraddress      (wa),
@@ -62,66 +61,6 @@ module rsp_lutram (
         .rdaddressstall (1'b0),
         .wraddressstall (1'b0),
         .rden           (1'b1)
-    );
-`endif
-endmodule
-
-// rsp_rfram: the scalar register file's memory (rsp_su) -- 32 words of 32 bits in LUT RAM, one clocked write, the read in
-// the cycle at an address the memory registers itself (ra_n: the address of the cycle to come), as rsp_lutram's
-`default_nettype none
-module rsp_rfram (
-    input  wire         clk,
-    input  wire         we,
-    input  wire [4:0]   wa,
-    input  wire [31:0]  wd,
-    input  wire [4:0]   ra_n,
-    output wire [31:0]  q
-);
-`ifdef VERILATOR
-    reg [31:0] m [0:31];
-    reg [4:0]  ra;
-    always @(posedge clk) begin
-        if (we) m[wa] <= wd;
-        ra <= ra_n;
-    end
-    assign q = m[ra];
-`else
-    altdpram #(
-        .width                              (32),
-        .widthad                            (5),
-        .numwords                           (32),
-        .lpm_type                           ("altdpram"),
-        .ram_block_type                     ("MLAB"),
-        .indata_reg                         ("INCLOCK"),
-        .indata_aclr                        ("OFF"),
-        .wraddress_reg                      ("INCLOCK"),
-        .wraddress_aclr                     ("OFF"),
-        .wrcontrol_reg                      ("INCLOCK"),
-        .wrcontrol_aclr                     ("OFF"),
-        .rdaddress_reg                      ("OUTCLOCK"),
-        .rdaddress_aclr                     ("OFF"),
-        .rdcontrol_reg                      ("UNREGISTERED"),
-        .rdcontrol_aclr                     ("OFF"),
-        .outdata_reg                        ("UNREGISTERED"),
-        .outdata_aclr                       ("OFF"),
-        .read_during_write_mode_mixed_ports ("DONT_CARE"),
-        .intended_device_family             ("Cyclone V")
-    ) ram (
-        .inclock        (clk),
-        .outclock       (clk),
-        .wren           (we),
-        .data           (wd),
-        .wraddress      (wa),
-        .rdaddress      (ra_n),
-        .q              (q),
-        .aclr           (1'b0),
-        .sclr           (1'b0),
-        .inclocken      (1'b1),
-        .outclocken     (1'b1),
-        .rdaddressstall (1'b0),
-        .wraddressstall (1'b0),
-        .rden           (1'b1),
-        .byteena        (1'b1)
     );
 `endif
 endmodule

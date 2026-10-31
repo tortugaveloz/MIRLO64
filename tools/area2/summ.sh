@@ -3,11 +3,11 @@
 for d in "$@"; do
   o=$d/output_files
   echo "== $(basename $d)"
-  [ -f $o/mirlo.fit.summary ] || { echo " (no fit yet)"; continue; }
-  grep -h "Fitter Status\|Logic utilization\|Total RAM\|Total DSP" $o/mirlo.fit.summary | sed 's/^/  /'
-  grep -h "Total LABs\|Memory ALUT usage\|ALMs used for\|route-throughs" $o/mirlo.fit.rpt | head -6 | sed 's/^/  /'
-  if [ -f $o/mirlo.sta.summary ]; then
-    python3 - $o/mirlo.sta.summary <<'PY'
+  [ -f $o/${REV:-mirlo}.fit.summary ] || { echo " (no fit yet)"; continue; }
+  grep -h "Fitter Status\|Logic utilization\|Total RAM\|Total DSP" $o/${REV:-mirlo}.fit.summary | sed 's/^/  /'
+  grep -h "Total LABs\|Memory ALUT usage\|ALMs used for\|route-throughs" $o/${REV:-mirlo}.fit.rpt | head -6 | sed 's/^/  /'
+  if [ -f $o/${REV:-mirlo}.sta.summary ]; then
+    python3 - $o/${REV:-mirlo}.sta.summary <<'PY'
 import sys,re
 t=open(sys.argv[1]).read().split('\n\n')
 su=[];ho=[]
@@ -23,7 +23,7 @@ print("  setup worst:", ", ".join(f"{s:+.3f} {n}" for s,n,_ in su[:4]))
 print("  hold  worst:", ", ".join(f"{s:+.3f} {n}" for s,n,_ in ho[:3]))
 PY
   fi
-  n176=$(grep -h "176279" $o/mirlo.fit.rpt | grep -ci "dram_a\|dram_ba")
-  padok=$(grep -E "^; dram_(a|ba)\[[0-9]+\] +; [A-Z0-9]+ +; [0-9A-Z]+ +; [0-9]+ +; [0-9]+ +; [0-9]+ +; yes " $o/mirlo.fit.rpt | wc -l)
+  n176=$(grep -h "176279" $o/${REV:-mirlo}.fit.rpt | grep -ci "dram_a\|dram_ba")
+  padok=$(grep -E "^; dram_(a|ba)\[[0-9]+\] +; [A-Z0-9]+ +; [0-9A-Z]+ +; [0-9]+ +; [0-9]+ +; [0-9]+ +; yes " $o/${REV:-mirlo}.fit.rpt | wc -l)
   echo "  pad check: 176279 dram_a/ba lines = $n176 (want 0); dram_a/ba with Output Register yes = $padok (want 15)"
 done

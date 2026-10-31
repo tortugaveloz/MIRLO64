@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # closure.py <output_files dir>...: the complete sta.summary (all 4 corner models): worst slack by kind and clock group
-import re,sys
+import os,re,sys
 for d in sys.argv[1:]:
-    f=d.rstrip('/')+'/mirlo.sta.summary' if not d.endswith('.summary') else d
+    f=d.rstrip('/')+'/'+os.environ.get('REV','mirlo')+'.sta.summary' if not d.endswith('.summary') else d
     t=open(f).read().split('\n\n')
     n=0; w={}
     for b in t:

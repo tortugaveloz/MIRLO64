@@ -1,0 +1,8 @@
+# ==============================================================================
+# The overclocked build: the same project as mirlo.qsf with the RSP of rtl/rsp_oc on the game CPU's clock
+# (docs/mips.md, "The RSP's clock"). Compile it as a revision: quartus_sh --flow compile mirlo -c mirlo_oc
+# (tools/area2/fit.sh: REV=mirlo_oc); the bitstream is output_files/mirlo_oc.rbf. mirlo.qsf's own revision is
+# the faithful build, the RSP as the console has it on the system clock.
+# ==============================================================================
+source mirlo.qsf
+set_global_assignment -name VERILOG_MACRO "MIRLO_RSP_OC=1"

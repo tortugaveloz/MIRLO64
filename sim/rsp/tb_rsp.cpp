@@ -176,17 +176,13 @@ int main(int argc, char **argv)
         std::deque<std::pair<int, uint32_t>> expect;  // register writes the RTL owes
         struct Vs { long ins; uint32_t pc, in; uint16_t vr[32][8], ah[8], am[8], al[8], vco, vcc; uint8_t vce; };
         std::deque<Vs> vexp;                          // vector-unit instructions the RTL has not finished
-        static const bool vstat = getenv("VSTAT") != nullptr; long vs_n[4] = {0, 0, 0, 0}, vk[3][32] = {};
-        int drain = 0, dmem_late = 0; uint64_t dmas_late = 0;
+        int drain = 0, dmem_late = 0;
         static const bool cyc_on = getenv("CYCLES") != nullptr;
         rsp_time_t ct;
         rsp_time_reset(&ct);
         bool ct_go = false, ct_ok = false;           // (ct_ok: the slot the model is at has met the rules: it stays let go)
         auto &R = *t->rootp;
         for (long n = 0; n < 2000000000L && !bad; n++) {
-            // (VDRAIN=a,b: the vector unit takes one computation at a time for the instructions a to b, to find where a state goes wrong)
-            { static long da = getenv("VDRAIN") ? atol(getenv("VDRAIN")) : -1, db = getenv("VDRAIN") && strchr(getenv("VDRAIN"), ',') ? atol(strchr(getenv("VDRAIN"), ',') + 1) : 1L << 40;
-              R.rsp_top__DOT__vu__DOT__dbg_drain = da >= 0 && ins >= da && ins <= db; }
             // the cycle's events are sampled before its edge
             t->eval();
             bool e = t->tr_e, e2 = t->tr_e2, we = t->tr_we, mw = t->tr_mw; int vdone = t->tr_v;
@@ -226,21 +222,9 @@ int main(int argc, char **argv)
                        (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__lw_v,
                        (int)R.rsp_top__DOT__vu__DOT__wp, (int)R.rsp_top__DOT__vu__DOT__x_defer);
             }
-            if (getenv("VTRACE") && ins >= atol(getenv("VTRACE")) && ins <= atol(getenv("VTRACE")) + 12)
-                printf("  [%ld] ins %ld e%d%d epc %03x | sel %d m_v %d x_v %d x_wait %d y_v %d lw_v %d wp %d\n", tb.cyc - c0, ins, e, e2, epc, (int)R.rsp_top__DOT__vu__DOT__sel_fire, (int)R.rsp_top__DOT__vu__DOT__m_v,
-                       (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__y_v, (int)R.rsp_top__DOT__vu__DOT__lw_v, (int)R.rsp_top__DOT__vu__DOT__wp);
-            if (vstat && R.rsp_top__DOT__vu__DOT__cmp && !R.rsp_top__DOT__vu__DOT__sel0r) {   // (VSTAT=1: why a computation in E waits)
-                vs_n[R.rsp_top__DOT__vu__DOT__dep ? 0 : R.rsp_top__DOT__vu__DOT__ldep ? 1 : !R.rsp_top__DOT__vu__DOT__go_k ? 2 : 3]++;
-                if (!R.rsp_top__DOT__vu__DOT__go_k && !R.rsp_top__DOT__vu__DOT__dep) {
-                    int cl = R.rsp_top__DOT__vu__DOT__fn_fast ? 0 : R.rsp_top__DOT__vu__DOT__fn_mul ? 1 : 2;
-                    vk[cl][(R.rsp_top__DOT__vu__DOT__x_v ? 1 : 0) | (R.rsp_top__DOT__vu__DOT__x_mul ? 2 : 0) | (R.rsp_top__DOT__vu__DOT__x_st ? 4 : 0) | (R.rsp_top__DOT__vu__DOT__x_wait ? 8 : 0) | (R.rsp_top__DOT__vu__DOT__m_v ? 16 : 0)]++;
-                }
-            }
             tb.tick();
-            if (dmem_late && !bad && !R.rsp_top__DOT__sw_v) {
+            if (dmem_late && !bad) {
                 dmem_late = 0;
-                // (a transfer the model does whole when it starts, begun meanwhile, has not reached DMEM in the RTL: not compared)
-                if (m.dmas == dmas_late && !R.rsp_top__DOT__p_full && R.rsp_top__DOT__ds == 0)
                 for (uint32_t a = 0; a < 4096; a += 4)
                     if (tb.dmem_word(a) != be32(m.dmem + a)) {
                         printf("  !! after instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
@@ -306,8 +290,8 @@ int main(int argc, char **argv)
                 if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
                 // (a store's second half may be going behind the next instruction,
                 // one that leaves DMEM alone: DMEM is compared a cycle on)
-                if (!bad && !brk && deep_now && (R.rsp_top__DOT__vu__DOT__st == 4 || R.rsp_top__DOT__sw_v)) { dmem_late = 1; dmas_late = m.dmas; }
-                else if (!bad && !dma_now && !R.rsp_top__DOT__sw_v && (brk || deep_now))
+                if (!bad && !brk && deep_now && R.rsp_top__DOT__vu__DOT__st == 4) dmem_late = 1;
+                else if (!bad && !dma_now && (brk || deep_now))
                     for (uint32_t a = 0; a < 4096; a += 4)
                         if (tb.dmem_word(a) != be32(m.dmem + a)) {
                             printf("  !! instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
@@ -317,29 +301,31 @@ int main(int argc, char **argv)
                 if (verbose && ins <= 200) printf("  %6ld  pc %03x  %08x\n", ins, m.last_pc, m.last_ins);
                 if (brk) ended = 1;
             }
-            // The vector unit is a pipeline: its state is compared when it is quiescent (tr_v: nothing under way and nothing
-            // starting), against the model's after the last vector instruction that left E
-            if (vdone && !bad && !vexp.empty()) {
-                Vs v = vexp.back(); std::vector<Vs> win(vexp.begin(), vexp.end()); vexp.clear();
-                for (int r = 0; r < 32 && !bad; r++)
-                    for (int l = 0; l < 8; l++)
-                        if (R.rsp_top__DOT__vu__DOT__shadow[r][l] != v.vr[r][l]) {
-                            printf("  !! after instruction %ld (pc %03x, %08x): v%d[%d] = %04x, the model %04x\n", v.ins, v.pc, v.in, r, l,
-                                   R.rsp_top__DOT__vu__DOT__shadow[r][l], v.vr[r][l]);
-                            bad = 1; break;
+            for (; vdone > 1 && !vexp.empty(); vdone--) vexp.pop_front();   // (two finished: the state is the later one's)
+            if (vdone && !bad) {
+                // the vector unit's state, against the model's after the instruction that just finished
+                if (vexp.empty()) { printf("  !! the vector unit finished an instruction the model did not run (around %ld)\n", ins); bad = 1; }
+                else {
+                    Vs v = vexp.front(); vexp.pop_front();
+                    for (int r = 0; r < 32 && !bad; r++)
+                        for (int l = 0; l < 8; l++)
+                            if (R.rsp_top__DOT__vu__DOT__shadow[r][l] != v.vr[r][l]) {
+                                printf("  !! instruction %ld (pc %03x, %08x): v%d[%d] = %04x, the model %04x\n", v.ins, v.pc, v.in, r, l,
+                                       R.rsp_top__DOT__vu__DOT__shadow[r][l], v.vr[r][l]);
+                                bad = 1; break;
+                            }
+                    for (int l = 0; l < 8 && !bad && !vpart; l++)
+                        if (R.rsp_top__DOT__vu__DOT__acc_h[l] != v.ah[l] || R.rsp_top__DOT__vu__DOT__acc_m[l] != v.am[l] || R.rsp_top__DOT__vu__DOT__acc_l[l] != v.al[l]) {
+                            printf("  !! instruction %ld (pc %03x, %08x): acc[%d] = %04x %04x %04x, the model %04x %04x %04x\n", v.ins, v.pc, v.in, l,
+                                   R.rsp_top__DOT__vu__DOT__acc_h[l], R.rsp_top__DOT__vu__DOT__acc_m[l], R.rsp_top__DOT__vu__DOT__acc_l[l], v.ah[l], v.am[l], v.al[l]);
+                            bad = 1;
                         }
-                for (int l = 0; l < 8 && !bad; l++)
-                    if (R.rsp_top__DOT__vu__DOT__acc_h[l] != v.ah[l] || R.rsp_top__DOT__vu__DOT__acc_m[l] != v.am[l] || R.rsp_top__DOT__vu__DOT__acc_l[l] != v.al[l]) {
-                        printf("  !! after instruction %ld (pc %03x, %08x): acc[%d] = %04x %04x %04x, the model %04x %04x %04x\n", v.ins, v.pc, v.in, l,
-                               R.rsp_top__DOT__vu__DOT__acc_h[l], R.rsp_top__DOT__vu__DOT__acc_m[l], R.rsp_top__DOT__vu__DOT__acc_l[l], v.ah[l], v.am[l], v.al[l]);
+                    if (!bad && !vpart && (R.rsp_top__DOT__vu__DOT__vco != v.vco || R.rsp_top__DOT__vu__DOT__vcc != v.vcc || R.rsp_top__DOT__vu__DOT__vce != v.vce)) {
+                        printf("  !! instruction %ld (pc %03x, %08x): vco %04x vcc %04x vce %02x, the model %04x %04x %02x\n", v.ins, v.pc, v.in,
+                               R.rsp_top__DOT__vu__DOT__vco, R.rsp_top__DOT__vu__DOT__vcc, R.rsp_top__DOT__vu__DOT__vce, v.vco, v.vcc, v.vce);
                         bad = 1;
                     }
-                if (!bad && (R.rsp_top__DOT__vu__DOT__vco != v.vco || R.rsp_top__DOT__vu__DOT__vcc != v.vcc || R.rsp_top__DOT__vu__DOT__vce != v.vce)) {
-                    printf("  !! after instruction %ld (pc %03x, %08x): vco %04x vcc %04x vce %02x, the model %04x %04x %02x\n", v.ins, v.pc, v.in,
-                           R.rsp_top__DOT__vu__DOT__vco, R.rsp_top__DOT__vu__DOT__vcc, R.rsp_top__DOT__vu__DOT__vce, v.vco, v.vcc, v.vce);
-                    bad = 1;
                 }
-                if (bad && getenv("VWIN")) for (auto &w : win) printf("      window: instruction %ld pc %03x %08x\n", w.ins, w.pc, w.in);
             }
             // (after the BREAK the vector unit may still have an instruction's
             // execute to run: its state is compared like any other's)
@@ -369,9 +355,6 @@ int main(int argc, char **argv)
         }
         printf("%s: %s -- %ld instructions (%ld pairs), %ld cycles (%.2f a instruction, %.2f ms at 62.5 MHz), %zu RDP words\n", argv[ai],
                bad ? "MISMATCH" : ended ? "identical" : "did not end", ins, pairs, cycles, ins ? (double)cycles / ins : 0.0, cycles / 62500.0, rtl_rdp.size());
-        if (vstat) for (int c = 0; c < 3; c++) for (int j = 0; j < 32; j++) if (vk[c][j] > 50)
-            printf("    go_k false: %s, EX1 %s%s%s%s, MUL %s: %ld\n", c == 0 ? "fast" : c == 1 ? "multiply" : "other", (j & 1) ? "busy" : "empty", (j & 2) ? " (multiply)" : "", (j & 4) ? " (s,t kept)" : "", (j & 8) ? " (kept)" : "", (j & 16) ? "busy" : "empty", vk[c][j]);
-        if (vstat) printf("  VSTAT: cycles a computation waited: %ld on a register (dep), %ld on a load (ldep), %ld on the pipeline (go_k), %ld other\n", vs_n[0], vs_n[1], vs_n[2], vs_n[3]);
         tot_cyc += cycles; tot_ins += ins;
         cy_con += (double)ct.now;
         bad_tasks += bad || !ended;

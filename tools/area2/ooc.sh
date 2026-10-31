@@ -1,5 +1,5 @@
 #!/bin/bash
-# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), rdp (rdp_top), rsp (rsp_top),
+# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), rdp (rdp_top), rsp (rsp_top), rspoc (rsp_top_oc, the overclocked build's),
 # video (n64_video), regs (mirlo_regs), and the SoC's smaller blocks -- soc (mirlo_mips whole: its entity table), glue
 # (mirlo_mips with the three cores as stubs), ai, si, vi
 # (rcp_ai, rcp_si, rcp_vi), arb (sdr_arb, six ports), sdr (sdr_ctrl), dpc (rdp_dpc with rcp_dpc_view), cport (cpu_port),
@@ -40,7 +40,17 @@ module ooc_rsp (input wire clk, rst, h_we, input wire [3:0] h_addr, input wire [
     output wire r_valid, r_we, output wire [23:2] r_addr, output wire [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
     output wire dpc_start_we, dpc_end_we, dpc_status_we, output wire [31:0] dpc_wdata, input wire [31:0] dpc_start, dpc_end, dpc_current, dpc_status,
     input wire [9:0] dx_addr, output wire [31:0] dx_data, output wire halted, unimpl);
-    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.clk_b(clk), .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
+    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
+endmodule
+SV
+;;
+rspoc) cat > top.sv <<SV
+\`include "mirlo_mips_init.svh"
+module ooc_rspoc (input wire clk, rst, h_we, input wire [3:0] h_addr, input wire [31:0] h_wdata, output wire [31:0] h_rdata, input wire h_rd, output wire h_ready, irq,
+    output wire r_valid, r_we, output wire [23:2] r_addr, output wire [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
+    output wire dpc_start_we, dpc_end_we, dpc_status_we, output wire [31:0] dpc_wdata, input wire [31:0] dpc_start, dpc_end, dpc_current, dpc_status,
+    input wire [9:0] dx_addr, output wire [31:0] dx_data, output wire halted, unimpl);
+    rsp_top_oc #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.clk_b(clk), .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
 endmodule
 SV
 ;;
@@ -58,7 +68,7 @@ rdp)  top=rdp_top ;;
 regs) top=mirlo_regs ;;
 soc)  top=mirlo_mips ;;
 glue) top=mirlo_mips                    # (mirlo_mips with the CPU, the RSP and the RDP as glue_stubs.sv's stubs: minutes, not twenty)
-      cp $W/tools/area2/glue_stubs.sv rtl/soc/mips_sys.sv; : > rtl/rsp/rsp_top.sv; : > rtl/rdp/rdp_top.v ;;
+      cp $W/tools/area2/glue_stubs.sv rtl/soc/mips_sys.sv; : > rtl/rsp/rsp_top.sv; : > rtl/rsp_oc/rsp_top_oc.sv; : > rtl/rdp/rdp_top.v ;;
 ai)   top=rcp_ai ;;
 si)   top=rcp_si ;;
 vi)   top=rcp_vi ;;
@@ -94,7 +104,7 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+*) echo "unit: cpu rdp rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"

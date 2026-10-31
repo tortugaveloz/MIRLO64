@@ -500,7 +500,7 @@ logic        dpc_start_ok;
 `endif
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
-// What rsp_top sees. On clk_sys (RSP_OC = 0) these are the SoC's own nets, as they have always been. With RSP_OC it is on
+// The RSP. RSP_OC = 0: the faithful RSP (rtl/rsp), on clk_sys, as it has always been. RSP_OC = 1: the pipelined one (rtl/rsp_oc), on
 // clk_cpu with edges left out (rsp_clk.sv, chosen by RSPDUTY: all of them is the overclock), and rsp_xing.sv takes everything
 // across: the host registers, the DMA's port of the arbiter, the DPC's writes (in order with the DMA, the RSP waiting for
 // them) and registers; its interrupt and state are sampled here.
@@ -540,34 +540,31 @@ generate if (RSP_OC) begin : oc
     assign rsp_dpc_wdata = s_dp_wdata;
     always_ff @(posedge clk) begin r_irq_q <= rsp_irq_i; r_halt_q <= rsp_halted_i; r_unimpl_q <= rsp_unimpl_i; end
     assign rsp_irq = r_irq_q; assign rsp_halted = r_halt_q; assign rsp_unimpl = r_unimpl_q;
+    rsp_top_oc #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV), .DUALCLK(1'b1)) rsp (.clk(rsp_ck), .clk_b(clk), .rst(rsp_rst),
+        .h_we(rsp_h_we), .h_rd(rsp_h_rd), .h_addr(rsp_h_addr), .h_wdata(rsp_h_wdata), .h_rdata(rsp_h_rdata_i),
+        .h_ready(rsp_h_ready), .irq(rsp_irq_i),
+        .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
+        .r_ready(rsp_r_ready), .r_rvalid(rsp_r_rvalid), .r_rdata(rsp_r_rdata),
+        .dpc_start_we(rsp_dpc_start_we_i), .dpc_end_we(rsp_dpc_end_we_i), .dpc_status_we(rsp_dpc_status_we_i), .dpc_wdata(rsp_dpc_wdata_i),
+        .dpc_start(rsp_dpc_start_i), .dpc_end(rsp_dpc_end_i), .dpc_current(rsp_dpc_current_i), .dpc_status(rsp_dpc_status_i),
+        .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
+        .halted(rsp_halted_i), .unimpl(rsp_unimpl_i),
+        .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp());
 end else begin : noc
-    assign rsp_ck = clk;
-    assign rsp_rst = rst;
-    assign rsp_h_we = rsp_x_go && rx_we && !rx_addr[4];
-    assign rsp_h_rd = rsp_x_go && !rx_we && !rx_addr[4];
-    assign rsp_h_addr = rx_addr[3:0];
-    assign rsp_h_wdata = rx_wdata;
-    assign rsp_h_rdata = rsp_h_rdata_i;
-    assign rsp_r_ready = p_ready[3];
-    assign rsp_r_rvalid = p_rvalid[3];
-    assign rsp_r_rdata = p_rdata;
-    assign rsp_dpc_start_i = {8'd0, dpc_start}; assign rsp_dpc_end_i = {8'd0, dpc_end_rd}; assign rsp_dpc_current_i = {8'd0, dpc_current}; assign rsp_dpc_status_i = dpc_status;
-    assign rsp_dpc_start_we = rsp_dpc_start_we_i; assign rsp_dpc_end_we = rsp_dpc_end_we_i; assign rsp_dpc_status_we = rsp_dpc_status_we_i;
-    assign rsp_dpc_wdata = rsp_dpc_wdata_i;
-    assign rsp_irq = rsp_irq_i; assign rsp_halted = rsp_halted_i; assign rsp_unimpl = rsp_unimpl_i;
+    // the faithful RSP: on clk_sys, its ports the SoC's own nets
+    rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV)) rsp (.clk, .rst,
+        .h_we(rsp_x_go && rx_we && !rx_addr[4]), .h_rd(rsp_x_go && !rx_we && !rx_addr[4]), .h_addr(rx_addr[3:0]), .h_wdata(rx_wdata), .h_rdata(rsp_h_rdata),
+        .h_ready(rsp_h_ready), .irq(rsp_irq),
+        .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
+        .r_ready(p_ready[3]), .r_rvalid(p_rvalid[3]), .r_rdata(p_rdata),
+        .dpc_start_we(rsp_dpc_start_we), .dpc_end_we(rsp_dpc_end_we), .dpc_status_we(rsp_dpc_status_we), .dpc_wdata(rsp_dpc_wdata),
+        .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
+        .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
+        .halted(rsp_halted), .unimpl(rsp_unimpl),
+        .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp());
     assign sx_valid = rsp_r_valid; assign sx_we = rsp_r_we; assign sx_addr = rsp_r_addr[22:2]; assign sx_wdata = rsp_r_wdata;
     assign oc_h_done = 1'b0; assign oc_dp_go = 1'b0;
 end endgenerate
-rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV), .DUALCLK(RSP_OC)) rsp (.clk(rsp_ck), .clk_b(clk), .rst(rsp_rst),
-    .h_we(rsp_h_we), .h_rd(rsp_h_rd), .h_addr(rsp_h_addr), .h_wdata(rsp_h_wdata), .h_rdata(rsp_h_rdata_i),
-    .h_ready(rsp_h_ready), .irq(rsp_irq_i),
-    .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
-    .r_ready(rsp_r_ready), .r_rvalid(rsp_r_rvalid), .r_rdata(rsp_r_rdata),
-    .dpc_start_we(rsp_dpc_start_we_i), .dpc_end_we(rsp_dpc_end_we_i), .dpc_status_we(rsp_dpc_status_we_i), .dpc_wdata(rsp_dpc_wdata_i),
-    .dpc_start(rsp_dpc_start_i), .dpc_end(rsp_dpc_end_i), .dpc_current(rsp_dpc_current_i), .dpc_status(rsp_dpc_status_i),
-    .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
-    .halted(rsp_halted_i), .unimpl(rsp_unimpl_i),
-    .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp());
 assign cpu_irq     = mon_own ? (mon_mi ? mi_line : mon_rcp) : (game_irq | rsp_irq);       // (the monitor's: the game's own IP2 is the monitor's line)
 assign mon_sp      = rsp_irq;
 assign p_valid[3]  = sx_valid;

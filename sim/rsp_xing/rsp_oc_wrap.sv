@@ -1,4 +1,4 @@
-// The real RSP (rtl/rsp/rsp_top.sv) on the gated clock of the game CPU, across rsp_xing.sv, with the RDP's command registers
+// The real RSP (rtl/rsp_oc/rsp_top_oc.sv) on the gated clock of the game CPU, across rsp_xing.sv, with the RDP's command registers
 // and fetch (rtl/rdp/rdp_dpc.sv) on clk_sys, as mirlo_mips.sv wires them with RSP_OC: for tb_ocdpc.cpp, which runs a task and
 // checks the command words that come out against the RSP's model (as sim/rdp's tb_dpc does without the crossing).
 `default_nettype none
@@ -44,7 +44,7 @@ rsp_xing xing (.clk_r(gclk), .rst_r(rst_c), .clk_c,
     .clk, .rst, .s_h_req, .s_h_we, .s_h_addr, .s_h_wdata, .s_h_done, .s_h_rdata,
     .p_valid, .p_we, .p_addr, .p_wdata, .p_ready, .p_rvalid, .p_rdata,
     .s_dp_go, .s_dp_k, .s_dp_wdata, .dpa_t, .s_dpc_start(dpc_start), .s_dpc_end(dpc_end_rd), .s_dpc_current(dpc_current), .s_dpc_status(dpc_status));
-rsp_top #(.LANES(8), .MULW(1'b1), .DIV_ROM(DIV_ROM), .DUALCLK(1'b1)) rsp (.clk(gclk), .clk_b(clk), .rst(rst_c),
+rsp_top_oc #(.LANES(8), .MULW(1'b1), .DIV_ROM(DIV_ROM), .DUALCLK(1'b1)) rsp (.clk(gclk), .clk_b(clk), .rst(rst_c),
     .h_we, .h_rd, .h_addr, .h_wdata, .h_rdata, .h_ready, .irq,
     .r_valid, .r_we, .r_addr, .r_wdata, .r_ready, .r_rvalid, .r_rdata,
     .dpc_start_we, .dpc_end_we, .dpc_status_we, .dpc_wdata,

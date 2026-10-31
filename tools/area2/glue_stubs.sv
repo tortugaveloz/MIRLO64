@@ -37,6 +37,23 @@ assign {h_rdata, h_ready, irq, r_valid, r_we, r_addr, r_wdata, dpc_start_we, dpc
 assign {tr_e, tr_e_pc, tr_e2, tr_e_we, tr_e_wr, tr_we, tr_wr, tr_val, tr_mw, tr_v, tr_vp} = '0;
 endmodule
 
+module rsp_top_oc #(parameter int LANES = 4, parameter bit MULW = 0, parameter DIV_ROM = "rsp_div_rom.hex", parameter bit DUALCLK = 0) (
+    input  wire         clk, clk_b, rst, h_we, input wire [3:0] h_addr, input wire [31:0] h_wdata, output logic [31:0] h_rdata, input wire h_rd,
+    output logic        h_ready, irq,
+    output logic        r_valid, r_we, output logic [23:2] r_addr, output logic [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
+    output logic        dpc_start_we, dpc_end_we, dpc_status_we, output logic [31:0] dpc_wdata,
+    input  wire  [31:0] dpc_start, dpc_end, dpc_current, dpc_status, input wire [9:0] dx_addr, output logic [31:0] dx_data,
+    output logic        halted, unimpl,
+    output logic        tr_e, output logic [11:0] tr_e_pc, output logic tr_e2, tr_e_we, output logic [4:0] tr_e_wr, output logic tr_we,
+    output logic [4:0]  tr_wr, output logic [31:0] tr_val, output logic tr_mw, output logic [3:0] tr_v, output logic tr_vp
+);
+localparam int N = 32 + 2 + 2 + 22 + 32 + 3 + 32 + 32 + 2;
+logic [N-1:0] s;
+always_ff @(posedge clk) s <= {s[N-2:0], ^{rst, h_we, h_addr, h_wdata, h_rd, r_ready, r_rvalid, r_rdata, dpc_start, dpc_end, dpc_current, dpc_status, dx_addr}};
+assign {h_rdata, h_ready, irq, r_valid, r_we, r_addr, r_wdata, dpc_start_we, dpc_end_we, dpc_status_we, dpc_wdata, dx_data, halted, unimpl} = s;
+assign {tr_e, tr_e_pc, tr_e2, tr_e_we, tr_e_wr, tr_we, tr_wr, tr_val, tr_mw, tr_v, tr_vp} = '0;
+endmodule
+
 module rdp_top (
     input  wire        clk, rst, cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
     output wire        m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,

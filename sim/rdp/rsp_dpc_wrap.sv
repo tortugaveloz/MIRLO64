@@ -26,7 +26,7 @@ logic        dpc_start_we, dpc_end_we, dpc_status_we, h_ready, irq;
 logic [31:0] dpc_wdata, dpc_status, dx_data;
 logic [23:0] dpc_start, dpc_end, dpc_end_rd, dpc_current;
 logic [9:0]  dx_addr;
-rsp_top #(.LANES(8), .MULW(1'b1), .DIV_ROM(DIV_ROM)) rsp (.clk, .rst,
+rsp_top #(.LANES(4), .DIV_ROM(DIV_ROM)) rsp (.clk, .rst,
     .h_we, .h_rd(1'b0), .h_addr, .h_wdata, .h_rdata, .h_ready, .irq,
     .r_valid, .r_we, .r_addr, .r_wdata, .r_ready, .r_rvalid, .r_rdata,
     .dpc_start_we, .dpc_end_we, .dpc_status_we, .dpc_wdata,

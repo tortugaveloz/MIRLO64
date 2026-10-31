@@ -16,7 +16,7 @@ soc)
     # the Quartus project's macros (projects/mirlo.qsf) but MIRLO_NO_JTAG_UART (the JTAG UART is built, its chain idle)
     DEFS="+define+CMDQ_AW=12 ${EXTRA_DEFS:-}"
     # (the closing set's MIRLO_* macros are always on in the RTL now; EXTRA_DEFS is for the value macros: MIRLO_CPU_IC_LOG2,
-    # MIRLO_CPU_DC_LOG2, MIRLO_RSP_LANES. The bench's clocks are the closing set's: the SoC at 62.5 MHz, the game CPU at 3/2 of it.)
+    # MIRLO_CPU_DC_LOG2, MIRLO_RSP_LANES, and MIRLO_RSP_OC (the overclocked build: the RSP of rtl/rsp_oc on the game CPU's clock). The bench's clocks are the closing set's: the SoC at 62.5 MHz, the game CPU at 3/2 of it.)
     S="$R/rtl/soc"
     "$VL" --cc --exe --build -j 8 -O3 ${VL_THREADS:+--threads $VL_THREADS} -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN \
         --x-assign fast --x-initial fast -Mdir "${OBJ:-$HERE/obj_soc}" --top-module soc_sim_top $DEFS ${TBC:+-CFLAGS "$TBC"} -I"$S" \
@@ -25,6 +25,7 @@ soc)
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
         "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" \
         "$R/rtl/rsp/rsp_lutram.v" "$R/rtl/rsp/rsp_su.sv" "$R/rtl/rsp/rsp_vu.sv" "$R/rtl/rsp/rsp_dpram.sv" "$R/rtl/rsp/rsp_top.sv" \
+        "$R/rtl/rsp_oc/rsp_lutram_oc.v" "$R/rtl/rsp_oc/rsp_su_oc.sv" "$R/rtl/rsp_oc/rsp_vu_oc.sv" "$R/rtl/rsp_oc/rsp_dpram_oc.sv" "$R/rtl/rsp_oc/rsp_top_oc.sv" \
         "$R/rtl/rdp/rdp_sdpram.v" "$R/rtl/rdp/rdp_rcp_rom.v" "$R"/rtl/rdp/rdp_*.v "$R/rtl/rdp/rdp_dpc.sv" \
         "$HERE/soc_sim_top.sv" "$HERE/tb_soc.cpp" -o tb_soc > "${OBJ:-$HERE/obj_soc}.log" 2>&1 || { grep -E "%Error" "${OBJ:-$HERE/obj_soc}.log" | head -30; tail -5 "${OBJ:-$HERE/obj_soc}.log"; exit 1; }
     echo "OK -> ${OBJ:-$HERE/obj_soc}/tb_soc" ;;

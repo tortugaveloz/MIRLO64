@@ -1,0 +1,8 @@
+# The pipelined RSP of the overclocked build (rtl/rsp_oc): the same RSP as rtl/rsp for the software, re-pipelined to run on the
+# game CPU's clock -- docs/rsp.md, "The overclocked build". In MIRLO's SoC (rtl/soc/mirlo_mips.sv) it is instantiated only with
+# RSP_OC (MIRLO_RSP_OC); the faithful RSP (rtl/rsp.qip) otherwise.
+set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) "rsp_oc/rsp_lutram_oc.v"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp_oc/rsp_su_oc.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp_oc/rsp_vu_oc.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp_oc/rsp_dpram_oc.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "rsp_oc/rsp_top_oc.sv"]
