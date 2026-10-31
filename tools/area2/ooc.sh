@@ -40,7 +40,7 @@ module ooc_rsp (input wire clk, rst, h_we, input wire [3:0] h_addr, input wire [
     output wire r_valid, r_we, output wire [23:2] r_addr, output wire [31:0] r_wdata, input wire r_ready, r_rvalid, input wire [31:0] r_rdata,
     output wire dpc_start_we, dpc_end_we, dpc_status_we, output wire [31:0] dpc_wdata, input wire [31:0] dpc_start, dpc_end, dpc_current, dpc_status,
     input wire [9:0] dx_addr, output wire [31:0] dx_data, output wire halted, unimpl);
-    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
+    rsp_top #(.LANES(\`MIRLO_RSP_LANES), .MULW(1'b1), .DIV_ROM(\`MIPS_INIT_RSP_DIV)) rsp (.clk_b(clk), .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp(), .*);
 endmodule
 SV
 ;;
@@ -78,6 +78,7 @@ module ooc_dpc (input wire clk, rst, start_we0, end_we, status_we, input wire [3
 endmodule
 SV
 ;;
+xing|xingpll) cp $W/tools/area2/xing_top.sv top.sv; top=ooc_$unit ;;       # (rsp_clk, rsp_gate and rsp_xing with stand-ins on both sides; CLK_C_NS=10.667)
 ports) cat > top.sv <<SV
 module ooc_ports (input wire clk, rst,
     input wire m_cmd_valid, m_cmd_we, input wire [31:0] m_cmd_addr, output wire m_cmd_ready, input wire m_wdata_valid, input wire [31:0] m_wdata,
@@ -103,14 +104,19 @@ esac
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
   for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
+  for m in ${OOC_MACROS:-}; do echo "set_global_assignment -name VERILOG_MACRO \"$m\""; done      # (OOC_MACROS="MIRLO_RSP_OC": the SoC with the RSP on the CPU's clock)
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
+  [ $unit = xingpll ] && echo "set_global_assignment -name QIP_FILE $W/target/pocket/mf_pllbase.qip"
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"
   # (FIT: its pins virtual -- an assignment synthesis takes -- and a 16 ns clock for each of its clocks)
-  [ -n "${FIT:-}" ] && { echo "set_instance_assignment -name VIRTUAL_PIN ON -to *"; echo "set_global_assignment -name SDC_FILE ooc.sdc"; }
+  [ -n "${FIT:-}" ] && { echo "set_instance_assignment -name VIRTUAL_PIN ON -to *"; [ $unit = xingpll ] && echo "set_instance_assignment -name VIRTUAL_PIN OFF -to refclk"; echo "set_global_assignment -name SDC_FILE ooc.sdc"; }
   true; } > ooc.qsf
-for c in clk clk_vid clk_c; do echo "if {[get_collection_size [get_ports -nowarn $c]] > 0} { create_clock -name $c -period ${CLK_NS:-16.000} [get_ports $c] }"; done > ooc.sdc
+for c in clk clk_vid clk_c; do p=${CLK_NS:-16.000}; [ $c = clk_c ] && p=${CLK_C_NS:-$p}
+  echo "if {[get_collection_size [get_ports -nowarn $c]] > 0} { create_clock -name $c -period $p [get_ports $c] }"; done > ooc.sdc
+# (xingpll: the Pocket's PLL, as core_top.sv has it: clk_sys and clk_cpu are the real 62.832 / 94.248 MHz outputs)
+[ $unit = xingpll ] && printf 'create_clock -name refclk -period 13.468 [get_ports refclk]\nderive_pll_clocks\nderive_clock_uncertainty\n' > ooc.sdc
 echo 'PROJECT_REVISION = "ooc"' > ooc.qpf
 ${QUARTUS:-$HOME/altera/25.1std/quartus/bin}/quartus_map ooc > map.log 2>&1 || { grep "Error (" map.log | head -5; exit 1; }
 f() { grep -h "$1" out/ooc.map.rpt | head -1 | awk -F';' '{gsub(/ /,"",$3); print $3}'; }
