@@ -1093,7 +1093,8 @@ All benches use Verilator. `VERILATOR` and `VERILATOR_ROOT` name the installatio
 `build.sh soc` verilates the SoC with an SDRAM chip model that checks the chip's timing in nanoseconds, and a model of
 a Game Boy cartridge (`gb_cart_model.sv`); it needs the images of `tools/mips_inits.py`. `build.sh sdr` builds a bench
 of the SDRAM controller, PHY and arbiter alone. The bench makes `clk_sys` at 62.5 MHz and the CPU's clock at 3/2 of it,
-in the PLL's phase.
+in the PLL's phase. `EXTRA_DEFS="+define+MIRLO_TLB_TABLES"` builds it with the tables' CPU instead of the TLB, `+define+MIRLO_FPG` (TLB) or
+`+define+MIRLO_NO_FPG` (tables) turns the fetch page registers on or off; the tests that need what a CPU lacks say SKIPPED.
 
 ```
 obj_soc/tb_soc <program.bin> [-c Mcycles] [-o dir] [-e every_n_frames]
