@@ -317,6 +317,33 @@ wire [31:0] zmag_d = ({32{z_xo}} & xo) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
                    | ({32{z_zsh}} & zsh) | ({32{z_mp}} & mprod[47:16]) | ({32{z_ir}} & ir) | ({32{z_nf}} & (zm_nf << lzc32(zm_nf)));
 always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mp || z_ir || z_nf || z_clr) zmag <= zmag_d;
 
+// ir's next value, likewise
+//   yo     (FAST) S_IDLE: a double's upper half (ft's)
+//   ax     S_DECIDE, cvt.s.l of 64 bits: the lower word
+//   dv     div's dividend, {1, fraction} (S_DECIDE of div; the special cases do not read it)
+//   it     the iteration's remainder (div: shifted left by one)
+//   za     S_LNEG: the lower word's magnitude
+//   sh     S_LSH1: shifted left by one, the bit going to zmag
+// S_DECIDE clears it for every operation that is not div or cvt.s.l (sqrt starts from zero; the others do not read it again)
+logic i_yo, i_ax, i_dv, i_it, i_za, i_sh, i_clr;
+always_comb begin
+    i_yo = 0; i_ax = 0; i_dv = 0; i_it = 0; i_za = 0; i_sh = 0; i_clr = 0;
+    if (!rst && live) case (st)
+    S_IDLE:   i_yo = FAST && ar_q;
+    S_DECIDE: if (sel_l) i_ax = zmag != 32'd0 && zmag != {32{ax[31]}};
+              else if (fn == 6'h03) i_dv = 1;
+              else i_clr = 1;
+    S_ITER:   i_it = 1;
+    S_LNEG:   i_za = zs;
+    S_LSH1:   i_sh = !zmag[31];
+    default: ;
+    endcase
+end
+wire [31:0] ir_sel = it_ge ? it_d[31:0] : it_a;
+wire [31:0] ir_d = ({32{i_yo}} & yo) | ({32{i_ax}} & ax) | ({32{i_dv}} & {8'd0, 1'b1, ax.f})
+                 | ({32{i_it}} & (kind == K_DIV ? {ir_sel[30:0], 1'b0} : ir_sel)) | ({32{i_za}} & za_s) | ({32{i_sh}} & {ir[30:0], 1'b0});
+always_ff @(posedge clk) if (i_yo || i_ax || i_dv || i_it || i_za || i_sh || i_clr) ir <= ir_d;
+
 // round (zmag normalised: bit 31 set) and pack; FTZ, overflow to infinity
 wire [24:0] rm = {1'b0, zmag[31:8]} + {24'd0, zmag[7] && (zst || zmag[6:0] != 0 || zmag[8])};
 wire signed [11:0] rexp = zexp + 12'(rm[24]);
@@ -346,7 +373,7 @@ always_ff @(posedge clk) begin
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
         if (FAST) begin
-            ax <= (isd_q || isl_q) ? xe : rfs; ay <= isd_q ? ye : rft; ir <= yo;
+            ax <= (isd_q || isl_q) ? xe : rfs; ay <= isd_q ? ye : rft;
             st <= S_UNPX;
         end
         dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
@@ -372,7 +399,7 @@ always_ff @(posedge clk) begin
             if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
             else if (zmag == 32'd0) begin zs <= 0; st <= S_NORM; end                    // an unsigned word
             else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; st <= S_NORM; end   // a word
-            else begin zs <= zmag[31]; ir <= ax; st <= S_LNEG; end                                  // 64 bits
+            else begin zs <= zmag[31]; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zexp <= 12'sd158; zst <= 0;
             if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
@@ -425,7 +452,7 @@ always_ff @(posedge clk) begin
             else if (ix || zy) res <= {ax.s ^ ay.s, 8'hFF, 23'd0};
             else if (zx || iy) res <= {ax.s ^ ay.s, 31'd0};
             else begin
-                ir <= {8'd0, 1'b1, ax.f}; icnt <= 5'd27;
+                icnt <= 5'd27;
                 zs <= ax.s ^ ay.s; zexp <= 12'(ax.e) - 12'(ay.e) + 12'sd131;
                 st <= S_ITER;
             end
@@ -435,7 +462,7 @@ always_ff @(posedge clk) begin
             if (nx || (ax.s && !zx)) res <= QNAN;
             else if (zx || ix) res <= ax;
             else begin
-                ir <= 0; icnt <= 5'd27; zs <= 0;
+                icnt <= 5'd27; zs <= 0;
                 // value = m * 2^t, t = e - 150 (as odd as e is); the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit
                 // root, whose exponent is t / 2 rounded down, + 143: e / 2 rounded down, + 68
                 if (ax.e[0]) mp <= {1'd0, 1'b1, ax.f, 31'd0};
@@ -466,8 +493,7 @@ always_ff @(posedge clk) begin
         st <= S_NORM;
     end
     S_ITER: begin
-        if (kind == K_DIV) ir <= (it_ge ? it_d[31:0] : it_a) << 1;
-        else begin ir <= it_ge ? it_d[31:0] : it_a; mp <= {mp[53:0], 2'b00}; end
+        if (kind != K_DIV) mp <= {mp[53:0], 2'b00};
         icnt <= icnt - 5'd1;
         if (icnt == 5'd0) st <= S_NORM;
     end
@@ -484,7 +510,7 @@ always_ff @(posedge clk) begin
     // its carry), then shifted left a bit a cycle until its top bit is set (at most 32 cycles), the bits below the upper
     // word kept as the sticky
     S_LNEG: begin
-        if (zs) begin ir <= za_s; lcar <= ir == 32'd0; end
+        if (zs) lcar <= ir == 32'd0;
         st <= S_LNEG2;
     end
     S_LNEG2: begin
@@ -492,7 +518,7 @@ always_ff @(posedge clk) begin
         else begin zexp <= 12'sd190; st <= S_LSH1; end
     end
     S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
-            else begin ir <= {ir[30:0], 1'b0}; zexp <= zexp - 12'sd1; end
+            else zexp <= zexp - 12'sd1;
     S_NORM2: begin zexp <= zexp - 12'(nzc); st <= S_ROUND; end
     S_ROUND: begin res <= rbits; st <= S_DONE; end
     S_F2W: if (FAST) begin fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
