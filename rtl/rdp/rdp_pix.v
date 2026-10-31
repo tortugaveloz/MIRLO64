@@ -59,6 +59,8 @@ module rdp_pix (
     input  wire        c32,         // ... a 32-bit one (rdp_top cimg32): a pixel a word of the old colour buffer
     input  wire        p_aa,        // a triangle: Z moves to the first covered sample
     input  wire [31:0] z_dx, z_dy,  // its DzDx, DzDy
+    input  wire [51:0] sh_dx, sh_dy, // the shade's DaDx and DaDy >> 14, 13 bits a channel (R, G, B, A: the console's steps to the first covered sample)
+    input  wire [1:0]  dzc_x,        // the console's dz code of the primitive (its top two bits), from DzDx and DzDy
     input  wire [31:0] fill,
     input  wire        p_shade, p_tex, p_zbuf, p_direct,   // p_direct: S,T are s10.5 already
     input  wire [2:0]  t_fmt,
@@ -263,8 +265,6 @@ module rdp_pix (
     // A shade past 255 (a highlight's overshoot at a lit surface's edge: a character's tunic lit by a moving light) never goes into the
     // combiner as it is: with 9 bits TEXEL0 * SHADE overshot 255 and, read as COMBINED in the second cycle of a 2-cycle
     // combiner (ENV * COMBINED), it became negative: black pixels.
-    wire [8:0] sr9 = {1'b0, clamp8($signed(in_r[31:16]))}, sg9 = {1'b0, clamp8($signed(in_g[31:16]))};
-    wire [8:0] sb9 = {1'b0, clamp8($signed(in_b[31:16]))}, sa9 = {1'b0, clamp8($signed(in_a[31:16]))};
     // the samples: the coverage (their count), and -- a triangle -- the first
     // covered one (the lowest subscanline, its leftmost sample) in quarter
     // pixels from the pixel's top-left corner, where Z is taken (the attributes
@@ -277,12 +277,34 @@ module rdp_pix (
     wire [3:0] cjf = (cj0 != 4'd0) ? cj0 : (cj1 != 4'd0) ? cj1 : (cj2 != 4'd0) ? cj2 : cj3;
     wire [1:0] oy4 = (cj0 != 4'd0) ? 2'd0 : (cj1 != 4'd0) ? 2'd1 : (cj2 != 4'd0) ? 2'd2 : 2'd3;
     wire [1:0] ox4 = cjf[3] ? 2'd0 : cjf[2] ? 2'd1 : cjf[1] ? 2'd2 : 2'd3;
-    wire signed [28:0] zcx = $signed(z_dx[31:5]) * $signed({1'b0, ox4});
-    wire signed [28:0] zcy = $signed(z_dy[31:5]) * $signed({1'b0, oy4});
-    wire [31:0] zcorr = ({{3{zcx[28]}}, zcx} + {{3{zcy[28]}}, zcy}) << 3;
+    // The shade as the console takes it (docs/rdp_exact.md, rule 4): a pixel without full coverage moves to its first covered
+    // sample -- ox4 quarters right, oy4 subscanlines down -- by the steps DaDx and DaDy >> 14 (13 bits), (A >> 14) * 4 + ox *
+    // cd + oy * dy, then 9 bits of it >> 4: 0..255 as they are, 256..383 255, 384..511 (a negative shade) 0. With full
+    // coverage ox4 = oy4 = 0 and that is the integer half. (Products of two bits: shifts and adds.)
+    function automatic [8:0] sh_x;
+        input [31:0] v;
+        input signed [12:0] cd, dy;
+        input [1:0] ox, oy;
+        reg signed [19:0] t;
+        reg [8:0] v9;
+        begin
+            t = $signed({v[31:14], 2'b00}) + (ox[0] ? cd : 13'sd0) + (ox[1] ? (cd <<< 1) : 14'sd0)
+                                           + (oy[0] ? dy : 13'sd0) + (oy[1] ? (dy <<< 1) : 14'sd0);
+            v9 = t[12:4];
+            sh_x = v9 < 9'd256 ? v9 : v9 < 9'd384 ? 9'd255 : 9'd0;
+        end
+    endfunction
+    wire [8:0] sr9 = sh_x(in_r, sh_dx[12:0], sh_dy[12:0], ox4, oy4), sg9 = sh_x(in_g, sh_dx[25:13], sh_dy[25:13], ox4, oy4);
+    wire [8:0] sb9 = sh_x(in_b, sh_dx[38:26], sh_dy[38:26], ox4, oy4), sa9 = sh_x(in_a, sh_dx[51:39], sh_dy[51:39], ox4, oy4);
+    // Z moves the same way: 22 bits of the attribute >> 10 (4 times) plus ox * (DzDx >> 10) + oy * (DzDy >> 10), then >> 5
+    wire signed [21:0] zdx22 = $signed(z_dx[31:10]), zdy22 = $signed(z_dy[31:10]);
+    wire signed [24:0] zcx = (ox4[0] ? zdx22 : 22'sd0) + (ox4[1] ? (zdx22 <<< 1) : 23'sd0);
+    wire signed [24:0] zcy = (oy4[0] ? zdy22 : 22'sd0) + (oy4[1] ? (zdy22 <<< 1) : 23'sd0);
+    wire signed [24:0] zcorr = zcx + zcy;
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
                       + in_mask[4] + in_mask[5] + in_mask[6] + in_mask[7];
-    reg  [31:0] z0r, zc0;
+    reg  [31:0] z0r;
+    reg signed [24:0] zc0;
     reg  [3:0]  cvg0;                // the coverage
     reg  [1:0]  y0;                  // the row's low bits (a row's last pixels are still in the pipe when the next row's y is issued)
     reg         g0;                  // a ghost (LOD)
@@ -295,7 +317,7 @@ module rdp_pix (
             x0 <= in_x; bs0 <= in_set;
             shade0 <= p_shade ? {sr9, sg9, sb9, sa9} : 36'd0;
             z0r <= in_z;
-            zc0 <= p_aa ? zcorr : 32'd0;
+            zc0 <= p_aa ? zcorr : 25'sd0;
             cvg0 <= cvg_in; y0 <= row_y; g0 <= in_ghost;
         end
         // (a primitive without texture coefficients has S = T = W = 0 and samples the tile's texel (0, 0) all the same: the model's
@@ -306,12 +328,13 @@ module rdp_pix (
             m0r <= in_m;
         end
     end
-    wire [31:0] zin_c = z0r + zc0;
+    wire signed [25:0] zin_c = $signed({2'b00, z0r[31:10], 2'b00}) + zc0;
     // the depth: the N64's 18 bits. The depth image's word (the model's z_enc / z_dec): 14 of them as a floating-point number --
     // the exponent the count of the depth's leading ones, 0..7, the mantissa the 11 bits under them -- above the top two bits
     // of the pixel's dz code
-    wire signed [31:0] zq = $signed(zin_c) >>> 13;
-    wire [17:0] dz = zq < 0 ? 18'd0 : (zq > 32'sd262143 ? 18'h3FFFF : zq[17:0]);
+    wire signed [25:0] zq = zin_c >>> 5;
+    // (the console's 19-bit result kept to 18: its top two bits 10 are all ones, 11 are 0)
+    wire [17:0] dz = zq[18:17] == 2'b11 ? 18'd0 : zq[18:17] == 2'b10 ? 18'h3FFFF : zq[17:0];
     function automatic [13:0] z_enc;
         input [17:0] z;
         casez (z[17:11])
@@ -1328,7 +1351,7 @@ module rdp_pix (
         if (e > 5'd15) e = 5'd15;
         d = 5'd15 - e;
         shb <= z_cmp ? 3'd0 : (e >= 5'd12) ? d[2:0] : 3'd4;
-        dzc <= e[3:2];
+        dzc <= z_src_p ? {|prim_dz[15:8], |(prim_dz & 16'hF0F0)} : p_zbuf ? dzc_x : 2'd0;     // (the console's code: docs/rdp_exact.md, rule 4)
     end
 
     // ======================================================================

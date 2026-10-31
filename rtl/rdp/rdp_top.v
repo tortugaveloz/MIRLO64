@@ -264,6 +264,21 @@ module rdp_top (
     // which would drop t_dxl's low 4 bits). On the whole 32 bits, as the model adds them: a sum that
     // wraps wraps there too.
     reg  [16:0] ldy_s, ldy_t, ldy_w;
+    // The console moves a pixel without full coverage to its first covered sample by the shade's DaDx and DaDy >> 14 (13 bits;
+    // adx's bits 26:14, sdy), and stores the top two bits of a dz code from the integer halves of DzDx and DzDy: |DzDx| + |DzDy|
+    // (a negative one's complement, 15 bits), the place of its top set bit + 1 (docs/rdp_exact.md, rule 4)
+    reg  [12:0] sdy [0:3];
+    reg  [1:0]  dzc_r;
+    wire [14:0] dzc_a = vgx[31] ? ~vgx[30:16] : vgx[30:16];
+    wire [14:0] dzc_b = zdy[31] ? ~zdy[30:16] : zdy[30:16];
+    wire [15:0] dzc_s = {1'b0, dzc_a} + {1'b0, dzc_b};
+    reg  [3:0]  dzc_p;
+    integer dzi;
+    always @* begin
+        dzc_p = 4'd0;
+        if (dzc_s[15:14] != 2'b00) dzc_p = 4'd15;
+        else for (dzi = 13; dzi >= 0; dzi = dzi - 1) if (dzc_s[dzi] && dzc_p == 4'd0) dzc_p = dzi[3:0] + 4'd1;
+    end
     wire        lpass = !pix_valid;
     wire        rflip = op == 6'h25;
     // (the console keeps a rectangle's row step to the same 17 bits of a 16.16 DaDy as a triangle's: DsDx's or DtDy's low 4 bits are 0)
@@ -312,6 +327,7 @@ module rdp_top (
         .prim(prim), .env(env), .fog(fog), .blend(blend),
         .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
         .prim_dz(prim_dz), .need_mem(need_mem), .c8(cimg8), .c32(cimg32), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
+        .sh_dx({adx[3][26:14], adx[2][26:14], adx[1][26:14], adx[0][26:14]}), .sh_dy({sdy[3], sdy[2], sdy[1], sdy[0]}), .dzc_x(dzc_r),
         .p_shade(p_shade), .p_tex(p_tex), .p_zbuf(p_zbuf), .p_direct(p_direct),
         .t_fmt(ts_fmt), .t_size(ts_sz), .t_pal(ts_pal), .t_line(ts_line), .t_tmem(ts_tmem),
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
@@ -972,6 +988,8 @@ module rdp_top (
             S_VSET: begin
                 // (the LOD's DaDy of S, T, W: read at steps 6 and 7, free, its integer half there at 15 and its fraction's
                 // top bit at the next attribute's step 0 -- the model keeps the top 17 bits)
+                if (vs == 4'd0 && tflags[2] && vi >= 3'd1 && vi <= 3'd4)         // (the previous shade attribute's DaDy fraction's top bits)
+                    sdy[vi - 3'd1][1:0] <= vi[0] ? vr_q[31:30] : vr_q[15:14];
                 if (vs == 4'd0 && tflags[1] && (vi == 3'd5 || vi == 3'd6 || vi == 3'd7)) begin
                     case (vi)
                         3'd5: ldy_s[0] <= vr_q[31];
@@ -1003,13 +1021,14 @@ module rdp_top (
                     4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
                         adx[vi] <= vgx;
+                        if (vi < 3'd4) sdy[vi][12:2] <= vhalf[10:0];
                         if (!vz) case (vi)
                             3'd4: ldy_s[16:1] <= vhalf;
                             3'd5: ldy_t[16:1] <= vhalf;
                             3'd6: ldy_w[16:1] <= vhalf;
                             default: ;
                         endcase             // e[vi], ade[vi]: the RAM writes below
-                        if (vz) z_tol <= zt_m;
+                        if (vz) begin z_tol <= zt_m; dzc_r <= dzc_p[3:2]; end
                         vs <= 4'd0; vi <= vi + 3'd1;
                         if (vi == 3'd7) st <= S_TRI_INIT;
                     end

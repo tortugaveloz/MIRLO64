@@ -110,8 +110,11 @@ static inline int32_t s105_noperp(int32_t s)
 #ifndef RDP_X_SHADE
 #define RDP_X_SHADE
 #endif
+#ifndef RDP_X_SPAN
+#define RDP_X_SPAN
 #endif
-#if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE)) && !defined(RDP_CVG)
+#endif
+#if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE) || defined(RDP_X_SPAN)) && !defined(RDP_CVG)
 #error "RDP_X_* are the N64's pixel pipeline's: build them with RDP_N64 (and without RDP_NO_BLEND)"
 #endif
 #ifdef RDP_CVG
@@ -801,6 +804,9 @@ static inline rdp_rgba_t unrgb565(uint16_t v)
 }
 #endif
 
+/* attribute order in the iterators */
+enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
+
 typedef struct {
     int shade, tex, zbuf;          /* which attributes the primitive has */
     int tile;
@@ -825,12 +831,11 @@ typedef struct {
     int32_t xcd[5], xdy[5];        /* shade R, G, B, A and Z: a pixel's and a line's step as the console moves them to the
                                       first covered sample (s13 in 1/16ths of the shade's unit; Z s22 in 1/1024ths) */
     unsigned xdzpix;               /* the console's depth step (|DzDx| + |DzDy| of the integer halves, as a power of 2) */
+    int32_t xdyv[NATTR];           /* DaDy of every attribute (RDP_X_SPAN: the span's start value) */
     int xwalk;                     /* the primitive is walked as the console's (RDP_EXACT's draw_triangle_x)  */
     int xcopy;                     /* copy mode: the pixel's place in its group (its texel is the group's first plus it) */
 } prim_t;
 
-/* attribute order in the iterators */
-enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
 
 /* A 32-bit colour image's RGB is dithered as a 16-bit one's (dither_n64: a channel either kept or taken up to the next
  * multiple of 8) and written whole: the N64 programming manual's blender section says the RGB dither "is enabled even
@@ -1792,9 +1797,18 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
         int32_t exh = (int32_t)((uint32_t)xh + k * (uint32_t)dxh);   /* the row's top: attributes (the N64's, not the pixel centre) */
         int lp[4], rp[4], lf[4], rf[4], valid[4], any = 0;
         int xmin = 0, xmax = 0;
+#ifdef RDP_X_SPAN
+        /* the major edge's x on the subscanline the attributes are taken on (the top, or the bottom when the edge leans away
+         * from the walk): its whole pixels (12 bits) and 8-bit fraction (docs/rdp_exact.md, rule 4) */
+        const int xld = ((dxh < 0) ^ (lft != 0)) ? 0 : 3;
+        uint32_t xr = 0;
+#endif
         for (int j = 0; j < 4; j++) {
             int yq = 4 * y + j;
             uint32_t xa = axh + (uint32_t)j * qh;
+#ifdef RDP_X_SPAN
+            if (j == xld) xr = xa;
+#endif
             uint32_t xb = (yq < ym) ? axm + (uint32_t)j * qm : axl + (uint32_t)j * ql;
             int32_t lx = (int32_t)(lft ? xa : xb), rx = (int32_t)(lft ? xb : xa);
             int crossed = (rx >> 14) < (lx >> 14);
@@ -1830,6 +1844,26 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
             uint32_t e = (uint32_t)at[i].v + k * (uint32_t)at[i].de;
             cur[i] = (int32_t)(e + (uint32_t)(int32_t)(((int64_t)at[i].dx * dx0) >> 16));
         }
+#ifdef RDP_X_SPAN
+        /* each attribute as the console starts its span: on the major edge (A + k DaDe, its low 9 bits cleared), moved to
+         * subscanline 3 and back up when the edge leans away from the walk (3/4 of DaDe - DaDy, each with its low 9 bits
+         * cleared), less the edge's x fraction times (DaDx >> 8) & ~1 (not in copy mode), the low 10 bits cleared; a pixel
+         * is that plus its distance from the edge's pixel times DaDx (its low 5 bits cleared, Z whole) */
+        const int xunscrx = (int32_t)(xr << 4) >> 20, xcpy = ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2;
+        const uint32_t xfrac = (xr >> 8) & 0xFFu;
+        uint32_t xa0[NATTR], xdp[NATTR];
+        for (int i = 0; i < NATTR; i++) {
+            const uint32_t e = (uint32_t)at[i].v + k * (uint32_t)at[i].de;
+            uint32_t diff = 0;
+            if (xld == 3) {
+                const int32_t de = (int32_t)((uint32_t)at[i].de & ~0x1FFu), dy = (int32_t)((uint32_t)pr->xdyv[i] & ~0x1FFu);
+                diff = (uint32_t)de - (uint32_t)(de >> 2) - (uint32_t)dy + (uint32_t)(dy >> 2);
+            }
+            const uint32_t dxh8 = xcpy ? 0u : (uint32_t)(at[i].dx >> 8) & ~1u;
+            xa0[i] = ((e & ~0x1FFu) + diff - xfrac * dxh8) & ~0x3FFu;
+            xdp[i] = i == AZ ? (uint32_t)at[i].dx : (uint32_t)at[i].dx & ~0x1Fu;
+        }
+#endif
         for (int x = xmin; x <= xmax; x++) {
             if (x > xmin)
                 for (int i = 0; i < NATTR; i++) cur[i] = (int32_t)((uint32_t)cur[i] + (uint32_t)at[i].dx);
@@ -1850,6 +1884,9 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
             if (!aa_en && !(mask & 0x80u)) continue;      /* no AA_EN: drawn only if the top-left sample (sample 7) is covered */
             int32_t pc[NATTR];
             for (int i = 0; i < NATTR; i++) pc[i] = cur[i];
+#ifdef RDP_X_SPAN
+            for (int i = 0; i < NATTR; i++) pc[i] = (int32_t)(xa0[i] + (uint32_t)(x - xunscrx) * xdp[i]);
+#endif
             int oy = 0; while (!cj[oy]) oy++;
             int ox = 0; while (!((cj[oy] >> (3 - ox)) & 1u)) ox++;
             int32_t sx8 = 2 * ox, sy8 = 2 * oy;      /* the sample, from the pixel's top-left corner, 1/8 px (0 for sample 7) */
@@ -2051,7 +2088,12 @@ static void lod_tri(prim_t *pr, const uint32_t *p, const attr_t *at, int lft)
         int wi = k >> 1, sh = (k & 1) ? 0 : 16;
         uint32_t yi = (p[10 + wi] >> sh) & 0xFFFF, yf = (p[14 + wi] >> sh) & 0xFFFF;
         pr->ddy[k] = (int32_t)(yi << 16 | yf) & LOD_DY_MASK;
-        pr->ddx[k] = lft ? at[AS + k].dx : (int32_t)(0u - (uint32_t)at[AS + k].dx);
+#ifdef RDP_X_SPAN
+        const uint32_t dxs = (uint32_t)at[AS + k].dx & ~0x1Fu;       /* (a pixel's step: DaDx without its low 5 bits) */
+#else
+        const uint32_t dxs = (uint32_t)at[AS + k].dx;
+#endif
+        pr->ddx[k] = lft ? (int32_t)dxs : (int32_t)(0u - dxs);
     }
 }
 #endif
@@ -2098,6 +2140,21 @@ static void draw_triangle(rdp_t *r, const uint32_t *w)
 #endif
 #endif
     }
+#ifdef RDP_X_SPAN
+    {
+        /* DaDy of each attribute (the shade's and the texture's at words 10 and 14 of their blocks, Z's the 4th) */
+        const uint32_t *q = w + 8;
+        for (int b = 0; b < 2; b++) {
+            if (!(b ? pr.tex : pr.shade)) continue;
+            for (int i = 0; i < (b ? 3 : 4); i++) {
+                const int wi = i >> 1, sh = (i & 1) ? 0 : 16;
+                pr.xdyv[(b ? AS : AR) + i] = (int32_t)((((q[10 + wi] >> sh) & 0xFFFFu) << 16) | ((q[14 + wi] >> sh) & 0xFFFFu));
+            }
+            q += 16;
+        }
+        if (pr.zbuf) pr.xdyv[AZ] = (int32_t)q[3];
+    }
+#endif
 #ifdef RDP_X_SHADE
     if (pr.shade) {
         /* the shade's DaDx and DaDy >> 14 (13 bits): the steps the console moves a pixel to its first covered sample by */
