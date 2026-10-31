@@ -37,10 +37,18 @@
 //    result like a load's. An hx is read from the register file only -- an
 //    instruction waits in D while one of its registers is still on its way
 //    from the unit or a 64-bit load -- so nothing of it is forwarded.
-//  - The TLB, three ways. TLB_EN: the VR4300's 32 entries (tlbwi, tlbwr,
-//    tlbp, tlbr; searched one a cycle, see below). Neither: none -- a mapped
-//    access is the runtime's to do (with N64WIN it arrives as an address
-//    error). TLB_RAM: translation tables of the runtime's making, in block
+//  - The TLB, three ways. TLB_EN: the VR4300's 32 entries (tlbwi, tlbwr, tlbp, tlbr; searched one a cycle, see "The TLB"
+//    below), pages of 4 KiB to 16 MiB, fully associative on VPN2 and ASID. A TLB exception is the game's own, whatever
+//    the monitor holds: a page no entry names is a refill (TLBL for a load or a fetch, TLBS for a store) at the refill
+//    vector (0x8000_0000 with Status.EXL clear), one that an entry names with V clear the same codes, a store to a page with D
+//    clear Mod (1), at the general vector; BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address, EPC / Cause.BD /
+//    Status.EXL as for any exception. A mapped access takes the slow path (one uncached word; a store through the write
+//    buffer, dropping a line it may shadow), a mapped fetch too unless FPG gives the CPU its page registers. With MON a valid
+//    page whose physical address is not the game's RDRAM (the RCP, the cartridge, nothing; with MCTL's bit 10 the RDRAM's
+//    upper half too) is the device access of an unmapped address -- an address error (4, 5) for the monitor level, with
+//    COP0 register 22 holding the physical address the page gave. COP0 register 23 reads 'T' 'L' 'B' | PG << 2 | 1 << 1 | MON
+//    (the runtime's probe). Neither TLB_EN nor TLB_RAM: none -- a mapped access is the runtime's to do (with N64WIN it
+//    arrives as an address error). TLB_RAM: translation tables of the runtime's making, in block
 //    RAM -- one for data and one for fetches (an instruction and what it
 //    reaches may share an index: with one table neither could stay), each of
 //    512 entries, one for a 4 KiB page by its number's low 9 bits
@@ -130,6 +138,7 @@ module mips_core #(
     // the refill exception, TLB writes are dropped, tlbp never finds one. For
     // games that map nothing -- NOT SM64: Goddard's title-screen head maps
     // 0x04000000 (n64sim: 200,897 mapped accesses in the first 3 G cycles).
+    // 1: the VR4300's 32 entries (see the top and "The TLB")
     parameter bit TLB_EN = 1,
     // the translation table in block RAM, filled by software (see the top);
     // not with TLB_EN
@@ -215,9 +224,10 @@ module mips_core #(
     // which then waits for st_done -- and the memory port only reads. What is
     // outside keeps the order: a read is of memory as every store before it left it
     parameter bit XWB = 0,
-    // TLB_RAM with FAST (FLAT, N64WIN): two page registers on the fetch side -- the last two pages of the fetch
-    // table that were cacheable (the entry's C bit, COP0 23's bit 5) -- and a fetch from such a page runs through
-    // the I-cache like KSEG0's (see "The page registers" above F). 0: a mapped fetch is always the slow path.
+    // TLB_RAM or TLB_EN with FAST (FLAT, N64WIN): two page registers on the fetch side -- the last two pages that a search
+    // (TLB_EN) or the fetch table (TLB_RAM) found cacheable (TLB_EN: C is not 2, and the page is in the RDRAM; TLB_RAM: the
+    // entry's C bit, COP0 23's bit 5) -- and a fetch from such a page runs through the I-cache like KSEG0's (see "The page
+    // registers" above F). 0: a mapped fetch is always the slow path.
     parameter bit FPG = 0,
     // the D-cache drops a line another master writes into (FLAT, the SDRAM's 64 MiB): sn_t turns over for each of
     // those writes, sn_line is its line (pa[25:4]); see "The snoop" below the cache RAM writes
@@ -583,7 +593,9 @@ logic        fcc;
 // The entries live in a RAM and are searched one per cycle (the scanner,
 // shared by F and M; tlbp and tlbr use it too). Mapped accesses are rare
 // (SM64: 200 k in 6,000 M cycles), and each of F and M keeps the last page it
-// translated (a micro-TLB), so a search only follows a change of page.
+// translated (a micro-TLB), so a search only follows a change of page. The first entry (by index) that matches wins, as the model's.
+// Whatever can change a translation -- a write of the TLB, tlbr (it loads EntryHi), a new ASID -- empties the micro-TLBs (and the fetch
+// page registers, but for the ASID, which they compare) and makes a search under way stale: F searches again (tlb_inval, sc_stale).
 typedef struct packed {
     logic [18:0] vpn;                        // EntryHi[31:13], the page-mask bits clear
     logic [7:0]  asid;
