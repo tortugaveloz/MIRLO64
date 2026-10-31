@@ -22,6 +22,9 @@
 #include <cinttypes>
 
 #include "Vmips_core.h"
+#ifdef TB_RTL_TLB
+#include "Vmips_core___024root.h"
+#endif
 #include "verilated.h"
 
 extern "C" {
@@ -158,6 +161,27 @@ static int check_fail(const char *what)
     fprintf(stderr, "MISMATCH after %" PRIu64 " instructions (%" PRIu64 " cycles): %s\n", retired, cycles, what);
     fprintf(stderr, "  model pc %08x (%s)\n", B.cpu.pc, sym(B.cpu.pc));
     fprintf(stderr, "  MI: RTL's devices intr %02x mask %02x, model's intr %02x mask %02x\n", A.rcp.mi_intr, A.rcp.mi_mask, B.rcp.mi_intr, B.rcp.mi_mask);
+    if (!getenv("TB_TLBDUMP")) return 1;                   // (TB_TLBDUMP=1: the TLB of the model, and of the RTL with -DTB_RTL_TLB, as they are)
+    for (int i = 0; i < N64_TLB_ENTRIES; i++) {
+        const n64_tlb_t *e = &B.cpu.tlb[i];
+        if (e->hi != 0x80000000u) fprintf(stderr, "  model tlb %2d: mask %08x hi %08x lo0 %08x lo1 %08x\n", i, e->mask, e->hi, e->lo0, e->lo1);
+    }
+#ifdef TB_RTL_TLB
+    fprintf(stderr, "  EntryHi: RTL %08x model %08x; Index: RTL %08x model %08x\n", top->rootp->mips_core__DOT__c0_entryhi, B.cpu.cop0[C0_ENTRYHI], top->rootp->mips_core__DOT__c0_index, B.cpu.cop0[C0_INDEX]);
+    for (int m = 0; m < 2; m++) {                          // the RTL's micro-TLBs: {valid, v, d, c, vpage 20, om 13, pfn 20, g, asid 8}
+        const uint32_t *w = m ? top->rootp->mips_core__DOT__utlb_f.m_storage : top->rootp->mips_core__DOT__utlb_m.m_storage;
+        unsigned __int128 v = ((unsigned __int128)w[2] << 64) | ((unsigned __int128)w[1] << 32) | w[0];
+        fprintf(stderr, "  RTL's micro-TLB %c: valid %d v %d d %d page %08x om %04x pfn %08x g %d asid %02x\n", m ? 'F' : 'M', (int)((v >> 65) & 1), (int)((v >> 64) & 1), (int)((v >> 63) & 1),
+                (uint32_t)((v >> 42) & 0xFFFFF) << 12, (uint32_t)((v >> 29) & 0x1FFF), (uint32_t)((v >> 9) & 0xFFFFF) << 12, (int)((v >> 8) & 1), (uint32_t)(v & 0xFF));
+    }
+    for (int i = 0; i < N64_TLB_ENTRIES; i++) {            // (and the RTL's: vpn 19, asid 8, mask 12, g, lo0 31, lo1 31)
+        const uint32_t *w = top->rootp->mips_core__DOT__tlb_ram[i].m_storage;
+        unsigned __int128 v = ((unsigned __int128)w[3] << 96) | ((unsigned __int128)w[2] << 64) | ((unsigned __int128)w[1] << 32) | w[0];
+        uint32_t lo1 = (uint32_t)(v & 0x7FFFFFFF), lo0 = (uint32_t)((v >> 31) & 0x7FFFFFFF), g = (uint32_t)((v >> 62) & 1), mask = (uint32_t)((v >> 63) & 0xFFF),
+                 asid = (uint32_t)((v >> 75) & 0xFF), vpn = (uint32_t)((v >> 83) & 0x7FFFF);
+        if (vpn != 0x40000u) fprintf(stderr, "  rtl   tlb %2d: mask %08x hi %08x lo0 %08x lo1 %08x g %u\n", i, mask << 13, vpn << 13 | asid, lo0 << 1 | g, lo1 << 1 | g, g);
+    }
+#endif
     return 1;
 }
 
@@ -224,10 +248,26 @@ int main(int argc, char **argv)
         uint64_t tval = top->tr_val;
         int fwe_e = top->tr_fwe_even, fwe_o = top->tr_fwe_odd, fk = top->tr_fwidx;
         uint32_t fwd_e = top->tr_fweven, fwd_o = top->tr_fwodd, fcr = top->tr_fcr31;
+#ifdef TB_RTL_TLB
+        static const bool ulog = getenv("TB_UTLBLOG") != nullptr;      // TB_UTLBLOG=1: the TLB's writes and the micro-TLBs' changes, by cycle
+        int u_we = top->rootp->mips_core__DOT__tlb_we, u_wa = top->rootp->mips_core__DOT__tlb_waddr, u_inv = top->rootp->mips_core__DOT__tlb_inval;
+        if (ulog && (u_we || u_inv)) fprintf(stderr, "[cycle %" PRIu64 "] tlb write %d index %d inval %d pc %08x EntryHi %08x\n", cycles, u_we, u_wa, u_inv, tpc, top->rootp->mips_core__DOT__c0_entryhi);
+#endif
         top->clk = 1; eval_comb();
         top->clk = 0;
         st_next();
         cycles++;
+#ifdef TB_RTL_TLB
+        if (ulog) {
+            static uint32_t pw[3]; const uint32_t *w = top->rootp->mips_core__DOT__utlb_m.m_storage;
+            if (memcmp(pw, w, sizeof pw)) {
+                unsigned __int128 v = ((unsigned __int128)w[2] << 64) | ((unsigned __int128)w[1] << 32) | w[0];
+                fprintf(stderr, "[cycle %" PRIu64 "] M micro-TLB: valid %d v %d d %d page %08x om %04x pfn %08x g %d asid %02x\n", cycles, (int)((v >> 65) & 1), (int)((v >> 64) & 1), (int)((v >> 63) & 1),
+                        (uint32_t)((v >> 42) & 0xFFFFF) << 12, (uint32_t)((v >> 29) & 0x1FFF), (uint32_t)((v >> 9) & 0xFFFFF) << 12, (int)((v >> 8) & 1), (uint32_t)(v & 0xFF));
+                memcpy(pw, w, sizeof pw);
+            }
+        }
+#endif
 
         if (ret) {
             if (B.cpu.pc != tpc) { bad = check_fail("pc"); fprintf(stderr, "  RTL retired %08x %08x\n", tpc, tinsn); break; }
@@ -258,6 +298,11 @@ int main(int argc, char **argv)
                 snprintf(w, sizeof w, "r%d: RTL %016" PRIx64 " model %016" PRIx64 " (%08x: %08x)", trd, tval, B.cpu.r[trd], tpc, tinsn);
                 bad = check_fail(w);
                 fprintf(stderr, "  at %s\n", sym(tpc));
+                if ((tinsn >> 26) >= 0x20) {      // (a load or store: where it went)
+                    uint32_t ea = (uint32_t)(B.cpu.r[(tinsn >> 21) & 31] + (int16_t)tinsn);
+                    fprintf(stderr, "  the access: %08x (model: translates to %08x, fault %d, ll_bit %d; Cause %08x BadVAddr %08x EPC %08x)\n", ea, n64_xlat_pa(&B, ea), n64_xlat_check(&B, ea, 0), (int)B.cpu.ll_bit,
+                            B.cpu.cop0[C0_CAUSE], B.cpu.cop0[C0_BADVADDR], B.cpu.cop0[C0_EPC]);
+                }
                 break;
             }
         }
@@ -279,7 +324,11 @@ int main(int argc, char **argv)
                 if (mcode != ecode) {
                     uint32_t wi = 0; n64_read(&B, epc, 4, &wi);
                     char w[128]; snprintf(w, sizeof w, "exception code RTL %u model %u at %08x (%08x), Status %08x", ecode, mcode, epc, wi, B.cpu.cop0[12]);
-                    bad = check_fail(w); break;
+                    bad = check_fail(w);
+                    { uint32_t ea = (uint32_t)(B.cpu.r[(wi >> 21) & 31] + (int16_t)wi);
+                      fprintf(stderr, "  the access: %08x (model: translates to %08x, fault %d)\n", ea, n64_xlat_pa(&B, ea), n64_xlat_check(&B, ea, 0)); }
+                    fprintf(stderr, "  model BadVAddr %08x EntryHi %08x ll_bit %d\n", B.cpu.cop0[C0_BADVADDR], B.cpu.cop0[C0_ENTRYHI], (int)B.cpu.ll_bit);
+                    break;
                 }
             }
             if (verbose) fprintf(stderr, "  exception %u (%s) at %08x\n", ecode, exc_int ? "interrupt" : "sync", epc);

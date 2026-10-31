@@ -16,6 +16,7 @@
 #include <string.h>
 #include <generated/csr.h>
 #include <generated/soc.h>
+#include <notice.h>
 #include "n64rt.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
@@ -95,8 +96,14 @@ void n64rt_log(const char *fmt, ...)
 void n64rt_fatal(const char *fmt, ...)
 {
     __asm__ volatile("mtc0 %0, $12" :: "r"(0u));
-    va_list ap; va_start(ap, fmt); vprintf(fmt, ap); va_end(ap);
+    static char s_msg[400];
+    va_list ap; va_start(ap, fmt); vsnprintf(s_msg, sizeof s_msg, fmt, ap); va_end(ap);
+    printf("%s", s_msg);
     printf("n64rt: halted (thread %ld)\n", n64rt_cur ? (long)n64rt_cur->id : -1L);
+    /* on the screen too, for a Pocket with no cable on it: the picture is the runtime's own (the VI in hardware off), over the RDRAM's
+     * first 150 KiB -- the game is not going on */
+    monitor_ctl_write(1u);
+    notice(N64RT_RDRAM_SDRAM, s_msg);
     for (;;) ;
 }
 
@@ -679,8 +686,23 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 #else
     u32 badv; __asm__ volatile("mfc0 %0, $8" : "=r"(badv));
 #endif
-    if ((badv >> 29) != 5u && (badv >> 29) != 4u) return 0;     /* (KSEG1 or KSEG0: a device's address) */
     u32 op = insn >> 26, rt = (insn >> 16) & 31u;
+#ifdef N64RT_OWN
+    if (n64rt_tlbreal && (badv >> 29) != 5u && (badv >> 29) != 4u) {
+        /* A mapped address: the CPU translated it, and the page names no RDRAM of the console's -- a register of the RCP, the
+         * cartridge, or nothing (libultra's debug port, mapped at 0xC000_0000 onto a bus with nothing on it: a load reads 0 and a store
+         * goes nowhere). COP0 22 has the physical address the page gave; what is below 0x2000_0000 goes on as an unmapped one. */
+        u32 pa; __asm__ volatile("mfc0 %0, $22" : "=r"(pa));
+        if (pa >= 0x20000000u) {
+            if (bd && !branch_next(x, x->epc, &next)) return 0;
+            if (!emulate_none(x, op, rt)) return 0;
+            x->epc = next;
+            return 1;
+        }
+        badv = 0xA0000000u | pa;
+    }
+#endif
+    if ((badv >> 29) != 5u && (badv >> 29) != 4u) return 0;     /* (KSEG1 or KSEG0: a device's address) */
     if ((badv & 0x1FFFFFFFu) < 0x03F00000u) {
 #ifdef N64RT_OWN
         /* Past the RDRAM the console has (8 MiB here), below the RCP: nothing. A game that sizes the memory itself goes on a megabyte
@@ -786,6 +808,7 @@ static u32 s_tlb_hits, s_tlb_fills, s_tlb_delivered;
 u32 n64rt_tlb_n;                        /* the entries that map something (n64rt_exc.S's tlbwi reads it) */
 #define s_tlb_n n64rt_tlb_n
 u32 n64rt_tlbram;                       /* the CPU has the translation tables */
+u32 n64rt_tlbreal;                      /* the CPU has the VR4300's own TLB (COP0 23: 'T' 'L' 'B', bit 1): no tables, no TLB entry kept here */
 /* The bits of COP0 23's write value (bit 4 is the page of the pair; the physical page is bits 28:12): valid, dirty (writable), global,
  * the fetch table, and TR_C = the page is CACHEABLE (the entry's C field, EntryLo bits 5:3, is not 2 = uncached). mips_core's fetch
  * table keeps the bit (the fetch page registers use the I-cache for a cacheable mapped page), and so does the data table: a
@@ -1177,8 +1200,31 @@ void n64rt_tlbi_init(void)
 #else
 void n64rt_tlbi_init(void) { }
 #endif
+/* The CPU's own TLB (n64rt_tlbreal): where the game's entries put va, by tlbp and tlbr -- the registers they use (Index, PageMask,
+ * EntryHi, EntryLo0/1) are the game's, and are put back. 1 when a valid page of the RDRAM is named. Run at the monitor level: the
+ * game does not run meanwhile, and no interrupt of the game's own can come between the writes. */
+static int tlb_phys_real(u32 va, u32 *pa)
+{
+    u32 hi, idx, pm, lo0, lo1, r = 0;
+    CP0_GET(10, hi); CP0_GET(0, idx); CP0_GET(5, pm); CP0_GET(2, lo0); CP0_GET(3, lo1);
+    __asm__ volatile("mtc0 %0, $10\n\tnop\n\tnop\n\t.set push\n\t.set mips3\n\ttlbp\n\tnop\n\tnop\n\t.set pop" : : "r"((va & 0xFFFFE000u) | (hi & 0xFFu)));
+    u32 i; CP0_GET(0, i);
+    if (!(i & 0x80000000u)) {
+        u32 m, l0, l1;
+        __asm__ volatile(".set push\n\t.set mips3\n\ttlbr\n\tnop\n\tnop\n\t.set pop");
+        CP0_GET(5, m); CP0_GET(2, l0); CP0_GET(3, l1);
+        const u32 span = (m + 0x2000u) >> 1, lo = (va & span) ? l1 : l0;
+        if (lo & 2u) {
+            const u32 p = ((((lo >> 6) << 12) & ~(span - 1u)) | (va & (span - 1u)));
+            if (p < 0x00800000u) { *pa = p; r = 1; }
+        }
+    }
+    __asm__ volatile("mtc0 %0, $5\n\tmtc0 %1, $2\n\tmtc0 %2, $3\n\tmtc0 %3, $10\n\tmtc0 %4, $0\n\tnop\n\tnop" : : "r"(pm), "r"(lo0), "r"(lo1), "r"(hi), "r"(idx));
+    return r;
+}
 int n64rt_tlb_phys(u32 va, u32 *pa)
 {
+    if (n64rt_tlbreal) return tlb_phys_real(va, pa);
 #ifdef N64RT_OWN
     if (!s_tlb_n && !n64rt_vic_n) return 0;
 #else
@@ -1565,11 +1611,13 @@ void n64rt_os_init(void)
         u32 v;
         __asm__ volatile("mfc0 %0, $23" : "=r"(v));
         n64rt_tlbram = (v & ~9u) == 0x54420000u;
+        n64rt_tlbreal = (v >> 8) == 0x544C42u && (v & 2u);
         n64rt_tlbi_init();
         tr_flush();
     }
 #ifdef N64RT_DEBUG
     n64rt_log("n64rt: the CPU %s translation tables\n", n64rt_tlbram ? "has" : "has no");
+    if (n64rt_tlbreal) n64rt_log("n64rt: the CPU has the VR4300's own TLB\n");
     if (s_count_q8 < 250u || s_count_q8 > 262u)
         n64rt_log("n64rt: the CPU's clock is %lu.%02lu times the SoC's\n", (unsigned long)(s_count_q8 >> 8), (unsigned long)(((s_count_q8 & 255u) * 100u) >> 8));
 #endif

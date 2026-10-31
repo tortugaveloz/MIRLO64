@@ -1,4 +1,4 @@
-/* The fetch page registers (mips_core's FPG, with TLB_RAM; sim/mips_soc): code run from a mapped page whose entry in the fetch
+/* The fetch page registers (mips_core's page registers, with TLB_RAM; sim/mips_soc): code run from a mapped page whose entry in the fetch
  * table has its C bit set (COP0 23's bit 5) goes through the I-cache -- indexed by the virtual address, tagged by the physical
  * one that the page register gives -- instead of one uncached word at a time. Checked here:
  *   - the speed: a loop on a cacheable mapped page runs within 1.3x of the same loop in KSEG0; on a page without the C bit it
@@ -44,8 +44,15 @@ static void code_page(uint32_t va, uint32_t pa, uint32_t flags) { tlb_set(va, 0,
 /* what the handler fills a faulting page with */
 static volatile uint32_t s_fill_pa, s_fill_flags;
 static volatile uint32_t s_traps, s_cause, s_badv, s_epc, s_fetch;
+/* the checks for the VR4300's own TLB (tlbpg_test_real.c, built into this program): run when COP0 23 says that is the CPU's */
+extern int real_main(void);
+extern void real_trap_handler(void);
+static int s_real;
+static int cpu_has_real_tlb(void) { uint32_t c = MFC0(23); return (c >> 8) == 0x544C42u && (c & 2u); }
+
 void trap_handler(void)
 {
+    if (s_real) { real_trap_handler(); return; }
     s_traps++;
     s_cause = MFC0(13); s_badv = MFC0(8); s_epc = MFC0(14);
     s_fetch = MFC0(23) >> 3 & 1;
@@ -82,8 +89,9 @@ static void icache_hit_inval(uint32_t va) { __asm__ volatile(".set push\n.set mi
 
 int main(void)
 {
+    if (cpu_has_real_tlb()) { s_real = 1; return real_main(); }
     puts_("tlbpg_test\n");
-    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbpg_test: no tables in this CPU\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbpg_test: SKIPPED, neither the tables nor the real TLB in this CPU\n"); putc_(4); for (;;); }
     for (uint32_t i = 0; i < 512; i++) { tlb_set(i << 12, 0, 0, 0); tlb_set(i << 12, 0, 0, FETCH); }
 
     /* ---- the plain case: a cacheable mapped page, run again and again ---- */

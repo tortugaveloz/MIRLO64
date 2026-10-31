@@ -140,6 +140,8 @@ void     n64_advance(n64_t *n, uint32_t cycles);   /* the RCP's clocks: VI, AI *
 void     n64_raise(n64_t *n, uint32_t mi_bits);
 void     n64_clear(n64_t *n, uint32_t mi_bits);
 uint8_t *n64_phys(n64_t *n, uint32_t vaddr, uint32_t len);          /* RDRAM pointer, or NULL */
+int      n64_xlat_check(n64_t *n, uint32_t vaddr, int write);
+uint32_t n64_xlat_pa(n64_t *n, uint32_t vaddr);                       /* its physical address, 0 for a TLB fault */       /* the TLB fault an access would take (N64_TLB_*), or 0 */
 /* cpu.c */
 void     n64_cpu_reset(n64_t *n);
 void     n64_cpu_step(n64_t *n);

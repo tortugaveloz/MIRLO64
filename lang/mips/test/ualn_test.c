@@ -25,14 +25,22 @@ static void check(const char *what, int where, uint32_t n, uint64_t got, uint64_
 }
 static uint32_t count(void) { uint32_t c; __asm__ volatile("mfc0 %0, $9" : "=r"(c)); return c; }
 
-/* a mapped page (the translation tables of TLB_RAM, as tlbram_test writes them): va's page onto an RDRAM page, valid, dirty, global */
+/* a mapped page: va's page onto an RDRAM page, valid, dirty, global -- in the translation tables of TLB_RAM (as tlbram_test writes them), or in
+ * the VR4300's own TLB (the CPU with TLB_EN: COP0 23 says 'TLB'): a pair at entry 7 (the odd page is the next frame) */
 #define MFC0(r) ({ uint32_t v_; __asm__ volatile("mfc0 %0, $" #r : "=r"(v_)); v_; })
 #define MTC0(r, v) __asm__ volatile("mtc0 %0, $" #r :: "r"((uint32_t)(v)))
+static int real_tlb(void) { uint32_t c = MFC0(23); return (c >> 8) == 0x544C42u && (c & 2u); }
 static void tlb_map(uint32_t va, uint32_t pa)
 {
     uint32_t hi = MFC0(10);
-    MTC0(10, (va & ~0x1FFFu));
-    MTC0(23, (pa & 0x1FFFF000u) | (va & 0x1000u ? 16u : 0u) | 7u);
+    if (real_tlb()) {
+        const uint32_t lo = 0x18u | 7u;                           /* cached, dirty, valid, global */
+        MTC0(0, 7); MTC0(5, 0); MTC0(10, va & ~0x1FFFu); MTC0(2, (((pa & ~0x1FFFu) >> 12) << 6) | lo); MTC0(3, ((((pa & ~0x1FFFu) + 0x1000u) >> 12) << 6) | lo);
+        __asm__ volatile(".set push\n.set mips3\ntlbwi\n.set pop\nnop\nnop");
+    } else {
+        MTC0(10, (va & ~0x1FFFu));
+        MTC0(23, (pa & 0x1FFFF000u) | (va & 0x1000u ? 16u : 0u) | 7u);
+    }
     MTC0(10, hi);
 }
 
@@ -162,12 +170,12 @@ int main(void)
     behind("kseg0", 0, k0);
     behind("kseg1", 1, k1);
     behind("sdram", 2, buf_sd + 2);
-    if ((MFC0(23) & ~9u) == 0x54420000u) {                              /* a mapped page: the slow path, a translation first */
+    if ((MFC0(23) & ~9u) == 0x54420000u || real_tlb()) {               /* a mapped page: the slow path, a translation first */
         volatile uint64_t *mp = (volatile uint64_t *)0x04000010u;
         tlb_map(0x04000000u, 0x00010000u);
         one_mem("mapped", 3, mp);
         behind("mapped", 3, mp);
-    } else puts_("(no translation tables in this CPU: the mapped pages are skipped)\n");
+    } else puts_("(no TLB in this CPU: the mapped pages are skipped)\n");
     block_moves();
     /* what each costs, back to back on cached memory (Count ticks once per two CPU clocks), against a nop in its place */
     {
