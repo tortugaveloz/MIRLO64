@@ -304,6 +304,7 @@ u32  n64rt_gbv_id(int n);                 /* its header's CRC */
 void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
+void n64rt_gbv_field(void);               /* every video field: the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file */
 u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
 void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
