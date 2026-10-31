@@ -86,7 +86,8 @@ module rdp_pix (
     input  wire [9:0]  in_x,
     input  wire        in_set,           // the row's line-buffer set
     input  wire [1:0]  row_y,                  // the row (its low bits), steady while its pixels run
-    input  wire [31:0] in_r, in_g, in_b, in_a, in_s, in_t, in_w, in_z,
+    input  wire [31:0] in_r, in_g, in_b, in_a, in_w, in_z,
+    input  wire [15:0] in_s, in_t,           // S and T in 16 bits: the integer halves the perspective divide takes, or a rectangle's s10.5
     input  wire [7:0]  in_mask,          // the pixel's samples (bit 7 the top-left; 0xFF: all)
 
     // ---- TMEM, a copy for each of the filter's three texels (rdp_tmem):
@@ -254,7 +255,8 @@ module rdp_pix (
     reg [9:0]  x0;
     // the line buffers' set of the pixel's row (rdp_top), along with x
     reg        bs0, bs9, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
-    reg [31:0] s0r, t0r, w0r;
+    reg [15:0] s0r, t0r;
+    reg [31:0] w0r;
     reg [35:0] shade0;
     // the shade, as the interpolator gives it, saturated to a byte -- 0 below 0, 255 above -- and carried as 9 bits (bit 8 clear).
     // A shade past 255 (a highlight's overshoot at a lit surface's edge: a character's tunic lit by a moving light) never goes into the
@@ -299,7 +301,7 @@ module rdp_pix (
         // draw_pixel_cvg; a character's collar is one. With the LOD the second clock takes S, T, W on the next line, which rdp_top
         // gives while it waits: S = T = W = 0 there too)
         if (!dup0 || lod_on) begin
-            s0r <= p_tex ? in_s : 32'd0; t0r <= p_tex ? in_t : 32'd0; w0r <= p_tex ? in_w : 32'd0;
+            s0r <= p_tex ? in_s : 16'd0; t0r <= p_tex ? in_t : 16'd0; w0r <= p_tex ? in_w : 32'd0;
         end
     end
     wire [31:0] zin_c = z0r + zc0;
@@ -401,7 +403,7 @@ module rdp_pix (
     reg [9:0]  sl1;
     reg [7:0]  f1;
     reg [3:0]  sh1;
-    reg [31:0] s1r, t1r;
+    reg [15:0] s1r, t1r;
     always @(posedge clk) begin
         v1 <= v0 & ~rst; ph1 <= ph0; g1 <= g0;
         pt1 <= dv_pt; sl1 <= dv_sl; f1 <= wn[7:0]; sh1 <= sh_c;
@@ -435,8 +437,8 @@ module rdp_pix (
         v2 <= v1 & ~rst; ph2 <= ph1; g2 <= g1; wle2 <= wle1;
         r2 <= {2'd0, rcp1} << rm1;
         sh2 <= sh1;
-        s2r <= p_direct ? s1r[15:0] : s1r[31:16];
-        t2r <= p_direct ? t1r[15:0] : t1r[31:16];
+        s2r <= s1r;
+        t2r <= t1r;
     end
 
     // ======================================================================

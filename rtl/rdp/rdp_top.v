@@ -271,8 +271,10 @@ module rdp_top (
     wire [31:0] cur_s = cur[4] + (lpass ? dy_s : 32'd0);
     wire [31:0] cur_t = cur[5] + (lpass ? dy_t : 32'd0);
     wire [31:0] cur_w = {cur[6][31:15] + ((lpass && !p_direct) ? ldy_w : 17'd0), cur[6][14:0]};
-    wire [31:0] pr_s = p_direct ? asr(cur_s, {2'b0, shS}) : cur_s;
-    wire [31:0] pr_t = p_direct ? asr(cur_t, 5'd5) : cur_t;
+    // (rdp_pix takes the 16 bits of each: a rectangle's s10.5 after the shift, a triangle's integer half)
+    wire [31:0] pr_sd = asr(cur_s, {2'b0, shS}), pr_td = asr(cur_t, 5'd5);
+    wire [15:0] pr_s = p_direct ? pr_sd[15:0] : cur_s[31:16];
+    wire [15:0] pr_t = p_direct ? pr_td[15:0] : cur_t[31:16];
     // The pass's tile's fields, registered: indexing tile[p_tile] straight
     // into the pixel pipe was the worst path of the first fit (-4 ns). rdp_pix
     // names the tile a clock before its P5 takes the fields (tl_ra): the
