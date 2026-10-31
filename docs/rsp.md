@@ -581,9 +581,12 @@ RSP is 1.01, 1.08, 0.98, 0.96. At 93.75 MHz the same work takes 0.67 to 0.73 of 
 ### Timing
 
 Alone in an empty device (`tools/area2/ooc.sh rspoc`, `CLK_NS=10.667 STA=1`) the RSP of `rtl/rsp` had a worst setup slack of -4.6 to
--5.2 ns at the slow corners; that of `rtl/rsp_oc` is within 0.3 ns of closing, and in the whole design (the same RSP among the rest,
-with the fitter's seeds) 0.2 to 0.5 ns short. The paths that are left are the fetch address (`pc_f`, `pf1`), the scalar result
-`m_res` and DMEM's address.
+-5.2 ns at the slow corners; that of `rtl/rsp_oc` is within 0.3 ns of closing. In the whole design (the `mirlo_oc` revision, 99 % of
+the ALMs, 18.1k to 18.3k) the same RSP is 0.1 to 1.2 ns short on most seeds (the fitter's placement moves it by half a nanosecond):
+one of nine fits closed every analysis. The paths that are left are the scalar unit's register file read (a LUT RAM read in E, then
+the operand choice) to `m_res` (the ALU) and to the fetch pointer (the branch compare), the vector unit's dependency compares to
+`done` and E's stall, and IMEM's write path (`pair_mem`). Moving the register file's read to D (two more LUT RAMs, a stage of
+operand registers and a third forward) is the next step.
 
 ### Verification
 
