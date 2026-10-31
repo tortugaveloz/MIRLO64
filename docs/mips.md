@@ -52,8 +52,11 @@ not used: its pads are tied off in `core_top.sv`.
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the
-N64's. What the game reaches of the RCP is either a hardware block (the table above) or a trap into the **monitor
-level**, a privilege level of the CPU in which the runtime does the access on the game's behalf.
+N64's. Every instruction the game runs, the 64-bit integer ones and the TLB's included, is done by the CPU: the runtime
+emulates none. What the game reaches of the RCP is either a hardware block (the table above) or a trap into the **monitor
+level**, a privilege level of the CPU in which the runtime does the access on the game's behalf (the RCP registers that
+are not a block, the PIF), and takes the events the console's hardware would raise (the video and audio interrupts, a
+save state's request).
 
 ## Memory map
 

@@ -8,7 +8,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 
 ## What is in it
 
-* **CPU**: a MIPS of the VR4300 class at 93.75 MHz, with its FPU and caches.
+* **CPU**: a MIPS of the VR4300 class at 93.75 MHz, with its FPU, caches and 32-entry TLB. Every instruction of the VR4300 the games use, 64-bit ones included, is done by the CPU itself.
 * **RSP and RDP**: both in hardware. The RSP runs the game's own microcode and the RDP draws the game's own command stream.
 * **Video**: the picture the game's video registers describe, in a 640 x 240 frame, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
 * **Audio**: the game's own audio, at the Pocket's 48 kHz.
@@ -17,7 +17,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Sleep and Memories**: the Pocket's Sleep and its Memories (save states), with every accessory.
 * **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, a Virtual Transfer Pak that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
-A small runtime, `n64rt.sys`, loads the game and does what is not in hardware. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
+A small runtime, `n64rt.sys`, loads the game and plays the console's part around it: the PIF, the cartridge, the RCP registers that are not a block of the hardware, the video and audio events, the saves and the save states. It emulates no instruction of the CPU. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
 ## Status
 
