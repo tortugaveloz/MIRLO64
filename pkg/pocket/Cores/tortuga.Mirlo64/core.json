@@ -3,7 +3,9 @@
     "magic": "APF_VER_1",
     "metadata": {
       "platform_ids": [
-        "n64"
+        "n64",
+        "gbc",
+        "gb"
       ],
       "shortname": "Mirlo64",
       "description": "MIRLO 64: A Nintendo 64 core for the Analogue Pocket",
