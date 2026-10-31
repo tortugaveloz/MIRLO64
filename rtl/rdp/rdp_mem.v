@@ -301,8 +301,10 @@ module rdp_mem (
     // group goes out after its last word, or the span's, when a pixel of it
     // was written. A fill: the quad pattern {a, a} by the colour's bit 0 (bits
     // 16 and 0), each quad touched enabled
-    wire [29:0] h_cw    = w_cb + {21'd0, h_idx};
-    wire [2:0]  h_j     = h_cw[2:0];
+    // the write command's word address: one adder for the colour and the depth span (the group's hidden word, which only a
+    // 16-bit image has, is addressed from the colour word's)
+    wire [29:0] h_wa    = ((h_c || !h_zz) ? w_cb : w_zb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
+    wire [2:0]  h_j     = w_cb[2:0] + h_idx[2:0];
     wire        h_first = h_j == 3'd0 || h_idx == {1'b0, w_x0[9:1]};
     wire [31:0] h_base  = h_first ? h_hold : hacc;
     wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_base[{h_j, 2'b10} +: 2],
@@ -356,9 +358,7 @@ module rdp_mem (
                 end else if (wr_want) begin
                     m_cmd_valid <= 1'b1;
                     m_cmd_we <= 1'b1;
-                    m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_cw[20:3], 2'b00}
-                                                        : {h_c ? w_cb + (w_c8 ? {21'd0, h_idx[9:1]} : {20'd0, h_idx})
-                                                               : w_zb + {20'd0, h_idx}, 2'b00};
+                    m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_wa[20:3], 2'b00} : {h_wa, 2'b00};
                     wf[wf_wr[WF-1:0]] <= (h_c && w_c8) ? {h_c8be, h_c8d}
                                        : h_c ? {h_csel, w_fc ? w_fillc : h_cdata}
                                        : h_zz ? {h_zsel, h_zdata}
