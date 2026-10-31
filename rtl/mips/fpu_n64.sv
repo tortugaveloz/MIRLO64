@@ -37,7 +37,8 @@
 `default_nettype none
 
 module fpu_n64 #(
-    parameter bit FAST = 0
+    parameter bit FAST = 0,
+    parameter bit D64 = 0               // (FAST) add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d at double precision: fpu_d64
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -126,7 +127,12 @@ wire is_l = is_cop1 && fmt == 5'h15 && (fn == 6'h20 || fn == 6'h21);   // cvt.s.
 // to a 64-bit integer (cvt.l, round.l, trunc.l, ceil.l, floor.l): done as to a word, the word sign-extended into the pair
 wire to_l = (is_s || is_d) && ((fn >= 6'h08 && fn <= 6'h0B) || fn == 6'h25);
 wire is_mov = (is_s || is_d) && fn == 6'h06;
-wire is_arith = ((is_s || is_d || is_w) && !is_mov) || is_l;      // through the datapath
+// (D64: the double-precision unit's, not this datapath's)
+function automatic logic d64_of(input logic [31:0] i);
+    return D64 && i[31:26] == 6'h11 && i[25:21] == 5'h11 && (i[5:0] <= 6'h02 || i[5:0] == 6'h05 || i[5:0] == 6'h07 || i[5:0] >= 6'h30);
+endfunction
+wire is_d64 = d64_of(insn);
+wire is_arith = (((is_s || is_d || is_w) && !is_mov) || is_l) && !is_d64;      // through the datapath
 wire is_lwc1 = op == 6'h31, is_ldc1 = op == 6'h35, is_swc1 = op == 6'h39, is_sdc1 = op == 6'h3D;
 
 // ============================================================ unpack
@@ -203,10 +209,10 @@ function automatic logic arith_of(input logic [31:0] i);
     logic cop1, s_, d_, w_;
     cop1 = i[31:26] == 6'h11;
     s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
-    return ((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21));
+    return (((s_ || d_ || w_) && !((s_ || d_) && i[5:0] == 6'h06)) || (cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21))) && !d64_of(i);
 endfunction
-logic ar_q;
-always_ff @(posedge clk) if (adv) ar_q <= arith_of(insn_e);
+logic ar_q, d64_q;
+always_ff @(posedge clk) if (adv) begin ar_q <= arith_of(insn_e); d64_q <= d64_of(insn_e); end
 logic isd_q, isw_q, isl_q;                              // (FAST) is_d, is_w and is_l, likewise
 always_ff @(posedge clk) if (adv) begin
     isd_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h11;
@@ -214,7 +220,16 @@ always_ff @(posedge clk) if (adv) begin
     isl_q <= insn_e[31:26] == 6'h11 && insn_e[25:21] == 5'h15;
 end
 wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w, sel_l = FAST ? isl_q : is_l;
-assign busy = FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE;
+logic d64_busy; logic [63:0] d64_res; logic d64_un, d64_eq, d64_lt;
+assign busy = (FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE) || (D64 && d64_busy);
+generate if (D64) begin : g_d64
+    fpu_d64 u (.clk, .rst, .go(d64_q), .live, .take(valid), .fn, .a({xo, xe}), .b({yo, ye}),
+               .busy(d64_busy), .res(d64_res), .c_un(d64_un), .c_eq(d64_eq), .c_lt(d64_lt));
+end else begin : g_nd64
+    assign d64_busy = 1'b0; assign d64_res = 64'd0; assign d64_un = 1'b0; assign d64_eq = 1'b0; assign d64_lt = 1'b0;
+end endgenerate
+wire d64_cmp = D64 && fn >= 6'h30;
+wire d64_rcond = (fn[0] && d64_un) || (fn[1] && d64_eq) || (fn[2] && d64_lt);
 
 // ------------------------------------------------------------ shared pieces
 // right shift with sticky: {out[33:0], sticky}
@@ -618,6 +633,7 @@ always_ff @(posedge clk) begin
     if (!rst && valid) begin
         if (is_ctc1 && insn[15:11] == 5'd31) fcr31 <= gpr_in & 32'h0183FFFF;
         if (is_arith && kind == K_CMP) fcr31[23] <= rcond;
+        if (is_d64 && d64_cmp) fcr31[23] <= d64_rcond;
     end
 end
 
@@ -629,7 +645,7 @@ always_comb begin
     gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
     gpr_out_hi = xo;
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
-    cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];
+    cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : (is_d64 && d64_cmp) ? d64_rcond : fcr31[23];
 
     we_e = 0; we_o = 0; widx = 0;
     if (valid) begin
@@ -642,6 +658,7 @@ always_comb begin
             if (is_d) begin we_e = 1; we_o = 1; end
             else if (insn[6]) we_o = 1; else we_e = 1;
         end
+        if (is_d64 && !d64_cmp) begin widx = insn[10:7]; we_e = 1; we_o = 1; end
         if (is_arith && kind != K_CMP) begin
             widx = insn[10:7];
             if (dst_l || dst_d) begin we_e = 1; we_o = 1; end
@@ -653,11 +670,13 @@ always_comb begin
     ld_lo = (is_lwc1 || is_ldc1) ? mem_in[31:0] : gpr_in;
     if (is_mtc1 || is_dmtc1 || is_lwc1 || is_ldc1) wd_e = ld_lo;
     else if (is_mov) wd_e = (is_d || !insn[11]) ? xe : xo;
+    else if (is_d64) wd_e = d64_res[31:0];                 // (the pair: the even register the lower half)
     else wd_e = dst_d ? res_d[63:32] : res;
     if (is_mtc1 || is_lwc1) wd_o = ld_lo;
     else if (is_dmtc1) wd_o = gpr_in_hi;
     else if (is_ldc1) wd_o = mem_in[63:32];
     else if (is_mov) wd_o = (is_d || insn[11]) ? xo : xe;
+    else if (is_d64) wd_o = d64_res[63:32];
     else wd_o = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
 end
 
@@ -665,7 +684,8 @@ end
 always_ff @(posedge clk) begin
     tr_we_even <= we_e; tr_we_odd <= we_o; tr_widx <= widx; tr_weven <= wd_e; tr_wodd <= wd_o;
     tr_fcr31 <= (valid && is_ctc1 && insn[15:11] == 5'd31) ? gpr_in & 32'h0183FFFF
-              : (valid && is_arith && kind == K_CMP) ? {fcr31[31:24], rcond, fcr31[22:0]} : fcr31;
+              : (valid && is_arith && kind == K_CMP) ? {fcr31[31:24], rcond, fcr31[22:0]}
+              : (valid && is_d64 && d64_cmp) ? {fcr31[31:24], d64_rcond, fcr31[22:0]} : fcr31;
 end
 
 endmodule

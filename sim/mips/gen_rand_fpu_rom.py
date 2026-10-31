@@ -10,11 +10,15 @@ their branches, the moves to and from the integer registers, FCR31's
 rounding mode, and loads and stores of both sizes through the cache and
 around it.
 
-    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64]
+    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64] [d64]
 
 "w64" adds the 64-bit side of COP1 (dmtc1 and dmfc1 through a 64-bit integer loaded from memory, cvt.s.l, cvt.d.l and the
 conversions to a 64-bit integer, on integers of every size class); a build whose model leaves 64-bit instructions to the
 runtime (TB_NO64) cannot run them.
+
+"d64" is for the core's FPD64 level (add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d exact doubles; TB_FPD64=1): most of the
+arithmetic and compares are on doubles that are loaded just before, a second operand made to cancel, tie, reach the first's exponent
+or its rounding boundary, with the exponents near the smallest and the largest normal as well as the middle.
 """
 import random
 import struct
@@ -39,6 +43,7 @@ def main():
     seed, out = int(sys.argv[1]), sys.argv[2]
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 120000
     w64 = "w64" in sys.argv[4:]
+    d64 = "d64" in sys.argv[4:]
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -81,7 +86,49 @@ def main():
     li32(CACHED, SCRATCH)
     for f in range(32): set_s(f)
 
+    def dpair():                                # a double and a second one that makes it hard: cancels, ties, close, far
+        k = rnd.randrange(12)
+        if k < 3: e = rnd.randrange(1020, 1030)
+        elif k < 5: e = rnd.randrange(1, 60)
+        elif k < 7: e = rnd.randrange(1990, 2047)
+        elif k < 9: e = rnd.randrange(480, 560)
+        else: e = rnd.randrange(1, 2047)
+        f = rnd.choice([rnd.getrandbits(52), rnd.getrandbits(52), rnd.getrandbits(rnd.randrange(1, 53)),
+                        (1 << 52) - 1 - rnd.getrandbits(rnd.randrange(1, 53)), 0, 1, (1 << 51)])
+        x = rnd.getrandbits(1) << 63 | e << 52 | f
+        m = rnd.randrange(10)
+        if m == 0: y = x ^ (1 << 63)                                           # x - x, x + -x
+        elif m == 1: y = (x + rnd.randrange(-3, 4)) & ((1 << 64) - 1)          # one ulp off: cancellation
+        elif m == 2: y = (x & (1 << 63)) | (min(2046, max(1, e + rnd.randrange(-3, 4))) << 52) | rnd.getrandbits(52)   # near
+        elif m == 3: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, e - 53 + rnd.randrange(-3, 4))) << 52) | rnd.getrandbits(52)   # at the guard bits
+        elif m == 4: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, e - rnd.randrange(54, 70))) << 52) | rnd.getrandbits(52)    # far below
+        elif m == 5: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, 1023 * 2 - e + rnd.randrange(-2, 3))) << 52) | rnd.getrandbits(52)   # a product near 1
+        elif m == 6: y = (rnd.getrandbits(1) << 63) | (min(2046, max(1, 1023 - e + rnd.randrange(-2, 3))) << 52) | rnd.getrandbits(52)       # a product near the smallest normal
+        else: y = dval()
+        return x, y
+
+    def set_dv(f, v):
+        li32(T0, v & 0xFFFFFFFF); mtc1(T0, f)
+        li32(T0, v >> 32); mtc1(T0, f + 1)
+
+    def d64_arith():
+        x, y = dpair()
+        a, b = dreg(), dreg()
+        set_dv(a, x); set_dv(b, y)
+        k = rnd.random()
+        if k < 0.85: fn = rnd.choice([0, 1, 2, 0, 1, 2, 5, 7])
+        else: fn = 0x30 + rnd.randrange(16)
+        if fn >= 0x30:
+            op(0x11, b, a, 0, fn)
+            emit(C1 | 8 << 21 | rnd.randrange(4) << 16 | 1)              # bc1f / bc1t over the next instruction
+            op(0x11, dreg(), dreg(), dreg(), rnd.choice([0, 1, 2]))
+        else:
+            op(0x11, b, a, dreg(), fn)
+
     def arith():
+        if d64 and rnd.random() < 0.8:
+            d64_arith()
+            return
         d = rnd.random() < 0.4
         fmt, r = (0x11, dreg) if d else (0x10, freg)
         fn = rnd.choice([0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7])

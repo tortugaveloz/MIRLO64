@@ -209,6 +209,9 @@ module mips_core #(
     parameter bit W64_DIV = 0,
     // (with W64_SH, FAST, XWB and BIG) ldl, ldr, sdl, sdr: left out (a Reserved Instruction, the runtime's) unless this is set
     parameter bit W64_UA = 0,
+    // FPD64 (with FAST): add.d, sub.d, mul.d, abs.d, neg.d and the compares of doubles exact, at 53 bits, in fpu_d64 (a few cycles each, on
+    // an adder, a shifter and a DSP block); div.d, sqrt.d and the conversions stay on the FPU's single-precision datapath. COP0 register 7's bit 26.
+    parameter bit FPD64 = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
     // reaches the next fetch
@@ -296,6 +299,7 @@ localparam bit XSH  = XALU && W64_SH;        // its shifter
 localparam bit XMD  = XALU && W64_MD;        // dmult(u); HI and LO of 64 bits
 localparam bit XDIV = XMD && W64_DIV;        // ddiv(u)
 localparam bit XUA  = XSH && W64_UA && FAST && XWB && BIG;   // ldl, ldr, sdl, sdr: the d-shifter's register, a byte a cycle
+localparam bit XFPD = FPD64 && FAST;                  // double-precision add, sub, mul, abs, neg and compares (fpu_d64)
 localparam bit PG   = (TLB_RAM || TLB_EN) && FAST && FLAT && N64WIN;     // the fetch page registers
 
 // =============================================================== decode
@@ -1395,8 +1399,8 @@ always_comb begin
     5'd1: c0_rd = {27'd0, rnd_now};
     5'd2: c0_rd = c0_entrylo0; 5'd3: c0_rd = c0_entrylo1; 5'd4: c0_rd = c0_context;
     5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
-    // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
-    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
+    // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there; bit 26: FPD64)
+    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, XFPD, 11'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     // (TLB_RAM: bit 0, the game's TLB instructions are the monitor's; TLB_EN: 'T' 'L' 'B', bit 2 cached fetches from mapped pages
     // (the page registers), bit 1 the real TLB, bit 0 the monitor)
     5'd23: c0_rd = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
@@ -1869,7 +1873,7 @@ end
 
 // COP1: at M; its results are written as the instruction completes
 wire m_fpu = FAST ? m_k_fpu : m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS;
-fpu_n64 #(.FAST(FAST)) fpu (
+fpu_n64 #(.FAST(FAST), .D64(XFPD)) fpu (
     .clk, .rst,
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
     .live(m_live && m_fpu), .valid(fpu_valid),

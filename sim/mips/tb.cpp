@@ -210,6 +210,7 @@ int main(int argc, char **argv)
     }
     B.irq_external = 1;
     { extern int n64_no64; n64_no64 = getenv("TB_NO64") != NULL; }
+    { extern int n64_fpd64; n64_fpd64 = getenv("TB_FPD64") != NULL; }       // TB_FPD64=1: the core has FPD64 (-GFPD64=1)
 
     if (getenv("TB_MODEL_ONLY")) {                      // the model alone (what the core leaves to a runtime included)
         { extern int n64_no64; n64_no64 = 0; }
