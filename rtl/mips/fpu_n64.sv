@@ -351,6 +351,81 @@ wire [31:0] rbits = rexp >= 255 ? {zs, 8'hFF, 23'd0}
                   : rexp <= 0   ? {zs, 31'd0}
                   :               {zs, rexp[7:0], rm[24] ? rm[23:1] : rm[22:0]};
 
+// res's next value. The sources, one-hot as the others' (a field at a time: the sign, the exponent, the fraction):
+//   ax, y, abs, neg  an operand as it is (y: the add's second, its sign by sub), its magnitude, its sign changed
+//   qnan, satp, satn, inf, zsg  the constants: 7FBFFFFF, 7FFFFFFF, 80000000, infinity and zero of a sign (mul / div: the signs'
+//                    xor; add: both operands' zero: their and)
+//   rb               S_ROUND's packed result       za   S_F2W2's integer (FAST)      nf   (!FAST) S_F2W's
+// and zero (a write with nothing selected: x - x, a zero integer, ...)
+wire dnx = FAST ? fnx : isnan(ax), dny = FAST ? fny : isnan(ay), dix = FAST ? fix : isinf(ax), diy = FAST ? fiy : isinf(ay);
+wire dzx = FAST ? fzx : iszero(ax), dzy = FAST ? fzy : iszero(ay);
+wire d_toint = (fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25;
+wire dsy = ay.s ^ fn[0];
+logic r_ax, r_y, r_abs, r_neg, r_qnan, r_satp, r_satn, r_inf, r_zsg, r_rb, r_za, r_nf, r_zero;
+always_comb begin
+    r_ax = 0; r_y = 0; r_abs = 0; r_neg = 0; r_qnan = 0; r_satp = 0; r_satn = 0; r_inf = 0; r_zsg = 0; r_rb = 0; r_za = 0; r_nf = 0; r_zero = 0;
+    if (!rst && live) case (st)
+    S_DECIDE:
+        if (sel_l) r_zero = zmag == 32'd0 && ax == 32'd0;
+        else if (sel_w) r_zero = ax == 32'd0;
+        else if (fn >= 6'h30) ;
+        else if (d_toint) begin
+            if (dnx) r_satp = 1;
+            else if (ax.e >= 8'd158) begin r_satn = ax.s; r_satp = !ax.s; end
+            else r_zero = dzx;
+        end else case (fn)
+        6'h00, 6'h01:
+            if (dnx || dny || (dix && diy && ax.s != dsy)) r_qnan = 1;
+            else if (dix) r_ax = 1;
+            else if (diy) r_y = 1;
+            else if (dzx && dzy) r_zsg = 1;
+            else if (dzx) r_y = 1;
+            else r_ax = dzy;
+        6'h02:
+            if (dnx || dny || (dix && dzy) || (dzx && diy)) r_qnan = 1;
+            else if (dix || diy) r_inf = 1;
+            else r_zsg = dzx || dzy;
+        6'h03:
+            if (dnx || dny || (dix && diy) || (dzx && dzy)) r_qnan = 1;
+            else if (dix || dzy) r_inf = 1;
+            else r_zsg = dzx || diy;
+        6'h04:
+            if (dnx || (ax.s && !dzx)) r_qnan = 1;
+            else r_ax = dzx || dix;
+        default:
+            if (dnx) r_qnan = 1;
+            else if (fn == 6'h05) r_abs = 1;
+            else if (fn == 6'h07) r_neg = 1;
+            else r_ax = 1;
+        endcase
+    S_ADD2:  r_zero = !FAST && za_s == 32'd0;
+    S_NORM:  r_zero = FAST && kind == K_ADD && zmag == 32'd0;
+    S_ROUND: r_rb = 1;
+    S_F2W:   r_nf = !FAST;
+    S_F2W2:  r_za = 1;
+    default: ;
+    endcase
+end
+wire [31:0] nf_i0 = sh_o[34:3];
+logic nf_inc;
+always_comb case (rmode)
+    2'd0: nf_inc = sh_o[2] && (sh_o[1] || sh_o[0] || nf_i0[0]);
+    2'd1: nf_inc = 1'b0;
+    2'd2: nf_inc = !ax.s && (sh_o[2] || sh_o[1] || sh_o[0]);
+    default: nf_inc = ax.s && (sh_o[2] || sh_o[1] || sh_o[0]);
+endcase
+wire [31:0] nf_i = nf_i0 + {31'd0, nf_inc};
+wire [31:0] nf_res = ax.s ? -nf_i : nf_i;
+// (the constants' sign: an infinity or a zero of mul / div has the signs' xor, an add's zero both operands')
+wire        r_sg = fn[1] ? ax.s ^ ay.s : ax.s & dsy;
+wire        r_axef = r_ax | r_abs | r_neg;
+wire [31:0] res_d_n = {({r_ax & ax.s} | {r_y & dsy} | {r_neg & !ax.s} | {r_satn} | {(r_inf | r_zsg) & r_sg} | {r_rb & rbits[31]} | {r_za & za_s[31]} | {r_nf & nf_res[31]}),
+                       ({8{r_axef}} & ax.e) | ({8{r_y}} & ay.e) | ({8{r_rb}} & rbits[30:23]) | ({8{r_za}} & za_s[30:23]) | ({8{r_nf}} & nf_res[30:23]) | {8{r_qnan | r_satp | r_inf}},
+                       ({23{r_axef}} & ax.f) | ({23{r_y}} & ay.f) | ({23{r_rb}} & rbits[22:0]) | ({23{r_za}} & za_s[22:0]) | ({23{r_nf}} & nf_res[22:0])
+                       | {23{r_satp}} | {1'b0, {22{r_qnan}}}};
+always_ff @(posedge clk) if (r_ax || r_y || r_abs || r_neg || r_qnan || r_satp || r_satn || r_inf || r_zsg || r_rb || r_za || r_nf || r_zero) res <= res_d_n;
+
+
 // f2d: a float as a double pair {lo, hi}
 function automatic logic [63:0] f2d(input logic [31:0] f);
     logic [10:0] e;
@@ -396,13 +471,13 @@ always_ff @(posedge clk) begin
         st <= S_DONE;                                     // (the special cases: done now)
         if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
             kind <= K_CVT; zst <= 0; zexp <= 12'sd158;
-            if (zmag == 32'd0 && ax == 32'd0) res <= 32'd0;
+            if (zmag == 32'd0 && ax == 32'd0) ;
             else if (zmag == 32'd0) begin zs <= 0; st <= S_NORM; end                    // an unsigned word
             else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; st <= S_NORM; end   // a word
             else begin zs <= zmag[31]; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zexp <= 12'sd158; zst <= 0;
-            if (ax == 32'd0) res <= 32'd0; else st <= S_NORM;
+            if (ax != 32'd0) st <= S_NORM;
         end else if (fn >= 6'h30) begin                   // c.cond
             logic un, eq, lt;
             un = nx || ny;
@@ -411,23 +486,14 @@ always_ff @(posedge clk) begin
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
         end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
-            if (nx) res <= 32'h7FFFFFFF;
-            else if (ax.e >= 8'd158) res <= ax.s ? 32'h80000000 : 32'h7FFFFFFF;
-            else if (zx) res <= 32'd0;
-            else st <= S_F2W;
+            if (!nx && ax.e < 8'd158 && !zx) st <= S_F2W;
             if (FAST) ad <= 8'd158 - ax.e;
         end else case (fn)
         6'h00, 6'h01: begin                               // add, sub: order by magnitude
             logic sy; fbits_t y;
             y = ay; y.s = ay.s ^ fn[0]; sy = y.s;
             kind <= K_ADD;
-            if (nx || ny || (ix && iy && ax.s != sy)) res <= QNAN;
-            else if (ix) res <= ax;
-            else if (iy) res <= y;
-            else if (zx && zy) res <= {ax.s & sy, 31'd0};
-            else if (zx) res <= y;
-            else if (zy) res <= ax;
-            else begin
+            if (!(nx || ny || ix || iy || zx || zy)) begin
                 if (FAST) begin
                     sw <= fmlt;
                     if (!fmlt) begin ad <= ax.e - ay.e; zs <= ax.s; end
@@ -441,17 +507,11 @@ always_ff @(posedge clk) begin
         end
         6'h02: begin                                      // mul
             kind <= K_MUL;
-            if (nx || ny || (ix && zy) || (zx && iy)) res <= QNAN;
-            else if (ix || iy) res <= {ax.s ^ ay.s, 8'hFF, 23'd0};
-            else if (zx || zy) res <= {ax.s ^ ay.s, 31'd0};
-            else st <= S_MUL;
+            if (!(nx || ny || ix || iy || zx || zy)) st <= S_MUL;
         end
         6'h03: begin                                      // div
             kind <= K_DIV;
-            if (nx || ny || (ix && iy) || (zx && zy)) res <= QNAN;
-            else if (ix || zy) res <= {ax.s ^ ay.s, 8'hFF, 23'd0};
-            else if (zx || iy) res <= {ax.s ^ ay.s, 31'd0};
-            else begin
+            if (!(nx || ny || ix || iy || zx || zy)) begin
                 icnt <= 5'd27;
                 zs <= ax.s ^ ay.s; zexp <= 12'(ax.e) - 12'(ay.e) + 12'sd131;
                 st <= S_ITER;
@@ -459,9 +519,7 @@ always_ff @(posedge clk) begin
         end
         6'h04: begin                                      // sqrt
             kind <= K_SQRT;
-            if (nx || (ax.s && !zx)) res <= QNAN;
-            else if (zx || ix) res <= ax;
-            else begin
+            if (!(nx || (ax.s && !zx) || zx || ix)) begin
                 icnt <= 5'd27; zs <= 0;
                 // value = m * 2^t, t = e - 150 (as odd as e is); the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit
                 // root, whose exponent is t / 2 rounded down, + 143: e / 2 rounded down, + 68
@@ -473,10 +531,6 @@ always_ff @(posedge clk) begin
         end
         default: begin                                    // abs, neg, cvt.s.d, cvt.d.s
             kind <= K_MOVE;
-            if (nx) res <= QNAN;
-            else if (fn == 6'h05) res <= {1'b0, ax.e, ax.f};
-            else if (fn == 6'h07) res <= {!ax.s, ax.e, ax.f};
-            else res <= ax;
         end
         endcase
     end
@@ -484,7 +538,7 @@ always_ff @(posedge clk) begin
     S_ADD2: begin                                         // align, add: the larger at [30:7]
         zst <= 0; zexp <= 12'(add_le) + 12'sd1;
         if (FAST) st <= S_NORM;                                   // (x - x: S_NORM's)
-        else if (za_s == 32'd0) begin res <= 32'd0; st <= S_DONE; end   // x - x: +0
+        else if (za_s == 32'd0) st <= S_DONE;   // x - x: +0
         else st <= S_NORM;
     end
     S_MUL: begin
@@ -504,7 +558,7 @@ always_ff @(posedge clk) begin
         else begin m = zmag; sti = zst; end
         if (FAST) begin nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)
         else begin zexp <= zexp - 12'(lzc32(m)); zst <= sti; st <= S_ROUND; end
-        if (FAST && kind == K_ADD && zmag == 32'd0) begin res <= 32'd0; st <= S_DONE; end
+        if (FAST && kind == K_ADD && zmag == 32'd0) st <= S_DONE;
     end
     // cvt.s.l of one that is not a word: the magnitude {zmag, ir} a word at a time (the lower word, then the upper one with
     // its carry), then shifted left a bit a cycle until its top bit is set (at most 32 cycles), the bits below the upper
@@ -520,25 +574,11 @@ always_ff @(posedge clk) begin
     S_LSH1: if (zmag[31]) begin zst <= ir != 32'd0; st <= S_ROUND; end
             else zexp <= zexp - 12'sd1;
     S_NORM2: begin zexp <= zexp - 12'(nzc); st <= S_ROUND; end
-    S_ROUND: begin res <= rbits; st <= S_DONE; end
+    S_ROUND: st <= S_DONE;
     S_F2W: if (FAST) begin fg <= sh_o[2]; zst <= sh_o[1] | sh_o[0]; st <= S_F2W2; end
-    else begin                                            // |x| < 2^31
-        logic [31:0] i; logic g, sk, inc;
-        i = sh_o[34:3]; g = sh_o[2]; sk = sh_o[1] | sh_o[0];
-        case (rmode)
-        2'd0: inc = g && (sk || i[0]);
-        2'd1: inc = 1'b0;
-        2'd2: inc = !ax.s && (g || sk);
-        default: inc = ax.s && (g || sk);
-        endcase
-        i = i + {31'd0, inc};
-        res <= ax.s ? -i : i;
-        st <= S_DONE;
-    end
+    else st <= S_DONE;                                    // |x| < 2^31: nf_res
     S_F2W2: begin
-        // (the rounded magnitude, negated for a negative: -(m + inc) is ~m + !inc -- the shared adder)
-        res <= za_s;
-        st <= S_DONE;
+        st <= S_DONE;                                     // (the rounded magnitude, negated for a negative: -(m + inc) is ~m + !inc -- the shared adder)
     end
     S_DONE: if (valid) st <= S_IDLE;
     default: st <= S_IDLE;
