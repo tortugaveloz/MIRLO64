@@ -300,7 +300,7 @@ endfunction
 
 // EX1, a compare or a clip: which of s, t and -t (~t) the result is -- the select of lane_x2, from the adder's flags of this
 // cycle and the flag registers -- registered (pk_r), so that EX2 has no compare in front of its result
-function automatic logic [1:0] lane_pk(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input logic [3:0] fr,
+function automatic logic [2:0] lane_pk(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input logic [3:0] fr,
                                        input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce);
     logic sign, cout, b16, zero, ones, eq, z17, cs, negside, cond, le_f, ge_f;
     sign = s[15] ^ t[15];
@@ -317,8 +317,9 @@ function automatic logic [1:0] lane_pk(input logic [5:0] f, input logic [15:0] s
         negside = sign;
     end
     cond = negside ? le_f : ge_f;
-    if (f == 6'h20 || f == 6'h23) return cs ? 2'd0 : 2'd1;
-    return !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2;
+    if (f == 6'h13) return {s == 16'd0, s[15] ? 2'd2 : 2'd1};         // VABS: -t for a negative s, t for a positive; 0 for 0
+    if (f == 6'h20 || f == 6'h23) return {1'b0, cs ? 2'd0 : 2'd1};
+    return {1'b0, !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2};
 endfunction
 
 // EX1, a multiply: the product into the accumulator (all 48 bits)
@@ -335,15 +336,48 @@ function automatic logic [47:0] lane_mac(input logic [5:0] f, input logic signed
     return term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
 endfunction
 
+// What EX2 asks of the function, registered with the instruction (it is the start of the result's longest path)
+typedef struct packed {
+    logic       cl;                 // the result and the accumulator's low word are the adder's sum
+    logic       cx;                 // a logic operation, VMOV or a reciprocal: the table is ttc
+    logic [3:0] ttc;
+    logic       usepk;              // the choice among s, t and -t is pk_r's (EX1 made it)
+    logic       vmrg;               // ... or VMRG's, by VCC
+    logic       vsar;
+    logic       vas;                // VADD, VSUB: the result is clamped
+    logic       abs_;               // VABS: -t of -8000 is 8000
+    logic       resv;               // a reserved function: 0
+} ydec_t;
+function automatic ydec_t ydecode(input logic [5:0] f);
+    ydec_t d;
+    d.cl    = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
+    d.cx    = (f >= 6'h28 && f <= 6'h2D) || f == 6'h33 || (f >= 6'h30 && f <= 6'h36) || f == 6'h22;
+    unique case (f[2:1])
+    2'd0:    d.ttc = 4'b1000;                                  // s & t
+    2'd1:    d.ttc = 4'b1110;                                  // s | t
+    default: d.ttc = 4'b0110;                                  // s ^ t
+    endcase
+    if (f >= 6'h28 && f <= 6'h2D) d.ttc = d.ttc ^ {4{f[0]}};
+    else if (f == 6'h22) d.ttc = 4'b1100;                      // VNE: s
+    else d.ttc = 4'b1010;                                      // VMOV, VRCP..: t
+    d.usepk = f == 6'h13 || f == 6'h20 || f == 6'h23 || f == 6'h24 || f == 6'h25 || f == 6'h26;
+    d.vmrg  = f == 6'h27;
+    d.vsar  = f == 6'h1D;
+    d.vas   = f == 6'h10 || f == 6'h11;
+    d.abs_  = f == 6'h13;
+    d.resv  = is_resv(f);
+    return d;
+endfunction
+
 // EX2, any computation but a multiply: from the registered sum (lo) and flags (fr, the adder's {carry, b16, zero,
 // ones} of its compare) the result, the accumulator's low word, the flags and the register write's data
 function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
-                                  input logic [15:0] lo, input logic [47:0] accm, input logic [1:0] pk_in,
+                                  input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input ydec_t yd,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);
     lane_t o = '0;
     logic eq, sign;
-    logic cs, negside, cond, le_f, ge_f, c_l, c_x, abs_sat, ovf, a_nt;
+    logic cs, negside, cond, le_f, ge_f, abs_sat, ovf, a_nt;
     logic [1:0] pk;
     logic [3:0] tt;
     logic [15:0] accl;
@@ -364,8 +398,6 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
     // is a function of the lane's two bits: a table of its four values (tt, the same
     // for the lane's sixteen bits), beside the adder's sum and -t.
     o.accl_w = f != 6'h1D;
-    c_l = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
-    c_x = f >= 6'h28 && f <= 6'h2D;
     // the compares: b16 is s < t (signed)
     unique case (f)
     6'h20:   cs = b16 || (eq && co_hi && co_lo);
@@ -384,40 +416,28 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
         negside = sign;
     end
     cond = negside ? le_f : ge_f;
-    unique case (f)
-    6'h13:                    pk = s[15] ? 2'd2 : 2'd1;
-    6'h27:                    pk = cs ? 2'd0 : 2'd1;
-    6'h22:                    pk = 2'd0;
-    6'h20, 6'h23, 6'h24, 6'h25, 6'h26: pk = pk_in;                 // (made in EX1: lane_pk)
-    default:                  pk = 2'd1;                     // VEQ, VRCP.., VMOV: vt
-    endcase
+    // (what s and t give: the table of the function, or of the choice -- VMRG's is by VCC)
+    pk = yd.usepk ? pk_in[1:0] : yd.vmrg ? (cc_lo ? 2'd0 : 2'd1) : 2'd1;
     unique case (pk)
     2'd0:    tt = 4'b1100;                                   // s
     2'd1:    tt = 4'b1010;                                   // t
     default: tt = 4'b0101;                                   // ~t (-t: a_nt)
     endcase
-    if (f == 6'h13 && s == 16'd0) tt = 4'b0000;              // VABS of 0
-    if (c_x) begin
-        unique case (f[2:1])
-        2'd0:    tt = 4'b1000;                               // s & t
-        2'd1:    tt = 4'b1110;                               // s | t
-        default: tt = 4'b0110;                               // s ^ t
-        endcase
-        tt = tt ^ {4{f[0]}};
-    end
-    a_nt = !c_x && pk == 2'd2;
-    for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? lo[i] : (f == 6'h1D) ? accm[i] : tt[{s[i], t[i]}];
+    if (yd.usepk && pk_in[2]) tt = 4'b0000;                  // VABS of 0
+    if (yd.cx) tt = yd.ttc;
+    a_nt = !yd.cx && pk == 2'd2;
+    for (int i = 0; i < 16; i++) accl[i] = (yd.cl || a_nt) ? lo[i] : yd.vsar ? accm[i] : tt[{s[i], t[i]}];
     o.acc[15:0] = accl;
     // vd: the clamped result, or VSAR's word of the accumulator
     // (VABS of a negative s with t = 8000: -t is 8000 again: that is t and -t, from the adder, both negative)
-    abs_sat = f == 6'h13 && s[15] && t[15] && lo[15];
-    ovf = (f == 6'h10 || f == 6'h11) && (b16 ^ lo[15]);
+    abs_sat = yd.abs_ && s[15] && t[15] && lo[15];
+    ovf = yd.vas && (b16 ^ lo[15]);
     rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
     c15 = !abs_sat && b16;                                   // (abs_sat: 7FFF; ovf: b16, then its inverse)
     clo = abs_sat || !b16;
-    if (is_resv(f)) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
+    if (yd.resv) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
     // (VSAR: the accumulator's word e names, the lane's, or 0)
-    if (f == 6'h1D) begin
+    if (yd.vsar) begin
         rsel = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
         c15 = 1'b0; clo = 1'b0;
     end
@@ -508,9 +528,9 @@ logic [4:0]         x_vdn;
 logic [2:0]         x_de;
 logic [15:0]        lo_r [LANES];             // the adder's sum, and its flags (the first cycle's)
 logic [3:0]         fl_r [LANES];
-logic [1:0]         pk_r [LANES];             // a compare's or a clip's choice among s, t and -t
+logic [2:0]         pk_r [LANES];             // a compare's or a clip's choice among s, t and -t
 add_t               ad [LANES];
-logic [1:0]         pk1 [LANES];
+logic [2:0]         pk1 [LANES];
 logic [47:0]        mac [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
@@ -524,6 +544,7 @@ wire x_ex2 = x_v && !x_wait;                  // its last cycle: EX2 is the next
 // EX2's registers
 logic               y_v /* verilator public_flat_rd */, y_mul, y_one, y_rcp;
 logic [5:0]         y_fn;
+ydec_t              y_yd;
 logic [3:0]         y_ve;
 logic [4:0]         y_vdn;
 logic [2:0]         y_de;
@@ -531,7 +552,7 @@ lane_t ex2 [LANES];
 logic [15:0] mres [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
         mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]});
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
@@ -854,7 +875,7 @@ always_ff @(posedge clk) begin
 
         // ---- EX2
         y_v <= x_ex2;
-        y_fn <= x_fn; y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
+        y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
         if (y_v) begin
             for (int l = 0; l < LANES; l++) begin
                 if (!y_mul) begin
@@ -890,8 +911,10 @@ always_ff @(posedge clk) begin
         x_sec <= x_v && x_wait;
 
         // ---- SEL
+        // (s and t are taken every cycle but while EX1 holds a computation that uses them in EX2: no SEL is in front of
+        // their enable)
+        if (!(x_v && x_st)) for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
         if (sel_fire) begin
-            for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
             if (!fn_mul && !fn_fast) begin                     // (a multiply enters EX1 from the MUL stage, a fast one skips it)
                 x_v <= 1'b1; x_mul <= 1'b0; x_st <= fn_cmp;
                 // a clip takes its adder's flags in one cycle and makes -t in the next; a reciprocal's second cycle is
@@ -913,7 +936,7 @@ always_ff @(posedge clk) begin
 
         // ---- a fast computation goes to EX2 from SEL (EX1 and MUL are empty then)
         if (sel0 && fn_fast) begin
-            y_v <= 1'b1; y_fn <= fn; y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
+            y_v <= 1'b1; y_fn <= fn; y_yd <= ydecode(fn); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
         end
 
         // ---- the MUL stage, and a multiply's start of EX1 behind it
