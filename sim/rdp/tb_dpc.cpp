@@ -103,6 +103,7 @@ int main(int argc, char **argv)
         bool ok = tb.t->halted && !tb.t->unimpl && k == model_rdp.size() && k == rtl_rdp.size();
         printf("%s: %s -- %zu command words (the model's %zu), %ld cycles", argv[ai], ok ? "the same commands" : "DIFFERENT",
                rtl_rdp.size(), model_rdp.size(), tb.cyc);
+        if (!ok && getenv("TB_DUMP")) for (size_t i = (k > 6 ? k - 6 : 0); i < k + 8 && i < std::max(model_rdp.size(), rtl_rdp.size()); i++) printf("\n   [%zu] model %08x rtl %08x", i, i < model_rdp.size() ? model_rdp[i] : 0u, i < rtl_rdp.size() ? rtl_rdp[i] : 0u);
         if (!ok) printf("; first difference at word %zu%s%s", k, tb.t->halted ? "" : ", the RSP did not halt", tb.t->unimpl ? ", unimplemented instruction" : "");
         printf("\n");
         bad |= !ok;

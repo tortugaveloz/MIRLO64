@@ -370,7 +370,7 @@ end
 wire         sp_wr   = wq_v;                               // a word is written into SP memory
 // SP memory: DMEM through the access above, IMEM through its second port
 // (IMEM is only ever written by a DMA)
-wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
+wire         dm_rd   = ds == D_OUT && !d_im && !sw_v && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // (not while a store waits to be written: the DMA reads what the program stored before it)   // out of DMEM: a pair read (from registers: m_stall's)
 assign dm_valid = (sp_wr && !d_im) || dm_rd;
 assign tr_mw    = (dm_valid || sw_v) && tr_e_mem;   // (a store waits for the DMA alone: the count is of the loads' too)
 assign dm_we    = sp_wr;
