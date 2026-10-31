@@ -98,8 +98,8 @@ logic [9:0]  i_addr, i_addr1;
 logic [31:0] i_data, i_data2;
 logic        i2_ok, p2_ok, pw_ok;
 logic [31:0] iw_prev, iw_data;
-logic        sm_valid, sm_we;       logic [11:0] sm_addr; logic [1:0] sm_n; logic [31:0] sm_wdata;
-logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; logic [127:0] vm_wdata; logic [3:0] vm_rot;
+logic        sm_valid, sm_we;       logic [11:0] sm_addr, sm_addr16, vm_addr16; logic [1:0] sm_n; logic [31:0] sm_wdata;
+logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; logic [127:0] vm_wpre; logic [3:0] vm_wsh, vm_rot;
 logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
@@ -113,7 +113,7 @@ logic        tr_e_mem;
 
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
-    .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
+    .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
     .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
@@ -127,7 +127,7 @@ logic [9:0]  rom_addr;
 logic [15:0] rom_q;
 rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .a(c_a), .b(c_b),
     .l_valid(c_valid && c_pr && l_vu), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
-    .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_be(vm_be), .m_wdata(vm_wdata), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall(dm_valid),
+    .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_addr16(vm_addr16), .m_be(vm_be), .m_wpre(vm_wpre), .m_wsh(vm_wsh), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall_ld(dm_valid || sw_v), .m_stall_st(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
 
 // the reciprocal ROM: 512 reciprocals, 512 inverse square roots (sim/rsp/make_div_rom.py)
@@ -186,29 +186,59 @@ assign p2_ok = p2_q;
 // the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
 wire         vu_own = c_valid && (c_lins[31:26] == 6'h32 || c_lins[31:26] == 6'h3A);
 logic        x_valid, x_we;
-logic [11:0] x_addr;
+logic [11:0] x_addr, x_addr16;
 logic [15:0] x_be16;
 logic [127:0] x_wd;
 logic [3:0]  x_rot_n;
 // the scalar unit's bytes: m_n + 1 from the address on; its word (and the
 // DMA's) goes to all four banks rotated to the address, the enables pick
 wire  [3:0]  sa = sm_addr[3:0];
-wire  [31:0] s_rw = {sm_wdata, sm_wdata} >> {sa[1:0], 3'b000};
 logic [15:0] s_be;
 always_comb
     for (int b = 0; b < 16; b++) s_be[b] = 4'(4'(b) - sa) <= {2'd0, sm_n};
+// A store does not write in the cycle it is in E: its address, bytes and data (before the rotation to DMEM's bytes) are taken
+// into registers (sw_*) and written the cycle after, when the port is free -- the units' loads and stores wait for that
+// cycle as they wait for the DMA's (m_stall). So a store's data, its rotation by the address and its byte enables are made
+// from registers.
+logic        sw_v /* verilator public_flat_rd */;
+logic [11:0] sw_addr, sw_addr16;
+logic [15:0] sw_be;
+logic [127:0] sw_pre;
+logic [3:0]  sw_rot;
+wire         unit_st = !dm_valid && (vu_own ? vm_valid && vm_we : sm_valid && sm_we);     // a store is taken
+function automatic logic [127:0] rot16(input logic [127:0] pre, input logic [3:0] r);   // byte b of the result is byte (b + r) mod 16
+    logic [127:0] w1, w2;
+    for (int b = 0; b < 16; b++) w1[127 - 8 * b -: 8] = pre[127 - 8 * ((b + int'(r[1:0])) & 15) -: 8];
+    for (int b = 0; b < 16; b++) w2[127 - 8 * b -: 8] = w1[127 - 8 * ((b + 4 * int'(r[3:2])) & 15) -: 8];
+    return w2;
+endfunction
 always_comb begin
-    if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_addr = dm_addr; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
+    if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_addr = dm_addr; x_addr16 = dm_addr + 12'd16; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
                            x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
-    else if (vu_own) begin x_valid = vm_valid; x_we = vm_we; x_addr = vm_addr; x_be16 = vm_be;
-                           x_wd = vm_wdata; x_rot_n = vm_rot; end
-    else             begin x_valid = sm_valid; x_we = sm_we; x_addr = sm_addr; x_be16 = s_be;
-                           x_wd = {4{s_rw}}; x_rot_n = sa; end
+    else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_addr = sw_addr; x_addr16 = sw_addr16; x_be16 = sw_be;
+                           x_wd = rot16(sw_pre, sw_rot); x_rot_n = 4'd0; end
+    else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_addr = vm_addr; x_addr16 = vm_addr16; x_be16 = 16'd0;
+                           x_wd = '0; x_rot_n = vm_rot; end
+    else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_addr = sm_addr; x_addr16 = sm_addr16; x_be16 = 16'd0;
+                           x_wd = '0; x_rot_n = sa; end
+end
+always_ff @(posedge clk) begin
+    if (rst) sw_v <= 1'b0;
+    else begin
+        if (sw_v && !dm_valid) sw_v <= 1'b0;
+        if (unit_st) sw_v <= 1'b1;
+    end
+    if (!dm_valid) begin
+        sw_addr <= vu_own ? vm_addr : sm_addr; sw_addr16 <= vu_own ? vm_addr16 : sm_addr16;
+        sw_be <= vu_own ? vm_be : s_be;
+        sw_pre <= vu_own ? vm_wpre : {4{sm_wdata}};                     // (the scalar unit's: byte b of the word is rotated to b - sa)
+        sw_rot <= vu_own ? vm_wsh : {2'b00, 2'(-sa[1:0])};
+    end
 end
 // (x_be16 is in address order, bit b the byte at address mod 16 = b; bank k
 // takes x_addr's row, or the next one for the words before x_addr's in its line)
 wire  [9:0]  x_wa  = x_addr[11:2];
-wire  [7:0]  x_wa1 = x_wa[9:2] + 8'd1;
+wire  [7:0]  x_wa1 = x_addr16[11:4];             // (the row after: from the address + 16, made beside the address)
 logic [31:0] x_row;
 always_comb
     for (int k = 0; k < 4; k++) x_row[8 * k +: 8] = (2'(k) < x_wa[1:0]) ? x_wa1 : x_wa[9:2];
@@ -341,7 +371,7 @@ wire         sp_wr   = wq_v;                               // a word is written 
 // (IMEM is only ever written by a DMA)
 wire         dm_rd   = ds == D_OUT && !d_im && 2'(pf_n + 2'(pf_rd)) < 2'd2;   // out of DMEM: a pair read (from registers: m_stall's)
 assign dm_valid = (sp_wr && !d_im) || dm_rd;
-assign tr_mw    = dm_valid && tr_e_mem;
+assign tr_mw    = (dm_valid || sw_v) && tr_e_mem;   // (a store waits for the DMA alone: the count is of the loads' too)
 assign dm_we    = sp_wr;
 assign dm_addr  = ds == D_OUT ? {np, 3'b000} : {sp_word, 2'b00};
 assign dm_wdata = wq_d;

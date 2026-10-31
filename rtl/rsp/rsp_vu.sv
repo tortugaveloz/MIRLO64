@@ -73,11 +73,14 @@ module rsp_vu #(
     output logic        m_valid,
     output logic        m_we,
     output logic [11:0] m_addr,
+    output logic [11:0] m_addr16,       // ... and the address + 16 (the next line's: made in parallel)
     output logic [15:0] m_be,
-    output logic [127:0] m_wdata,
+    output logic [127:0] m_wpre,        // a store's bytes in the register's order (byte i in [127 - 8i -: 8]), and the rotation to DMEM's:
+    output logic [3:0]  m_wsh,          // byte b of DMEM's line takes byte (b + m_wsh) mod 16 of m_wpre
     output logic [3:0]  m_rot,
     input  wire  [127:0] m_rdata,
-    input  wire         m_stall,        // DMEM's port is the DMA's this cycle: a load or store (each beat of LTV / STV) waits
+    input  wire         m_stall_ld,     // DMEM's port is not for a load this cycle (the DMA's, or a store's write): a load (each beat of LTV) waits
+    input  wire         m_stall_st,     // ... for a store (the DMA's): a store (each beat of STV) waits
 
     // the reciprocal ROM (rsp_top): 512 reciprocals, then 512 inverse square roots
     output logic [9:0]  rom_addr,
@@ -586,6 +589,7 @@ always_comb begin
     endcase
 end
 wire  [11:0] ls_addr = la[11:0] + off_sh;
+wire  [11:0] ls_addr16 = la[11:0] + (off_sh + 12'd16);
 wire  ls_packed = ld.packed_;
 wire  ls_tv     = ld.tv;                                           // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
@@ -598,6 +602,7 @@ wire  [4:0]  size = 5'd1 << lsop[1:0];
 // the 8-byte block's
 wire  [1:0]  win_w  = lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ls_addr[3], 1'b0} : ls_addr[3:2];
 wire  [11:0] ls_win = {ls_addr[11:4], win_w, 2'b00};
+wire  [11:0] ls_win16 = {ls_addr16[11:4], win_w, 2'b00};
 // a load's register bytes: a run of the register's sixteen from e on -- its size's; to the 16-byte block's end
 // (LQV); or (LRV) from where the block's start comes, the bytes before the address, to the register's end
 logic [15:0] ld_mask;
@@ -651,8 +656,6 @@ wire         in_tv   = st == V_TV;
 // from the instruction first, then rs's low bits (the late ones: forwarded),
 // the low two of them first
 logic [7:0]  sarr [16];
-logic [7:0]  sr1 [16];
-logic [7:0]  sb [16];
 wire         st_pk  = swc2 && ls_packed;
 wire  [3:0]  st_eo  = el - off_sh[3:0];
 wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - a[3:0] : el;
@@ -676,8 +679,6 @@ always_comb begin
         endcase
         if (i % 4 == 0 && st_fv) sarr[i] = wf[14:7];
     end
-    for (int b = 0; b < 16; b++) sr1[b] = sarr[(b + int'(st_rot[1:0])) & 15];
-    for (int b = 0; b < 16; b++) sb[b]  = sr1[(b + 4 * int'(st_rot[3:2])) & 15];
 end
 
 // MFC2's bytes: those of D's copy at e and e + 1 (mod 16), not through the store's rotation
@@ -754,6 +755,7 @@ wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 wire [4:0] l_reg = mtc2 ? li[15:11] : ltn;
 wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
 wire ls_go    = ld.go;
+wire m_stall  = swc2 ? m_stall_st : m_stall_ld;                              // (the port, for the load or store of E)
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || mtc2) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free) : (cfc2 || ctc2) ? pipe_e : 1'b1)
               && !(m_stall && ls_go);                       // (a load or store waits for the port)
@@ -787,9 +789,11 @@ always_comb begin
     m_valid = (start_nc && ls_go) || (in_tv && !m_stall);
     m_we    = swc2;
     m_addr  = in_tv ? tv_addr : ls_win;
+    m_addr16 = in_tv ? tv_addr + 12'd16 : ls_win16;
     m_be    = in_tv ? 16'd1 << tv_addr[3:0] : st_be;
     m_rot   = in_tv ? tv_addr[3:0] - tv_n : o - el;
-    for (int i = 0; i < 16; i++) m_wdata[127 - 8 * i -: 8] = sb[i];
+    for (int i = 0; i < 16; i++) m_wpre[127 - 8 * i -: 8] = sarr[i];
+    m_wsh = st_rot;
     // done, and the value MFC2 / CFC2 give
     done = 1'b0;
     if (sel0) done = 1'b1;                                      // the rest runs behind the next instruction

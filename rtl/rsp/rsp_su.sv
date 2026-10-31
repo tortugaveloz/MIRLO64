@@ -60,10 +60,12 @@ module rsp_su #(
     output logic        m_valid,
     output logic        m_we,
     output logic [11:0] m_addr,
+    output logic [11:0] m_addr16,       // ... and the address + 16 (the next line's: made in parallel)
     output logic [1:0]  m_n,            // bytes - 1 (0, 1 or 3)
     output logic [31:0] m_wdata,
     input  wire  [31:0] m_rdata,
-    input  wire         m_stall,        // DMEM's port is the DMA's this cycle: a load or store waits (E holds)
+    input  wire         m_stall,        // DMEM's port is not for a load this cycle (the DMA's, or a store's write): a load waits (E holds)
+    input  wire         m_stall_st,     // ... for a store (the DMA's): a store waits
 
     // the coprocessors
     output logic        c_valid,
@@ -190,7 +192,6 @@ logic        v_e;      logic [31:0] v_ins;                  // E holds a pair: i
 logic        m_valid_r; logic [31:0] m_res; ctl_t m_c;
 logic        m_we_r;
 logic        w_we;     logic [4:0] w_wr;   logic [31:0] w_res;
-logic        x_we;     logic [4:0] x_wr;   logic [31:0] x_res;
 
 // ---- what an instruction reads and writes, for the console's issue rules (sim/rsp/rsp_time.c has them in C)
 function automatic logic is_vc(input logic [31:0] i);
@@ -286,40 +287,31 @@ wire         pair_go = pair_d && !stall_e;
 
 // ---- the register file: two copies, read with the instruction arriving in D
 logic [31:0] rf_qa, rf_qb;
-wire  [4:0]  ra_d = s_ins_d[25:21];
-wire  [4:0]  rb_d = s_ins_d[20:16];
+wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
+// (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
+wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
+wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
 rsp_rfram rfa (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qa));
 rsp_rfram rfb (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qb));
 
-// ---- E: the operands. Where each comes from is chosen by registers, set the cycle before for the instruction that will
-// be in E (D's, or E's own if it waits): one of the three writers behind (M, W, X -- the youngest first), the register
-// file, or the operand E held (hold_*: what it had last cycle, once its writer has left X)
-wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
-logic        fa_m, fa_w, fa_x, fa_h, fb_m, fb_w, fb_x, fb_h;       // (neither: the register file's)
-logic [31:0] hold_a, hold_b;
+// ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
+// in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which
+// has what is older than those (it is written at the end of W's cycle and read the cycle after, from an address registered a
+// cycle ahead)
+logic        fa_m, fa_w, fb_m, fb_w;
 logic [31:0] ea, eb;
 always_comb begin
-    ea = ({32{fa_m}} & m_res) | ({32{fa_w}} & w_res) | ({32{fa_x}} & x_res) | ({32{fa_h}} & hold_a)
-       | ({32{!(fa_m | fa_w | fa_x | fa_h)}} & rf_qa);
-    eb = ({32{fb_m}} & m_res) | ({32{fb_w}} & w_res) | ({32{fb_x}} & x_res) | ({32{fb_h}} & hold_b)
-       | ({32{!(fb_m | fb_w | fb_x | fb_h)}} & rf_qb);
+    ea = ({32{fa_m}} & m_res) | ({32{fa_w}} & w_res) | ({32{!(fa_m | fa_w)}} & rf_qa);
+    eb = ({32{fb_m}} & m_res) | ({32{fb_w}} & w_res) | ({32{!(fb_m | fb_w)}} & rf_qb);
 end
 // next cycle's choice, for a register number r read by D's instruction (the cycle's E goes: the writer is E's, now in M then)
-// or by E's own (it waits: M's writer is in W then, W's in X, and what came from X, the file or hold is held)
-function automatic logic [3:0] fsel(input logic [4:0] r_d, input logic [4:0] r_e, input logic stall,
-                                    input logic e_wr_v, input logic [4:0] e_wr, input logic m_wr_v, input logic [4:0] m_wr,
-                                    input logic w_wr_v, input logic [4:0] w_wr_);
-    logic nm, nw, nx;
-    // D's instruction (E goes)
+// or by E's own (it waits: M's writer is in W then)
+function automatic logic [1:0] fsel(input logic [4:0] r_d, input logic [4:0] r_e, input logic stall,
+                                    input logic e_wr_v, input logic [4:0] e_wr, input logic m_wr_v, input logic [4:0] m_wr);
+    logic nm;
     nm = e_wr_v && e_wr == r_d;
-    nw = !nm && m_wr_v && m_wr == r_d;
-    nx = !nm && !nw && w_wr_v && w_wr_ == r_d;
-    if (!stall) return {nm, nw, nx, 1'b0};
-    // E's own, waiting: from M it is in W next, from W in X; from anywhere else it is held
-    nm = 1'b0;
-    nw = m_wr_v && m_wr == r_e;
-    nx = !nw && w_wr_v && w_wr_ == r_e;
-    return {1'b0, nw, nx, !nw && !nx};
+    if (!stall) return {nm, !nm && m_wr_v && m_wr == r_d};
+    return {1'b0, m_wr_v && m_wr == r_e};
 endfunction
 
 // ---- a load's value (and CFC2's) comes in M: the instruction behind it that reads it waits a cycle, then has it
@@ -387,11 +379,13 @@ wire [31:0] addr_v = ea + imm_sx;
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
 assign m_addr = addr_v[11:0];
+wire  [31:0] addr_v16 = ea + (imm_sx + 32'd16);
+assign m_addr16 = addr_v16[11:0];
 assign m_n = e_c.size;
 assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
 
 // the coprocessors (a pair's computation goes when its scalar instruction can: neither waits on a load nor on DMEM)
-wire        s_mwait /* verilator public_flat_rd */ = m_stall && (e_c.load || e_c.store);
+wire        s_mwait /* verilator public_flat_rd */ = (m_stall && e_c.load) || (m_stall_st && e_c.store);
 assign c_valid = e_valid && !hazard && (e_c.cop || (v_e && !s_mwait));
 assign c_ins = v_e ? v_ins : e_ins;
 assign c_pr = v_e;
@@ -441,12 +435,10 @@ always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0;
         d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0; v_e <= 1'b0;
-        m_we_r <= 1'b0; w_we <= 1'b0; x_we <= 1'b0;
+        m_we_r <= 1'b0; w_we <= 1'b0;
     end else begin
-        x_we <= w_we; x_wr <= w_wr; x_res <= w_res;
-        hold_a <= ea; hold_b <= eb;
-        {fa_m, fa_w, fa_x, fa_h} <= fsel(ra_d, e_rs, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr, w_we, w_wr);
-        {fb_m, fb_w, fb_x, fb_h} <= fsel(rb_d, e_rt, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr, w_we, w_wr);
+        {fa_m, fa_w} <= fsel(s_ins_d[25:21], e_rs, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
+        {fb_m, fb_w} <= fsel(s_ins_d[20:16], e_rt, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
         w_we <= m_valid_r && m_we_r; w_wr <= m_c.wr; w_res <= m_out;
         m_valid_r <= e_go;
         m_c <= e_c; m_res <= e_res;

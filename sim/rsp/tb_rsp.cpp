@@ -229,7 +229,7 @@ int main(int argc, char **argv)
                 printf("  [%ld] ins %ld e%d%d epc %03x | sel %d m_v %d x_v %d x_wait %d y_v %d lw_v %d wp %d\n", tb.cyc - c0, ins, e, e2, epc, (int)R.rsp_top__DOT__vu__DOT__sel_fire, (int)R.rsp_top__DOT__vu__DOT__m_v,
                        (int)R.rsp_top__DOT__vu__DOT__x_v, (int)R.rsp_top__DOT__vu__DOT__x_wait, (int)R.rsp_top__DOT__vu__DOT__y_v, (int)R.rsp_top__DOT__vu__DOT__lw_v, (int)R.rsp_top__DOT__vu__DOT__wp);
             tb.tick();
-            if (dmem_late && !bad) {
+            if (dmem_late && !bad && !R.rsp_top__DOT__sw_v) {
                 dmem_late = 0;
                 for (uint32_t a = 0; a < 4096; a += 4)
                     if (tb.dmem_word(a) != be32(m.dmem + a)) {
@@ -296,8 +296,8 @@ int main(int argc, char **argv)
                 if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
                 // (a store's second half may be going behind the next instruction,
                 // one that leaves DMEM alone: DMEM is compared a cycle on)
-                if (!bad && !brk && deep_now && R.rsp_top__DOT__vu__DOT__st == 4) dmem_late = 1;
-                else if (!bad && !dma_now && (brk || deep_now))
+                if (!bad && !brk && deep_now && (R.rsp_top__DOT__vu__DOT__st == 4 || R.rsp_top__DOT__sw_v)) dmem_late = 1;
+                else if (!bad && !dma_now && !R.rsp_top__DOT__sw_v && (brk || deep_now))
                     for (uint32_t a = 0; a < 4096; a += 4)
                         if (tb.dmem_word(a) != be32(m.dmem + a)) {
                             printf("  !! instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
