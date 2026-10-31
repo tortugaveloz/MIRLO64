@@ -129,15 +129,131 @@ static void rtc_write(u32 reg, u8 v)
     rtc_store();
 }
 
+/* ---- the Game Boy game's own save, read from the SD card by its path ----------------------------------------- */
+/* The Pocket names a nonvolatile slot's file after the N64 game, so the save the Game Boy core keeps for the same game
+ * (Saves/gbc/common/<game>.sav or Saves/gb/common/<game>.sav) is not the slot's file. With the slot's file not there, the runtime
+ * takes that save in: it asks the Pocket for the path of the file in the ROM's slot (the one picked for it: APF_BRIDGE.REQUEST_GETFILE
+ * writes a 256-byte NUL-ended path to the parameter struct), makes the .sav's path from its name, and has the Pocket open that path into
+ * LAYOUT_GS_SLOT (a read-only slot the GameShark's codes share: the two never run at once) and read it straight into the save's memory.
+ * The folder is the one the ROM's path decides, with no other tried (a .gbc: gbc; a .gb: gb; any other extension: Assets/gbc or Assets/gb
+ * in its path); the file not there is no import: the cartridge starts with an empty RAM. The file must be the RAM's size or longer (its
+ * end is not used); a shorter one is not a save of this cartridge. Nothing is written to the card here: the slot's file is made by the
+ * Pocket from the memory when the core is quit, as for any save the game makes. */
+#define IMP_PARAM ((volatile u8 *)(uintptr_t)LAYOUT_GS_PARAM)
+static void imp_settle(void) { for (volatile int i = 0; i < 256; i++) { } }
+static int imp_command(void (*issue)(u32))      /* a target command: 0 done, the result code (1 to 7) if the Pocket failed it, -1 no answer */
+{
+    (void)apf_bridge_status_read();             /* (a read clears it) */
+    issue(1u);
+    const u64 end = now() + (u64)CONFIG_CLOCK_FREQUENCY / 2u;
+    while (!apf_bridge_status_read()) if (now() > end) return -1;
+    return (int)(apf_bridge_command_result_code_read() & 7u);
+}
+static int imp_ci_eq(const char *a, const char *b)      /* b is lower case */
+{
+    for (; *b; a++, b++) { char c = *a; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); if (c != *b) return 0; }
+    return !*a;
+}
+/* the parameter struct, clear, with the path in it (the flags and the size after the 256 bytes: 0) */
+static void imp_param(const char *path)
+{
+    for (u32 i = 0; i < 0x110u; i++) IMP_PARAM[i] = 0;
+    for (u32 i = 0; i < 255u && path[i]; i++) IMP_PARAM[i] = (u8)path[i];
+    flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+}
+/* The bytes of the file `path` (up to `max`) read into `dst`; 0 if it is not there, is shorter than `min` or the read failed. */
+static u32 imp_read(const char *path, u32 dst, u32 min, u32 max)
+{
+    imp_param(path);
+    apf_bridge_slot_id_write(LAYOUT_GS_SLOT);
+    apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
+    imp_settle();
+    int r = imp_command(apf_bridge_request_openfile_write);
+    if (r != 0) { n64rt_log("n64rt: Game Boy save: %s: %s (%d)\n", path, r < 0 ? "no answer" : "not opened", r); return 0; }
+    imp_settle();
+    u32 size = apf_bridge_file_size_read();
+    if (size < min) { n64rt_log("n64rt: Game Boy save: %s: %lu bytes, the cartridge's RAM is %lu: not used\n", path, (unsigned long)size, (unsigned long)min); return 0; }
+    if (size > max) size = max;
+    apf_bridge_data_offset_write(0);
+    apf_bridge_transfer_length_write(size);
+    apf_bridge_ram_data_address_write(dst);
+    imp_settle();
+    r = imp_command(apf_bridge_request_read_write);
+    if (r != 0) { n64rt_log("n64rt: Game Boy save: %s: the read failed (%d)\n", path, r); return 0; }
+    n64rt_log("n64rt: Game Boy save: %s: %lu bytes\n", path, (unsigned long)size);
+    return size;
+}
+/* The ROM slot's file: its name without the extension in `name` (255 bytes at most), and the Saves folder its path decides. 0 if the Pocket
+ * does not give the path or it says neither. */
+static int imp_rom_name(u32 rom_slot, char *name, const char **dir)
+{
+    for (u32 i = 0; i < 0x110u; i++) IMP_PARAM[i] = 0;
+    flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+    apf_bridge_slot_id_write(rom_slot);
+    apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
+    imp_settle();
+    int r = imp_command(apf_bridge_request_getfile_write);
+    if (r != 0) { n64rt_log("n64rt: Game Boy save: the ROM's file name: %s (%d)\n", r < 0 ? "no answer" : "refused", r); return 0; }
+    imp_settle();
+    flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+    char path[256];
+    u32 len = 0, base = 0, dot = ~0u;
+    for (; len < 255u && IMP_PARAM[len]; len++) {
+        path[len] = (char)IMP_PARAM[len];
+        if (path[len] == '/') { base = len + 1u; dot = ~0u; }
+        else if (path[len] == '.') dot = len;
+    }
+    path[len] = 0;
+    n64rt_log("n64rt: Game Boy save: the ROM is %s\n", path);
+    u32 end = dot != ~0u && dot > base ? dot : len;
+    if (end == base) return 0;
+    for (u32 i = base; i < end; i++) name[i - base] = path[i];
+    name[end - base] = 0;
+    const int gbc = dot != ~0u && imp_ci_eq(path + dot, ".gbc"), gb = dot != ~0u && imp_ci_eq(path + dot, ".gb");
+    int kind = gbc ? 2 : gb ? 1 : 0;
+    for (u32 i = 0; !kind && i + 4u <= len; i++) {      /* (another extension: the folder the file is in) */
+        if (path[i] != '/' || (path[i + 1] | 32) != 'g' || (path[i + 2] | 32) != 'b') continue;
+        if (path[i + 3] == '/') kind = 1;
+        else if ((path[i + 3] | 32) == 'c' && path[i + 4] == '/') kind = 2;
+    }
+    if (!kind) { n64rt_log("n64rt: Game Boy save: neither a .gb, a .gbc nor in a gb or gbc folder\n"); return 0; }
+    *dir = kind == 2 ? "/Saves/gbc/common/" : "/Saves/gb/common/";
+    return 1;
+}
+/* The save for the cartridge whose ROM is in `rom_slot`, into `dst`: `min` bytes at least are read, `max` at most. Returns the bytes read (0: none). */
+static u32 import_save(u32 rom_slot, u32 dst, u32 min, u32 max)
+{
+    const u32 prev_slot = apf_bridge_slot_id_read(), prev_len = apf_bridge_transfer_length_read();
+    char name[256], path[300];
+    const char *dir = 0;
+    u32 got = 0;
+    if (imp_rom_name(rom_slot, name, &dir)) {
+        u32 o = 0;
+        for (const char *p = dir; *p; ) path[o++] = *p++;
+        for (const char *p = name; *p; ) path[o++] = *p++;
+        for (const char *p = ".sav"; *p; ) path[o++] = *p++;
+        path[o] = 0;
+        if (o > 255u) n64rt_log("n64rt: Game Boy save: the name is too long\n");
+        else got = imp_read(path, dst, min, max);
+    }
+    apf_bridge_transfer_length_write(prev_len);
+    apf_bridge_slot_id_write(prev_slot);
+    return got;
+}
+
 /* ---- the save slot -------------------------------------------------------------- */
 /* the RAM's memory from the slot: what the file has, the rest 0xFF (the clock's footer 0) */
 static void ram_init(void)
 {
-    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u), have = n64rt_slot_size(SAVE_SLOT, 0);
+    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u), have = n64rt_slot_size(SAVE_SLOT, 0), imported = 0;
     if (have > LAYOUT_GBSAVE_MAX) have = LAYOUT_GBSAVE_MAX;
+    if (!have && g.ram_bytes) {                 /* (no file of ours: the Game Boy game's own save, if the card has it) */
+        have = imported = import_save(g.n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, (u32)(uintptr_t)RAM_MEM, g.ram_bytes, total);
+    }
     flush_cpu_dcache_range((const void *)RAM_MEM, total);
     for (u32 i = have < total ? have : total; i < total; i++) RAM_MEM[i] = i < g.ram_bytes ? 0xFFu : 0u;
     g.sized = have >= total;
+    if (imported) { g.sized = 0; need_file(); } /* (what was taken in is written back at quit, which keeps it: the file is ours from then on) */
     g.l[0] = g.l[1] = g.l[2] = g.l[3] = g.l[4] = 0;
     g.s = g.m = g.h = g.d = 0; g.halt = g.carry = 0; g.t0 = now();
     if (g.timer) rtc_load();

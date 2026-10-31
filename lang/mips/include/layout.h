@@ -46,7 +46,8 @@
 #define LAYOUT_GBROM2_SLOT  9
 /* the GameShark codes of the game (lang/n64rt/n64rt_cheat.c): data.json's slot LAYOUT_GS_SLOT, a file the runtime asks the Pocket to open by
  * its path (Assets/n64/common/gameshark/<the cartridge's ID>.txt) and to read to LAYOUT_GS; LAYOUT_GS_PARAM holds the open command's
- * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. */
+ * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. The virtual Transfer Pak's
+ * import of a Game Boy game's own save (n64rt_gbvirt.c) uses the same three (the two never run at once). */
 #define LAYOUT_GS_PARAM     0x42D30000
 #define LAYOUT_GS           0x42D40000
 #define LAYOUT_GS_SLOT      7

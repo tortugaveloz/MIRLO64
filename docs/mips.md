@@ -160,7 +160,7 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 4 | Save-type database | `n64savedb.txt`, optional, at most 64 KiB | `0x0710_0000` | `0x4310_0000` |
 | 5 | Game Boy Save 1 | `.gbsav1`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
 | 6 | Game Boy Save 2 | `.gbsav2`, the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
-| 7 | Gameshark codes | no file at the start: the runtime opens one by path, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
+| 7 | Gameshark codes | no file at the start: the runtime opens one by path (the GameShark's codes, the Game Boy game's save), at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
 | 8 | Virtual Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
 | 9 | Virtual Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
 
@@ -827,11 +827,18 @@ The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one
   cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
   that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
   loaded after that.
-* **The RAM** is data slot 5, "Game Boy Save 1" (`.gbsav1`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav1`), so a Game Boy game's existing `.sav` has to be copied there first, with that name;
-  controller 2's is slot 6 (`.gbsav2`, `0x42D5_0000`): one Game Boy save for each N64 game and each pak. A Game Boy core's `.sav` has the same bytes: it is copied in and out by hand (the Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file). It is the cartridge's RAM as the emulators keep it (its size is the
+* **The RAM** is data slot 5, "Game Boy Save 1" (`.gbsav1`, nonvolatile), `0x42D0_0000`, named by the Pocket after the N64 game (`Saves/n64/common/<game>.gbsav1`);
+  controller 2's is slot 6 (`.gbsav2`, `0x42D5_0000`): one Game Boy save for each N64 game and each pak. A Game Boy core's `.sav` has the same bytes. The Pocket names a save after the file picked for slot 0 and a `data.json` filename cannot leave the platform's folder, so the core cannot write the Game Boy core's own file: the copy back to the Game Boy core is by hand. The copy in is done by the runtime (below). It is the cartridge's RAM as the emulators keep it (its size is the
   header's, `0x149`), and for MBC3 with a clock 48 bytes after it: the clock's registers and the latched ones as ten little-endian words, and a 64-bit time that is
   left 0. With no file the RAM is `0xFF`. The slot takes a file size (what the Pocket writes back when the core quits) when the game first
   writes to the RAM or the clock, so a game that never saves leaves no file.
+* **The import of the Game Boy game's own save** (`import_save`, in `ram_init`, when the cartridge is new to the pak): only if the save slot has no file (size 0), so an existing
+  `.gbsav` is never overwritten. The runtime asks the Pocket for the path of the file in the ROM's slot (`APF_BRIDGE.REQUEST_GETFILE`: the Pocket writes a 256-byte NUL-ended
+  path to `RAM_DATA_ADDRESS`; here `LAYOUT_GS_PARAM`), takes its name without the extension, and makes `/Saves/gbc/common/<name>.sav` for a `.gbc` and `/Saves/gb/common/<name>.sav` for a `.gb`
+  (any other extension: by `/gbc/` or `/gb/` in the path; with neither, no import). No other folder is tried. It has the Pocket open that path into slot 7 (`REQUEST_OPENFILE`, the slot the GameShark's codes use: they never run at once; the path
+  must be absolute, with the slash; the Pocket opens only files in the platform folders `core.json`'s `platform_ids` lists, so it lists `gbc` and `gb` besides `n64`: measured, with only `n64` the open of a `Saves/gbc/common` file fails with result code 4) and read it with `REQUEST_READ` straight into the save's memory. The checks: each command's result code is 0; the file is at least the cartridge's RAM
+  in bytes (a shorter one is not used, and the RAM starts as `0xFF`); of a longer one, only the RAM and the clock's footer are read (MBC3: a file of just the RAM leaves the clock at 0). Each outcome is logged
+  (`n64rt: Game Boy save: ...`). What is taken in is given the file size at once, so the Pocket writes `.gbsav` when the core quits, and it is the save from then on. The Game Boy `.sav` is only read, never written.
 * **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
   there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
   (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
