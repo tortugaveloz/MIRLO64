@@ -1,4 +1,4 @@
-/* What the TLB tests (tlbmon_test, tlbgame_test, tlbpg_test, tlbreal_test; sim/mips_soc) have in common: output, COP0 and TLB
+/* What the TLB tests (tlbmon_test, tlbgame_test, tlbpg_test, tlbram_test; sim/mips_soc) have in common: output, COP0 and TLB
  * instructions, EntryLo, and the "game" side of mips_core's real TLB -- the game's own vectors in the RDRAM and code in
  * KSEG0, because an exception of code that is not the game's (this program's, in the SDRAM at 0x4000_0000) is the program's
  * own trap_handler, at 0x4000_0180, and one of the game's (a pc in the RDRAM's KSEG0 window, or on a mapped page) is the

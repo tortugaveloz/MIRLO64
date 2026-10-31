@@ -89,8 +89,15 @@ static int fill(uint32_t badv, uint32_t fetch)
     }
     return 0;
 }
+/* the checks for the VR4300's own TLB (tlbmon_test_real.c, built into this program): run when COP0 23 says that is the CPU's */
+extern int real_main(void);
+extern void real_trap_handler(void);
+static int s_real;
+static int cpu_has_real_tlb(void) { uint32_t c = MFC0(23); return (c >> 8) == 0x544C42u && (c & 2u); }
+
 void mon_c(void)
 {
+    if (s_real) { real_trap_handler(); return; }
     uint32_t mctl = MFC0(7), code = (mctl >> 3) & 31u, bd = (mctl >> 2) & 1u, epc = MFC0(30);
     if (code == 10) {
         uint32_t pc = epc + (bd ? 4u : 0u), insn = *(volatile uint32_t *)(uintptr_t)pc, next = pc + 4u;
@@ -205,8 +212,9 @@ static void tlb_wi(uint32_t idx, uint32_t pm, uint32_t hi, uint32_t lo0, uint32_
 
 int main(void)
 {
+    if (cpu_has_real_tlb()) { s_real = 1; return real_main(); }
     puts_("tlbmon_test\n");
-    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbmon_test: SKIPPED, no tables with the monitor in this CPU\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~8u) != 0x54420001u) { puts_("tlbmon_test: SKIPPED, neither the tables with the monitor nor the real TLB in this CPU\n"); putc_(4); for (;;); }
     if ((monitor_id_read() & 0xFFFF0001u) != 0x4D4F0001u) { puts_("no monitor in this SoC\ntlbmon_test: FAILED\n"); putc_(4); for (;;); }
     for (int i = 0; i < 32; i++) raw[i].hi = 0x80000000u;
     for (uint32_t i = 0; i < 0x200; i++) { K1(0x10000)[i] = 0x10000000u + i; K1(0x12000)[i] = 0x12000000u + i; }

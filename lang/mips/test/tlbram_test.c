@@ -36,11 +36,18 @@ static void tlb_set(uint32_t va, uint32_t asid, uint32_t pa, uint32_t flags)
     MTC0(10, hi);
 }
 
+/* the checks for the VR4300's own TLB (tlbram_test_real.c, built into this program): run when COP0 23 says that is the CPU's */
+extern int real_main(void);
+extern void real_trap_handler(void);
+static int s_real;
+static int cpu_has_real_tlb(void) { uint32_t c = MFC0(23); return (c >> 8) == 0x544C42u && (c & 2u); }
+
 /* what the handler fills a faulting page with (0 flags: it skips the access instead) */
 static volatile uint32_t s_fill_pa, s_fill_flags;
 static volatile uint32_t s_traps, s_cause, s_badv, s_epc, s_fetch;
 void trap_handler(void)
 {
+    if (s_real) { real_trap_handler(); return; }
     s_traps++;
     s_cause = MFC0(13); s_badv = MFC0(8); s_epc = MFC0(14);
     s_fetch = MFC0(23) >> 3 & 1;
@@ -56,8 +63,9 @@ typedef uint32_t (*fn_t)(uint32_t a);
 
 int main(void)
 {
+    if (cpu_has_real_tlb()) { s_real = 1; return real_main(); }
     puts_("tlbram_test\n");
-    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbram_test: SKIPPED, no tables in this CPU\n"); putc_(4); for (;;); }
+    if ((MFC0(23) & ~9u) != 0x54420000u) { puts_("tlbram_test: SKIPPED, neither the tables nor the real TLB in this CPU\n"); putc_(4); for (;;); }
     for (uint32_t i = 0; i < 512; i++) { tlb_set(i << 12, 0, 0, 0); tlb_set(i << 12, 0, 0, FETCH); }
 
     /* data, through a valid entry: no exception */

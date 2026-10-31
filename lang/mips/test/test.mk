@@ -5,6 +5,10 @@ ifneq ($(filter mon_test mi_test vi_test ai_test rcpcpu_test si_test viaa_test v
 CFLAGS += -DMIRLO_VEC_JUMP
 endif
 all: $(BUILD)/$(PROGRAM).bin
+# (a program's checks for the VR4300's TLB: a main and a trap_handler of their own, which the program's calls)
+$(BUILD)/%_real.o: %_real.c
+	@mkdir -p $(BUILD)
+	$(MIPS_GCC) $(CFLAGS) -Dmain=real_main -Dtrap_handler=real_trap_handler -c $< -o $@
 $(BUILD)/%.o: %.c
 	@mkdir -p $(BUILD)
 	$(MIPS_GCC) $(CFLAGS) -c $< -o $@

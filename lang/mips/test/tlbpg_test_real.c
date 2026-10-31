@@ -95,8 +95,8 @@ static void icache_hit_inval(uint32_t va) { __asm__ volatile(".set push\n.set mi
 
 int main(void)
 {
-    puts_("tlbpg_real_test\n");
-    if (!has_real_tlb()) { puts_("tlbpg_real_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
+    puts_("tlbpg_test\n");
+    if (!has_real_tlb()) { puts_("tlbpg_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
     const int cached_fetch = (MFC0(23) & 4u) != 0;
     tlb_unmap_all();
     MTC0(6, 28);                                    /* Wired: the handler's tlbwr stays out of the program's entries */
@@ -253,5 +253,6 @@ int main(void)
         check("three pages in a loop", ((fn_t)0x0F000000u)(300), 0);
     }
     check("end: traps", s_traps, t0 + 1);
-    done("tlbpg_real_test");
+    done("tlbpg_test");
+    return 0;
 }

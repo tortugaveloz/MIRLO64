@@ -62,11 +62,11 @@ static void icache_hit_inval(uint32_t va) { __asm__ volatile(".set push\n.set mi
 
 int main(void)
 {
-    puts_("tlbreal_test\n");
+    puts_("tlbram_test\n");
     /* ---- 1 */
     check("COP0 23: 'TLB'", MFC0(23) >> 8, 0x544C42u);
     check("COP0 23: a real TLB", (MFC0(23) >> 1) & 1u, 1);
-    if (!has_real_tlb()) { puts_("tlbreal_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
+    if (!has_real_tlb()) { puts_("tlbram_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
     int mon = MFC0(23) & 1, fpg = (MFC0(23) >> 2) & 1;
     tlb_unmap_all();
     install_game_vectors();
@@ -443,6 +443,6 @@ int main(void)
 
     check("no fault of this program's own", h_own, 0);
     (void)mon; (void)fpg;
-    done("tlbreal_test");
+    done("tlbram_test");
     return 0;
 }

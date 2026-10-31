@@ -20,8 +20,8 @@ void trap_handler(void)
 
 int main(void)
 {
-    puts_("tlbmon_real_test\n");
-    if (!has_real_tlb()) { puts_("tlbmon_real_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
+    puts_("tlbmon_test\n");
+    if (!has_real_tlb()) { puts_("tlbmon_test: SKIPPED, no real TLB in this CPU\n"); putc_(4); for (;;); }
     tlb_unmap_all();
     for (uint32_t i = 0; i < 0x200; i++) { K1(0x10000)[i] = 0x10000000u + i; K1(0x12000)[i] = 0x12000000u + i; }
     K1(0x20000)[0] = 0x20000000u; K1(0x25000)[0] = 0x25000000u; K1(0x21000)[0] = 0x21000000u;
@@ -200,6 +200,6 @@ int main(void)
 
     check("only the expected exceptions", t_faults, 3);
     puts_("exceptions of the program's own "); puthex(t_faults); puts_("\n");
-    done("tlbmon_real_test");
+    done("tlbmon_test");
     return 0;
 }

@@ -23,14 +23,14 @@ void trap_handler(void) { t_own++; MTC0(14, MFC0(14) + 4u); }      /* (the progr
 /* ---- the game's handlers (copied to the RDRAM at 0x8000_0000 and 0x8000_0180) --------------- */
 /* the log, at 0x8001_0000: +0 refills, +4.. Cause, BadVAddr, EPC, Context, EntryHi, Status of the last;
  * +0x40 general exceptions, +0x44.. the same; +0x5C mode (0: repair, 1: just return), +0x60 / +0x64 the repair's EntryLo0 / 1 */
-extern char h_refill[], h_refill_end[], h_gen[], h_gen_end[];
+extern char r_refill[], r_refill_end[], r_gen[], r_gen_end[];
 __asm__(
 "    .set noreorder\n"
 "    .set noat\n"
 "    .set mips3\n"
 "    .text\n"
-"    .globl h_refill\n"
-"h_refill:\n"
+"    .globl r_refill\n"
+"r_refill:\n"
 "    mfc0  $k0, $4\n"
 "    lw    $k1, 0($k0)\n"
 "    lw    $k0, 4($k0)\n"
@@ -53,10 +53,10 @@ __asm__(
 "    nop\n"
 "    eret\n"
 "    nop\n"
-"    .globl h_refill_end\n"
-"h_refill_end:\n"
-"    .globl h_gen\n"
-"h_gen:\n"
+"    .globl r_refill_end\n"
+"r_refill_end:\n"
+"    .globl r_gen\n"
+"r_gen:\n"
 "    lui   $k0, 0x8001\n"
 "    lw    $k1, 0x40($k0)\n"
 "    addiu $k1, $k1, 1\n"
@@ -84,8 +84,8 @@ __asm__(
 "    nop\n"
 "9:  eret\n"
 "    nop\n"
-"    .globl h_gen_end\n"
-"h_gen_end:\n"
+"    .globl r_gen_end\n"
+"r_gen_end:\n"
 );
 
 /* ---- the game ------------------------------------------------------------------------- */
@@ -100,15 +100,15 @@ static void clear_log(void) { for (uint32_t o = 0; o < 0x80; o += 4) LOG(o) = 0;
 
 int main(void)
 {
-    puts_("tlbgame_real_test\n");
-    if (!has_real_tlb() || !(MFC0(23) & 1u)) { puts_("tlbgame_real_test: SKIPPED, no real TLB with the monitor in this CPU\n"); putc_(4); for (;;); }
+    puts_("tlbgame_test\n");
+    if (!has_real_tlb() || !(MFC0(23) & 1u)) { puts_("tlbgame_test: SKIPPED, no real TLB with the monitor in this CPU\n"); putc_(4); for (;;); }
     tlb_unmap_all();
     /* data pages: physical 0x100000 + n * 0x1000 hold n in every word's top, and their offset */
     for (uint32_t n = 0; n < 32; n++) for (uint32_t w = 0; w < 1024; w += 64) K1(0x100000 + n * 0x1000)[w] = (n << 24) | w;
     /* code in a page: addiu v0, zero, 0x1234 / jr ra / nop */
     K1(0x120000)[0] = 0x24021234u; K1(0x120000)[1] = 0x03E00008u; K1(0x120000)[2] = 0;
-    copy_k1(0x0, h_refill, h_refill_end);
-    copy_k1(0x180, h_gen, h_gen_end);
+    copy_k1(0x0, r_refill, r_refill_end);
+    copy_k1(0x180, r_gen, r_gen_end);
     install_game_code();
     clear_log();
     MTC0(4, 0x80000000u);                         /* Context: PTEBase */
@@ -310,6 +310,6 @@ int main(void)
 
     check("no exception of the program's own", t_own, 0);
     puts_("refills "); puthex(LOG(0)); puts_(", general "); puthex(LOG(0x40)); puts_("\n");
-    done("tlbgame_real_test");
+    done("tlbgame_test");
     return 0;
 }
