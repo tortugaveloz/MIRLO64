@@ -454,6 +454,18 @@ module rdp_top (
                     : (tflags[2] ? 6'd16 : 6'd0) + (tflags[1] ? 6'd16 : 6'd0);
     wire        vz = vi == 3'd7;
     wire [15:0] vhalf = vi[0] ? vr_q[15:0] : vr_q[31:16];      // (R, B, S, W: the first half)
+    // The value, DaDx and DaDe come from the words in halves (Z: whole words); each register is loaded, a half at a time, from
+    // the one choice of the half an attribute takes, or a Z's, at the step it takes them -- a source a register, not two.
+    wire [15:0] vsrc_hi = vz ? vr_q[31:16] : vhalf, vsrc_lo = vz ? vr_q[15:0] : vhalf;
+    wire        vs_on = !rst && st == S_VSET;
+    always @(posedge clk) begin
+        if (vs_on && vs == 4'd2) vval[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd2 && vz) || (vs == 4'd3 && !vz))) vval[15:0] <= vsrc_lo;
+        if (vs_on && ((vs == 4'd3 && vz) || (vs == 4'd4 && !vz))) vgx[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd3 && vz) || (vs == 4'd5 && !vz))) vgx[15:0] <= vsrc_lo;
+        if (vs_on && ((vs == 4'd4 && vz) || (vs == 4'd6 && !vz))) vde[31:16] <= vsrc_hi;
+        if (vs_on && ((vs == 4'd4 && vz) || (vs == 4'd7 && !vz))) vde[15:0] <= vsrc_lo;
+    end
     function automatic [5:0] voff;           // the word read at step k
         input [2:0] k;
         input       z;
@@ -970,21 +982,18 @@ module rdp_top (
                     4'd1: begin vr_ra <= vgb + voff(3'd1, vz) + (vz ? 6'd0 : {5'd0, vi[1]}); vs <= 4'd2; end
                     4'd2: begin
                         vr_ra <= vgb + voff(3'd2, vz) + (vz ? 6'd0 : {5'd0, vi[1]}); vs <= 4'd3;
-                        if (vz) vval <= vr_q; else vval[31:16] <= vhalf;
                     end
                     4'd3: begin
                         vr_ra <= vz ? vgb + 6'd3 : vgb + voff(3'd3, vz) + {5'd0, vi[1]}; vs <= 4'd4;
-                        if (vz) vgx <= vr_q; else vval[15:0] <= vhalf;
                     end
                     4'd4: begin
                         vr_ra <= vgb + voff(3'd4, vz) + {5'd0, vi[1]};
-                        if (vz) begin vde <= vr_q; vs <= 4'd5; end
-                        else begin vgx[31:16] <= vhalf; vs <= 4'd5; end
+                        vs <= 4'd5;
                     end
                     4'd5: if (vz) begin zdy <= vr_q; vs <= 4'd15; end
-                          else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vgx[15:0] <= vhalf; vs <= 4'd6; end
-                    4'd6: begin vde[31:16] <= vhalf; vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
-                    4'd7: begin vde[15:0] <= vhalf; vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
+                          else begin vr_ra <= vgb + voff(3'd5, vz) + {5'd0, vi[1]}; vs <= 4'd6; end
+                    4'd6: begin vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
+                    4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
                         adx[vi] <= vgx;
                         if (!vz) case (vi)
