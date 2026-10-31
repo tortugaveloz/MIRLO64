@@ -1427,7 +1427,9 @@ wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word acce
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
-wire m_refill = (!m_exc_v && m_tlb_fault && !m_tlbq[34]) || m_fxr;
+// (an interrupt that is taken instead of the instruction in M, which may have faulted -- a fetch the TLB has no entry for -- is
+//  not a refill: it goes to the general vector, and the fault comes again when the handler has returned)
+wire m_refill = !m_take_int && ((!m_exc_v && m_tlb_fault && !m_tlbq[34]) || m_fxr);
 wire [4:0] m_ccode = m_fxr ? 5'd2 : m_code;                  // Cause.ExcCode
 // a TLB exception: BadVAddr, Context and EntryHi take the page
 wire m_tlbx = TLB_EN && ((!m_exc_v && m_tlb_fault && !m_tdev) || (m_exc_v && (m_exc_code == 5'd2 || m_fxr)));
