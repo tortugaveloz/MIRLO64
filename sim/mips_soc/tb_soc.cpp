@@ -362,17 +362,21 @@ static void cpu_trace_step()
 static void exc_stat_step()
 {
     static long hist[32], tot, f_n; static bool vb_was; const long per = o_exc_per;
-    static long retired, ex_total;
+    static long retired, ex_total, mapped_pc;
     if (t->tr_exc) { hist[t->tr_exc_code & 31]++; tot++; ex_total++; }
-    if (t->tr_retire) retired++;
+    if (t->tr_retire) {
+        retired++;
+        const uint32_t pc = t->tr_pc, hi = pc >> 28;      // (an instruction of a mapped page: below 0x2000_0000, 0x5000_0000 - 0x7FFF_FFFF, 0xC000_0000 - 0xEFFF_FFFF)
+        if (pc < 0x20000000u || (hi >= 5 && hi <= 7) || (hi >= 12 && hi <= 14)) mapped_pc++;
+    }
     if (t->vblank && !vb_was && ++f_n % per == 0) {
         printf("[excstat fields %ld..%ld: %ld exceptions (%.1f a field)", f_n - per + 1, f_n, tot, (double)tot / per);
         static const char *nm[32] = { "int", "mod", "tlbl", "tlbs", "adel", "ades", "ibe", "dbe", "sys", "bp", "ri", "cpu", "ov", "tr", "", "fpe" };
         for (int i = 0; i < 32; i++) if (hist[i]) printf(" %s %ld", i < 16 && nm[i][0] ? nm[i] : "?", hist[i]);
-        printf("; %ld instructions retired]\n", retired);
+        printf("; %ld instructions retired, %ld of them from mapped pages]\n", retired, mapped_pc);
         fflush(stdout);
         for (int i = 0; i < 32; i++) hist[i] = 0;
-        tot = retired = 0;
+        tot = retired = mapped_pc = 0;
     }
     vb_was = t->vblank;
 }
