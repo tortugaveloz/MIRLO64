@@ -424,16 +424,18 @@ wire [31:0] m_out = m_c.load ? ld : m_c.cf ? c_res_l : m_res;
 // (the fetch pointer's next words are kept: pf1 = pc_f's word + 1, pf2 = + 2, dp1 = D's word + 1, so that the address is a
 // choice between registers by the stall and the pair)
 logic [9:0]  pf1, dp1;
-wire  [9:0]  rd1 = redirect_pc[11:2] + 10'd1;
 wire  [9:0]  pf2 = pc_f[11:2] + 10'd2;
 assign i_addr  = stall_e ? d_pc[11:2] : pair_go ? pf1 : pc_f[11:2];
-assign i_addr1 = stall_e ? dp1        : pair_go ? pf2 : pf1;
+// (after a redirect pf1 is not made: it is the fetch pointer's word + 1, from an adder on the register, for the one cycle)
+logic        r_fix;
+wire  [9:0]  pf1c = pc_f[11:2] + 10'd1;
+assign i_addr1 = stall_e ? dp1        : pair_go ? pf2 : r_fix ? pf1c : pf1;
 assign pc_next = d_valid ? d_pc : pc_f;
 assign idle = !e_valid && !m_valid_r;
 
 always_ff @(posedge clk) begin
     if (rst) begin
-        pc_f <= 12'd0;
+        pc_f <= 12'd0; r_fix <= 1'b0;
         d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0; v_e <= 1'b0;
         m_we_r <= 1'b0; w_we <= 1'b0;
     end else begin
@@ -450,13 +452,14 @@ always_ff @(posedge clk) begin
             v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
         if (!stall_e) c_rd <= vrb_d;
+        if (redirect) r_fix <= 1'b1; else if (!stall_e) r_fix <= 1'b0;      // (until the cycle that moves the pointer on)
         if (pc_load) begin
             pc_f <= {pc_in[11:2], 2'b00}; d_valid <= 1'b0;
             pf1 <= pc_in[11:2] + 10'd1;
         end else if (brk) begin
             // what follows the BREAK was not run: fetch it again when resumed
             pc_f <= redirect ? redirect_pc : d_valid ? d_pc : pc_f;
-            pf1  <= redirect ? rd1 : d_valid ? dp1 : pf1;
+            pf1  <= d_valid ? dp1 : pf1;
             d_valid <= 1'b0;
         end else if (!run && !redirect) begin
             // stopped: D's instruction (not run) is the next one
@@ -468,9 +471,9 @@ always_ff @(posedge clk) begin
             // (a pair: D's next instruction went with it, the fetch is a word on)
             d_valid <= !redirect;
             d_pc <= pair_go ? pc_f + 12'd4 : pc_f;
-            dp1  <= pair_go ? pf2 : pf1;
+            dp1  <= pair_go ? pf2 : r_fix ? pf1c : pf1;
             pc_f <= redirect ? redirect_pc : pair_go ? pc_f + 12'd8 : pc_f + 12'd4;
-            pf1  <= redirect ? rd1 : pair_go ? pc_f[11:2] + 10'd3 : pf2;
+            pf1  <= pair_go ? pc_f[11:2] + 10'd3 : pf2;
         end
     end
 end
