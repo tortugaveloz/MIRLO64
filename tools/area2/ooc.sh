@@ -6,7 +6,9 @@
 # ports (port_rdp and port_apf), psram, gbc (gb_cart) -- with the project's synthesis settings and fit.sh's macros, in
 # projects_ooc_<tag>/ of this worktree (OOC_ROOT=<dir>: under that directory instead; the unit of another tree: its path as
 # the third argument). FIT="1 2 3": then the unit fitted alone, every pin virtual, once a seed (fit_<seed>.rpt, its
-# ALMs). A minute or two, and steady: the
+# ALMs). STA=1 with FIT: the timing analyser after each fit too (sta_<seed>.rpt: for each of the four corners the worst setup and
+# hold slack, the worst setup paths and Fmax); CLK_NS=<ns>: the period of the unit's clocks (16.000, the RSP's and RDP's clk_sys, by
+# default; 10.667 for the CPU's). A minute or two, and steady: the
 # whole design's synthesis moves a unit that was not touched by tens of ALUTs (rsp_vu by a hundred) from one run to
 # the next; a unit alone gives the same count for the same source. Prints its ALUTs, registers, memory ALUTs, DSPs.
 # The RSP and the video are instantiated as rtl/soc/mirlo_mips.sv does (MIRLO_RSP_LANES lanes with MULW; the
@@ -108,7 +110,7 @@ esac
   # (FIT: its pins virtual -- an assignment synthesis takes -- and a 16 ns clock for each of its clocks)
   [ -n "${FIT:-}" ] && { echo "set_instance_assignment -name VIRTUAL_PIN ON -to *"; echo "set_global_assignment -name SDC_FILE ooc.sdc"; }
   true; } > ooc.qsf
-for c in clk clk_vid clk_c; do echo "if {[get_collection_size [get_ports -nowarn $c]] > 0} { create_clock -name $c -period 16.000 [get_ports $c] }"; done > ooc.sdc
+for c in clk clk_vid clk_c; do echo "if {[get_collection_size [get_ports -nowarn $c]] > 0} { create_clock -name $c -period ${CLK_NS:-16.000} [get_ports $c] }"; done > ooc.sdc
 echo 'PROJECT_REVISION = "ooc"' > ooc.qpf
 ${QUARTUS:-$HOME/altera/25.1std/quartus/bin}/quartus_map ooc > map.log 2>&1 || { grep "Error (" map.log | head -5; exit 1; }
 f() { grep -h "$1" out/ooc.map.rpt | head -1 | awk -F';' '{gsub(/ /,"",$3); print $3}'; }
@@ -122,4 +124,29 @@ for seed in $FIT; do
   cp out/ooc.fit.rpt fit_$seed.rpt
   g() { grep -m1 "$1" fit_$seed.rpt | awk -F';' '{gsub(/ /,"",$3); print $3}'; }
   echo "$tag [$unit] seed $seed: ALMs $(g 'Logic utilization (ALMs needed'), registers $(g '; Total registers')"
+  [ -n "${STA:-}" ] || continue
+  cat > sta.tcl <<TCL
+project_open ooc
+create_timing_netlist
+read_sdc
+set out [open sta_$seed.rpt w]
+foreach_in_collection oc [get_available_operating_conditions] {
+    set name [string map {" " _ "," ""} [get_operating_conditions_info \$oc -display_name]]
+    set_operating_conditions \$oc
+    update_timing_netlist
+    report_clock_fmax_summary -file fmax_${seed}_\$name.rpt
+    foreach {kind opt} {setup -setup hold -hold} {
+        set paths [get_timing_paths \$opt -npaths ${STA_PATHS:-12} -nworst 1]
+        set first 1
+        foreach_in_collection p \$paths {
+            if {\$first} { puts \$out "\$name \$kind worst slack [get_path_info \$p -slack]"; set first 0 }
+            if {\$kind == "setup"} { puts \$out "  \$name \$kind [format %.3f [get_path_info \$p -slack]]  [get_node_info -name [get_path_info \$p -from]] -> [get_node_info -name [get_path_info \$p -to]]" }
+        }
+    }
+}
+close \$out
+delete_timing_netlist
+TCL
+  ${QUARTUS:-$HOME/altera/25.1std/quartus/bin}/quartus_sta -t sta.tcl > sta_$seed.log 2>&1 || { grep "Error (" sta_$seed.log | head -5; exit 1; }
+  echo "$tag [$unit] seed $seed: $(grep -E 'worst slack' sta_$seed.rpt | tr '\n' ';')"
 done
