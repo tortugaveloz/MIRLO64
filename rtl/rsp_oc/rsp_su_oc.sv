@@ -447,16 +447,18 @@ assign i_addr1 = stall_e ? dp1        : pair_go ? pf2 : r_fix ? pf1c : pf1;
 assign pc_next = d_valid ? d_pc : pc_f;
 assign idle = !e_valid && !m_valid_r;
 
-// the fetch pointer, if no branch is taken (brk: where the BREAK stopped it; stopped: D's instruction; else the next word, or two)
-wire [11:0] pc_nr = brk       ? (d_valid ? d_pc : pc_f)
-                  : !run      ? ((!stall_e && d_valid) ? d_pc : pc_f)
-                  : !stall_e  ? (pair_go ? pc_f + 12'd8 : pc_f + 12'd4)
-                  :             pc_f;
-wire [9:0]  pc_nf1 = brk       ? (d_valid ? dp1 : pf1)
-                   : !run      ? ((!stall_e && d_valid) ? dp1 : pf1)
-                   : !stall_e  ? (pair_go ? pc_f[11:2] + 10'd3 : pf2)
-                   :             pf1;
-wire        br_go = e_valid && !stall_e && ((e_c.br && taken) || e_c.j || e_c.jr);      // (= redirect)
+// the fetch pointer and the word after it, in the cycle E's instruction leaves: a taken branch's target, or, if none is taken, where a
+// BREAK stopped it, D's instruction when stopped, or the next word (two with a pair). Where E stalls, the pointer stays: that is the
+// last choice, so the stall (the longest chain of the unit) is one 2:1 choice before the register.
+wire        e_go0 = e_valid;                                                              // (E's instruction, if it is not stalled)
+wire        brk0  = e_go0 && e_c.brk;
+wire        br_go0 = e_go0 && ((e_c.br && taken) || e_c.j || e_c.jr);
+wire [11:0] pc_nr0 = brk0     ? (d_valid ? d_pc : pc_f)
+                   : !run     ? (d_valid ? d_pc : pc_f)
+                   :            (pair_d ? pc_f + 12'd8 : pc_f + 12'd4);
+wire [9:0]  pf1_nr0 = brk0    ? (d_valid ? dp1 : pf1)
+                    : !run    ? (d_valid ? dp1 : pf1)
+                    :           (pair_d ? pc_f[11:2] + 10'd3 : pf2);
 always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0; r_fix <= 1'b0;
@@ -496,9 +498,8 @@ always_ff @(posedge clk) begin
         end
         // (the fetch pointer and the word after it: a taken branch's target over what the rest would make -- the branch's condition
         // is late, so it is the last choice. After a redirect pf1 is not made: r_fix has the next cycle's address from pc_f)
-        pf1 <= pc_load ? pc_in[11:2] + 10'd1 : pc_nf1;
-        if (!pc_load && br_go) pc_f <= redirect_pc;
-        else if (!pc_load) pc_f <= pc_nr;
+        pf1 <= pc_load ? pc_in[11:2] + 10'd1 : stall_e ? pf1 : pf1_nr0;
+        pc_f <= pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : br_go0 ? redirect_pc : pc_nr0;
     end
 end
 
