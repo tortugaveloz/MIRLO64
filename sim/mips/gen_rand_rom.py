@@ -13,7 +13,9 @@ back to back with the moves from HI and LO.
     gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|div|nomd|alu|base]
 
 A last argument "k1" has the program run from KSEG1 (its own code fetched
-uncached, a word at a time; the trap handler stays in KSEG0).
+uncached, a word at a time; the trap handler stays in KSEG0). An argument "ua"
+adds ldl, ldr, sdl and sdr (the core's W64_UA) at every byte address, through
+the cache and around it, and as often as ld and sd.
 """
 import random
 import struct
@@ -48,6 +50,7 @@ def main():
     # LO stored at RESULT with a mark after them, to compare with the model's
     e2e = len(sys.argv) > 5 and sys.argv[5] == "e2e"
     k1 = sys.argv[-1] == "k1"
+    ua = "ua" in sys.argv[5:] and not base
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -115,15 +118,34 @@ def main():
         else:                                   # a 64-bit value again
             I(0x37, TAB, wreg(), 8 * rnd.randrange(32))
 
+    def mem_pair():
+        # ("ua") a store and, right behind it, an access to the same doubleword at any byte: the store's second word may be the
+        # one the next access reads first (the cache's write against its read, and the write buffer's)
+        base = UNC if rnd.random() < 0.3 else CACHED
+        o = rnd.randrange(64) * 8
+        s = rnd.choice([0x2C, 0x2D, 0x2C, 0x2D, 0x3F, 0x2B, 0x2A, 0x2E, 0x28, 0x29])
+        l = rnd.choice([0x1A, 0x1B, 0x1A, 0x1B, 0x37, 0x23, 0x22, 0x26, 0x20, 0x25])
+        so, lo = o + rnd.randrange(8), o + rnd.randrange(8)
+        if s in (0x3F,): so = o
+        elif s in (0x2B,): so = o + 4 * rnd.randrange(2)
+        elif s in (0x29,): so = o + 2 * rnd.randrange(4)
+        if l == 0x37: lo = o
+        elif l == 0x23: lo = o + 4 * rnd.randrange(2)
+        I(s, base, src(), so)
+        I(l, base, wreg() if l in (0x1A, 0x1B, 0x37) else nreg(), lo)
+
     def mem():
+        if ua and rnd.random() < 0.3: return mem_pair()
         base = UNC if rnd.random() < 0.3 else CACHED
         op = rnd.choice([0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x37, 0x37,
                          0x28, 0x29, 0x2A, 0x2B, 0x2E, 0x3F, 0x3F, 0x2B])
+        if ua and rnd.random() < 0.3:
+            op = rnd.choice([0x1A, 0x1B, 0x2C, 0x2D])
         off = rnd.randrange(512)
         if op in (0x37, 0x3F): off &= ~7
         elif op in (0x23, 0x27, 0x2B): off &= ~3
         elif op in (0x21, 0x25, 0x29): off &= ~1
-        I(op, base, (wreg() if op in (0x27, 0x37) else nreg()) if op < 0x28 or op == 0x37 else src(), off)
+        I(op, base, (wreg() if op in (0x27, 0x37, 0x1A, 0x1B) else nreg()) if op < 0x28 or op == 0x37 else src(), off)
 
     def trap():
         # (on 32-bit values: with any other the core has a Reserved Instruction)

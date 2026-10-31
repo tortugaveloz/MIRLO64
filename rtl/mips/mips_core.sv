@@ -20,9 +20,11 @@
 //      W64_DIV  (with W64_MD) ddiv(u), a bit a cycle on a divider of 64 bits
 //               (the 32-bit div(u) go through it too): left out, they are
 //               Reserved Instructions and the runtime divides
-//    Never in the core: ldl, ldr, sdl, sdr, lld, scd, a trap on a 64-bit
+//    ldl, ldr, sdl, sdr (W64_UA, with W64_SH, FAST, XWB and BIG; a Reserved
+//    Instruction without) are the d-shifter's too: see the caches, below.
+//    Never in the core: lld, scd, a trap on a 64-bit
 //    operand. COP0 register 7 (MCTL)
-//    reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV), 0 on
+//    reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV), 27 (UA), 0 on
 //    a core before them. Without W64_MD HI and LO
 //    are 32 bits and the runtime keeps a 64-bit product or quotient itself:
 //    it sets COP0 register 7's bit 0, and mfhi / mflo / mthi / mtlo are
@@ -90,6 +92,12 @@
 //    cycles, through the cache and the write buffer as any other. Uncached,
 //    device and TLB-mapped accesses (but a fetch from a cacheable mapped page,
 //    FPG, and a load from one, PGD) take the slow path (one single-word access; two for a 64-bit one).
+//  - ldl, ldr, sdl, sdr (XUA) are accesses to the doubleword the address is in, as ld's and sd's are -- cached, uncached and
+//    mapped alike, a device's the same address error -- with no alignment requirement, done on the d-shifter's register (sh_r)
+//    a byte a cycle. A store rotates rt left by 8 - n bytes (sdl) or 7 - n (sdr), n the address' low three bits, and writes
+//    its two words with the strobes of the bytes the address leaves to it. A load takes 8 steps, once its doubleword is in:
+//    each shifts a byte in at the bottom -- the doubleword's byte that is rt's new one there, or rt's own, the one that
+//    leaves at the top. Nothing of this is in E.
 //  - Memory is word-native (sim/n64/n64.h): big-endian byte k of a word is
 //    lane 3 - k (BIG; little-endian: lane k).
 //  - COP1 instructions run at M in fpu_n64 (single precision, doubles
@@ -190,6 +198,8 @@ module mips_core #(
     // (with W64_MD) ddiv and ddivu, a bit a cycle on a divider of 64 bits (div and divu run on it too): left out (a
     // Reserved Instruction, the runtime's) unless this is set -- dmult(u) are the DSP's either way
     parameter bit W64_DIV = 0,
+    // (with W64_SH, FAST, XWB and BIG) ldl, ldr, sdl, sdr: left out (a Reserved Instruction, the runtime's) unless this is set
+    parameter bit W64_UA = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
     // reaches the next fetch
@@ -276,6 +286,7 @@ localparam bit XALU = W64 && W64_ALU;        // M's 64-bit unit
 localparam bit XSH  = XALU && W64_SH;        // its shifter
 localparam bit XMD  = XALU && W64_MD;        // dmult(u); HI and LO of 64 bits
 localparam bit XDIV = XMD && W64_DIV;        // ddiv(u)
+localparam bit XUA  = XSH && W64_UA && FAST && XWB && BIG;   // ldl, ldr, sdl, sdr: the d-shifter's register, a byte a cycle
 localparam bit PG   = FPG && TLB_RAM && FAST && FLAT && N64WIN;     // the fetch page registers
 
 // =============================================================== decode
@@ -284,10 +295,10 @@ typedef enum logic [4:0] {
     A_MFHI, A_MFLO
 } alu_t;
 typedef enum logic [3:0] {
-    M_NONE, M_LB, M_LBU, M_LH, M_LHU, M_LW, M_LWL, M_LWR, M_LL, M_FL, M_LWU, M_LD
+    M_NONE, M_LB, M_LBU, M_LH, M_LHU, M_LW, M_LWL, M_LWR, M_LL, M_FL, M_LWU, M_LD, M_LDL, M_LDR
 } load_t;
 typedef enum logic [3:0] {
-    S_NONE, S_SB, S_SH, S_SW, S_SWL, S_SWR, S_SC, S_FS, S_SD
+    S_NONE, S_SB, S_SH, S_SW, S_SWL, S_SWR, S_SC, S_FS, S_SD, S_SDL, S_SDR
 } store_t;
 typedef enum logic [3:0] {
     B_NONE, B_EQ, B_NE, B_LEZ, B_GTZ, B_LTZ, B_GEZ, B_C1F, B_C1T, B_J, B_JR
@@ -455,6 +466,8 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h26: begin c.ld = M_LWR; c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end
     6'h27: if (W64) begin c.ld = M_LWU; c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
     6'h37: if (W64) begin c.ld = M_LD;  c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
+    6'h1A, 6'h1B: if (XUA) begin c.ld = op[0] ? M_LDR : M_LDL; c.x64 = X_SLL; c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
+    6'h2C, 6'h2D: if (XUA) begin c.st = op[0] ? S_SDR : S_SDL; c.x64 = X_SLL; c.use_rs = 1; c.use_rt = 1; end else c.ri = 1;
     6'h3F: if (W64) begin c.st = S_SD;  c.use_rs = 1; c.use_rt = 1; end else c.ri = 1;
     6'h28: begin c.st = S_SB;  c.use_rs = 1; c.use_rt = 1; end
     6'h29: begin c.st = S_SH;  c.use_rs = 1; c.use_rt = 1; end
@@ -720,7 +733,7 @@ logic [3:0]  wb_rp, wb_wp;
 logic [3:0]  wb_cnt;                         // (FAST: wb_wp - wb_rp, kept)
 wire  [3:0]  wb_n = FAST ? wb_cnt : wb_wp - wb_rp;
 wire         wb_empty = XWB ? 1'b1 : FAST ? wb_cnt == 4'd0 : wb_rp == wb_wp;
-wire         wb_full  = XWB ? st_full : wb_n == 4'(WB_N);
+wire         wb_full  = XWB ? st_full || (m_k_ua && (m_shwait || m_shw2)) : wb_n == 4'(WB_N);   // (XUA: and an unaligned store waits for its doubleword to be rotated)
 // It is emptied in runs, not a store at a time: on the one SDRAM a write
 // among another port's reads costs the bus its turn both ways (and often a
 // row), whatever follows it. A run starts with five stores waiting, when the
@@ -766,6 +779,9 @@ logic [31:0] m_a_lo;                         // rs (mthi/mtlo, mult/div)
 ctl_t        m_c;
 logic [31:0] m_pc, m_insn, m_res, m_addr, m_st_lo, m_badv;
 logic [31:0] m_a_hx, m_st_hx;
+logic        m_k_ua;                         // (FAST, XUA: ldl, ldr, sdl, sdr, registered with the instruction)
+logic        m_shw2;                         // (XUA) and the cycle after it: m_st_lo is sh_r's a cycle later
+logic        m_shwait;                       // M's d-shift is not done: !(sh_on && sh_n == 0), registered; ldl ... sdr's rotation
 logic        m_ph;                           // a cached 64-bit access: its second word
 logic [4:0]  m_exc_code;
 
@@ -798,7 +814,7 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 // hx: the register file's, or zero for a value still in the pipeline (what
 // can have one makes its readers wait: haz_wide)
 function automatic logic wideprod(input ctl_t c);
-    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.cop1_64;   // (a compare's result is 0 or 1)
+    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
 wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
 wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
@@ -1072,6 +1088,8 @@ always_comb begin
     default: ;
     endcase
 end
+// ldl, ldr, sdl, sdr (XUA): a doubleword access at any address -- no alignment requirement, and its first read is the doubleword's first word
+wire e_ua = XUA && (e_c.ld == M_LDL || e_c.ld == M_LDR || e_c.st == S_SDL || e_c.st == S_SDR);
 wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e_ea[2:0] != 0);
 // N64WIN: the game touching what is not RDRAM (Mirlo's runtime emulates it)
 // (MI: the MI's and PI_STATUS' word accesses, in KSEG0 or KSEG1, are the device port's. The address error they would
@@ -1170,6 +1188,7 @@ logic        fpu_valid, fpu_busy;
 logic [31:0] fpu_gpr_out, fpu_gpr_out_hi;
 logic [63:0] fpu_mem_out;
 // (FAST: what kind of instruction it is, registered with it)
+logic m_ldw;                                 // (FAST: a load whose value is m_ld_val: not ldl, ldr)
 logic m_k_ld, m_k_st, m_k_wide, m_k_fwide, m_k_cach, m_k_mapped, m_k_md, m_k_fpu, m_k_sbeq;
 logic [3:0] m_k_sstrb; logic m_k_sfs, m_k_ssd;      // (FAST: a store of the FPU's word, of a doubleword)
 wire m_ld = FAST ? m_k_ld : m_c.ld != M_NONE, m_st = FAST ? m_k_st : m_c.st != S_NONE, m_mem = m_ld || m_st;
@@ -1298,14 +1317,33 @@ end
 // the d-shifts: the value in sh_r, a byte or a bit a cycle
 // (registered with the instruction: M's wait for it is on the D-cache's address path)
 logic       m_xshift;
-logic       m_shwait;                                      // M's d-shift is not done: !(sh_on && sh_n == 0), registered
 wire [5:0]  m_xsh = m_insn[5] ? {m_insn[2], m_insn[10:6]} : m_a_lo[5:0];        // dsll(32) ..., or the v forms
-logic [63:0] sh_r; logic [5:0] sh_n; logic sh_on;
+logic [63:0] sh_r; logic [6:0] sh_n; logic sh_on;
+// ldl, ldr, sdl, sdr (XUA), on sh_r, as a d-shift left by bytes with a byte of its own coming in at the bottom (decoded as
+// X_SLL). A store rotates rt by 8 - n bytes (sdl) or 7 - n (sdr), n the address' low bits, and writes it with strobes. A load
+// takes 8 steps, once its doubleword is in ms_data (ua_rdy): ldl feeds the doubleword's byte n + t, as long as it lasts, and rt's
+// byte t -- the register's top one -- after; ldr rt's, then the doubleword's bytes from its first. ua_u is the number of the
+// doubleword's byte (and, with its 4th bit, which of the two is fed).
+logic [3:0] ua_u;
+wire  [2:0] ua_rot = m_insn[26] ? ~m_addr[2:0] : -m_addr[2:0];
+wire  [6:0] m_xamt = m_k_ua ? (m_ld ? 7'd64 : {1'b0, ua_rot, 3'd0}) : {1'b0, m_xsh};
+logic       ua_rdy;                                      // a load's doubleword is in ms_data
+wire        ua_go  = !m_k_ua || !m_ld || ua_rdy;
+wire        ua_sel = m_ld && (ua_u[3] ^ !m_insn[26]);
+wire  [7:0] ua_feed = ua_sel ? ms_data[8 * (3'd7 - ua_u[2:0]) +: 8] : sh_r[63:56];
 wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
 
 // stores: data and strobes of the word at m_addr (lane 3 - k is N64 byte k);
 // sd's by which of its two words is being written
 wire m_second = m_cw ? m_ph : ms == MS_SLOW_B;
+// sdl, sdr (XUA): the doubleword as the d-shifter's register has rotated it (sh_r), its bytes from the address' on (sdl) or up to it
+// (sdr) written, a word as the store of a word: m_st_lo takes sh_r's upper half (a cycle behind it), the second word's after four
+// steps more -- the strobes, by byte p of the doubleword (0 is the most significant, word 0's lane 3)
+logic [7:0] m_ua_mask; logic [3:0] m_ua_strb;
+always_comb begin
+    for (int p = 0; p < 8; p++) m_ua_mask[p] = m_insn[26] ? p <= int'(m_addr[2:0]) : p >= int'(m_addr[2:0]);
+    m_ua_strb = m_second ? {m_ua_mask[4], m_ua_mask[5], m_ua_mask[6], m_ua_mask[7]} : {m_ua_mask[0], m_ua_mask[1], m_ua_mask[2], m_ua_mask[3]};
+end
 logic [31:0] m_st_data; logic [3:0] m_st_strb;
 always_comb begin
     logic [1:0] k;
@@ -1320,9 +1358,10 @@ always_comb begin
     S_SD:  begin m_st_data = (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; m_st_strb = 4'b1111; end
     default: ;
     endcase
-    if (FAST && !m_k_sfs && !m_k_ssd) begin m_st_data = m_st_lo; m_st_strb = m_k_sstrb; end
-    else if (FAST) begin m_st_strb = 4'b1111; m_st_data = m_k_sfs ? ((m_k_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]) :
-                                                      (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
+    if (FAST && !m_k_sfs && !m_k_ssd) begin m_st_data = m_st_lo; m_st_strb = m_k_ua ? m_ua_strb : m_k_sstrb; end
+    else if (FAST) begin m_st_strb = 4'b1111;
+                         m_st_data = m_k_sfs ? ((m_k_fwide && m_second != BIG) ? fpu_mem_out[63:32] : fpu_mem_out[31:0]) :
+                                     (m_second == BIG) ? m_b64[31:0] : m_b64[63:32]; end
 end
 
 wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
@@ -1333,8 +1372,8 @@ always_comb begin
     5'd1: c0_rd = {27'd0, rnd_now};
     5'd2: c0_rd = c0_entrylo0; 5'd3: c0_rd = c0_entrylo1; 5'd4: c0_rd = c0_context;
     5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
-    // (31:28: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV; a core before them reads 0 there)
-    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, 13'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
+    // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
+    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     5'd23: c0_rd = TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;     // (bit 0: the game's TLB instructions are the monitor's)
     5'd22: c0_rd = (TLB_RAM && MON) ? mon_badv : 32'd0;
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
@@ -1403,7 +1442,7 @@ wire m_wb_push = (m_commit_e || m_w0) && m_st && (!m_wide || m_cw) && !m_sc_fail
 // then waits for st_done: sw_wait)
 logic sw_wait;
 wire m_sw = XWB && m_live && m_st && (ms == MS_SLOW_A || ms == MS_SLOW_B);
-wire m_sw_push = m_sw && !sw_wait && !st_full;
+wire m_sw_push = m_sw && !sw_wait && !wb_full;
 assign st_valid = XWB && (m_wb_push || m_sw_push);
 assign st_dev   = m_devst;
 assign st_addr  = {m_pa[31:3], m_cw ? m_ph : m_sw ? (ms == MS_SLOW_B || (!m_wide && m_pa[2])) : m_pa[2], 2'b00};
@@ -1715,8 +1754,9 @@ end
 // the D-cache read: the next M's address, or M's own while it waits
 // (a cached 64-bit load: its second word once the first is taken)
 // (PGD: a mapped load in MS_XLAT reads at its physical index -- the bits above the page offset are the translation's)
-always_comb dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_addr[DW+1:12], m_addr[11:3], (m_cw && (m_w0 || m_ph)) ? 1'b1 : m_addr[2]}
-                               : e_ea[DW+1:2];
+// (a doubleword access reads the first word first whatever its address: an unaligned one's bit 2 is its byte's)
+always_comb dc_raddr = m_stall ? {(PGD && ms == MS_XLAT) ? m_tlbq[DW+1:12] : m_addr[DW+1:12], m_addr[11:3], m_cw ? (m_w0 || m_ph) : m_addr[2]}
+                               : {e_ea[DW+1:3], e_ea[2] && !e_ua};
 
 // =============================================================== the snoop (SNOOP)
 // The D-cache's lines are 16 bytes, as on the VR4300. A line can still be
@@ -1863,13 +1903,13 @@ always_ff @(posedge clk) begin
             if (m_c.mfc0) w_res <= c0_rd;
             else if (m_c.cop1_gpr) w_res <= fpu_gpr_out[31:0];
             else if (m_c.st == S_SC) w_res <= {31'd0, !m_sc_fail};
-            else if (m_ld) w_res <= m_ld_val;
+            else if (FAST ? m_ldw : m_ld) w_res <= m_ld_val;
             else if (XALU && m_xcmp) w_res <= {31'd0, m_xlt};
-            else if (XALU && m_xshift) w_res <= sh_r[31:0];
+            else if (XALU && m_xshift) w_res <= sh_r[31:0];                 // (ldl, ldr: the doubleword as rotated and merged)
             else w_res <= m_res;
             w_hx <= 32'd0;
             if (W64) begin
-                if (m_ld) w_hx <= m_ld_hx;
+                if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
@@ -1985,20 +2025,33 @@ always_ff @(posedge clk) begin
         if (flush || m_adv) m_ph <= 1'b0;
         else if (m_w0 && !m_lmiss) m_ph <= 1'b1;
         if (m_w0 && m_ld) begin if (BIG) ms_data[63:32] <= dc_qm; else ms_data[31:0] <= dc_qm; end
+        // (XUA: and its second word, once there; ldl and ldr take their bytes from ms_data a cycle later)
+        if (XUA && m_ph && m_ld) ms_data[31:0] <= dc_qm;
+        ua_rdy <= XUA && sh_on && m_ld && (m_cw ? m_ph : ms == MS_DONE);
+        m_shw2 <= m_shwait;
+        if (XUA && m_k_ua && m_st && sh_on && !m_adv) m_st_lo <= sh_r[63:32];
         // a d-shift: the value in, then a byte or a bit a cycle
         if (flush || m_adv) begin sh_on <= 1'b0; end
+        else if (XUA && m_k_ua && m_st && (m_w0 || (m_sw_push && ms == MS_SLOW_A))) begin
+            sh_n <= 7'd32; m_shwait <= 1'b1;                        // (sdl, sdr: the first word is out; the second is the next four bytes)
+        end
         else if (m_live && m_xshift) begin
             logic fill;
             fill = m_c.x64 == X_SRA && sh_r[63];
-            if (!sh_on) begin sh_r <= m_b64; sh_n <= m_xsh; sh_on <= 1'b1; m_shwait <= m_xsh != 6'd0; end
-            else if (sh_n >= 6'd8) begin
-                m_shwait <= sh_n != 6'd8;
-                sh_r <= m_c.x64 == X_SLL ? {sh_r[55:0], 8'd0} : {{8{fill}}, sh_r[63:8]};
-                sh_n <= sh_n - 6'd8;
-            end else if (sh_n != 6'd0) begin
-                m_shwait <= sh_n != 6'd1;
+            if (!sh_on) begin
+                sh_r <= m_b64; sh_n <= m_xamt; sh_on <= 1'b1; m_shwait <= m_xamt != 7'd0;
+                ua_u <= {1'b0, m_addr[2:0]} + {3'd0, m_insn[26]};
+            end
+            // (ldl, ldr, sdl, sdr: the same steps, a byte at the bottom for the byte that leaves at the top; a load's wait
+            // for its doubleword: ua_go)
+            else if (sh_n >= 7'd8 && ua_go) begin
+                m_shwait <= sh_n != 7'd8;
+                sh_r <= m_c.x64 == X_SLL ? {sh_r[55:0], m_k_ua ? ua_feed : 8'd0} : {{8{fill}}, sh_r[63:8]};
+                sh_n <= sh_n - 7'd8; ua_u <= ua_u + 4'd1;
+            end else if (sh_n != 7'd0 && sh_n < 7'd8) begin
+                m_shwait <= sh_n != 7'd1;
                 sh_r <= m_c.x64 == X_SLL ? {sh_r[62:0], 1'b0} : {fill, sh_r[63:1]};
-                sh_n <= sh_n - 6'd1;
+                sh_n <= sh_n - 7'd1;
             end
         end
 
@@ -2008,17 +2061,17 @@ always_ff @(posedge clk) begin
             m_valid <= e_valid && !e_kill;
             m_xshift <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_shwait <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
-            m_xc <= e_cs[32]; m_xltu <= e_ltu;
+            m_xc <= e_cs[32]; m_xltu <= e_ltu; m_k_ua <= e_ua;
             m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
             m_res <= e_res;
             m_addr <= e_ea;
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
-                m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_k_sc <= e_c.st == S_SC;
-                m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD));
+                m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_ldw <= e_c.ld != M_NONE && !e_ua; m_k_sc <= e_c.st == S_SC;
+                m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD)) || e_ua;
                 m_k_cach <= cacheable(e_ea, game_view); m_k_mapped <= e_mem && !kseg01(e_ea, game_view);
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
-                m_k_sbeq <= m_cst_idx == e_ea[DW+1:2];            // (it is behind the store that is at M now)
+                m_k_sbeq <= m_cst_idx == {e_ea[DW+1:3], e_ea[2] && !e_ua};   // (it is behind the store that is at M now; its read, dc_raddr's)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
             end
             m_st_lo <= FAST ? e_sdata : e_b;        // (FAST: a store's word in its lanes already)

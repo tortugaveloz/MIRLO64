@@ -186,7 +186,7 @@ instantiates it with the boot ROM and these parameters:
 | `EXC_BASE` | `0x4000_0000` | The runtime's vector is `EXC_BASE + 0x180` |
 | `TLB_EN` / `TLB_RAM` / `FPG` | 0 / 1 / 1 | No VR4300 TLB; translation tables in block RAM; fetch page registers |
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
-| `W64`, `W64_ALU`, `W64_SH`, `W64_MD` / `W64_DIV` | 1 / 0 | The 64-bit levels (the SoC has all of them) |
+| `W64`, `W64_ALU`, `W64_SH`, `W64_MD`, `W64_UA` / `W64_DIV` | 1 / 1 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
@@ -262,10 +262,12 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_SH` | yes | The d-shifts, a byte or a bit a cycle |
 | `W64_MD` | yes | `dmult(u)`: four products of the operands' halves on the 32-bit multiply's DSP block, summed a word at a time; HI and LO of 64 bits |
 | `W64_DIV` | yes | `ddiv(u)`, a bit a cycle (64 steps; `div(u)` run on the same divider, 32 steps); without it `ddiv(u)` are Reserved Instructions, and `div(u)` have a 32-bit divider of their own |
+| `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back; the runtime's version took hundreds). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
-What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: `ldl` / `ldr` /
-`sdl` / `sdr` (and, on a core without a level, that level's instructions). A trap instruction on a 64-bit operand, `lld` and
-`scd` are Reserved Instructions that the runtime does not do.
+What the CPU does not have is a Reserved Instruction, which the runtime does on the real 64-bit registers: on a core
+without a level, that level's instructions. A trap instruction on a 64-bit operand, `lld` and `scd` are Reserved
+Instructions that the runtime does not do. COP0 register 7 reads the levels in its bits 31 (ALU), 30 (SH), 29 (MD),
+28 (DIV) and 27 (UA).
 
 ### The FPU
 
@@ -327,7 +329,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 
 | Register | Bits |
 |---|---|
-| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:28]` read the 64-bit levels present: ALU, SH, MD, DIV |
+| 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:27]` read the 64-bit levels present: ALU, SH, MD, DIV, UA |
 | 22 | Read only: the address of the last translation fault the monitor level took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
 | 23 | Write: stores a table entry for EntryHi's page pair and ASID. `[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid. Read: `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's |
@@ -1084,6 +1086,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 |---|---|
 | `cpu_test`, `libc_test` | Loads and stores of every width, the caches, the FPU, the divider; the C library |
 | `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
+| `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
