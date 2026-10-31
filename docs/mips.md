@@ -69,7 +69,7 @@ level**, a privilege level of the CPU in which the runtime does the access on th
 | `0x2000_0000` | The RSP's host port: SP_MEM_ADDR `+00`, SP_DRAM_ADDR `+04`, SP_RD_LEN `+08`, SP_WR_LEN `+0C`, SP_STATUS `+10`, SP_DMA_FULL `+14`, SP_DMA_BUSY `+18`, SP_SEMAPHORE `+1C`, SP_PC `+20`; DPC_START `+40`, DPC_END `+44`, DPC_CURRENT `+48`, DPC_STATUS `+4C` |
 | `0xF000_0000` | The registers ([control.md](control.md)) |
 | `0xFFFF_8000`, 2 KiB | The monitor RAM: a store with `$zero` as its base reaches it |
-| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the tables the runtime fills from the game's TLB entries |
+| `0x0000_0000` - `0x1FFF_FFFF`, `0x5000_0000` - `0x7FFF_FFFF`, `0xC000_0000` - `0xEFFF_FFFF` | Mapped addresses: translated by the CPU's TLB, the game's own 32 entries |
 | `0x2000_0000` - `0x4FFF_FFFF`, in the game's view | Mapped addresses too (below) |
 
 The caches are physically tagged, so the runtime at `0x438x_xxxx` and the game through KSEG0 see one copy of the RDRAM.
@@ -185,7 +185,7 @@ integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below
 |---|---|---|
 | `FLAT`, `BIG`, `N64WIN` | 1 | The map above; big-endian; the RDRAM window, and the address error for the game's other accesses |
 | `EXC_BASE` | `0x4000_0000` | The runtime's vector is `EXC_BASE + 0x180` |
-| `TLB_EN` / `TLB_RAM` / `FPG` | 0 / 1 / 1 | No VR4300 TLB; translation tables in block RAM; fetch page registers |
+| `TLB_EN` / `TLB_RAM` / `FPG` | 1 / 0 / 0 | The VR4300's TLB, 32 entries in block RAM; no translation tables; no fetch page registers (`MIRLO_FPG`: with them) |
 | `MON`, `MI`, `PIW`, `VIW`, `AIW`, `SIW`, `PI2W` | 1 | The monitor level and the pass-through windows |
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD`, `W64_UA` / `W64_DIV` | 1 / 1 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
@@ -240,7 +240,7 @@ line in invalid. While two or more lines wait, those masters' writes are held at
 refill and changes nothing else in its cycles; a write 16 MiB from a cached line (the nine bits do not tell them
 apart) drops it too, which is rare and costs the same.
 
-Uncached, device and mapped data accesses (but a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
+Uncached, device and mapped data accesses (but, with the tables, a mapped load from a cacheable page: "Address translation"), and `ldc1` / `sdc1`, take the slow path: one word at a time. `ld` and `sd`
 to cached memory are two words in two cycles.
 
 Stores leave the core as they are done (`XWB`) and go through a 16-entry FIFO in `cpu_port.sv`, written on the CPU's
@@ -289,41 +289,73 @@ the pair (beyond a word's range a value saturates as a word's).
 
 ### Address translation
 
-In place of the VR4300's 32-entry TLB the core has two translation tables in block RAM, one for data and one for
-fetches (an instruction and what it reaches may share an index), of 512 entries each. An entry stands for one 4 KiB
-page, indexed by the page number's low 9 bits (`va[20:12]`), and holds valid, dirty, global and cacheable bits, the
-ASID, `va[31:21]` and the physical page `pa[28:12]`. A mapped access or fetch reads its page's entry. An entry that is
-valid, of this page and of this ASID (unless global) translates it into the RDRAM; anything else is the TLB's exception
-(TLBL, TLBS, or Mod for a store to an entry that is not dirty). The runtime then writes the entry from the game's own
-TLB entries and the instruction runs again, so a page costs one exception however much it is touched.
+The CPU has the VR4300's TLB (`TLB_EN`): 32 entries, each a pair of pages of 4 KiB to 16 MiB (PageMask), fully associative
+on VPN2 and the ASID (a global entry matches any), with the Valid, Dirty, Global and C fields of EntryLo0 and EntryLo1, in
+block RAM. `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are the CPU's own, with the game's COP0 registers (EntryHi, EntryLo0/1,
+PageMask, Index with its P bit, Random, Wired, Context's BadVPN2), and a TLB exception is the game's: a page no entry names is
+a refill (TLBL, code 2, for a load or a fetch, TLBS, code 3, for a store) at `0x8000_0000` while Status.EXL is clear and
+at `0x8000_0180` while it is set; a page an entry names with V clear is the same code at `0x8000_0180`; a store to a page
+with D clear is Mod (1) at `0x8000_0180`. BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address (the ASID is kept),
+EPC (the branch's, in a delay slot) and Cause.BD are set unless EXL was, and EXL is. So the game's own `osMapTLB`,
+`osUnmapTLB`, `osVirtualToPhysical` and a refill handler of its own (`tlbwr`) run as they are, and the runtime does
+nothing for them. What the console's TLB does and this one does not: the 64-bit XContext and the 64-bit addresses (an address is
+32 bits), and the machine check of two entries that match one address (undefined there; here the first by index wins). The registers keep what is written
+(EntryLo 30 bits, PageMask 12 bits, whatever the mask), a translation uses `pa[31:12]` of EntryLo's page number, and Wired's low five bits
+bound Random from below.
 
-A translation fault that goes to the monitor level leaves BadVAddr and EntryHi as the game has them: its address is
-COP0 register 22's. The tables are not the VR4300's TLB -- a page that an entry of the game's maps can miss them at any
-time, where a wired entry of the console's TLB never misses -- so a miss must not be seen by code of the game's that
-runs from a mapped page, an exception handler about to read BadVAddr among it. The monitor writes BadVAddr and EntryHi
-itself for the exception it delivers to the game.
+The entries are searched one a cycle, from entry 0, by a scanner that F and M share (`tlbp` and `tlbr` use it too), so
+the first entry of the index order that matches wins. Each of F and M keeps the page it last translated in a **micro-TLB**
+(one page, of whatever size the entry's pages are; the fetch side's are the page registers below): a mapped access to
+that page costs the translation's cycle and no search. A TLB write, `tlbr` and a new ASID empty them, and a search
+under way when that happens is dropped and made again. The costs, in cycles of the game's CPU (`lang/mips/test/tlbcost_test.c`):
 
-A mapped load of a word or less from a page whose entry has the cacheable bit goes through the D-cache: the table's
-read gives the physical page, the cache is read at the physical index, and the word is taken a cycle later -- a miss
-reads the line and translates again. Other mapped accesses take the slow path, uncached; a mapped store writes through
-and drops the line it may shadow, as an uncached store does. A mapped fetch runs through the I-cache when its entry has the cacheable bit: two
-**fetch page registers** hold the last two cacheable pages a table read found (virtual page, ASID or global, physical
-page). The I-cache is indexed by the virtual address and tagged by the physical one, `{valid, pa[28:12]}`; F delivers
-the cache's word and D checks it a cycle later against the register's page. A fetch from a page neither register holds
-reads the table and loads the older register. Any write to a table entry empties both registers. Because the index
-comes from the virtual address, a frame mapped at a virtual address whose index bits above the page offset differ from
-the frame's can sit in the cache under more than one index; once such a page has been entered, a hit-type cache
-instruction on the I-cache drops the line under every such index, so code rewritten through one alias is the new code
-through all.
+| What | Cycles |
+|---|---|
+| a mapped load from the page the last load translated, over the same load from KSEG1 | 2 |
+| a mapped load that changes page, over that: the search | entry *k* costs about 0.85 *k* (0 for entry 0, 15 for entry 16, 27 for entry 31) |
+| a refill through the game's own handler of 7 instructions (exception, handler, `tlbwr`, `eret`, the load again), over a load from KSEG0 | 133, the mapped load's own 30 and its search included |
+| the same, through the table's monitor (`TLB_RAM`: below), for comparison | some 3,000 |
+
+A mapped load or store takes the slow path: one uncached word (two for a 64-bit one), and a store through a mapped page
+drops the line it may shadow in the D-cache. A mapped `lw`, `sw`, `ld`, `sd`, `ldl`, `sdl`, `ll` and `sc` are the same as an unmapped
+one's in what they do (`LLAddr` is the physical address). A mapped fetch is the slow path as well, a word at a time, unless the CPU has
+the **fetch page registers** (`FPG`, off in the SoC's default build, `MIRLO_FPG` turns it on): two registers keep the last two pages
+a search found that are cacheable (the entry's C field is not 2) and in the RDRAM -- the virtual page with its size, the ASID or global, the
+physical page -- and a fetch from one runs through the I-cache like KSEG0's. The I-cache is indexed by the virtual address and tagged by
+the physical one, `{valid, pa[28:12]}`; F delivers the cache's word and D checks it a cycle later against the register's page. A
+fetch from a page neither register holds searches the TLB and loads the older register. A TLB write empties both registers.
+Because the index comes from the virtual address, a frame mapped at a virtual address whose index bits above the page offset differ
+from the frame's can sit in the cache under more than one index; once such a page has been entered, a hit-type cache instruction
+on the I-cache drops the line under every such index, so code rewritten through one alias is the new code through all. The D-cache
+does the same for a hit-type instruction through a mapped address.
+
+**Where the physical address goes.** An access through a valid page to a physical address that is not the game's RDRAM -- an
+RCP register, the cartridge, or nothing at all (with MCTL bit 10 the RDRAM's upper 4 MiB too) -- is the device access of an unmapped
+address: an address error (4 or 5) for the monitor level, with the game's Cause, EPC, BadVAddr and EntryHi untouched, and COP0
+register 22 holding the physical address the page gave. The runtime answers it as it answers the unmapped one (`emulate_hw`):
+a register of the RCP as the console's, and an address of `0x2000_0000` or more -- the debug port that libultra maps at
+`0xC000_0000` onto `0x8000_0000` -- as nothing: a load reads 0 and a store goes nowhere. The game's own exceptions for the same page
+(an invalid page, a clean one) come first.
+
+**The tables (`TLB_RAM`, until they are removed).** The core can still be built without the TLB and with two translation tables
+in block RAM, one for data and one for fetches, of 512 entries each, which the runtime fills from the game's entries
+(`MIRLO_TLB_TABLES` in `rtl/soc/mips_sys.sv`): an entry stands for one 4 KiB page, indexed by the page number's low 9 bits, and holds
+valid, dirty, global and cacheable bits, the ASID, `va[31:21]` and the physical page `pa[28:12]`. A mapped access or fetch reads
+its page's entry; anything but a valid entry of this page and this ASID is the TLB's exception, which goes to the monitor level,
+leaves BadVAddr and EntryHi as the game has them (COP0 register 22 has the address) and is answered from the entries the runtime keeps
+(below); the game's own `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor, which does them. A mapped load of a
+word or less from a cacheable page goes through the D-cache (`PGD`), and the fetch page registers hold the last two cacheable pages of the
+fetch table. `n64rt.sys` finds which CPU it has in COP0 register 23 and runs on either.
 
 ### The monitor level
 
 With `MON`, COP0 register 7's bit 1 (`GAME`) divides exceptions in two:
 
-- Those a console would take go to the game's own handler at `0x8000_0180`, with EPC, Cause and Status.EXL as on the
-  VR4300, when the instruction is the game's.
-- The rest go to the **monitor level**: a device access of the game's, an instruction the core lacks, a translation
-  fault, and the monitor's own interrupt (`irq_mon`, which the game cannot mask). The entry sets ERL and ErrorEPC and
+- Those a console would take go to the game's own handler at `0x8000_0180` (a TLB refill at `0x8000_0000`), with EPC, Cause
+  and Status.EXL as on the VR4300, when the instruction is the game's -- the TLB's exceptions among them.
+- The rest go to the **monitor level**: a device access of the game's (an address that is not the RDRAM, by a pointer or through a
+  page of the TLB), an instruction the core lacks, and the monitor's own interrupt (`irq_mon`, which the game cannot mask). (On the
+  tables' CPU, below, a translation fault too.) The entry sets ERL and ErrorEPC and
   jumps to the runtime's vector; it touches neither EXL nor EPC nor Cause, so it can interrupt the game's handler too.
   `eret` with ERL set returns to ErrorEPC.
 
@@ -334,16 +366,16 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 | Register | Bits |
 |---|---|
 | 7 (MCTL) | `[1]` GAME; `[2]` the monitor's entry was in a delay slot (ErrorEPC is the branch); `[7:3]` the entry's cause: an exception code, or 31 for the monitor's interrupt; `[8]` the pass-through to the RCP's blocks, written only together with bit 9; `[10]` the game's RDRAM is 4 MiB (its accesses to the upper half of the window go to the monitor), written only together with bit 11; `[12]` the game's view maps `0x2000_0000` - `0x4FFF_FFFF` (above), written only together with bit 13; `[14]` the game's word accesses to the SP's and the DPC's registers are the RSP's host port's (no trap; a store of DPC_STATUS still traps: the runtime keeps DPC_CLOCK), written only together with bit 15; `[31:27]` read the 64-bit levels present: ALU, SH, MD, DIV, UA |
-| 22 | Read only: the address of the last translation fault the monitor level took |
+| 22 | Read only: the physical address a page gave to the last device access through the TLB that the monitor level took; with the tables, the address of the last translation fault it took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
-| 23 | Write: stores a table entry for EntryHi's page pair and ASID. `[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid. Read: `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's |
+| 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (`FPG`), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
 | 0 (Index) | Bit 31 (P) is writable by `mtc0` while ERL is set |
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
 
-While GAME is set, `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor level. The three
-`mtc0` enables let the monitor do what the VR4300 does itself for a `tlbp` that finds nothing and for a TLB exception
-it delivers to the game.
+With the tables, while GAME is set, `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor level. The
+three `mtc0` enables let the monitor do what the VR4300 does itself for a `tlbp` that finds nothing and for a TLB exception it
+delivers to the game; with the TLB, Index's P bit and BadVAddr are written by the monitor level to put a save state back.
 
 ## The runtime
 
@@ -448,8 +480,8 @@ functions return so), and whose address is one of these registers, each a copy o
 
 The base register is read, and a load's result written, through two jump tables indexed by the register number.
 Anything else falls through to the full path at the point it is found to be different, with nothing of the game's
-changed. A second fast path does the game's `tlbr`, `tlbp` and the `tlbwi` that changes no translation, with seven of
-the game's registers saved in the context for the work.
+changed. On the tables' CPU a second fast path does the game's `tlbr`, `tlbp` and the `tlbwi` that changes no translation,
+with seven of the game's registers saved in the context for the work.
 
 **The full path** saves the game's registers at 64 bits, HI and LO, FCSR and the 32 FPU registers, and calls
 `n64rt_mon_exception` on a stack of the runtime's:
@@ -457,9 +489,9 @@ the game's registers saved in the context for the work.
 | MCTL cause | What the monitor does |
 |---|---|
 | 31, the monitor's interrupt | `n64rt_rcp_events`: the hardware's wake-ups (below) |
-| 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge |
-| 1, 2, 3 (TLB) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
-| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction |
+| 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge, by a pointer or through a page of the TLB |
+| 1, 2, 3 (TLB; the tables' CPU only) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
+| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction (the tables' CPU only) |
 
 Anything else stops the game with a message on the UART.
 
@@ -480,7 +512,15 @@ The monitor's interrupt is `MONITOR.PEND & MONITOR.MASK`. The runtime masks in f
 
 ### TLB instructions and exceptions
 
-The runtime keeps the game's 32 TLB entries as the registers gave them and does each instruction on the game's COP0
+With the CPU's own TLB the runtime has nothing to do for the game's TLB instructions and exceptions: they are the CPU's, and
+nothing of the game's libultra is patched. It keeps no entries, and the monitor's fast path for the TLB instructions never runs.
+What reaches it is a device access through a page (MCTL cause 4 or 5, `emulate_hw`: COP0 register 22 has the physical address; below `0x2000_0000`
+it goes on as the unmapped address `0xA000_0000 | pa`, above it is nothing), and the instruction at a mapped `pc` that it has to
+read to do that, a 64-bit instruction or an access it emulates (`insn_at`, `n64rt_tlb_phys`): found by `tlbp` and `tlbr`, with the game's
+Index, PageMask, EntryHi and EntryLo registers put back. A state holds the 32 entries ([Save states](#save-states)).
+
+**With the translation tables** (`TLB_RAM`, the core built with `MIRLO_TLB_TABLES`; the runtime knows which by COP0 register 23) the
+runtime does all of the following. It keeps the game's 32 TLB entries as the registers gave them and does each instruction on the game's COP0
 registers as the VR4300 would (`tlb_insn` in `n64rt_os.c`): `tlbwi` writes the entry Index names, `tlbwr` the one
 Random names, `tlbr` gives the registers back (G in both EntryLo registers), and `tlbp` searches by VPN2 and ASID and
 sets Index's P bit when it finds nothing. A write over an entry that mapped something empties that entry's pages in
@@ -504,9 +544,9 @@ returns to the vector. Some software maps its code through the TLB and fills it 
 runs as it is, its `tlbwr` is the monitor's, and the access then misses the tables again and is filled from the entry
 the handler wrote.
 
-**The entries a `tlbwr` puts out are kept.** Software with a refill handler has more pages in use than the 32 entries
+**The entries a `tlbwr` puts out are kept** (the tables' only). Software with a refill handler has more pages in use than the 32 entries
 hold, and each `tlbwr` puts a random one out. On the console the page that entry mapped is a refill away, a dozen
-instructions; here a refill is several trips through the monitor. So the entry a `tlbwr` replaces is kept by the
+instructions; with the tables a refill is several trips through the monitor. So the entry a `tlbwr` replaces is kept by the
 runtime (128 of them, by their page pair, 4 KiB pages only) and its pages stay in the CPU's tables: an access to them
 goes on as before, and one that misses the tables is filled from the kept entry, neither seen by the game. The game
 sees its 32 entries as the VR4300 has them (`tlbr`, `tlbp`, Index, Random).
@@ -890,10 +930,11 @@ while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with t
    be idle, and for the AI to have played its buffers (some 0.2 s, most of it the AI's), answering the other wake-ups as
    they come. The game's tasks end and their interrupts are pending in the state. A state that cannot be made so in
    half a second is refused (the Pocket's error), and the game goes on.
-2. **A state** is the runtime's own `.data` and `.bss` (the game's registers in the monitor's context, the game's TLB
-   entries and the kept ones, the PI's and the RI's registers, the saves' kinds and sizes); the RDRAM and the RDP's hidden
+2. **A state** is the runtime's own `.data` and `.bss` (the game's registers in the monitor's context, the PI's and the RI's
+   registers, the saves' kinds and sizes, and on the tables' CPU the game's TLB entries and the kept ones); the RDRAM and the RDP's hidden
    coverage plane; the cartridge's save, a FlashRAM's page buffer and status, the Controller Pak; and the hardware's
-   registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits) and the FPU's condition bit, the MI's
+   registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits), the CPU's own 32 TLB entries (`tlbr` on the way out, `tlbwi`
+   on the way back, with Index, PageMask, EntryHi and EntryLo0/1 put back after them) and the FPU's condition bit, the MI's
    mode, interrupts and mask, the VI's registers, base, field and line, the AI's rate and its DMA enable, the PIF RAM, the
    SI's address and whether the PIF has run commands, DMEM, the RSP's status, PC and semaphore, the DPC's registers, and
    the sizes the Pocket's table has for the saves' and the paks' slots. Its header names the runtime (a sum of its code)
@@ -1093,9 +1134,13 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 |---|---|
 | `cpu_test`, `libc_test` | Loads and stores of every width, the caches, the FPU, the divider; the C library |
 | `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
-| `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
+| `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped, on either TLB), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
-| `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers |
+| `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | The translation tables' CPU: the tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers (each says SKIPPED on another CPU) |
+| `tlbreal_test` | The real TLB: the seven page sizes, the micro-TLBs, every register of the TLB exceptions and their vectors, `tlbp`, `tlbr`, Index, Wired, Random, the caches, `0x6000_0000` |
+| `tlbmon_real_test`, `tlbgame_real_test`, `tlbpg_real_test` | The same three subjects on the real TLB: the game's TLB instructions, its refill and general handlers, the cached fetches from mapped pages |
+| `tlbdev_test` | A page onto a device or past the RDRAM: the monitor's entry and COP0 22, the 4 MiB setting, the game's exceptions first, every range the game maps, the game's view |
+| `tlbcost_test` | What a mapped load and a refill cost in cycles (printed) |
 | `mi_test`, `vi_test`, `ai_test`, `si_test`, `pi2_test` | Each RCP block: registers, interrupts, DMA, and that the game's accesses enter the monitor only where they should |
 | `rcpcpu_test` | The CPU's side of the SP and DPC registers: the semaphore, the DMA queue, DPC writes |
 | `dma_coh_test` | The D-cache against the PI's engine, the RSP's DMA and the SI's RD64B writing a buffer beside data loaded during the transfer |
@@ -1115,7 +1160,10 @@ instruction's address, word and written register (64 bits), on every exception a
 `GEN="-GFAST=1 -GXWB=1 -GW64_ALU=1 ..."` passes the core's parameters. `gen_rand_rom.py` writes random integer programs
 (every instruction on registers full of 64-bit values, through the cache and around it; its mode `full` matches the
 SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
-`ddiv(u)`) and `gen_rand_fpu_rom.py` random FPU programs.
+`ddiv(u)`; the argument `tlb` adds four windows of mapped pages onto the scratch memory, loads and stores through them with
+`ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
+`tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
+set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 
 ### Single blocks
 
