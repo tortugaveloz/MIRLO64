@@ -46,10 +46,13 @@ module rsp_vu #(
     input  wire         rst,
 
     input  wire         valid,
-    input  wire  [31:0] ins,
+    // the instructions entering E (the unit keeps them, and what is decoded of them, from the cycle E takes them: adv):
+    // the computation's and the scalar unit's own, a pair's load, store or move
+    input  wire  [31:0] ins_n,
+    input  wire  [31:0] lins_n,
+    input  wire         adv,
     input  wire  [31:0] a,              // rs: the base of a load / store
     input  wire         l_valid,        // (LPAIR) a load, store or move paired with the computation on ins
-    input  wire  [31:0] l_ins,          // the scalar unit's E instruction: a load, store or move (ins as well), or a pair's load
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     // the registers' read addresses, from the scalar unit: of the slot E holds next cycle -- the computation's vs and
     // vt (ra_n, rb_n), and the register the scalar unit's own reads or writes, a store's or a load's vt or MFC2 / MTC2's
@@ -89,22 +92,93 @@ module rsp_vu #(
 localparam bit LPAIR = 1'b1;            // a computation and a load may come together (rsp_su's pairs)
 
 // ---------------------------------------------------------------- decode --
+// The instructions in E are registers here, and what the unit asks of them -- which kind of instruction, which of the
+// functions -- is registered with them, decoded the cycle before from the instructions arriving in E (the decode is not
+// in front of the controls)
+logic [31:0] ins, l_ins;
+function automatic logic is_resv(input logic [5:0] f);          // the reserved functions: vd 0, the accumulator's low word vs + vt (the adder's, as VADDC's), the flags kept
+    return f == 6'h12 || (f >= 6'h16 && f <= 6'h1C) || f == 6'h1E || f == 6'h1F || f == 6'h2E || f == 6'h2F || (f >= 6'h38 && f <= 6'h3E);
+endfunction
+// a computation's: vec -- COP2 with bit 25 -- and of its function
+typedef struct packed {
+    logic vec, mul, rcp, one, none, known, fast, cmp, cin, ch;
+    logic [2:0] am;
+} cdec_t;
+function automatic cdec_t cdecode(input logic [31:0] i);
+    cdec_t d;
+    logic [5:0] f;
+    logic mov;
+    f = i[5:0];
+    d.vec  = i[31:26] == 6'h12 && i[25];
+    d.mul  = f[5:4] == 2'b00 && f[2:1] != 2'b01;                   // the multiplies (not VRNDP/VMULQ/VRNDN/VMACQ)
+    d.rcp  = f[5:3] == 3'b110 && f[1:0] != 2'b11;                  // VRCP VRCPL VRCPH VRSQ VRSQL VRSQH
+    mov    = f == 6'h33;
+    d.one  = d.rcp || mov;                                         // writes one lane of vd
+    d.none = f == 6'h37 || f == 6'h3F;                             // VNOP, VNULL
+    d.known = d.mul || d.one || d.none || is_resv(f) || f == 6'h10 || f == 6'h11 || f == 6'h13 || f == 6'h14 || f == 6'h15
+              || f == 6'h1D || (f >= 6'h20 && f <= 6'h2D);
+    d.ch   = f == 6'h24 || f == 6'h25 || f == 6'h26;
+    // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
+    d.fast = f == 6'h27 || mov || (f >= 6'h28 && f <= 6'h2D) || f == 6'h1D || (d.rcp && f[1:0] == 2'd2);
+    d.cmp  = f == 6'h13 || (f >= 6'h20 && f <= 6'h23) || d.ch || d.rcp;     // (a reciprocal's accumulator word is vt, too)
+    d.cin  = f == 6'h10 || f == 6'h11 || f == 6'h24;               // reads VCO in EX1: VADD and VSUB for their carry, VCL for its compare
+    unique case (f)
+    6'h10:   d.am = 3'd1;
+    6'h11:   d.am = 3'd2;
+    6'h14:   d.am = 3'd3;
+    6'h12, 6'h16, 6'h17, 6'h18, 6'h19, 6'h1A, 6'h1B, 6'h1C, 6'h1E, 6'h1F, 6'h2E, 6'h2F,
+    6'h38, 6'h39, 6'h3A, 6'h3B, 6'h3C, 6'h3D, 6'h3E: d.am = 3'd3;
+    6'h25:   d.am = 3'd4;
+    6'h24:   d.am = 3'd5;
+    6'h26:   d.am = 3'd6;
+    6'h13:   d.am = 3'd7;
+    default: d.am = 3'd0;
+    endcase
+    return d;
+endfunction
+// the scalar unit's own (a load, store or move): which, and of a load or store which one
+typedef struct packed {
+    logic mfc2, cfc2, mtc2, ctc2, lwc2, swc2, packed_, tv, hv, fv, known, go;
+} ldec_t;
+function automatic ldec_t ldecode(input logic [31:0] i);
+    ldec_t d;
+    logic cop2_l;
+    logic [4:0] op5;
+    op5 = i[15:11];
+    cop2_l = i[31:26] == 6'h12 && !i[25];
+    d.mfc2 = cop2_l && i[24:21] == 4'd0;
+    d.cfc2 = cop2_l && i[24:21] == 4'd2;
+    d.mtc2 = cop2_l && i[24:21] == 4'd4;
+    d.ctc2 = cop2_l && i[24:21] == 4'd6;
+    d.lwc2 = i[31:26] == 6'h32;
+    d.swc2 = i[31:26] == 6'h3A;
+    d.packed_ = op5 == 5'd6 || op5 == 5'd7;
+    d.tv   = (d.lwc2 || d.swc2) && op5 == 5'd11;                  // LTV, STV
+    d.hv   = d.swc2 && op5 == 5'd8;                               // SHV, SFV: a byte every second / fourth of the 16
+    d.fv   = d.swc2 && op5 == 5'd9 && i[8:7] == 2'd0;
+    d.known = op5 <= 5'd7 || op5 == 5'd11 || d.hv || d.fv;
+    d.go   = (d.lwc2 || d.swc2) && d.known && !d.tv;
+    return d;
+endfunction
+cdec_t cd;
+ldec_t ld;
+always_ff @(posedge clk)
+    if (adv) begin ins <= ins_n; cd <= cdecode(ins_n); l_ins <= lins_n; ld <= ldecode(lins_n); end
+
 wire [5:0] op   = ins[31:26];
-wire       cop2 = op == 6'h12;
-wire       vec  = cop2 && ins[25];
+wire       vec  = cd.vec;
 // (the moves, loads and stores are never a pair's computation: from l_ins, the scalar unit's E instruction, which ins
 // only adds a select to)
-wire       cop2_l = l_ins[31:26] == 6'h12 && !l_ins[25];
-wire       mfc2 = cop2_l && l_ins[24:21] == 4'd0;
-wire       cfc2 = cop2_l && l_ins[24:21] == 4'd2;
-wire       mtc2 = cop2_l && l_ins[24:21] == 4'd4;
-wire       ctc2 = cop2_l && l_ins[24:21] == 4'd6;
+wire       mfc2 = ld.mfc2;
+wire       cfc2 = ld.cfc2;
+wire       mtc2 = ld.mtc2;
+wire       ctc2 = ld.ctc2;
 // (the load or store: l_ins, alone or a pair's load)
 wire       lp   = LPAIR && l_valid;
 wire [31:0] li  = l_ins;
 wire [31:0] la  = a;
-wire       lwc2 = li[31:26] == 6'h32;
-wire       swc2 = li[31:26] == 6'h3A;
+wire       lwc2 = ld.lwc2;
+wire       swc2 = ld.swc2;
 wire [4:0] lsop = li[15:11];
 wire [3:0] el   = li[10:7];             // LWC2/SWC2/MFC2/MTC2: the element (a byte of the register)
 wire [4:0] ltn  = li[20:16];            // LWC2/SWC2: the register
@@ -115,17 +189,11 @@ wire [4:0] vdn  = ins[10:6];
 wire [5:0] fn   = ins[5:0];
 wire [2:0] de   = ins[13:11];           // VRCP.., VMOV: the lane of vd written
 
-wire fn_mul  = fn[5:4] == 2'b00 && fn[2:1] != 2'b01;               // the multiplies (not VRNDP/VMULQ/VRNDN/VMACQ)
-wire fn_rcp  = fn[5:3] == 3'b110 && fn[1:0] != 2'b11;              // VRCP VRCPL VRCPH VRSQ VRSQL VRSQH
-wire fn_mov  = fn == 6'h33;
-wire fn_one  = fn_rcp || fn_mov;                                   // writes one lane of vd
-wire fn_none = fn == 6'h37 || fn == 6'h3F;                         // VNOP, VNULL
-// the reserved functions: vd 0, the accumulator's low word vs + vt (the adder's, as VADDC's), the flags kept
-function automatic logic is_resv(input logic [5:0] f);
-    return f == 6'h12 || (f >= 6'h16 && f <= 6'h1C) || f == 6'h1E || f == 6'h1F || f == 6'h2E || f == 6'h2F || (f >= 6'h38 && f <= 6'h3E);
-endfunction
-wire fn_known = fn_mul || fn_one || fn_none || is_resv(fn) || fn == 6'h10 || fn == 6'h11 || fn == 6'h13 || fn == 6'h14 || fn == 6'h15
-              || fn == 6'h1D || (fn >= 6'h20 && fn <= 6'h2D);
+wire fn_mul  = cd.mul;
+wire fn_rcp  = cd.rcp;
+wire fn_one  = cd.one;
+wire fn_none = cd.none;
+wire fn_known = cd.known;
 
 // ------------------------------------------------------------- registers --
 // three copies (LUT RAM, read in the cycle, each at an address its memory registers a cycle ahead): A at vs and C at
@@ -192,23 +260,9 @@ function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] 
     return kc ? {c15, {15{clo}}} : klo ? a[15:0] : a[31:16];
 endfunction
 
-// what the lanes' adder does, by the instruction (kept with it, x_am):
-// 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t); and 7, 0 - t (VABS's, and the clips' second
-// cycle: their compare is over by then, the flags it made are in fl_r, and -t is what they and VABS pick)
-function automatic logic [2:0] amode(input logic [5:0] f);
-    unique case (f)
-    6'h10:   return 3'd1;
-    6'h11:   return 3'd2;
-    6'h14:   return 3'd3;
-    6'h12, 6'h16, 6'h17, 6'h18, 6'h19, 6'h1A, 6'h1B, 6'h1C, 6'h1E, 6'h1F, 6'h2E, 6'h2F,
-    6'h38, 6'h39, 6'h3A, 6'h3B, 6'h3C, 6'h3D, 6'h3E: return 3'd3;
-    6'h25:   return 3'd4;
-    6'h24:   return 3'd5;
-    6'h26:   return 3'd6;
-    6'h13:   return 3'd7;
-    default: return 3'd0;
-    endcase
-endfunction
+// (what the lanes' adder does, by the instruction -- kept with it, x_am: 1 VADD, 2 VSUB, 3 VADDC, 4 VCH, 5 VCL, 6 VCR, 0 the rest (s - t),
+// and 7, 0 - t (VABS's, and the clips' second cycle: their compare is over by then, the flags it made are in fl_r, and -t is
+// what they and VABS pick) -- is in cdecode)
 
 // EX1, any computation but a multiply: one adder for every add, subtract and compare, s + t or s - t, with the 17-bit
 // signed result's top bit (b16) and the carry (unsigned: no borrow). Its sum and flags are registered (lo_r, fl_r);
@@ -398,7 +452,7 @@ always_comb begin
     for (int i = 0; i < 8; i++)
         tv[i] = ve[3] ? t_b : ve[2] ? t_h[i / 4] : ve[1] ? t_p[i / 2] : qc[i];
 end
-wire  fn_ch = fn == 6'h24 || fn == 6'h25 || fn == 6'h26;
+wire  fn_ch = cd.ch;
 
 logic [15:0]        s_n [LANES], t_n [LANES];
 logic [15:0]        s_r [LANES], t_r [LANES];
@@ -506,12 +560,12 @@ always_comb begin
     endcase
 end
 wire  [11:0] ls_addr = la[11:0] + off_sh;
-wire  ls_packed = lsop == 5'd6 || lsop == 5'd7;
-wire  ls_tv     = (lwc2 || swc2) && lsop == 5'd11;                 // LTV, STV
+wire  ls_packed = ld.packed_;
+wire  ls_tv     = ld.tv;                                           // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
-wire  st_hv     = swc2 && lsop == 5'd8;
-wire  st_fv     = swc2 && lsop == 5'd9 && el[1:0] == 2'd0;
-wire  ls_known  = lsop <= 5'd7 || lsop == 5'd11 || st_hv || st_fv;
+wire  st_hv     = ld.hv;
+wire  st_fv     = ld.fv;
+wire  ls_known  = ld.known;
 wire  [3:0]  o    = ls_addr[3:0];
 wire  [4:0]  size = 5'd1 << lsop[1:0];
 // the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV)
@@ -649,9 +703,9 @@ wire dep      = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn
 wire ldep     = lw_v && (lw_reg == vsn || lw_reg == vtn);
 wire pipe_e   = !m_v && !x_v && !y_v && !wp;          // no computation is under way
 // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
-wire fn_fast  = fn == 6'h27 || fn == 6'h33 || (fn >= 6'h28 && fn <= 6'h2D) || fn == 6'h1D || (fn_rcp && fn[1:0] == 2'd2);
-wire fn_cmp   = fn == 6'h13 || (fn >= 6'h20 && fn <= 6'h23) || fn_ch || fn_rcp;   // (a reciprocal's accumulator word is vt, too)
-wire fn_cin   = fn == 6'h10 || fn == 6'h11 || fn == 6'h24;                  // (reads VCO in EX1: VADD and VSUB for their carry, VCL for its compare)
+wire fn_fast  = cd.fast;
+wire fn_cmp   = cd.cmp;
+wire fn_cin   = cd.cin;
 wire x_kept   = x_v && x_wait;                                                // EX1 holds its computation another cycle
 wire go_k     = fn_fast ? !x_v && !m_v
               : fn_mul  ? !(x_v && x_st) && !x_kept
@@ -673,7 +727,7 @@ wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load into the register a computation is to write would be written over by it, put off or not)
 wire [4:0] l_reg = mtc2 ? li[15:11] : ltn;
 wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
-wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
+wire ls_go    = ld.go;
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || mtc2) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free) : (cfc2 || ctc2) ? pipe_e : 1'b1)
               && !(m_stall && ls_go);                       // (a load or store waits for the port)
@@ -802,7 +856,7 @@ always_ff @(posedge clk) begin
                 // a clip takes its adder's flags in one cycle and makes -t in the next; a reciprocal's second cycle is
                 // its normalisation
                 x_wait <= fn_ch || fn_rcp;
-                x_fn <= fn; x_am <= amode(fn); x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
+                x_fn <= fn; x_am <= cd.am; x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
             end
             if (fn_rcp) begin
                 // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left; and the divide registers'

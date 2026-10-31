@@ -103,7 +103,8 @@ logic        vm_valid, vm_we;       logic [11:0] vm_addr; logic [15:0] vm_be; lo
 logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
-logic [31:0] c_ins, c_a, c_b, c_res, c_lins;
+logic [31:0] c_ins, c_a, c_b, c_res, c_lins, c_ins_n, c_lins_n;
+logic        c_adv;
 logic        c_pr;
 logic [4:0]  c_ra_n, c_rb_n, c_rd_n, c_rd;
 logic [31:0] v_res_l;
@@ -113,7 +114,7 @@ logic        tr_e_mem;
 rsp_su #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd,
+    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
@@ -124,8 +125,8 @@ logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
-rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins(c_ins), .a(c_a), .b(c_b),
-    .l_valid(c_valid && c_pr && l_vu), .l_ins(c_lins), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
+rsp_vu #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .a(c_a), .b(c_b),
+    .l_valid(c_valid && c_pr && l_vu), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_be(vm_be), .m_wdata(vm_wdata), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
 

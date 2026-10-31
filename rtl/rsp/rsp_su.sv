@@ -82,6 +82,10 @@ module rsp_su #(
     output logic [4:0]  c_rb_n,
     output logic [4:0]  c_rd_n,
     output logic [4:0]  c_rd,
+    // the instructions entering E, for the vector unit's decode: the coprocessors', the scalar unit's own, and that E takes them
+    output logic [31:0] c_ins_n,
+    output logic [31:0] c_lins_n,
+    output logic        c_adv,
 
     // (simulation) each instruction as it leaves E, and each register write
     output logic        tr_e,
@@ -396,6 +400,9 @@ assign c_valid = e_valid && !hazard && (e_c.cop || (v_e && !s_mwait));
 assign c_ins = v_e ? v_ins : e_ins;
 assign c_pr = v_e;
 assign c_lins = e_ins;
+assign c_ins_n = c_ins_d;
+assign c_lins_n = s_ins_d;
+assign c_adv = !stall_e;
 assign c_a = ea;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
