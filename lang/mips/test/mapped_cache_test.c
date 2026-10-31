@@ -13,6 +13,10 @@ int main(void)
     volatile uint32_t *u = (volatile uint32_t *)(uintptr_t)(0xa0000000u + PA);
     volatile uint32_t *src = (volatile uint32_t *)(uintptr_t)SRC;
     *u = 0x11112222u; *src = 0x33334444u;
+    {   /* the VR4300's own TLB (COP0 23: 'TLB', bit 1) has no cached mapped loads (TLB_RAM's PGD): nothing here to check */
+        uint32_t c23; __asm__ volatile("mfc0 %0, $23" : "=r"(c23));
+        if ((c23 >> 8) == 0x544C42u && (c23 & 2u)) { puts_("mapped_cache_test: SKIPPED, the CPU's own TLB loads uncached\n"); putc_(4); for (;;) { } }
+    }
     MTC0(10, VA); MTC0(23, PA | 1u | 2u | 4u | 32u); MTC0(10, 0);
     flush_cpu_dcache();
     uint32_t before = *v;
