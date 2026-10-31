@@ -179,10 +179,12 @@ static void ll_patch(u32 vram, u32 len)
         for (u32 k = 0; k < sizeof s_ll_sigs / sizeof s_ll_sigs[0]; k++) {
             const u32 n = s_ll_sigs[k].n;
             if (w[0] != s_ll_sigs[k].w[0] || a + 4u * n > vram + len) continue;
-            /* a CPU that does the function's 64-bit instruction itself runs the original: shifts (W64_SH), dmultu (W64_MD);
-             * what divides (ddiv, ddivu: always the runtime's) is replaced on every CPU */
+            /* a CPU that does the function's 64-bit instruction itself runs the original: shifts (W64_SH), dmultu (W64_MD), ddiv and
+             * ddivu (W64_DIV: some seventy cycles, where this C is a hundred and fifty) */
             if (n64rt_cpu_sh && (s_ll_sigs[k].w == s_sig_ull_rshift || s_ll_sigs[k].w == s_sig_ll_lshift || s_ll_sigs[k].w == s_sig_ll_rshift)) continue;
             if (n64rt_cpu_md && s_ll_sigs[k].w == s_sig_ll_mul) continue;
+            if (n64rt_cpu_div && (s_ll_sigs[k].w == s_sig_ull_rem || s_ll_sigs[k].w == s_sig_ull_div || s_ll_sigs[k].w == s_sig_ll_rem ||
+                                  s_ll_sigs[k].w == s_sig_ll_div || s_ll_sigs[k].w == s_sig_ull_divremi || s_ll_sigs[k].w == s_sig_ll_mod)) continue;
             u32 i = 1;
             while (i < n && w[i] == s_ll_sigs[k].w[i]) i++;
             if (i < n) continue;

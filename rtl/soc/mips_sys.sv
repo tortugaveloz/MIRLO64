@@ -77,12 +77,12 @@ localparam bit CPU_FPG = 1'b1;
 // mips_core's levels. What the CPU leaves out is a Reserved Instruction, for
 // the runtime to do. In: the registers, ld and sd, the unit (dadd, dsub, logic
 // and compares on 64-bit values), its d-shifts, dmult (on the DSP) and 64-bit
-// HI and LO; not ddiv: it is the runtime's.
+// HI and LO, and ddiv(u) (a bit a cycle on the divider of 64 bits)
 localparam bit CPU_W64 = 1'b1;
 localparam bit CPU_W64_ALU = 1'b1;
 localparam bit CPU_W64_SH = 1'b1;
 localparam bit CPU_W64_MD = 1'b1;
-localparam bit CPU_W64_DIV = 1'b0;
+localparam bit CPU_W64_DIV = 1'b1;
 localparam bit CPU_FAST = FAST;
 // MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: the caches' lines (the VR4300's are 512
 // and 512: 16 KiB and 8 KiB; more are block RAM only: mips_core)
