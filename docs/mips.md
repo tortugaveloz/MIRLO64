@@ -213,6 +213,7 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 
 Nothing a cache tag says reaches the pipeline's advance. Multiplies and divides run in the background with HI and LO
 interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles later; `div(u)` is a bit a cycle.
+HI and LO keep the upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them.
 
 ### Caches and memory
 

@@ -538,9 +538,11 @@ logic [31:0] rfq_a, rfq_b;
 logic        rf_xv; logic [4:0] rf_xrd; logic [31:0] rf_xlo;
 logic [31:0] hi_r, lo_r;
 // W64: the registers' upper halves, as hx (see the top)
-logic [31:0] rfq_ah, rfq_bh, hi_hx, lo_hx;
+logic [31:0] rfq_ah, rfq_bh, hi_up, lo_up;
 logic        rfq_aw, rfq_bw;                // (read with them) the register's hx is not zero
 logic        rf_xw, hi_wide, lo_wide;       // the value written last cycle / HI / LO may have an hx
+// (HI and LO keep their upper words as they are, hi_up and lo_up -- hx is made as they are read, with the lower word's sign; where
+// hi_wide / lo_wide is 0 the value is a 32-bit one and the upper word is not read)
 logic        hilo_soft;                     // COP0 7: HI and LO are the runtime's (mfhi, mflo trap)
 logic        mon_game, mon_bd, mon_mi;              // MON: MCTL.GAME; the monitor's entry was in a delay slot
 logic        mon_sp;                                // SPW: MCTL bit 14 -- the SP's and DPC's registers are the device port's
@@ -1267,8 +1269,8 @@ always_comb begin
     X_OR:         m_xhx = (m_xha | m_xhb) ^ {32{m_res[31]}};
     X_XOR:        m_xhx = (m_xha ^ m_xhb) ^ {32{m_res[31]}};
     X_NOR:        m_xhx = ~(m_xha | m_xhb) ^ {32{m_res[31]}};
-    X_MFHI:       m_xhx = hi_hx;
-    X_MFLO:       m_xhx = lo_hx;
+    X_MFHI:       m_xhx = hi_up ^ {32{m_res[31]}};
+    X_MFLO:       m_xhx = lo_up ^ {32{m_res[31]}};
     default:      m_xhx = 32'd0;
     endcase
 end
@@ -1801,7 +1803,7 @@ always_ff @(posedge clk) begin
         c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
         c0_watchhi <= 0; c0_taglo <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
-        hi_r <= 0; lo_r <= 0; hi_hx <= 0; lo_hx <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
+        hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
@@ -2289,7 +2291,7 @@ always_ff @(posedge clk) begin
             end else if (m_c.md == MD_MULT || m_c.md == MD_MULTU) begin
                 logic [63:0] p;
                 p = m_c.md == MD_MULT ? 64'($signed(m_a_lo) * $signed(m_st_lo)) : 64'(m_a_lo) * 64'(m_st_lo);
-                lo_r <= p[31:0]; hi_r <= p[63:32]; lo_hx <= 0; hi_hx <= 0; lo_wide <= 0; hi_wide <= 0;
+                lo_r <= p[31:0]; hi_r <= p[63:32]; lo_wide <= 0; hi_wide <= 0;
             end else if (XMD && (m_c.md == MD_DMULT || m_c.md == MD_DMULTU)) begin
                 // (aL and bL are in md_ma and md_mb: pass 0)
                 md_sa <= 1'b0; md_sb <= 1'b0;
@@ -2301,15 +2303,13 @@ always_ff @(posedge clk) begin
                 md_cnt <= w ? 7'd64 : 7'd32; md_busy <= 1'b1;
             end
         end else if (md_busy && md_mt) begin
-            logic [31:0] hx;
-            hx = md_ah ^ {32{md_ma[31]}};
             md_mt <= 1'b0; md_busy <= 1'b0;
-            if (md_mth) begin hi_r <= md_ma; if (XMD) begin hi_hx <= hx; hi_wide <= hx != 32'd0; end end
-            else begin lo_r <= md_ma; if (XMD) begin lo_hx <= hx; lo_wide <= hx != 32'd0; end end
+            if (md_mth) begin hi_r <= md_ma; if (XMD) begin hi_up <= md_ah; hi_wide <= 1'b1; end end
+            else begin lo_r <= md_ma; if (XMD) begin lo_up <= md_ah; lo_wide <= 1'b1; end end
         end else if (md_busy && md_m32) begin
             md_m32 <= 1'b0; md_m32b <= 1'b1;
         end else if (md_busy && md_m32b) begin
-            lo_r <= md_p[31:0]; hi_r <= md_p[63:32]; lo_hx <= 0; hi_hx <= 0; lo_wide <= 0; hi_wide <= 0;
+            lo_r <= md_p[31:0]; hi_r <= md_p[63:32]; lo_wide <= 0; hi_wide <= 0;
             md_busy <= 1'b0; md_m32b <= 1'b0;
         end else if (XMD && md_busy && md_dm) begin
             // dmult(u): the products' sum, a word at a time: the low word of the sum of
@@ -2328,10 +2328,10 @@ always_ff @(posedge clk) begin
             case (md_c)
             3'd3: begin lo_r <= t[31:0]; md_ac <= {{32{t[66]}}, t[66:32]}; end
             3'd4: md_ac <= t;
-            3'd5: begin lo_hx <= t[31:0] ^ {32{lo_r[31]}}; md_ac <= {{32{t[66]}}, t[66:32]}; end
-            3'd6: begin hi_r <= t[31:0]; hi_hx <= t[63:32] ^ {32{t[31]}}; end
+            3'd5: begin lo_up <= t[31:0]; md_ac <= {{32{t[66]}}, t[66:32]}; end
+            3'd6: begin hi_r <= t[31:0]; hi_up <= t[63:32]; end
             3'd7: begin                                                  // (the flags: which words are 32-bit values)
-                lo_wide <= lo_hx != 32'd0; hi_wide <= hi_hx != 32'd0;
+                lo_wide <= 1'b1; hi_wide <= 1'b1;
                 md_busy <= 1'b0; md_dm <= 1'b0;
             end
             default: ;
@@ -2350,10 +2350,10 @@ always_ff @(posedge clk) begin
                 q = md_nq ? -md_acc[MW-1:0] : md_acc[MW-1:0];
                 r = md_nr ? -md_acc[2*MW-1:MW] : md_acc[2*MW-1:MW];
                 lo_r <= q[31:0]; hi_r <= r[31:0];
-                lo_hx <= md_w ? hx32(64'(q)) : 32'd0; hi_hx <= md_w ? hx32(64'(r)) : 32'd0;
+                lo_up <= 32'(64'(q) >> 32); hi_up <= 32'(64'(r) >> 32);
                 lo_wide <= md_w; hi_wide <= md_w;
                 // (ddiv of two words: only -2^31 / -1 leaves the 32 bits, a positive 2^31 -- its upper half 0)
-                if (!md_w && md_dd && !md_nq && q[31]) begin lo_hx <= 32'hFFFFFFFF; lo_wide <= 1'b1; end
+                if (!md_w && md_dd && !md_nq && q[31]) begin lo_up <= 32'd0; lo_wide <= 1'b1; end
             end
         end
     end
