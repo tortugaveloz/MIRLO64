@@ -197,7 +197,8 @@ int main(void)
     code_page(0x09004000u, 0x34000, C);                              /* colour 4, the frame's own: the same lines as KSEG0's */
     const uint32_t al[4] = { 0x09000000u, 0x09003000u, 0x09004000u, 0x80034000u };
     for (int i = 0; i < 4; i++) check("alias, old code", ((fn_t)al[i])(0), 0x700);
-    for (int k = 0; k < 4; k++) {                                    /* the code rewritten, dropped through alias k alone */
+    for (int k = 0; k < 4 && (MFC0(23) & 4u); k++) {                 /* the code rewritten, dropped through alias k alone (a CPU without
+                                                                      * the page registers fetches a mapped page uncached, which no cache holds a line of) */
         mkfn(0x34000, 0x710 + k);
         icache_hit_inval(al[k]);
         for (int i = 0; i < 4; i++) check("alias, new code", ((fn_t)al[(i + k) & 3])(0), 0x710 + k);

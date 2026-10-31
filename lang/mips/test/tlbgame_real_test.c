@@ -305,7 +305,7 @@ int main(void)
         uint32_t t = MFC0(9); ((fn1_t)0x80124000u)(3000); uint32_t t_k0 = MFC0(9) - t;
         t = MFC0(9); ((fn1_t)0x04B00000u)(3000); uint32_t t_map = MFC0(9) - t;
         puts_("loop of 3000: KSEG0 "); puthex(t_k0); puts_(", mapped "); puthex(t_map); puts_("\n");
-        check("code speed: the mapped loop within 1.3x of KSEG0's", t_map * 10 <= t_k0 * 13, 1);
+        if (MFC0(23) & 4u) check("code speed: the mapped loop within 1.3x of KSEG0's", t_map * 10 <= t_k0 * 13, 1);       /* (with the page registers) */
     }
 
     check("no exception of the program's own", t_own, 0);
