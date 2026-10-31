@@ -34,7 +34,7 @@
 `default_nettype none
 
 module rsp_top #(
-    parameter int LANES = 4,
+    parameter int LANES = 8,
     parameter bit MULW = 0,                 // (4 lanes) the multiplies on eight
     parameter     DIV_ROM = "rsp_div_rom.hex"
 ) (

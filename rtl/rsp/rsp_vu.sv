@@ -4,19 +4,18 @@
 // flags VCO, VCC and VCE, the reciprocal unit. The contract is the reference
 // model, sim/rsp/rsp.c: the same state after each instruction.
 //
-// LANES (8 or 4) is how many lanes the datapath holds: with 4, a computational
-// instruction runs in two passes (lanes 0-3, then 4-7) on half the
-// multipliers and adders. An instruction arrives from the scalar unit's E
-// stage (valid, held until done):
-//   computational   operands and products (a cycle), then the accumulator,
-//                   the clamps and the flags (a cycle per pass); all eight
-//                   result lanes are written at the end, so vd may be vs or vt
-//   VRCP.. VRSQH    with them, the reciprocal ROM (three cycles in all)
-//   MFC2 MTC2 CFC2 CTC2   one cycle
+// Eight lanes (LANES stays a parameter for the ports). An instruction arrives from the scalar unit's E stage (valid, held
+// until done; the instructions in E are taken, with their decode, from ins_n / lins_n when E takes them: adv):
+//   computational   SEL (the operands), then by kind -- a multiply: the products (MUL), the accumulator (EX1), the clamp and
+//                   vd (EX2); one with no adder (VMRG, VMOV, the logic operations, VSAR, VRCPH): EX2; the others: the
+//                   adder (EX1, two cycles for a clip and a reciprocal) and the result, the accumulator's low word, the
+//                   flags and vd (EX2). All eight result lanes are written at the end, so vd may be vs or vt
+//   VRCP.. VRSQH    with them, the reciprocal ROM
+//   MFC2 MTC2 CFC2 CTC2   one cycle (MFC2's and CFC2's value comes the cycle after)
 //   loads, stores   one cycle (DMEM is 16 bytes wide, as the N64's: what one
 //                   moves lies in the 16 bytes from its address's word on);
 //                   a load's data comes the cycle after its address
-//   a pair          (LPAIR: eight lanes) a computation on valid / ins and the
+//   a pair          a computation on valid / ins and the
 //                   scalar unit's load (LBV .. LUV), store, MFC2, MTC2, CFC2 or
 //                   CTC2 on l_valid / l_ins (a load's or store's base on a), the
 //                   scalar unit's pair: both start in the same cycle (done for
@@ -36,11 +35,8 @@
 `default_nettype none
 
 module rsp_vu #(
-    parameter int LANES = 4,
-    // (with LANES 4) the multiplies on all eight lanes at once: four more
-    // multipliers and accumulator adders, and only the other operations take
-    // two passes
-    parameter bit MULW = 0
+    parameter int LANES = 8,
+    parameter bit MULW = 0                  // (not used: kept for the ports of the 4-lane unit that was)
 ) (
     input  wire         clk,
     input  wire         rst,
