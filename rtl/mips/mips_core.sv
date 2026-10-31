@@ -1208,8 +1208,12 @@ wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]})
 // TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
 // RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
 // monitor level, which answers it -- with COP0 22 holding the physical address the page gave
-wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && m_tlbq[34] && m_tlbq[33] &&
-              !(m_st && !m_tlbq[32]) && (m_tlbq[31:23] != 9'd0 || (mon_mem4 && m_tlbq[22]));
+// (m_tdev_r: the page is valid and its address is not the game's, found as m_tlbq is loaded)
+logic m_tdev_r;
+function automatic logic tdev_of(input logic [34:0] q);
+    return q[34] && q[33] && (q[31:23] != 9'd0 || (mon_mem4 && q[22]));
+endfunction
+wire m_tdev = TLB_EN && MON && N64WIN && FLAT && m_tdev_r && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && !(m_st && !m_tlbq[32]);
 wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]) || m_tdev);
 wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
@@ -1907,7 +1911,7 @@ always_ff @(posedge clk) begin
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_STEP; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
         ms <= MS_IDLE; ms_cnt <= 0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
-        sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0; sc_stale <= 0; f_xrefill <= 0;
+        sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0; sc_stale <= 0; f_xrefill <= 0; m_tdev_r <= 0;
         d_fmiss <= 0; rd_res <= 0; rd_fix <= 0; rp_pend <= 0; m_w1 <= 0;
     end else begin
         // ---------------------------------------------------- Count / Compare
@@ -2282,7 +2286,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; m_tdev_r <= tdev_of(utlb_res(utlb_m.x, m_addr)); end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2295,6 +2299,7 @@ always_ff @(posedge clk) begin
                 else begin
                     ms <= MS_XLAT;
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
+                    m_tdev_r <= TLB_EN && sc_hit && tdev_of(utlb_res(sc_x, m_addr));
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
                     if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
                 end
