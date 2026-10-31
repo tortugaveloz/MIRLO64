@@ -253,10 +253,8 @@ typedef struct packed {
 // a multiply's result: the accumulator's middle word, or its low word (VMUDL, VMUDN, VMADL, VMADN: k 4, 6), or a
 // constant where the word does not hold the value -- 7FFF / 8000, VMULU's and VMACU's (k 1) FFFF / 0000, the low
 // word's FFFF / 0000: its top bit and its other fifteen
-function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] a);
-    logic gt, lt, klo, kc, c15, clo;
-    gt = !a[47] && |a[46:31];
-    lt = a[47] && !(&a[46:31]);
+function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] a, input logic gt, input logic lt);
+    logic klo, kc, c15, clo;
     klo = k == 3'd4 || k == 3'd6;
     if (k == 3'd1) begin kc = a[47] || gt; c15 = !a[47]; clo = !a[47]; end
     else if (klo)  begin kc = gt || lt;    c15 = gt;     clo = gt;     end
@@ -558,10 +556,11 @@ logic [4:0]         y_vdn;
 logic [2:0]         y_de;
 lane_t ex2 [LANES];
 logic [15:0] mres [LANES];
+logic [LANES-1:0] mgt_r, mlt_r;               // a multiply's sum is above / below what a word holds (made as it was: EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin
         ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
-        mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]});
+        mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
 logic [15:0] hold_be_w;                       // ... and the bytes it writes
@@ -905,7 +904,10 @@ always_ff @(posedge clk) begin
         // ---- EX1
         if (x_v) begin
             if (x_mul) begin
-                for (int l = 0; l < LANES; l++) begin acc_h[l] <= mac[l][47:32]; acc_m[l] <= mac[l][31:16]; acc_l[l] <= mac[l][15:0]; end
+                for (int l = 0; l < LANES; l++) begin
+                    acc_h[l] <= mac[l][47:32]; acc_m[l] <= mac[l][31:16]; acc_l[l] <= mac[l][15:0];
+                    mgt_r[l] <= !mac[l][47] && |mac[l][46:31]; mlt_r[l] <= mac[l][47] && !(&mac[l][46:31]);
+                end
             end else begin
                 for (int l = 0; l < LANES; l++) begin
                     lo_r[l] <= ad[l].lo;
@@ -922,7 +924,12 @@ always_ff @(posedge clk) begin
         // ---- SEL
         // (s and t are taken every cycle but while EX1 holds a computation that uses them in EX2: no SEL is in front of
         // their enable)
-        if (!(x_v && x_st)) for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
+        if (!(x_v && x_st)) begin
+            for (int l = 0; l < LANES; l++) begin s_r[l] <= s_n[l]; t_r[l] <= t_n[l]; end
+            // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left
+            rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
+            r_sqrt <= fn[2];
+        end
         if (sel_fire) begin
             if (!fn_mul && !fn_fast) begin                     // (a multiply enters EX1 from the MUL stage, a fast one skips it)
                 x_v <= 1'b1; x_mul <= 1'b0; x_st <= fn_cmp;
@@ -932,12 +939,7 @@ always_ff @(posedge clk) begin
                 x_fn <= fn; x_am <= cd.am; x_ve <= ve; x_vdn <= vdn; x_de <= de; x_one <= fn_one; x_rcp <= fn_rcp;
             end
             if (fn_rcp) begin
-                // the reciprocal's input: 16 bits, or with the high half a VRCPH / VRSQH left; and the divide registers'
-                // state after it (in program order, as the SEL's are)
-                if (fn[1:0] != 2'd2) begin
-                    rin <= (fn[1:0] == 2'd1 && dph) ? {div_in_h, qc[ve[2:0]]} : {{16{qc[ve[2:0]][15]}}, qc[ve[2:0]]};
-                    r_sqrt <= fn[2];
-                end
+                // the divide registers' state after it (in program order, as the SEL's are)
                 dph <= fn[1:0] == 2'd2;
                 if (fn[1:0] == 2'd2) div_in_h <= qc[ve[2:0]];
             end

@@ -381,7 +381,8 @@ wire [11:0] redirect_pc = e_c.jr ? {ea[11:2], 2'b00} : e_c.j ? j_tgt : br_tgt;
 // memory
 // (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
 wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qa[11:0] + imm_sx[11:0];
-wire [31:0] imm16 = imm_sx + 32'd16;
+logic [31:0] imm16;                            // (the offset + 16, registered with the instruction)
+always_ff @(posedge clk) if (!stall_e) imm16 <= {{16{s_ins_d[15]}}, s_ins_d[15:0]} + 32'd16;
 wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qa[11:0] + imm16[11:0];
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
