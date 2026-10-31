@@ -4,7 +4,7 @@
 //
 //   the game CPU (mips_sys: mips_core, big-endian) -----\
 //   the RDP (rtl/rdp): its pixels, its commands --------+-- sdr_arb -- sdr_ctrl -- sdr_phy -- SDRAM
-//   the RSP's DMA (rtl/rsp) ----------------------------|
+//   the RSP's DMA (rtl/rsp; RSP_OC: across rsp_xing) ---|
 //   the scan-out ---------------------------------------|
 //   the Pocket's bridge --------------------------------/
 //
@@ -26,9 +26,17 @@
 
 `include "mirlo_mips_init.svh"
 
+// RSP_OC: the RSP on the game CPU's clock (docs/mips.md, "The RSP's clock"); off, it is on clk_sys and nothing below changes
+`ifdef MIRLO_RSP_OC
+`define MIRLO_RSP_OC_VAL 1'b1
+`else
+`define MIRLO_RSP_OC_VAL 1'b0
+`endif
+
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
-    parameter int SDR_T_INIT = 12600
+    parameter int SDR_T_INIT = 12600,
+    parameter bit RSP_OC = `MIRLO_RSP_OC_VAL
 ) (
     input  wire          altera_reserved_tck,
     input  wire          altera_reserved_tdi,
@@ -75,7 +83,7 @@ module mirlo_mips #(
     input  wire   [31:0] apf_input_cont4_joy,
     input  wire   [31:0] apf_input_cont4_key,
     input  wire   [31:0] apf_input_cont4_trig,
-    input  wire    [3:0] apf_interact_address,
+    input  wire    [4:0] apf_interact_address,
     input  wire   [31:0] apf_interact_data,
     output logic  [31:0] apf_interact_q,
     input  wire          apf_interact_wr,
@@ -335,7 +343,8 @@ logic [31:0] rsp_x_rdata, rx_wdata;
 logic [4:0]  rx_addr;                                // x_addr[6:2]
 logic        rx_we;
 logic        rsp_h_ready;
-wire         rsp_x_go = xs == X_RSP && (!rx_we || rsp_h_ready);
+logic        oc_h_done, oc_dp_go;                    // RSP_OC: the SP register access is back; the RSP's DPC write is made this cycle
+wire         rsp_x_go = xs == X_RSP && (RSP_OC ? (rx_addr[4] ? (!rx_we || !oc_dp_go) : oc_h_done) : (!rx_we || rsp_h_ready));
 always_ff @(posedge clk) begin
     x_ack <= 0;
     if (rst) begin xs <= X_IDLE; bus_errors <= 0; end
@@ -416,7 +425,7 @@ logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
 logic [15:0] gbc_addr;
 logic [7:0]  gbc_wdata, gbc_rdata;
-mirlo_regs regs (.clk, .rst,
+mirlo_regs #(.RSP_OC(RSP_OC)) regs (.clk, .rst,
     .r_req(bus_r_req || xr_go), .r_we(bus_r_req ? br_we : x_we), .r_addr(bus_r_req ? br_addr : x_addr[15:0]),
     .r_wdata(bus_r_req ? br_wdata : x_wdata), .r_rdata,
     .aud_out(aud_out_r), .aud_wr(aud_wr_r), .aud_playback_en(apf_audio_playback_en),
@@ -436,7 +445,7 @@ mirlo_regs regs (.clk, .rst,
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
     .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
-    .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
+    .bus_errors, .rsp_duty, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
     .rdp_sync_count(rdp_sync), .rdp_load_count(rdp_load), .rdp_unknown_ops(rdp_unknown), .rdp_idle,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
@@ -491,22 +500,80 @@ logic        dpc_start_ok;
 `endif
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
-rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV)) rsp (.clk, .rst,
-    .h_we(rsp_x_go && rx_we && !rx_addr[4]), .h_rd(rsp_x_go && !rx_we && !rx_addr[4]), .h_addr(rx_addr[3:0]), .h_wdata(rx_wdata), .h_rdata(rsp_h_rdata),
-    .h_ready(rsp_h_ready), .irq(rsp_irq),
+// What rsp_top sees. On clk_sys (RSP_OC = 0) these are the SoC's own nets, as they have always been. With RSP_OC it is on
+// clk_cpu with edges left out (rsp_clk.sv, chosen by RSPDUTY: all of them is the overclock), and rsp_xing.sv takes everything
+// across: the host registers, the DMA's port of the arbiter, the DPC's writes (in order with the DMA, the RSP waiting for
+// them) and registers; its interrupt and state are sampled here.
+logic        rsp_ck, rsp_rst, rsp_h_we, rsp_h_rd, rsp_r_ready, rsp_r_rvalid;
+logic [3:0]  rsp_h_addr;
+logic [31:0] rsp_h_wdata, rsp_r_rdata, rsp_h_rdata_i;
+logic        rsp_irq_i, rsp_halted_i, rsp_unimpl_i, rsp_dq_t;
+logic [31:0] rsp_dpc_start_i, rsp_dpc_end_i, rsp_dpc_current_i, rsp_dpc_status_i;
+logic        rsp_dpc_start_we_i, rsp_dpc_end_we_i, rsp_dpc_status_we_i;
+logic [31:0] rsp_dpc_wdata_i;
+logic        sx_valid, sx_we;
+logic [22:2] sx_addr;
+logic [31:0] sx_wdata;
+logic [7:0]  rsp_duty;
+generate if (RSP_OC) begin : oc
+    logic        gclk, dpa_t, s_dp_go;
+    logic [2:0]  s_dp_k;
+    logic [31:0] s_dp_wdata;
+    logic        r_irq_q, r_halt_q, r_unimpl_q;
+    assign rsp_ck = gclk;
+    assign rsp_rst = rst_cpu;
+    rsp_clk clkgen (.clk_c(clk_cpu), .rst_c(rst_cpu), .duty_n(rsp_duty[3:0]), .duty_d(rsp_duty[7:4]),
+        .strobe(rsp_dpc_start_we_i || rsp_dpc_end_we_i || rsp_dpc_status_we_i), .dpa_t, .gclk);
+    rsp_xing xing (.clk_r(gclk), .rst_r(rst_cpu), .clk_c(clk_cpu),
+        .h_we(rsp_h_we), .h_rd(rsp_h_rd), .h_addr(rsp_h_addr), .h_wdata(rsp_h_wdata), .h_rdata(rsp_h_rdata_i), .h_ready(rsp_h_ready),
+        .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata), .r_ready(rsp_r_ready), .r_rvalid(rsp_r_rvalid), .r_rdata(rsp_r_rdata),
+        .dpc_start_we(rsp_dpc_start_we_i), .dpc_end_we(rsp_dpc_end_we_i), .dpc_status_we(rsp_dpc_status_we_i), .dpc_wdata(rsp_dpc_wdata_i),
+        .dpc_start_r(rsp_dpc_start_i), .dpc_end_r(rsp_dpc_end_i), .dpc_current_r(rsp_dpc_current_i), .dpc_status_r(rsp_dpc_status_i), .dq_t(rsp_dq_t),
+        .clk, .rst,
+        .s_h_req(xs == X_RSP && !rx_addr[4]), .s_h_we(rx_we), .s_h_addr(rx_addr[3:0]), .s_h_wdata(rx_wdata), .s_h_done(oc_h_done), .s_h_rdata(rsp_h_rdata),
+        .p_valid(sx_valid), .p_we(sx_we), .p_addr(sx_addr), .p_wdata(sx_wdata), .p_ready(p_ready[3]), .p_rvalid(p_rvalid[3]), .p_rdata,
+        .s_dp_go, .s_dp_k, .s_dp_wdata, .dpa_t, .s_dpc_start(dpc_start), .s_dpc_end(dpc_end_rd), .s_dpc_current(dpc_current), .s_dpc_status(dpc_status));
+    assign oc_dp_go = s_dp_go;
+    assign rsp_dpc_start_we = s_dp_go && s_dp_k[0];
+    assign rsp_dpc_end_we = s_dp_go && s_dp_k[1];
+    assign rsp_dpc_status_we = s_dp_go && s_dp_k[2];
+    assign rsp_dpc_wdata = s_dp_wdata;
+    always_ff @(posedge clk) begin r_irq_q <= rsp_irq_i; r_halt_q <= rsp_halted_i; r_unimpl_q <= rsp_unimpl_i; end
+    assign rsp_irq = r_irq_q; assign rsp_halted = r_halt_q; assign rsp_unimpl = r_unimpl_q;
+end else begin : noc
+    assign rsp_ck = clk;
+    assign rsp_rst = rst;
+    assign rsp_h_we = rsp_x_go && rx_we && !rx_addr[4];
+    assign rsp_h_rd = rsp_x_go && !rx_we && !rx_addr[4];
+    assign rsp_h_addr = rx_addr[3:0];
+    assign rsp_h_wdata = rx_wdata;
+    assign rsp_h_rdata = rsp_h_rdata_i;
+    assign rsp_r_ready = p_ready[3];
+    assign rsp_r_rvalid = p_rvalid[3];
+    assign rsp_r_rdata = p_rdata;
+    assign rsp_dpc_start_i = {8'd0, dpc_start}; assign rsp_dpc_end_i = {8'd0, dpc_end_rd}; assign rsp_dpc_current_i = {8'd0, dpc_current}; assign rsp_dpc_status_i = dpc_status;
+    assign rsp_dpc_start_we = rsp_dpc_start_we_i; assign rsp_dpc_end_we = rsp_dpc_end_we_i; assign rsp_dpc_status_we = rsp_dpc_status_we_i;
+    assign rsp_dpc_wdata = rsp_dpc_wdata_i;
+    assign rsp_irq = rsp_irq_i; assign rsp_halted = rsp_halted_i; assign rsp_unimpl = rsp_unimpl_i;
+    assign sx_valid = rsp_r_valid; assign sx_we = rsp_r_we; assign sx_addr = rsp_r_addr[22:2]; assign sx_wdata = rsp_r_wdata;
+    assign oc_h_done = 1'b0; assign oc_dp_go = 1'b0;
+end endgenerate
+rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV), .DUALCLK(RSP_OC)) rsp (.clk(rsp_ck), .clk_b(clk), .rst(rsp_rst),
+    .h_we(rsp_h_we), .h_rd(rsp_h_rd), .h_addr(rsp_h_addr), .h_wdata(rsp_h_wdata), .h_rdata(rsp_h_rdata_i),
+    .h_ready(rsp_h_ready), .irq(rsp_irq_i),
     .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
-    .r_ready(p_ready[3]), .r_rvalid(p_rvalid[3]), .r_rdata(p_rdata),
-    .dpc_start_we(rsp_dpc_start_we), .dpc_end_we(rsp_dpc_end_we), .dpc_status_we(rsp_dpc_status_we), .dpc_wdata(rsp_dpc_wdata),
-    .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
+    .r_ready(rsp_r_ready), .r_rvalid(rsp_r_rvalid), .r_rdata(rsp_r_rdata),
+    .dpc_start_we(rsp_dpc_start_we_i), .dpc_end_we(rsp_dpc_end_we_i), .dpc_status_we(rsp_dpc_status_we_i), .dpc_wdata(rsp_dpc_wdata_i),
+    .dpc_start(rsp_dpc_start_i), .dpc_end(rsp_dpc_end_i), .dpc_current(rsp_dpc_current_i), .dpc_status(rsp_dpc_status_i),
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
-    .halted(rsp_halted), .unimpl(rsp_unimpl),
+    .halted(rsp_halted_i), .unimpl(rsp_unimpl_i),
     .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp());
 assign cpu_irq     = mon_own ? (mon_mi ? mi_line : mon_rcp) : (game_irq | rsp_irq);       // (the monitor's: the game's own IP2 is the monitor's line)
 assign mon_sp      = rsp_irq;
-assign p_valid[3]  = rsp_r_valid;
-assign p_we[3]     = rsp_r_we;
-assign p_addr[3]   = 24'hE0_0000 + {3'd0, rsp_r_addr[22:2]};  // 8 MiB of RDRAM at 0x4380_0000
-assign p_wdata[3]  = rsp_r_wdata;
+assign p_valid[3]  = sx_valid;
+assign p_we[3]     = sx_we;
+assign p_addr[3]   = 24'hE0_0000 + {3'd0, sx_addr};  // 8 MiB of RDRAM at 0x4380_0000
+assign p_wdata[3]  = sx_wdata;
 assign p_be[3]     = 4'hF;
 // (the RSP's DMA goes first, with the CPU: the microcode waits for each transfer it starts -- a display list's next
 // commands, the vertices, the RDP's commands out -- while the RDP and the scan-out ride out a wait in their buffers)

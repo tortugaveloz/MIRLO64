@@ -36,9 +36,11 @@
 module rsp_top #(
     parameter int LANES = 8,
     parameter bit MULW = 0,                 // (4 lanes) the multiplies on eight
-    parameter     DIV_ROM = "rsp_div_rom.hex"
+    parameter     DIV_ROM = "rsp_div_rom.hex",
+    parameter bit DUALCLK = 0               // the RDP's reads of DMEM (dx_*) are on clk_b, not clk: the SoC's, with the RSP on the game CPU's
 ) (
     input  wire         clk,
+    input  wire         clk_b,              // (DUALCLK) dx_*'s
     input  wire         rst,
 
     // the host's register port (one cycle; reads combinational)
@@ -244,7 +246,7 @@ always_comb
     for (int k = 0; k < 4; k++) x_row[8 * k +: 8] = (2'(k) < x_wa[1:0]) ? x_wa1 : x_wa[9:2];
 logic [127:0] q16;
 logic [3:0]  x_rot;
-rsp_dpram dmem (.clk, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), .a_dat_w(x_wd), .a_dat_r(q16),
+rsp_dpram #(.DUALCLK(DUALCLK)) dmem (.clk, .clk_b, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), .a_dat_w(x_wd), .a_dat_r(q16),
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
 // byte m of the result is byte (m + x_rot) mod 16 of the line: by words, then bytes

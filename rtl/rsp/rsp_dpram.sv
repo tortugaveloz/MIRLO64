@@ -8,11 +8,15 @@
 // address. On the FPGA each bank is altsyncram in M10K, true dual port
 // (inferring one with byte enables is not dependable); in simulation the
 // same behaviour in plain SystemVerilog, one array of 1024 words in address
-// order (the testbenches read DMEM there).
+// order (the testbenches read DMEM there). DUALCLK: port b on clk_b, its own clock (the
+// SoC's, when the RSP runs on the game CPU's: the RDP's reads of DMEM stay where they are).
 `default_nettype none
 
-module rsp_dpram (
+module rsp_dpram #(
+    parameter bit DUALCLK = 0
+) (
     input  wire          clk,
+    input  wire          clk_b,             // (DUALCLK) port b's clock
     input  wire  [31:0]  a_row,             // bank k's row in [8k +: 8]
     input  wire  [15:0]  a_we,
     input  wire  [127:0] a_dat_w,
@@ -28,12 +32,14 @@ module rsp_dpram (
                 if (a_we[4 * k + i]) mem[{a_row[8 * k +: 8], 2'(k)}][31 - 8 * i -: 8] <= a_dat_w[127 - 32 * k - 8 * i -: 8];
             a_dat_r[127 - 32 * k -: 32] <= mem[{a_row[8 * k +: 8], 2'(k)}];
         end
-        b_dat_r <= mem[b_adr];
     end
+    wire clk_bs = DUALCLK ? clk_b : clk;
+    always_ff @(posedge clk_bs) b_dat_r <= mem[b_adr];
 `else
     logic [1:0]  b_k;
     logic [31:0] qb [4];
-    always_ff @(posedge clk) b_k <= b_adr[1:0];
+    wire clk_bs = DUALCLK ? clk_b : clk;
+    always_ff @(posedge clk_bs) b_k <= b_adr[1:0];
     assign b_dat_r = qb[b_k];
     genvar k;
     generate for (k = 0; k < 4; k++) begin : bank
@@ -51,9 +57,9 @@ module rsp_dpram (
             .byte_size                          (8),
             .outdata_reg_a                      ("UNREGISTERED"),
             .outdata_reg_b                      ("UNREGISTERED"),
-            .address_reg_b                      ("CLOCK0"),
-            .indata_reg_b                       ("CLOCK0"),
-            .wrcontrol_wraddress_reg_b          ("CLOCK0"),
+            .address_reg_b                      (DUALCLK ? "CLOCK1" : "CLOCK0"),
+            .indata_reg_b                       (DUALCLK ? "CLOCK1" : "CLOCK0"),
+            .wrcontrol_wraddress_reg_b          (DUALCLK ? "CLOCK1" : "CLOCK0"),
             .outdata_aclr_a                     ("NONE"),
             .outdata_aclr_b                     ("NONE"),
             .clock_enable_input_a               ("BYPASS"),
@@ -83,7 +89,7 @@ module rsp_dpram (
             .aclr1          (1'b0),
             .addressstall_a (1'b0),
             .addressstall_b (1'b0),
-            .clock1         (1'b1),
+            .clock1         (DUALCLK ? clk_b : 1'b1),
             .clocken0       (1'b1),
             .clocken1       (1'b1),
             .clocken2       (1'b1),

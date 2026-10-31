@@ -40,6 +40,7 @@ localparam logic [15:0] R_APF_VIDEO_VIDEO = 16'h0400;
 localparam logic [15:0] R_CTRL_RESET = 16'h0500;
 localparam logic [15:0] R_CTRL_SCRATCH = 16'h0504;
 localparam logic [15:0] R_CTRL_BUS_ERRORS = 16'h0508;
+localparam logic [15:0] R_CTRL_RSPDUTY = 16'h050C;
 localparam logic [15:0] R_MAILBOX_GAME_MSG = 16'h0600;
 localparam logic [15:0] R_MAILBOX_GAME_KICK = 16'h0604;
 localparam logic [15:0] R_MAILBOX_GEOM_ACK = 16'h0608;

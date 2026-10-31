@@ -988,6 +988,7 @@ scan-out instead.
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
 | Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
+| RSP Overclock | `0x1000_0140` | `interact1[26]` | **Off** (0), on (1): a check box; read when the game starts; a core built with `RSP_OC` then gives the RSP every edge of the CPU's clock ([The RSP's clock](#the-rsps-clock-rsp_oc)); any other core does nothing |
 | Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak (2), Virtual Transfer Pak (3) |
 | Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Virtual Transfer Pak (3) |
@@ -1034,7 +1035,7 @@ One PLL (`target/pocket/mf_pllbase`) makes the SoC's clocks from the Pocket's 74
 | Clock | Frequency | Use |
 |---|---|---|
 | `clk_sys` | 62.5 MHz | The SoC: SDRAM controller, RSP, RDP, the RCP's blocks, registers. The N64 RCP's frequency |
-| `clk_cpu` | 93.75 MHz | The CPU, its FPU, caches and boot ROM. The VR4300's frequency; 3/2 of `clk_sys` |
+| `clk_cpu` | 93.75 MHz | The CPU, its FPU, caches and boot ROM. The VR4300's frequency; 3/2 of `clk_sys`. With `RSP_OC`, the RSP's too (below) |
 | `clk_sys2x` | 125 MHz | The SDRAM's PHY; a second 125 MHz output, shifted by 4 ns, is the SDRAM clock's source |
 | `clk_vid` | 12.5 MHz | The video pads: a fifth of `clk_sys`, two clocks a pixel; a second output shifted by 90 degrees goes to the Pocket |
 
@@ -1047,6 +1048,43 @@ it for delays and time-outs, which are therefore half a percent off.
 
 `target/pocket/core_constraints.sdc` puts `clk_sys`, `clk_sys2x`, `clk_vid` and `clk_cpu` in one group: every path
 between them is timed. The other clocks are asynchronous groups.
+
+### The RSP's clock (`RSP_OC`)
+
+The RSP is on `clk_sys` unless `mirlo_mips` is built with its parameter `RSP_OC` (the macro `MIRLO_RSP_OC`, 0 by default; with
+it 0 the RSP and the SoC around it are as they were, cycle for cycle). With it the RSP is on `clk_cpu`, 93.75 MHz, with some of
+that clock's edges left out, and the setting "RSP Overclock" (below) says how many. The pieces are in `rtl/soc`:
+
+- `rsp_gate.sv` is the RSP's clock: `clk_cpu` through a clock-control block of the global network with an enable
+  (`altclkctrl`, Quartus's, the enable taken on the falling edge, so no edge is cut short). The fitter keeps it a global clock
+  of its own (the PLL's counter drives it and the CPU's), and the timing analyser sees the clock it came from: every path
+  between the RSP and `clk_sys` is timed against the 3/2 relation, 5.33 ns, as the CPU's are, with no exception. The analyser
+  does not time the path into the block's enable at all (a deliberately long one showed no slack), so the enable is one
+  register's output.
+- `rsp_clk.sv` is the enable: `RSPDUTY.N` of every `RSPDUTY.D` edges, spread evenly (an accumulator). 1 of 1 is every edge, the
+  overclock. The rest is for the RSP that is pipelined for 93.75 MHz and takes more cycles for the same work: with its edges
+  cut to the share `CTRL.RSPDUTY` resets to (5 of 6), it goes about as fast as it did on `clk_sys`. The share is a register,
+  not a constant, to be set by a measurement. The RSP also waits, with no edge, while a write it made to the DPC's registers
+  goes across and back (a dozen cycles), so that its next read of DPC_STATUS finds the write there.
+- `rsp_xing.sv` is everything that crosses. Like `cpu_port.sv`, register to register with no synchroniser, each path timed at the
+  closest pair of edges; nothing counts on seeing a value for exactly one cycle of the other clock.
+
+| What | How it crosses | Added |
+|---|---|---|
+| The CPU's access to SP_MEM_ADDR .. SP_PC | the access (held) and a toggle to the RSP's clock; the answer and a toggle back | 2 to 3 system cycles |
+| The CPU's access to DPC_START .. DPC_STATUS | none: the DPC is on `clk_sys` | merged with the RSP's own writes in a cycle without one |
+| The RSP's DMA | a FIFO of 8 requests (the RSP is let 6) written on the RSP's clock and read on `clk_sys`, into the arbiter's port 3 as before; a FIFO of 16 words back. The RSP may have 16 reads that it has not yet taken a word of: no more are made | 3 to 4 system cycles each way; one word a cycle, as before |
+| The RSP's DPC writes | held, with a toggle; applied when the requests' FIFO is empty and the arbiter has the last one, so the data a list is made of is written before the RDP is told where it ends | the wait above |
+| The DPC's registers, as the RSP reads them | one register on the whole `clk_cpu` (the RSP's wait ends with an edge that must find them new) | one cycle |
+| The interrupt, halted, unimplemented | one register on `clk_sys` | one cycle |
+| DMEM, for the RDP's XBUS reads | the memory's port B is on `clk_sys` (`rsp_dpram` `DUALCLK`) | none |
+
+`MONITOR.ID` bit 9 says the core has it; `CTRL.RSPDUTY` ([control.md](control.md)) is [3:0] N and [7:4] D. It is set while the
+RSP is idle (the runtime writes it when a game starts), but a change under a running RSP would only change its speed: nothing in
+the crossing depends on the share. `sim/rsp_xing` tests the crossing alone; the programs `rcpcpu_test` and `dma_coh_test` pass
+with `RSP_OC` on.
+
+At 93.75 MHz the RSP's own logic must meet timing, which `rtl/rsp` does only in its pipelined form.
 
 ### Timing closure
 
@@ -1175,6 +1213,11 @@ set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL'
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
 - `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model.
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
+- `sim/rsp_xing`: `build.sh`, then `obj_xing/tb_xing +dn=5 +dd=6 +pr=50 ...` (the arguments are in `build.sh`): the RSP's clock gate and
+  crossings (`rsp_gate.sv`, `rsp_clk.sv`, `rsp_xing.sv`) between a random RSP on the gated clock and a random SoC on `clk_sys`
+  (back-pressure, late data, resets), the two clocks locked 3:2. It checks that the DMA's requests reach the arbiter in order and
+  intact, that every word comes back once, that a host access is done once and a DPC write once, in order after the DMA
+  requests before it, with the RSP's next read finding it, and that no FIFO overflows.
 
 ### The runtime: `lang/n64rt/test`
 
