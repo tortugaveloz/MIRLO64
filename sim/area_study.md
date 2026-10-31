@@ -943,3 +943,69 @@ Verification (Verilator 5.052; the reference is a bench built from main, `sim/rd
 `TB_CC`, the SoC's memory with `TB_STALL`), 181 in all, each run on the reference and on the new RTL with `TB_CMDT`:
 every summary line and every command's clock byte for byte the same, and every run says `RTL == model`; `rdp_regress.sh`
 itself: 63 runs, 0 failed. The load word count was checked for every texel count and size against the old expression.
+
+## Round 6: the RSP's adders and the FPU's data blocks
+
+The RSP and the FPU, measured as above (`tools/area2/ooc.sh`, the unit alone, the same seeds, a snapshot of main). Each
+change is cycle for cycle the same as before.
+
+### The RSP (8 lanes)
+
+Each trick uses an adder that is idle where the logic it replaces was needed. All apply to 8 lanes; the 4-lane build keeps
+the old logic.
+
+| Change | ALUTs | Fitted ALMs (mean of 3 seeds) |
+|---|---|---|
+| main | 6,045 | 4,729.7 |
+| the lanes' `-t` from the adder that the clips and VABS do not use (a new adder mode: 0 - t, in VABS and in the second cycle of VCH / VCL / VCR) | -107 | 4,645.7 |
+| VSAR reads the accumulator through the multiply adder (adds 0), in place of a three-way choice of registers per lane | -113 | 4,558.7 |
+| VABS's saturation from the adder's `-t` (`s[15] && t[15] && lo[15]`), not a 16-bit compare of `t` | -35 | 4,509.3 |
+
+Total: -255 ALUTs and -220 fitted ALMs; registers, DSP blocks and block RAM are the same. The worst path of the unit is the
+vector registers' write data into the LUT RAM, in both trees; no path got longer.
+
+Not kept: the scalar unit's decode after the pair mux (-36 ALUTs, but the IMEM-to-`e_c` slack falls from +1.9 to +0.6 ns in a
+unit that is among the worst of the whole design); `x_wd` as one 32-bit choice plus a wide one (-3: Quartus does it already);
+sharing the `+4` / `+8` PC adders (0: shared already); the DMA length's decrement as a mux (-5); the dither as one subtract
+per tap (+87); removing the `hold` register (-14 to -40 ALMs for 128 registers).
+
+### The FPU
+
+The saving is in the data blocks: `fpu_n64`'s registers had each a priority chain of sources, which `MUX_RESTRUCTURE OFF`
+(the CPU's setting) keeps as chains. Each is now a one-hot select, an AND-OR and one enable, in a block of its own, and the
+adds share one adder.
+
+| Change | CPU ALUTs | Fitted ALMs (mean of 3 seeds) |
+|---|---|---|
+| main | 7,499 | 4,709.7 |
+| one adder `x + (y ^ inv) + cin` for the add's sum, the negations of `cvt.s.w` / `cvt.s.l` and the rounded integer | 7,385 | 4,716.7 |
+| `wd_e` / `wd_o` without the zero defaults, one choice for the `mtc1` / `lwc1` word | 7,330 | 4,649.7 |
+| sqrt's exponent as `e[7:1] + 68` | 7,306 | |
+| the iteration and the one-bit left shifts through the normaliser's barrel | 7,309 | |
+| `zmag` (nine sources) one-hot | 7,209 | 4,550.7 |
+| `ir` one-hot | 7,162 | 4,533.7 |
+| `res` one-hot (13 flags) | 7,011 | 4,445.7 |
+| `zexp` one-hot; the mul and div exponents from one adder | 6,890 | 4,387.0 |
+| two timing fixes: the carry-in as the low bit of one 33-bit sum; the data blocks' enables not gated by the core's flush | 6,845 | 4,363 |
+
+The CPU alone goes from 4,710 to 4,349 fitted ALMs (mean of 5 seeds, -361, 7.7 %), 7,499 to 6,845 ALUTs, with the same
+DSP blocks and block RAM. The one-hot series misses the CPU's clock by 1.6 to 2.1 ns until the last two changes; with them the
+FPU's endpoints have +0.01 to +1.0 ns, and the unit's worst path is not the FPU's. No FPU instruction changes its cycle count.
+Internal state that is not read before it is written again (`zmag`, `ir`, `zexp`, `res` after a flush) is written in states
+where the old code left it alone.
+
+Not kept: `ax` and `ay` one-hot (+24 ALUTs and +41 ALMs on the CPU although -81 on the FPU alone); a staged-sticky right
+shifter (-5); a nibble-priority leading-zero count (+27); dropping the flush of the double-to-float result (+56); the register
+write data as an AND-OR (-15 ALUTs, +68 ALMs fitted alone); left shifts through the right shifter on the reversed value (+14).
+
+Verification: lockstep against the reference model with the FPU's trace compared between a bench built from main and one from
+the branch, per cycle (retired pc, instruction, register values, FPU writes, FCR31, cycle count): 232 runs on 52 ROMs, half
+with 64-bit operations (`gen_rand_fpu_rom.py w64`), memory latency 0, 3 and 5, FAST on and off; the 33 SoC test programs on
+both, output and cycle counts identical.
+
+### The whole design
+
+With the CPU's 64-bit division and unaligned doubleword accesses (+77 and +122 ALMs on the CPU alone), the RDP of round 5,
+and the two changes above, `tools/area2/fit.sh` gives 17,507 to 17,575 ALMs (95 %) over four seeds, against 18,197 to 18,213 on
+main (98 %), and every one of the 128 timing analyses is at or above zero in each (the worst +0.039 to +0.092 ns). Without
+the FPU's changes the same tree fits at 17,740 to 17,799, and one seed of four misses.
