@@ -353,13 +353,20 @@ always_comb begin
     endcase
 end
 
+// A branch's condition is made from the sources, not from the operands after the choice among them: the compares of the
+// pairs of sources (the choice is then among their results) and the zero of each
+wire eq_mw = m_res == w_res, eq_mr = m_res == rf_qb, eq_rm = rf_qa == m_res, eq_wr = w_res == rf_qb, eq_rw = rf_qa == w_res, eq_rr = rf_qa == rf_qb;
+wire ea_eq_eb = fa_m ? (fb_m ? 1'b1  : fb_w ? eq_mw : eq_mr)
+              : fa_w ? (fb_m ? eq_mw : fb_w ? 1'b1  : eq_wr)
+              :        (fb_m ? eq_rm : fb_w ? eq_rw : eq_rr);
+wire ea_zero  = fa_m ? m_res == 32'd0 : fa_w ? w_res == 32'd0 : rf_qa == 32'd0;
 logic taken;
 always_comb begin
     unique case (e_c.bcond)
-    3'd0: taken = ea == eb;
-    3'd1: taken = ea != eb;
-    3'd2: taken = $signed(ea) <= 0;
-    3'd3: taken = $signed(ea) > 0;
+    3'd0: taken = ea_eq_eb;
+    3'd1: taken = !ea_eq_eb;
+    3'd2: taken = ea[31] || ea_zero;               // blez
+    3'd3: taken = !ea[31] && !ea_zero;             // bgtz
     3'd4: taken = ea[31];
     3'd5: taken = !ea[31];
     default: taken = 1'b0;
@@ -372,12 +379,15 @@ wire        redirect = e_go && ((e_c.br && taken) || e_c.j || e_c.jr);
 wire [11:0] redirect_pc = e_c.jr ? {ea[11:2], 2'b00} : e_c.j ? j_tgt : br_tgt;
 
 // memory
-wire [31:0] addr_v = ea + imm_sx;
+// (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
+wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qa[11:0] + imm_sx[11:0];
+wire [31:0] imm16 = imm_sx + 32'd16;
+wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qa[11:0] + imm16[11:0];
+wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
 assign m_addr = addr_v[11:0];
-wire  [31:0] addr_v16 = ea + (imm_sx + 32'd16);
-assign m_addr16 = addr_v16[11:0];
+assign m_addr16 = fa_m ? adh_m : fa_w ? adh_w : adh_r;
 assign m_n = e_c.size;
 assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
 
