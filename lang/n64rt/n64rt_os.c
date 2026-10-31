@@ -16,6 +16,7 @@
 #include <string.h>
 #include <generated/csr.h>
 #include <generated/soc.h>
+#include <notice.h>
 #include "n64rt.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
@@ -95,8 +96,14 @@ void n64rt_log(const char *fmt, ...)
 void n64rt_fatal(const char *fmt, ...)
 {
     __asm__ volatile("mtc0 %0, $12" :: "r"(0u));
-    va_list ap; va_start(ap, fmt); vprintf(fmt, ap); va_end(ap);
+    static char s_msg[400];
+    va_list ap; va_start(ap, fmt); vsnprintf(s_msg, sizeof s_msg, fmt, ap); va_end(ap);
+    printf("%s", s_msg);
     printf("n64rt: halted (thread %ld)\n", n64rt_cur ? (long)n64rt_cur->id : -1L);
+    /* on the screen too, for a Pocket with no cable on it: the picture is the runtime's own (the VI in hardware off), over the RDRAM's
+     * first 150 KiB -- the game is not going on */
+    monitor_ctl_write(1u);
+    notice(N64RT_RDRAM_SDRAM, s_msg);
     for (;;) ;
 }
 
