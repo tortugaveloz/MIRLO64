@@ -484,12 +484,12 @@ module rdp_top (
     function automatic [10:0] load_words;
         input [12:0] n;
         input [1:0]  sz;
-        reg [15:0] bytes, b7;
+        reg [16:0] m;
         reg [12:0] w;
         begin
-            bytes = (({3'd0, n} << sz) + 16'd1) >> 1;
-            b7 = bytes + 16'd7;
-            w = b7[15:3];
+            // (the 64-bit words of n texels: ceil(ceil(n << sz / 2) / 8) = ceil((n << sz) / 16))
+            m = ({4'd0, n} << sz) + 17'd15;
+            w = m[16:4];
             load_words = (w >= 13'd512) ? 11'd1024 : {w[9:0], 1'b0};
         end
     endfunction
