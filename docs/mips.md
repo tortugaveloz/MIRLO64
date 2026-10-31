@@ -270,7 +270,8 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
 The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
-bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA) (and bit 26 is the FPU's double precision, FPD64, which the shipped CPU does
+not have and the runtime does not ask for); the runtime checks at start-up that all five are set and, if one
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
@@ -289,6 +290,20 @@ saturate. There are no FPU exceptions and no cause or flag bits in FCR31. The mo
 move a 64-bit register through a pair; `cvt.s.l` and `cvt.d.l` convert the pair's 64-bit integer exactly (a word's by
 `cvt.s.w`'s path, another shifted a bit a cycle); the conversions to `.l` are those to `.w`, the word sign-extended into
 the pair (beyond a word's range a value saturates as a word's).
+
+**FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off by default; with `FAST`; COP0 register 7's bit 26):
+`add.d`, `sub.d`, `mul.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
+are the single-precision path's: an input below the normals is a zero of its sign, arithmetic rounds to nearest even with an
+unbounded exponent (whatever FCR31's rounding mode is) and then a result below the normals is a zero and one above them
+infinity, a NaN result is the default one (`0x7FF7FFFF_FFFFFFFF`, the single's `0x7FBFFFFF` in a double's fields), no
+exceptions and no cause or flag bits; a compare is exact on the flushed values. `div.d`, `sqrt.d` and every conversion
+(`cvt.s.d`, `cvt.d.w`, `cvt.d.l`, the round / trunc / ceil / floor and `cvt` to `.w` and `.l`) stay on the datapath above, a double
+taken to a float and back. The unit is a few small pieces used over and over: one 57-bit adder, a shifter on its accumulator
+(by 8 or 1 bits, right with the shifted-out bits jammed into a sticky bit, or left), and one 26 x 26 multiplier (a DSP block)
+for the product in four pieces. The cycles the instruction is in M: `add.d` and `sub.d` 8 + a step per 8 bits (and one per bit
+of the remainder) of the exponents' difference + the same for the cancellation of a difference (a sum: none), `mul.d` 13,
+`abs.d` and `neg.d` 3, a compare 3 (6 when the exponents are equal); a special operand is the result at once (3). The VR4300's
+are 3 (add, sub) and 8 (mul). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
 
 ### Address translation
 
@@ -1199,10 +1214,16 @@ instruction's address, word and written register (64 bits), on every exception a
 SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
 `ddiv(u)`; the argument `tlb` adds four windows of mapped pages onto the scratch memory, loads and stores through them with
 `ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
+`gen_rand_fpu_rom.py SEED out.z64 N d64` writes double programs for a core with FPD64 (`TB_FPD64=1`; the model does the doubles exactly), and
+`fpd64_rom.sh <out.z64>` builds `lang/mips/test/fpu_d64_test.c` for the same (the failures in `fails`).
 `tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
 set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 
 ### Single blocks
+
+- `sim/fpd64`: `build.sh`, then `obj_dir/Vfpu_d64 [millions of operands per operation] [seed]`: the double unit alone against its
+  model (`sim/n64/fpd64.h`) and the model against the host's IEEE doubles, on a grid of the special values and random operands made to
+  cancel, tie and overflow, with the cycles each operation took.
 
 - `sim/ai`: `build.sh`, then `obj_ai/tb_ai [handler latency us]`: the AI's queue and interrupt, the third buffer
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
