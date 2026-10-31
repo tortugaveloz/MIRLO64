@@ -195,6 +195,24 @@ static int store(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, uint64_t 
     return 0;
 }
 
+/* lwl, lwr, swl, swr, ldl, ldr, sdl, sdr: one aligned access of `size` bytes (the doubleword's two words as ld's), whose TLB fault is the
+ * instruction's own -- a store's for the store forms, TLBS or Mod, not the load's TLBL -- and at the effective address, unaligned */
+static int partial(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, int write, uint64_t *w)
+{
+    int t = n64_xlat_check(n, a & ~(uint32_t)(size - 1), write);
+    if (t && t <= N64_TLB_MISS) { tlb_fault(n, pc, dly, a, t, write); return -1; }
+    return write ? 0 : load(n, pc, dly, a & ~(uint32_t)(size - 1), size, w);
+}
+
+/* sc, scd with the link lost: nothing is stored, but the address is checked and translated as a store's (1: the exception was taken) */
+static int sc_fault(n64_t *n, uint32_t pc, int dly, uint32_t a, int size)
+{
+    if (a & (size - 1)) { n->cpu.cop0[C0_BADVADDR] = a; exception(n, pc, dly, EXC_ADES, 0); return 1; }
+    int t = n64_xlat_check(n, a, 1);
+    if (t && t <= N64_TLB_MISS) { tlb_fault(n, pc, dly, a, t, 1); return 1; }
+    return 0;
+}
+
 /* ---- COP1 (but its branches): shared with the co-simulation's FPU ------ */
 uint64_t n64_fp_count[32][64];   /* COP1 instructions by fmt (rs) and function */
 uint64_t n64_fp_denorm_in, n64_fp_denorm_out, n64_fp_nan_out;
@@ -602,7 +620,7 @@ void n64_cpu_step(n64_t *n)
     case 0x1A: case 0x1B: {                                                        /* ldl, ldr */
         OP64(N64_OP64_MEM);
         uint64_t w;
-        if (load(n, pc, dly, a & ~7u, 8, &w)) break;
+        if (partial(n, pc, dly, a, 8, 0, &w)) break;
         uint32_t k = a & 7;
         if (op == 0x1A) WR(rti, (w << (8 * k)) | (k ? rt & ((1ull << (8 * k)) - 1) : 0));
         else WR(rti, (w >> (8 * (7 - k))) | (k == 7 ? 0 : rt & ~(~0ull >> (8 * (7 - k)))));
@@ -612,7 +630,7 @@ void n64_cpu_step(n64_t *n)
     case 0x21: if (!load(n, pc, dly, a, 2, &v)) WR(rti, (uint64_t)(int64_t)(int16_t)v); break;   /* lh */
     case 0x22: case 0x26: {                                                        /* lwl, lwr */
         uint64_t w64;
-        if (load(n, pc, dly, a & ~3u, 4, &w64)) break;
+        if (partial(n, pc, dly, a, 4, 0, &w64)) break;
         uint32_t w = (uint32_t)w64, k = a & 3, res;
         if (op == 0x22) res = (w << (8 * k)) | (k ? rt32 & ((1u << (8 * k)) - 1) : 0);
         else res = (w >> (8 * (3 - k))) | (k == 3 ? 0 : rt32 & ~(0xFFFFFFFFu >> (8 * (3 - k))));
@@ -627,7 +645,7 @@ void n64_cpu_step(n64_t *n)
     case 0x29: store(n, pc, dly, a, 2, rt & 0xFFFF); break;                        /* sh */
     case 0x2A: case 0x2E: {                                                        /* swl, swr */
         uint64_t w64;
-        if (load(n, pc, dly, a & ~3u, 4, &w64)) break;
+        if (partial(n, pc, dly, a, 4, 1, &w64) || partial(n, pc, dly, a, 4, 0, &w64)) break;
         uint32_t w = (uint32_t)w64, k = a & 3;
         if (op == 0x2A) w = (w & ~(0xFFFFFFFFu >> (8 * k))) | (rt32 >> (8 * k));
         else w = (w & (k == 3 ? 0 : 0xFFFFFFFFu >> (8 * (k + 1)))) | (rt32 << (8 * (3 - k)));
@@ -638,7 +656,7 @@ void n64_cpu_step(n64_t *n)
     case 0x2C: case 0x2D: {                                                        /* sdl, sdr */
         OP64(N64_OP64_MEM);
         uint64_t w;
-        if (load(n, pc, dly, a & ~7u, 8, &w)) break;
+        if (partial(n, pc, dly, a, 8, 1, &w) || partial(n, pc, dly, a, 8, 0, &w)) break;
         uint32_t k = a & 7;
         if (op == 0x2C) w = (w & (k ? ~(~0ull >> (8 * k)) : 0)) | (rt >> (8 * k));
         else w = (w & (k == 7 ? 0 : ~0ull >> (8 * (k + 1)))) | (rt << (8 * (7 - k)));
@@ -646,21 +664,23 @@ void n64_cpu_step(n64_t *n)
         break;
     }
     case 0x2F: break;                                                              /* cache */
-    case 0x30: if (!load(n, pc, dly, a, 4, &v)) { WR(rti, SX(v)); c->ll_bit = 1; } break;   /* ll */
+    case 0x30: if (!load(n, pc, dly, a, 4, &v)) { WR(rti, SX(v)); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;   /* ll */
     case 0x31: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (lwc1: CpU, see COP1) */
         if (!load(n, pc, dly, a, 4, &v)) c->f[rti] = (uint32_t)v; break;              /* lwc1 */
-    case 0x34: if (!load(n, pc, dly, a, 8, &v)) { OP64(N64_OP64_MEM); WR(rti, v); c->ll_bit = 1; } break;  /* lld */
+    case 0x34: if (!load(n, pc, dly, a, 8, &v)) { OP64(N64_OP64_MEM); WR(rti, v); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;  /* lld */
     case 0x35: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (ldc1: CpU, see COP1) */
         if (!load(n, pc, dly, a, 8, &v)) fl_set(c, rti, (int64_t)v); break;          /* ldc1 */
     case 0x37: if (!load(n, pc, dly, a, 8, &v)) { OP64(N64_OP64_MEM); WR(rti, v); } break;  /* ld */
     case 0x38:                                                                     /* sc */
-        if (c->ll_bit) { if (!store(n, pc, dly, a, 4, rt32)) WR(rti, 1); } else WR(rti, 0);
+        if (c->ll_bit) { if (!store(n, pc, dly, a, 4, rt32)) { WR(rti, 1); c->ll_bit = 0; } }      /* (the link ends with the sc) */
+        else if (!sc_fault(n, pc, dly, a, 4)) WR(rti, 0);
         break;
     case 0x39: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (swc1: CpU, see COP1) */
         store(n, pc, dly, a, 4, c->f[rti]); break;                          /* swc1 */
     case 0x3C:                                                                     /* scd */
         OP64(N64_OP64_MEM);
-        if (c->ll_bit) { if (!store(n, pc, dly, a, 8, rt)) WR(rti, 1); } else WR(rti, 0);
+        if (c->ll_bit) { if (!store(n, pc, dly, a, 8, rt)) { WR(rti, 1); c->ll_bit = 0; } }
+        else if (!sc_fault(n, pc, dly, a, 8)) WR(rti, 0);
         break;
     case 0x3D: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (sdc1: CpU, see COP1) */
         store(n, pc, dly, a, 8, (uint64_t)fl_get(c, rti)); break;           /* sdc1 */

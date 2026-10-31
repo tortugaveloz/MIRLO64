@@ -386,7 +386,10 @@ void n64rt_run(const n64rt_game_t *g)
     {
         u32 c23, done = 0;
         __asm__ volatile("mfc0 %0, $23" : "=r"(c23));
-        if ((c23 & ~8u) == 0x54420001u) {
+        if ((c23 >> 8) == 0x544C42u && (c23 & 2u)) {
+            /* the CPU has the VR4300's own TLB (mips_core TLB_EN): the game's TLB instructions and exceptions are the CPU's */
+            printf("n64rt: the game's own libultra, nothing of it replaced: the CPU has the VR4300's TLB\n");
+        } else if ((c23 & ~8u) == 0x54420001u) {
             printf("n64rt: the game's own libultra, nothing of it replaced: its TLB instructions are the monitor's\n");
         } else {
             for (u32 i = 0; i < g->npatches; i++) {

@@ -348,6 +348,23 @@ static void cpu_trace_step()
 {
     long &from = ct_from, &count = ct_count, &n = ct_n;
     if (from < 0) { const char *e = getenv("CPUTRACE"); from = atol(e); count = strchr(e, ',') ? atol(strchr(e, ',') + 1) : 1000; }
+    // CPUTRACE_AT=<pc>[,<before>]: the <before> (300) instructions and exceptions before the first retire at <pc>, and the first `count` from it
+    static const char *at_e = getenv("CPUTRACE_AT");
+    if (at_e) {
+        static const uint32_t at_pc = (uint32_t)strtoul(at_e, 0, 16); static const int nb = strchr(at_e, ',') ? atoi(strchr(at_e, ',') + 1) : 300;
+        static struct { char k; uint32_t pc, insn; unsigned rd, wr, code; uint32_t val; } ring[4096]; static int rn; static bool hit;
+        if (!hit) {
+            if (t->tr_exc) { auto &r = ring[rn++ & 4095]; r.k = 'x'; r.pc = t->tr_exc_pc; r.code = t->tr_exc_code; }
+            if (t->tr_retire) {
+                auto &r = ring[rn++ & 4095]; r.k = 'i'; r.pc = t->tr_pc; r.insn = t->tr_insn; r.wr = t->tr_wr; r.rd = t->tr_rd; r.val = (uint32_t)t->tr_val;
+                if (t->tr_pc == at_pc) {
+                    hit = true; from = n; count = 100;
+                    for (int i = rn - nb; i < rn; i++) { if (i < 0) continue; auto &q = ring[i & 4095];
+                        if (q.k == 'x') printf("[cpu      exception %u at %08x]\n", q.code, q.pc); else if (q.wr) printf("[cpu -%d %08x: %08x  r%u = %08x]\n", rn - i, q.pc, q.insn, q.rd, q.val); else printf("[cpu -%d %08x: %08x]\n", rn - i, q.pc, q.insn); }
+                }
+            }
+        }
+    }
     if (t->tr_exc && n >= from && n < from + count) printf("[cpu      exception %u at %08x]\n", t->tr_exc_code, t->tr_exc_pc);
     if (!t->tr_retire) return;
     if (n >= from && n < from + count) {
@@ -362,17 +379,21 @@ static void cpu_trace_step()
 static void exc_stat_step()
 {
     static long hist[32], tot, f_n; static bool vb_was; const long per = o_exc_per;
-    static long retired, ex_total;
+    static long retired, ex_total, mapped_pc;
     if (t->tr_exc) { hist[t->tr_exc_code & 31]++; tot++; ex_total++; }
-    if (t->tr_retire) retired++;
+    if (t->tr_retire) {
+        retired++;
+        const uint32_t pc = t->tr_pc, hi = pc >> 28;      // (an instruction of a mapped page: below 0x2000_0000, 0x5000_0000 - 0x7FFF_FFFF, 0xC000_0000 - 0xEFFF_FFFF)
+        if (pc < 0x20000000u || (hi >= 5 && hi <= 7) || (hi >= 12 && hi <= 14)) mapped_pc++;
+    }
     if (t->vblank && !vb_was && ++f_n % per == 0) {
         printf("[excstat fields %ld..%ld: %ld exceptions (%.1f a field)", f_n - per + 1, f_n, tot, (double)tot / per);
         static const char *nm[32] = { "int", "mod", "tlbl", "tlbs", "adel", "ades", "ibe", "dbe", "sys", "bp", "ri", "cpu", "ov", "tr", "", "fpe" };
         for (int i = 0; i < 32; i++) if (hist[i]) printf(" %s %ld", i < 16 && nm[i][0] ? nm[i] : "?", hist[i]);
-        printf("; %ld instructions retired]\n", retired);
+        printf("; %ld instructions retired, %ld of them from mapped pages]\n", retired, mapped_pc);
         fflush(stdout);
         for (int i = 0; i < 32; i++) hist[i] = 0;
-        tot = retired = 0;
+        tot = retired = mapped_pc = 0;
     }
     vb_was = t->vblank;
 }

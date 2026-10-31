@@ -38,6 +38,19 @@ static int phys(n64_t *n, uint32_t va, uint32_t *pa, int write)
     return N64_TLB_MISS;
 }
 
+/* a TLB fault the access to va would take (0 when it would not: a KSEG0 / KSEG1 address, or a page that translates) */
+int n64_xlat_check(n64_t *n, uint32_t va, int write)
+{
+    uint32_t pa;
+    return phys(n, va, &pa, write);
+}
+/* the physical address of va (0 if it takes a TLB fault) */
+uint32_t n64_xlat_pa(n64_t *n, uint32_t va)
+{
+    uint32_t pa = 0;
+    return phys(n, va, &pa, 0) ? 0 : pa;
+}
+
 uint8_t *n64_phys(n64_t *n, uint32_t va, uint32_t len)
 {
     uint32_t pa = va & 0x1FFFFFFFu;

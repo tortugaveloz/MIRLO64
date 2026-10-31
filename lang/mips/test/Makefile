@@ -1,8 +1,11 @@
 # Tests for MIRLO's MIPS SoC, run in sim/mips_soc (tb_soc build/<test>.bin).
-TESTS := cpu_test dcache16_test snoop_probe mapped_cache_test int64_test ualn_test cvtl_test ddiv_test ddiv64_test fpu64_test libc_test n64win_test tlbram_test rsp_replay vwin_test hires_test mon_test mi_test vi_test ai_test rcpcpu_test si_test viaa_test vi32_test pi2_test coverage_ps_test rom_tail_dma_test paper_flash_test paper_verify_test tlbmon_test tlbgame_test ram8_test tlbpg_test padtest dma_coh_test
+TESTS := cpu_test dcache16_test snoop_probe mapped_cache_test int64_test ualn_test cvtl_test ddiv_test ddiv64_test fpu64_test libc_test n64win_test tlbram_test rsp_replay vwin_test hires_test mon_test mi_test vi_test ai_test rcpcpu_test si_test viaa_test vi32_test pi2_test coverage_ps_test rom_tail_dma_test paper_flash_test paper_verify_test tlbmon_test tlbgame_test ram8_test tlbpg_test tlbdev_test tlbcost_test tlbint_real_test padtest dma_coh_test
+# (the tests of the translation tables' CPU, each with its checks of the VR4300's TLB in <name>_real.c, the same program: it runs
+# the one for the CPU it finds, COP0 23)
+REAL := tlbram_test tlbmon_test tlbgame_test tlbpg_test
 all: $(TESTS)
 $(TESTS):
-	$(MAKE) -f test.mk PROGRAM=$@ OBJECTS=build/$@.o
+	$(MAKE) -f test.mk PROGRAM=$@ OBJECTS='build/$@.o $(if $(filter $@,$(REAL)),build/$@_real.o)'
 clean:
 	rm -rf build
 .PHONY: all clean $(TESTS)

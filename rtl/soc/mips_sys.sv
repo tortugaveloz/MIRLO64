@@ -1,5 +1,5 @@
 // Mirlo's game CPU on the MIPS SoC: mips_core (rtl/mips/mips_core.sv) with
-// MIRLO's memory map -- no TLB, big-endian (the N64's order), every address
+// MIRLO's memory map -- the N64 game's TLB, big-endian (the N64's order), every address
 // physical but the N64 window:
 //   0x4000_0000-0x43FF_FFFF  SDRAM, cached (the s_* port: lines and words)
 //   0x1FC0_0000-0x1FC0_0FFF  the boot ROM (KSEG1 0xBFC0_0000: the reset
@@ -59,19 +59,20 @@ logic [31:0] c_addr, c_wdata, c_rdata, dbg_status;
 logic [3:0]  c_strb;
 logic        hwx_on;
 
-// The TLB. An N64 game's mapped addresses are those below 0x2000_0000 (Super
-// Mario 64's title-screen head at 0x0400_0000); a miss is the N64's
-// exception, at Mirlo's vector. mips_core's translation table is in block
-// RAM, which the runtime fills from what the game maps (~75 ALMs, 4 M10K).
+// The TLB: the VR4300's, 32 entries in block RAM (mips_core's TLB_EN: tlbwi, tlbwr, tlbr, tlbp and the TLB exceptions are the CPU's own,
+// the game's). An N64 game's mapped addresses are those below 0x2000_0000 (a title screen's data at 0x0400_0000) and, with the
+// monitor, 0x5000_0000 - 0x7FFF_FFFF and 0xC000_0000 - 0xEFFF_FFFF; a miss is the game's own exception. A page that maps a device is the
+// monitor's. MIRLO_TLB_TABLES: the translation tables of mips_core's TLB_RAM instead (block RAM that the runtime fills from what the game
+// maps, ~75 ALMs and 4 M10K; n64rt.sys runs on either CPU: COP0 register 23).
+`ifdef MIRLO_TLB_TABLES
 localparam bit CPU_TLB = 1'b0;
 localparam bit CPU_TLB_RAM = 1'b1;
-// mips_core's FPG: two page registers on the fetch side, so that code run from a mapped page whose table entry is
-// cacheable (COP0 23's bit 5) goes through the I-cache. MIRLO_NO_FPG: a mapped fetch is the slow path (A/B in the sim)
-`ifdef MIRLO_NO_FPG
-localparam bit CPU_FPG = 1'b0;
 `else
-localparam bit CPU_FPG = 1'b1;
+localparam bit CPU_TLB = 1'b1;
+localparam bit CPU_TLB_RAM = 1'b0;
 `endif
+// (mips_core's page registers on the fetch side, which let code run from a mapped page whose entry is cacheable through the I-cache,
+// are part of either TLB.)
 // The VR4300's 64-bit integers (an N64 game's own code has them: its long
 // long helpers, a -mips3 compiler's register saves and block moves), by
 // mips_core's levels. What the CPU leaves out is a Reserved Instruction, for
@@ -116,7 +117,7 @@ localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
 `ifndef MIRLO_CPU_DC_LOG2
 `define MIRLO_CPU_DC_LOG2 9
 `endif
-mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JRP(0), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FAST(CPU_FAST), .FPG(CPU_FPG),
+mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JRP(0), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FAST(CPU_FAST),
             .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
     .clk, .rst, .reset_pc(32'hBFC0_0000),
     .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_wrun(s_wrun),
