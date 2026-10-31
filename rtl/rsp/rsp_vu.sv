@@ -204,6 +204,7 @@ wire fn_known = cd.known;
 // their bytes -- a pair's computation and store each have theirs. A write is of whole lanes or, a load's and MTC2's,
 // of bytes: by an enable a byte, so nothing is read to keep the rest of a lane
 logic [4:0]  wr_reg;
+logic        wr_en;                   // a write this cycle (wr_be non-zero), made from the controls
 logic [15:0] wr_be;                   // the register's bytes written (bit m: byte m -- lane m / 2, its upper half first)
 logic [15:0] wr_d [8];
 wire  [4:0]  rdd_n;                   // (below: D's address next cycle)
@@ -215,9 +216,9 @@ always_comb
         wr_w[16 * g +: 16] = wr_d[g]; wr_e[2 * g + 1] = wr_be[2 * g]; wr_e[2 * g] = wr_be[2 * g + 1];
         qa[g] = qa_w[16 * g +: 16]; qc[g] = qc_w[16 * g +: 16]; qd[g] = qd_w[16 * g +: 16];
     end
-rsp_lutram ma (.clk, .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(ra_n), .q(qa_w));
-rsp_lutram mc (.clk, .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(rb_n), .q(qc_w));
-rsp_lutram md (.clk, .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(rdd_n), .q(qd_w));
+rsp_lutram ma (.clk, .en(wr_en), .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(ra_n), .q(qa_w));
+rsp_lutram mc (.clk, .en(wr_en), .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(rb_n), .q(qc_w));
+rsp_lutram md (.clk, .en(wr_en), .we(wr_e), .wa(wr_reg), .wd(wr_w), .ra_n(rdd_n), .q(qd_w));
 `ifdef VERILATOR
 // (simulation) the registers where the testbench can read them
 logic [15:0] shadow [0:31][0:7] /* verilator public_flat_rd */;
@@ -556,10 +557,10 @@ always_comb begin
 end
 wire  [31:0] r_norm = r_dat << r_clz[4:0];
 wire  [8:0]  r_idx  = r_norm[30:22];
+wire  [4:0]  r_dn   = 5'd31 - r_clz[4:0];
 assign rom_addr = r_sqrt ? {1'b1, r_idx[8:1], r_clz[0]} : {1'b0, r_idx};
 wire  [31:0] r_val  = {1'b0, 1'b1, rom_q, 14'd0};                          // (0x10000 | rom) << 14
-wire  [4:0]  r_d    = 5'd31 - r_sh;
-wire  [4:0]  r_rsh  = r_sqrt ? {1'b0, r_d[4:1]} : r_d;
+wire  [4:0]  r_rsh  = r_sh;                                                 // (the shift back, made with the normalisation)
 wire  [31:0] r_res  = r_zero ? 32'h7FFF_FFFF : r_min ? 32'hFFFF_0000 : (r_val >> r_rsh) ^ {32{r_mask}};
 
 // ------------------------------------------------------- loads and stores --
@@ -575,21 +576,23 @@ wire  [31:0] r_res  = r_zero ? 32'h7FFF_FFFF : r_min ? 32'hFFFF_0000 : (r_val >>
 //                   runs them often)
 typedef enum logic { V_IDLE, V_TV } vst_t;
 vst_t st;
-wire  [11:0] off  = {{5{li[6]}}, li[6:0]};
+function automatic logic [11:0] offs(input logic [31:0] i);      // the offset scaled by the access's size
+    logic [11:0] of;
+    of = {{5{i[6]}}, i[6:0]};
+    unique case (i[15:11])
+    5'd0:             return of;
+    5'd1:             return {of[10:0], 1'b0};
+    5'd2:             return {of[9:0], 2'b0};
+    5'd3, 5'd6, 5'd7: return {of[8:0], 3'b0};
+    default:          return {of[7:0], 4'b0};
+    endcase
+endfunction
+logic [11:0] off_sh, off_sh16;              // ... and 16 more: registered with the instruction, so that the address and the next line's are two adders after rs
+always_ff @(posedge clk) if (adv) begin off_sh <= offs(lins_n); off_sh16 <= offs(lins_n) + 12'd16; end
 // (the offset scaled first, so that the address is one adder after rs: the
 // store's rotation hangs off its low bits)
-logic [11:0] off_sh;
-always_comb begin
-    unique case (lsop)
-    5'd0:             off_sh = off;
-    5'd1:             off_sh = {off[10:0], 1'b0};
-    5'd2:             off_sh = {off[9:0], 2'b0};
-    5'd3, 5'd6, 5'd7: off_sh = {off[8:0], 3'b0};
-    default:          off_sh = {off[7:0], 4'b0};
-    endcase
-end
 wire  [11:0] ls_addr = la[11:0] + off_sh;
-wire  [11:0] ls_addr16 = la[11:0] + (off_sh + 12'd16);
+wire  [11:0] ls_addr16 = la[11:0] + off_sh16;
 wire  ls_packed = ld.packed_;
 wire  ls_tv     = ld.tv;                                           // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
@@ -816,6 +819,7 @@ always_comb begin
     res = 32'd0;
     // the register write: EX2's, a load's bytes, MTC2
     wr_reg = y_vdn; wr_be = 16'd0;
+    wr_en = wp || y_wr || in_v;
     for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
     if (!wp) for (int l = 0; l < LANES; l++) wr_d[l] = y_mul ? mres[l] : ex2[l].res;
     if (wp) begin wr_reg = w_vdn; wr_be = w_be; end                // (the put-off write)
@@ -843,7 +847,7 @@ always_ff @(posedge clk) begin
     end else begin
         lw_v <= 1'b0;
         // the reciprocal: absolute value and normalisation, a cycle each, from the input taken at SEL
-        r_dat <= r_data; r_sh <= r_clz[4:0]; r_mask <= rin[31];
+        r_dat <= r_data; r_sh <= r_sqrt ? {1'b0, r_dn[4:1]} : r_dn; r_mask <= rin[31];
         r_zero <= rin == 32'd0; r_min <= rin == 32'hFFFF_8000;
         if (valid && vec && !fn_known) unimpl <= 1'b1;
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;

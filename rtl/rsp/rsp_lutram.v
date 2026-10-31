@@ -7,6 +7,7 @@
 `default_nettype none
 module rsp_lutram (
     input  wire         clk,
+    input  wire         en,                 // some byte is written (the OR of we, made by the caller)
     input  wire [15:0]  we,
     input  wire [4:0]   wa,
     input  wire [127:0] wd,
@@ -48,7 +49,7 @@ module rsp_lutram (
     ) ram (
         .inclock        (clk),
         .outclock       (clk),
-        .wren           (|we),
+        .wren           (en),
         .byteena        (we),
         .data           (wd),
         .wraddress      (wa),
