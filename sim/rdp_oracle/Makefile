@@ -9,7 +9,8 @@ M := $(abspath $(MODEL_DIR))
 ORC := $(abspath $(ORACLE_DIR))/src/core
 B := build
 # the oracle's source: its own warnings are not ours
-ORC_CFLAGS := -O2 -g -w -I$(ORC)
+# (-Drdp_init: the model names a function rdp_init too)
+ORC_CFLAGS := -O2 -g -w -Drdp_init=orc_rdp_init -I$(ORC)
 
 all: $(B)/rdpo $(B)/rdpo_exact $(B)/rdpgen
 
