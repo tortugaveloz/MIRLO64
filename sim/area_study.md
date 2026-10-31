@@ -879,3 +879,67 @@ Against a bench built from unchanged main (`e17dce2`, Verilator 5.052):
   both). A 3D platformer for 300M cycles (`FB_N64=1 VGA=1 EXCSTAT=1 -e 60`):
   the ten frame dumps and the log (288 frames, the CPU at 80246ddc) byte for
   byte the same, with changes 1 and 2 and again with all three.
+
+## Round 5: the RDP's route-through LUTs and adders
+
+The RDP alone (`ooc.sh rdp`, every pin virtual, `FIT="1 2 3"`, from a copy of main `5fa9918`): 7,608 ALUTs, 6,400
+registers, 48 RAM blocks, 39 DSP blocks, fitted 5,250 / 5,252 / 5,259 ALMs. Each candidate below was measured on its own, on
+the tree before it, with the same seeds; a unit's fit moves by up to 15 ALMs from one seed or one unrelated edit to the next
+(a candidate that measured a saving on one tree and a loss on the next is reverted), so only the differences of several
+ALMs in both seeds are counted.
+
+**Where the fitted ALMs go that the synthesis count does not show.** The fit report counts "route-through" ALUTs (1,468 in
+the unit): a LUT that carries a signal to a register. The post-fit netlist (`quartus_cdb --vqm` after the fit; a script
+that lists the single-input LUTs that feed a flip-flop by register name) says which registers have them, and it is the
+registers with **two sources that are not in their own ALM**. `cur[]` took its first value from the setup adder
+(`e + product`) and its pixel step from its own adder (`cur + adx`): the fitter put the register in one adder's ALM and
+a route-through LUT behind the other, one for each of 256 bits (170 of them), and a mux. The same for `ax_*`, `exh`,
+`row_off`, `vval` / `vgx` / `vde`, S and T. Removing the second source is worth more than its mux in the synthesis count:
+the first such change added 8 ALUTs in synthesis and saved 61 ALMs in the fit.
+
+Kept (each cycle for cycle; ALUTs by `quartus_map`, ALMs by the fit, seeds 1 / 2 / 3 where run):
+
+| Change | ALUTs | Fitted ALMs |
+|---|---|---|
+| `rdp_mem`: one adder for the write command's word address (the colour span's 8-bit and other words, the depth span's, the hidden group's) | -91 | |
+| `rdp_top`: a load's 64-bit word count as ceil((n << size) / 16), one adder (checked for every n and size) | -28 | |
+| `rdp_pix`: the decal tolerance's lower bound from the subtraction's borrow, not a second compare | -30 | |
+| `rdp_mem`: a load's read count in one adder (two carries as one addend), TMEM's word step in one adder | -32 | |
+| `rdp_mem`: the write engine's end-of-word check shares the counter's increment | -9 | |
+| these five | 7,608 to 7,416 | 5,250 / 5,252 to 5,139 / 5,133 |
+| `rdp_top`: a triangle's first attribute values through the pixel step's adder (`0 + the value` in place of `cur + adx`) | +8 | -61 / -50 |
+| `rdp_top`: the AA edges `ax_h/m/l` and `exh` the same way | +4 | -36 (seed 1) |
+| `rdp_top`: `row_off` kept as the pixel count (`row_h`), doubled where used; one adder, its first value `0 + product` | -11 | -22 (seed 1) |
+| `rdp_pix`: S and T come in as the 16 bits the pipeline takes (the choice of the half is made in `rdp_top`; 64 registers fewer) | -7 | -35 (seed 1) |
+| `rdp_top`: a texrect's first S and T through the same adder as a triangle's attributes | -48 | -27 / -38 |
+| `rdp_top`: `vval`, `vgx`, `vde` loaded from one choice of halves | +23 | -48 (seed 1) |
+| all | 7,377 | 4,881 / 4,892 / 4,900 |
+
+So the RDP alone is 231 ALUTs, 60 registers and 359 to 369 fitted ALMs (mean -363, 7 %) smaller, with the same RAM blocks and
+DSP blocks.
+
+Timing, from the same fits (`quartus_sta`, every clock at 16 ns, the slow corners): worst setup slack of main +0.78 to +1.27 ns
+(seeds 2 and 3), of this branch +1.27 ns (seed 3, 0 C) and +1.64 ns (85 C); the worst path is the same one in both, the
+texture decode into `tex9` / `texA9` (rdp.md's "timing option kept in reserve"). The paths that the changes make (`mul_p`
+and `e` through two adders into `cur`) have 2.8 ns of slack in the slow 0 C corner, the other new ones 4.8 ns or more.
+
+Not kept (measured):
+
+* The pure delays of the pixel pipe (the blender's P / M and the copy mode's texel, two clocks, 90 bits) in a block RAM instead
+  of registers: 152 registers fewer in the fit and 28 / 41 fitted ALMs more. A register that only copies another costs no
+  ALM that the fitter does not fill with another LUT's.
+* The rectangle's corners as incrementers with a carry in (the `+ 3 >> 2` is that already): +1 ALUT. The three-way choice
+  of `aa_x` by hand: +4. One mux for the write FIFO's colour word (the fill is the same in the 8-bit case): +7.
+* The load address and the frame's row address in one adder (`crow`): +12 ALUTs, -5 ALMs (seed 1). The read engine's load
+  address from the span's adder (no `w_next`) with the load's counters through the adder as the others: +18 ALUTs, -8 ALMs (seed 1).
+* The triangle command's clear of `adx` moved into the attributes' load (an attribute that is off is written 0 in S_VSET):
+  -16 / -29 ALMs on the tree before the changes above, +14 / +11 on the last one (-20 ALUTs): noise, reverted.
+* `rdp_mem`'s `rf` and `wf` bypasses (119 and 45 registers, a 114-bit and a 36-bit select, ~170 ALUTs with the write data's
+  choice) are left: the head is read the clock after the entry that makes the FIFO non-empty is written, which a block
+  RAM does not give (round 2).
+
+Verification (Verilator 5.052; the reference is a bench built from main, `sim/rdp/build_rtl.sh` with `RDP_DIR` the copy of
+`rtl/rdp`): the 62 random runs of `rdp_regress.sh` and 119 more (seeds 100 to 290: plain, `TB_LOD`, `TB_C8`, `TB_C32`,
+`TB_CC`, the SoC's memory with `TB_STALL`), 181 in all, each run on the reference and on the new RTL with `TB_CMDT`:
+every summary line and every command's clock byte for byte the same, and every run says `RTL == model`; `rdp_regress.sh`
+itself: 63 runs, 0 failed. The load word count was checked for every texel count and size against the old expression.
