@@ -698,6 +698,30 @@ module rdp_top (
         else if (st == S_PIX && row_wq && pix_go) begin aa_pl <= aa_pl | aa_eql; aa_pr <= aa_pr | aa_eqr; end
     end
 
+    // cur: the span setup's first values (a triangle's e + the product, one attribute a clock; a texrect's S and T) and the
+    // pixels' step. A triangle's load goes through the step's adder, as 0 + the value in place of cur + adx: each attribute
+    // has one adder and nothing behind it (the fitter put a second source of a register's behind its own adder in a
+    // route-through LUT a bit: 170 of them, and a mux).
+    wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp;
+    wire [31:0] cur_ldv = e_q + mul_p[47:16];
+    wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
+    wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
+    wire        rs_on = st == S_SETUP && !kind_tri;
+    wire [7:0]  cur_ld;
+    genvar cg;
+    generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
+        assign cur_ld[cg] = st == S_SETUP && kind_tri && mi == cg + 2;     // (e[ea] with ea = mi - 2)
+    end endgenerate
+    integer ci;
+    always @(posedge clk) begin
+        for (ci = 0; ci < 8; ci = ci + 1) begin
+            if (cur_ld[ci] || cur_stp)
+                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
+        end
+        if (rs_on && mi == 5'd2) cur[4] <= (rs_sv <<< rs_ds) + mul_p[33:2];
+        if (rs_on && mi == 5'd3) cur[5] <= (rs_tv <<< 5) + mul_p[33:2];
+    end
+
     integer i;
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
@@ -1048,8 +1072,6 @@ module rdp_top (
             // the S/T accumulators (texrects)
             S_SETUP: begin
                 if (kind_tri) begin
-                    if (mi >= 5'd2 && mi < 5'd10)
-                        cur[mi - 5'd2] <= e_q + mul_p[47:16];                // ea = mi - 2
                     mi <= mi + 5'd1;
                     if (mi == 5'd9) begin
                         st <= S_PIX;
@@ -1058,13 +1080,7 @@ module rdp_top (
                 end else begin
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
-                        reg [2:0] ds;
-                        reg signed [31:0] sv, tv;
-                        ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
-                        sv = {{16{t_xl[31]}}, t_xl[31:16]};   tv = {{16{t_xl[15]}}, t_xl[15:0]};
-                        if (mi == 5'd2) cur[4] <= (sv <<< ds) + mul_p[33:2];
-                        if (mi == 5'd3) cur[5] <= (tv <<< 5) + mul_p[33:2];
-                        shS <= ds;
+                        shS <= rs_ds;
                         adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
                         adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
@@ -1097,7 +1113,6 @@ module rdp_top (
                     // follows it there: no step then; walking left, the span's first pixel is the next place)
                     pix_valid <= 1'b1; pix_ghost <= 1'b1; pix_mask <= 8'h00;
                     if (pix_stp) begin
-                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
                     end
                     pix_stp <= pix_g0; pix_g0 <= 1'b0; pix_fol <= 1'b0;
                     if (pix_end) begin
@@ -1109,9 +1124,6 @@ module rdp_top (
                     pix_valid <= 1'b1; pix_ghost <= 1'b0;
                     pix_x <= xs + px_cnt;
                     pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
-                    if (pix_stp) begin
-                        for (i = 0; i < 8; i = i + 1) cur[i] <= cur[i] + adx[i];
-                    end
                     pix_stp <= 1'b1;
                     pix_fol <= lod_on && lod_lft;
                     px_cnt <= px_cnt + 10'd1;
