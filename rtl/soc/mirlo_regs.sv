@@ -7,7 +7,7 @@
 //                 STATUS is set by a command's completion, cleared by its read
 //   APF_INPUT     the controllers
 //   APF_INTERACT  interact.json: two words the Pocket writes (whole, or a
-//                 field at a time at addresses 2-15); INTERACT_CHANGEDn is set
+//                 field at a time at addresses 2-16); INTERACT_CHANGEDn is set
 //                 by a whole-word write and cleared by the CPU reading INTERACTn
 //   APF_VIDEO     vblank: its level, a flag set at its start (cleared by the
 //                 read) and a frame counter
@@ -27,7 +27,9 @@
 // its unknown-opcode count, the scan-out's unused LENGTH -- and reads as 0.
 `default_nettype none
 
-module mirlo_regs (
+module mirlo_regs #(
+    parameter bit RSP_OC = 1'b0                 // the RSP on the game CPU's clock (rsp_clk.sv): CTRL.RSPDUTY is there (MONITOR.ID bit 9)
+) (
     input  wire         clk,
     input  wire         rst,
     input  wire         r_req,
@@ -59,7 +61,7 @@ module mirlo_regs (
     // APF input
     input  wire  [3:0][31:0] cont_key, cont_joy, cont_trig,
     // APF interact
-    input  wire  [3:0]  ia_address,
+    input  wire  [4:0]  ia_address,
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
@@ -83,6 +85,7 @@ module mirlo_regs (
     output logic        fb_dma_enable, fb_vtg_enable, fb_mode,
     // CTRL
     input  wire  [15:0] bus_errors,
+    output logic [7:0]  rsp_duty,           // CTRL.RSPDUTY: N in [3:0], D in [7:4] (RSP_OC)
     // the mailbox
     output logic        geom_irq, game_irq,
     output logic        geom_run,           // MAILBOX.GEOM_RUN: the geom core out of reset
@@ -232,41 +235,45 @@ always_ff @(posedge clk) begin
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr) case (ia_address)
-            4'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
-            4'd1:  begin ia1 <= ia_data; ia_ch1 <= 1; end
-            4'd2:  ia0[4:0]   <= ia_data[4:0];
-            4'd3:  ia0[9:5]   <= ia_data[4:0];
-            4'd4:  ia0[14:10] <= ia_data[4:0];
-            4'd5:  ia0[19:15] <= ia_data[4:0];
-            4'd6:  ia0[24:20] <= ia_data[4:0];
-            4'd7:  ia0[29:25] <= ia_data[4:0];
-            4'd8:  ia1[4:0]   <= ia_data[4:0];
-            4'd9:  ia1[9:5]   <= ia_data[4:0];
-            4'd10: ia1[14:10] <= ia_data[4:0];
-            4'd11: ia1[19:15] <= ia_data[4:0];
-            4'd12: ia1[21:20] <= ia_data[1:0];
-            4'd13: ia1[23:22] <= ia_data[1:0];
-            4'd14: ia1[24]    <= ia_data[0];
-            default: ia1[25]  <= ia_data[0];
+            5'd0:  begin ia0 <= ia_data; ia_ch0 <= 1; end
+            5'd1:  begin ia1 <= ia_data; ia_ch1 <= 1; end
+            5'd2:  ia0[4:0]   <= ia_data[4:0];
+            5'd3:  ia0[9:5]   <= ia_data[4:0];
+            5'd4:  ia0[14:10] <= ia_data[4:0];
+            5'd5:  ia0[19:15] <= ia_data[4:0];
+            5'd6:  ia0[24:20] <= ia_data[4:0];
+            5'd7:  ia0[29:25] <= ia_data[4:0];
+            5'd8:  ia1[4:0]   <= ia_data[4:0];
+            5'd9:  ia1[9:5]   <= ia_data[4:0];
+            5'd10: ia1[14:10] <= ia_data[4:0];
+            5'd11: ia1[19:15] <= ia_data[4:0];
+            5'd12: ia1[21:20] <= ia_data[1:0];
+            5'd13: ia1[23:22] <= ia_data[1:0];
+            5'd14: ia1[24]    <= ia_data[0];
+            5'd15: ia1[25]    <= ia_data[0];
+            5'd16: ia1[26]    <= ia_data[0];
+            default: ;
         endcase
     end
     case (ia_address)
-    4'd0:  ia_q <= ia0;
-    4'd1:  ia_q <= ia1;
-    4'd2:  ia_q <= {27'd0, ia0[4:0]};
-    4'd3:  ia_q <= {27'd0, ia0[9:5]};
-    4'd4:  ia_q <= {27'd0, ia0[14:10]};
-    4'd5:  ia_q <= {27'd0, ia0[19:15]};
-    4'd6:  ia_q <= {27'd0, ia0[24:20]};
-    4'd7:  ia_q <= {27'd0, ia0[29:25]};
-    4'd8:  ia_q <= {27'd0, ia1[4:0]};
-    4'd9:  ia_q <= {27'd0, ia1[9:5]};
-    4'd10: ia_q <= {27'd0, ia1[14:10]};
-    4'd11: ia_q <= {27'd0, ia1[19:15]};
-    4'd12: ia_q <= {30'd0, ia1[21:20]};
-    4'd13: ia_q <= {30'd0, ia1[23:22]};
-    4'd14: ia_q <= {31'd0, ia1[24]};
-    default: ia_q <= {31'd0, ia1[25]};
+    5'd0:  ia_q <= ia0;
+    5'd1:  ia_q <= ia1;
+    5'd2:  ia_q <= {27'd0, ia0[4:0]};
+    5'd3:  ia_q <= {27'd0, ia0[9:5]};
+    5'd4:  ia_q <= {27'd0, ia0[14:10]};
+    5'd5:  ia_q <= {27'd0, ia0[19:15]};
+    5'd6:  ia_q <= {27'd0, ia0[24:20]};
+    5'd7:  ia_q <= {27'd0, ia0[29:25]};
+    5'd8:  ia_q <= {27'd0, ia1[4:0]};
+    5'd9:  ia_q <= {27'd0, ia1[9:5]};
+    5'd10: ia_q <= {27'd0, ia1[14:10]};
+    5'd11: ia_q <= {27'd0, ia1[19:15]};
+    5'd12: ia_q <= {30'd0, ia1[21:20]};
+    5'd13: ia_q <= {30'd0, ia1[23:22]};
+    5'd14: ia_q <= {31'd0, ia1[24]};
+    5'd15: ia_q <= {31'd0, ia1[25]};
+    5'd16: ia_q <= {31'd0, ia1[26]};
+    default: ia_q <= 32'd0;
     endcase
 end
 
@@ -303,6 +310,14 @@ always_ff @(posedge clk)
     endcase
 
 // ---- CTRL (SCRATCH is only read back: it is the shadow's word alone, below)
+// RSPDUTY (RSP_OC): the RSP gets N of every D edges of the game CPU's clock (rsp_clk.sv); reset: 5 of 6, the calibration
+generate if (RSP_OC) begin : g_duty
+    always_ff @(posedge clk)
+        if (rst) rsp_duty <= 8'h65;
+        else if (wr && a == R_CTRL_RSPDUTY) rsp_duty <= r_wdata[7:0];
+end else begin : g_noduty
+    assign rsp_duty = 8'h00;
+end endgenerate
 
 // ---- the mailbox
 wire [31:0] game_msg = 32'd0, geom_msg = 32'd0;
@@ -478,6 +493,7 @@ always_comb begin
     endcase
     case (a[5:2])                                               // CTRL
     R_CTRL_BUS_ERRORS[5:2]:                rb[5] = {16'd0, bus_errors};
+    R_CTRL_RSPDUTY[5:2]:                   rb[5] = {24'd0, rsp_duty};
     default: ;
     endcase
     case (a[5:2])                                               // MAILBOX (left out with the RSP: 0)
@@ -517,7 +533,7 @@ always_comb begin
     default: ;
     endcase
     case (a[5:2])                                               // MONITOR
-    R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
+    R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8 | 32'(RSP_OC) << 9;
     R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};
     R_MONITOR_PEND[5:2]:                   rb[13] = {26'd0, mon_pend};
     R_MONITOR_LEVEL[5:2]:                  rb[13] = {31'd0, mon_sp};

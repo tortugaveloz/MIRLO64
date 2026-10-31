@@ -414,7 +414,12 @@ The whole RSP is on one clock with a synchronous reset. In the SoC that clock
 is `clk_sys`, the system clock shared with the SDRAM, the RDP and the scan-out:
 62.5 MHz (`SYS_HZ` in `target/pocket/core_top.sv`; [mips.md](mips.md) has the
 clocks). The game CPU runs on its own clock; its register accesses reach the
-RSP through the CPU's device port, already on `clk_sys`.
+RSP through the CPU's device port, already on `clk_sys`. A SoC built with
+`RSP_OC` puts the RSP on the CPU's clock, 93.75 MHz, with the edges the
+setting leaves out removed by a clock gate; the host port, the DMA and the DPC's
+strobes and registers then cross to `clk_sys` in `rtl/soc/rsp_xing.sv`, and DMEM's
+port b (the RDP's XBUS reads) stays on `clk_sys` (`DUALCLK`) -- see
+[mips.md](mips.md), "The RSP's clock".
 
 Several details of the RTL exist for this clock:
 
