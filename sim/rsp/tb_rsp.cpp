@@ -176,7 +176,7 @@ int main(int argc, char **argv)
         std::deque<std::pair<int, uint32_t>> expect;  // register writes the RTL owes
         struct Vs { long ins; uint32_t pc, in; uint16_t vr[32][8], ah[8], am[8], al[8], vco, vcc; uint8_t vce; };
         std::deque<Vs> vexp;                          // vector-unit instructions the RTL has not finished
-        int drain = 0, dmem_late = 0;
+        int drain = 0, dmem_late = 0; uint64_t dmas_late = 0;
         static const bool cyc_on = getenv("CYCLES") != nullptr;
         rsp_time_t ct;
         rsp_time_reset(&ct);
@@ -231,6 +231,8 @@ int main(int argc, char **argv)
             tb.tick();
             if (dmem_late && !bad && !R.rsp_top__DOT__sw_v) {
                 dmem_late = 0;
+                // (a transfer the model does whole when it starts, begun meanwhile, has not reached DMEM in the RTL: not compared)
+                if (m.dmas == dmas_late && !R.rsp_top__DOT__p_full && R.rsp_top__DOT__ds == 0)
                 for (uint32_t a = 0; a < 4096; a += 4)
                     if (tb.dmem_word(a) != be32(m.dmem + a)) {
                         printf("  !! after instruction %ld (pc %03x, %08x): DMEM[%03x] = %08x, the model %08x\n", ins, m.last_pc, m.last_ins, a,
@@ -296,7 +298,7 @@ int main(int argc, char **argv)
                 if (e_we) expect.push_back({ (int)e_wr, m.r[e_wr] });
                 // (a store's second half may be going behind the next instruction,
                 // one that leaves DMEM alone: DMEM is compared a cycle on)
-                if (!bad && !brk && deep_now && (R.rsp_top__DOT__vu__DOT__st == 4 || R.rsp_top__DOT__sw_v)) dmem_late = 1;
+                if (!bad && !brk && deep_now && (R.rsp_top__DOT__vu__DOT__st == 4 || R.rsp_top__DOT__sw_v)) { dmem_late = 1; dmas_late = m.dmas; }
                 else if (!bad && !dma_now && !R.rsp_top__DOT__sw_v && (brk || deep_now))
                     for (uint32_t a = 0; a < 4096; a += 4)
                         if (tb.dmem_word(a) != be32(m.dmem + a)) {
