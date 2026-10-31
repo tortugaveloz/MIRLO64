@@ -266,8 +266,10 @@ module rdp_mem (
     // through its pixel)
     wire        w_wide = w_c32 && !w_pz;
     wire [10:0] w_res  = w_set ? res_b : res_a;
-    wire [10:0] w_end  = w_wide ? {1'b0, w_idx} + 11'd1
-                       : ({1'b0, w_idx[8:0], 1'b0} + 11'd2 > w_x1) ? w_x1 : {1'b0, w_idx[8:0], 1'b0} + 11'd2;
+    // (the word after this one: the counter's step, and twice it for a word of two pixels -- w_idx is below 512 until the
+    // span's last word has gone, and w_rdy is only wanted before that)
+    wire [10:0] w_idx1 = {1'b0, w_idx} + 11'd1;
+    wire [10:0] w_end  = w_wide ? w_idx1 : ({w_idx1[9:0], 1'b0} > w_x1) ? w_x1 : {w_idx1[9:0], 1'b0};
     wire        w_rdy  = w_fillm || w_pz || w_res >= (w_end - {1'b0, w_x0});
     wire [12:0] w_hgw  = w_cb[12:0] + {3'd0, w_idx};       // (the word's address: its group, for the raw hidden buffer)
 
@@ -515,7 +517,7 @@ module rdp_mem (
                     p1 <= 1'b1;
                     p1_idx <= w_idx;
                     if (w_idx == w_lastw) w_all <= 1'b1;
-                    w_idx <= w_idx + 10'd1;
+                    w_idx <= w_idx1[9:0];
                 end else begin
                     p1 <= 1'b0;
                 end
