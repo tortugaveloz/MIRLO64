@@ -7,37 +7,58 @@ disagree, the model follows a rule of its own. This page lists each rule the
 console follows there, what the model does without the switch below, and what
 the RTL in `rtl/rdp` must change to follow it.
 
-The rules are in the model behind a compile switch, so that the RTL lockstep
-benches keep passing until the RTL follows them:
+The rules are in the model behind compile switches, so that the RTL lockstep
+benches can follow the ones the RTL has and no more:
 
 | what | where |
 |---|---|
-| the switch | `RDP_EXACT`, with `RDP_N64`. Off by default |
+| the rules, one switch each | `RDP_X_RECTLOD` (rule 2), `RDP_X_COPY` (rule 6's copy mode), `RDP_X_SHADE` (rule 4's pixel side), `RDP_X_SPAN` (rule 4's span start). `sim/rdp/build_rtl.sh` builds the model with the ones `rtl/rdp` follows (`XRULES=` to change them); the oracle's `rdpo_x` is that model |
+| all the rules | `RDP_EXACT`, with `RDP_N64`: the four above and the rest (the walk's edges and spans, rectangles as primitives, the LOD in 1-cycle mode, TEXEL1 a pixel ahead). Off by default |
 | the console's perspective divide | rule 1, the model's whatever the switch, as `rtl/rdp` has it: `rdp_n64_div` in `rdp.c` (declared in `rdp.h`), and `n64_persp` (static) for the texel |
 | a frame | `make rdp_task EXACT=1` in `sim/rdp` |
-| the comparison | `sim/rdp_oracle`: `make` builds `build/rdpo_exact` (`RDP_EXACT`), `./run.sh 50` runs it on every suite, the minimal streams and the captured dumps |
+| the comparison | `sim/rdp_oracle`: `make` builds `build/rdpo` (no switch), `build/rdpo_x` (the rules the RTL follows) and `build/rdpo_exact` (`RDP_EXACT`); `./run.sh 50` runs them on every suite, the minimal streams and the captured dumps |
 | tests | `test_lod.c` checks `rdp_n64_div`; `test_cvg.c` (two checks take the console's values with the switch) and `test_cimg32.c` pass with and without it |
 
-Without the switch the model is unchanged, byte for byte: `rdp.o` (`-O2`,
-`RDP_N64`, and with no define) is the same object code with and without the
-switch's code.
+Without a switch the model is as it was.
 
 ## In short
 
-With `RDP_EXACT` the model agrees with the oracle on every suite of
-`run.sh 50` (25 suites: 528 calibration primitives, 9,825 random ones and 176
-in the worked-step and floor streams; 5.48 million pixels drawn with an LOD,
-each with the oracle's inputs and result), on all 10 minimal streams, and on
-78 of the 79 captured dumps. What is left is 64 colour words in 6
-primitives of one captured frame: the depth compare's use of the depth image's
-own dz (below, "What is left"). Without the switch the same dumps differ in
-10,484 colour words in 1,696 primitives (222,756 in 6,310 before rule 1 was
-the model's own).
+`rtl/rdp` follows rules 1, 2, 5 and 4 whole (the pixel side and the span's start), the copy mode
+of rule 6, and the CVG_X_ALPHA write rule; it does not follow the rest of rule 6 (edges, spans,
+rectangles as primitives), rule 3 (the LOD in 1-cycle and copy mode) or rule 7 (TEXEL1 a pixel
+ahead), nor the depth compare's use of the depth image's own dz ("What is left"). The benches
+build the model with the rules the RTL follows, so `rdp_regress.sh` passes.
 
-`rtl/rdp` does the perspective divide as the console does (rule 1), and so
-does the model, with or without the switch. The RTL follows none of the other
-rules, and the benches build the model without `RDP_EXACT`, so
-`rdp_regress.sh` passes.
+With `RDP_EXACT` the model agrees with the oracle on every suite of `run.sh 50` (25 suites: 528
+calibration primitives, 9,825 random ones and 176 in the worked-step and floor streams; 5.48
+million pixels drawn with an LOD, each with the oracle's inputs and result) and on all the minimal
+streams. On the 138 captured tasks measured for the numbers below (92,498 primitives, 34.8 million
+pixels drawn) the model differs from the oracle, by rule:
+
+| the model | primitives that differ | colour words that differ |
+|---|---|---|
+| no rule (what the RTL was) | 51,889 | 383,878 |
+| rules 2 and 6's copy mode (no task draws a rectangle in copy mode that they change) | 51,889 | 383,878 |
+| and rule 4's pixel side (the shade, Z, the dz code) | 37,558 | 279,995 |
+| and rule 4's span start (what the RTL is) | 15,745 | 218,324 |
+| `RDP_EXACT` | 15,734 | 218,372 |
+
+(153,755 of the colour words are 27 primitives drawn with the noise dither, whose random numbers
+are each side's own: they differ whatever the rules.) What is left, 15.7 thousand primitives and 64.6
+thousand colour words (0.19 % of the pixels, 13 thousand of them four or more steps of a 5-bit channel off),
+is one thing: the depth compare's and the blender's use of the depth image's own dz, below.
+
+On the suites of `run.sh 50` (colour words that differ; the model with no rule, with the rules the RTL follows, with all):
+
+| suite | no rule | the RTL's rules | `RDP_EXACT` |
+|---|---|---|---|
+| cal_shade, cal_aff, cal_persp (cal_z: the depth words of 57 primitives) | 753, 2,899, 7,181 (57) | 0, 0, 0 (0) | 0 |
+| lod2, frac2 (the 2-cycle LOD, shade, Z, perspective) | 97,047, 112,872 | 0, 0 | 0 |
+| cal_rect | 1,197 | 1,197 | 0 |
+| cal_t1, lod2_t1 (TEXEL1 a pixel ahead) | 72,762, 733,470 | 72,497, 731,711 | 0 |
+| floor, floor_affine (rows past 2,048 pixels) | 10,856, 3,520 | 10,560, 3,520 | 0 |
+| rect (rectangles with the LOD) | 76,359 | 75,975 | 0 |
+| lod1 (the LOD in 1-cycle mode) | 849,469 | 842,687 | 0 |
 
 ## The rules
 
@@ -84,11 +105,9 @@ top 17 bits (`LOD_DY_MASK`), as a triangle's DaDy is.
 DaDy of the row-stepped coordinate is the row step; `lod_pixel` keeps it to
 `LOD_DY_MASK` as for a triangle.
 
-**RTL**: the rectangle path of the LOD's next line (`rdp_top.v` S_SETUP's
-`rect_setup`, and the next-line pass of `rdp_pix.v`'s LOD block, L1): the
-row-stepped coordinate kept with an 11-bit fraction and the step masked
-before the add; with rule 6's rectangles as primitives this is the triangle
-path and costs nothing more. Alone: about 20 to 30 ALUTs.
+**RTL**: done. `rdp_top.v`'s `dy_s` and `dy_t`: a rectangle's row step (DtDy, DsDx flipped) is added to
+the row's coordinate with its low 4 bits cleared, which is `LOD_DY_MASK`'s 17 bits of a 16.16 DaDy. The
+model's `RDP_X_RECTLOD` is the same; `TB_LOD=1 TB_RECT=1` streams in `rdp_regress.sh`.
 
 ### 3. The LOD in 1-cycle and copy mode
 
@@ -128,7 +147,7 @@ there too. The walk (`draw_triangle_x`) gives each pixel its place in the span
 and the next row's start (`prim_t` `xj`, `xlen`, `xlodlen`, `xnvalid`,
 `xnrow`).
 
-**RTL**: `rdp_pix.v`'s LOD block (L1 to L3) in 1-cycle mode: the two points
+**RTL** (not done): `rdp_pix.v`'s LOD block (L1 to L3) in 1-cycle mode: the two points
 ahead are the next two pixels' own perspective divides in the walk's order, so
 it is the neighbour scheme of docs/lod.md's variant (c) two pixels deep (three
 perspective divides held), with the span-end cases choosing the next row's
@@ -173,19 +192,32 @@ DaDx is large, the shade by an LSB, the depth by a few.
 the 19-bit Z and the dz code (`x_dzpix`, `x_dzcomp`). The model's own dz code
 keeps serving its depth compare and blender shifts (see "What is left").
 
-**RTL**: `rdp_top.v` S_SETUP: `cur = e + DaDx * (xs - xh)` becomes the
-console's start, `((e & ~0x1FF) + diff - xfrac * ((DaDx >> 8) & ~1)) &
-~0x3FF`, then `+ (xs - unscrx) * DaDx'` on the shared multiplier (the walk
-still issues left to right: the value at `xs` is the start plus its distance
-from `unscrx`, with the 12-bit wrap of the scissored count); `diff` needs DaDy
-of all eight attributes from the staging RAM (only Z's is read today), two
-adders; `adx[]` loses its low 5 bits (free). About 120 to 180 ALUTs, and 8
-more clocks of the shared multiplier a row (the x fraction's product besides
-the distance's, for each of the eight attributes). `rdp_pix.v` P0: the shade's coverage
-correction (four `offx * cd + offy * dy` with 2-bit factors, shift and add) and
-its 9-bit wrap in place of `clamp8`, Z's in the 22-bit form (as `zcorr`
-today) with the 19-bit wrap: about 120 to 160 ALUTs and 80 flip-flops for the
-steps. The dz code: a 16-bit sum and a priority encoder, about 40 ALUTs.
+**RTL**: done, in two parts, each with a model switch.
+
+* The pixel side (`RDP_X_SHADE`; `rdp_pix.v` P0, `rdp_top.v` S_VSET): a pixel without full coverage
+  takes its shade and Z at its first covered sample by `(A >> 14) * 4 + ox * DaDx' + oy * DaDy'`
+  (shade, steps of 13 bits: `adx`'s bits 26:14 and `sdy`, the DaDy of the four shade
+  attributes read in S_VSET with the others), a 9-bit result kept 0..255 / 255 / 0, and Z in 22 bits
+  (`z_dx`, `z_dy` >> 10) with the 19-bit wrap; the products of two bits are shifts and adds (the first version's
+  `*` took eight DSP blocks and missed timing by up to 0.6 ns). The depth word's dz code is the
+  console's: the place of the top set bit of |DzDx| + |DzDy| of the integer halves, plus 1
+  (`dzc_p`); the model's own code keeps serving the compare and the blender's shifts.
+* The span's start (`RDP_X_SPAN`; `rdp_top.v` S_AASUB, S_VSET, S_SETUP): the walker's major edge
+  `ax_h` is captured on the subscanline the attributes are taken on (`unscrx`, `xfrac`); `dif_ram` has an
+  attribute's 3/4 of DaDe - DaDy (0 when the edge does not lean away from the walk), made as DaDy is
+  read; a row's setup computes `((e & ~0x1FF) + dif - xfrac * ((DaDx >> 8) & ~1)) & ~0x3FF` in a
+  stage of its own (the product on a DSP block of its own) and the shared multiplier's product of the
+  distance from the edge's pixel and DaDx' comes in a clock later: a row's setup takes one clock more
+  than it did. `exh`, the major edge's running x, and its adder are gone; `adx` and the DaDx copy in `ade_ram` lose
+  their low 5 bits (Z whole). The 2-cycle LOD's neighbour is the pixel's own, so it follows.
+  (3/4 of DaDe - DaDy is `de - de >> 2 - dy + dy >> 2` with the wrap of 32 bits, not `(de - dy)`
+  shifted: with large DaDe and DaDy they differ.)
+
+Measured with `tools/area2/ooc.sh rdp` (3 seeds, ALMs fitted, RDP alone): the pixel side +131, the
+span's start +109 (before the sharing of the copy mode's mask and the single write port of `dif_ram`,
+which took it from +113 to the figure in docs/rdp.md "Resources"). Cycles, on 138 captured tasks: the
+setup state takes 8.9 to 9.7 million clocks (a row's setup 7.6 to 8.3), the whole 95,115,501 to 95,126,383 (+0.01 %: the
+row's step of `e[]` now starts with the setup's last clock).
 
 ### 5. An untextured triangle with PERSP
 
@@ -260,18 +292,18 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
 
 **RTL**:
 
-* `rdp_top.v`, the AA walker (`aa_a8`, `aa_b8`, `aa_clamp`, `aa_cross`): the
+* (not done) `rdp_top.v`, the AA walker (`aa_a8`, `aa_b8`, `aa_clamp`, `aa_cross`): the
   edges' bit tests and the 14-bit crossing compare in place of 19-bit signed
   compares and clamps, 28-bit X: narrower, about 20 ALUTs fewer; the rows'
   limits and the all-over / all-under flags: about 20 ALUTs; the field mode is done
   (the model's and the RTL's own, with the dither's row: `streams/`
   `scissor_field.rdps`).
-* `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
+* (not done) `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
   copy mode, every pixel with a full mask (no cut at the scissor's last
   column): about 10 ALUTs. A rectangle in fill or copy mode already reaches
   the scissor's last column (the model's and the RTL's own: `streams/`
   `fill_scissor_edge.rdps`, `copy_scissor_edge.rdps`).
-* `rdp_top.v`, the rectangle path (S_ROW's fixed columns, S_SETUP's
+* (not done) `rdp_top.v`, the rectangle path (S_ROW's fixed columns, S_SETUP's
   `rect_setup`, S_FILL, `kind_fillmode`): rectangles go through the AA walker
   as triangles with vertical edges and their S, T as two attributes through
   rule 4's span setup; copy mode's group step (a 2- or 3-bit counter gating
@@ -279,8 +311,10 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
   S, T accumulators go: about even, perhaps 50 ALUTs fewer. Fill mode
   rectangles then leave the fast path straight to memory unless it is kept
   for them with the console's span ends.
-* `rdp_pix.v` P5 (P5b): in copy mode the texel is the group's coordinate plus
-  0 to 3 (or 7), clamp off, mask at most 10 bits: about 20 ALUTs.
+* done, with `RDP_X_COPY`: `rdp_pix.v` P5 (P5b): in copy mode (a texture rectangle's) the texel is the group's coordinate plus
+  0 to 3 (or 7), clamp off, mask at most 10 bits (`tc_axis` shares the other modes' mask logic); `rdp_top.v`'s `cp_m` counts a pixel's place in its
+  group, steps S (T) once a group, from the first pixel drawn (the scissor shifts the texture), and `m` goes down the pipe with S and T.
+  `TB_COPY=1` streams (also `TB_C8=1`, with the SDRAM's timing) in `rdp_regress.sh`.
 * The CVG_X_ALPHA write rule: done (`rdp_pix.v` `kill11`).
 
 ### 7. TEXEL1 a pixel ahead
@@ -300,7 +334,7 @@ TEXEL0 again (1-cycle).
 **With it**: `draw_pixel_cvg` samples that texel (`tex_ahead`, and the 1-cycle
 TEXEL1 block) when the second cycle reads TEXEL1 (`cc1_uses_texel1`).
 
-**RTL**: `rdp_pix.v`: the texture stages already give every pixel its first
+**RTL** (not done): `rdp_pix.v`: the texture stages already give every pixel its first
 texel; the second combiner cycle of a pixel needs its walk neighbour's. With
 `lft` the neighbour is issued after the pixel: the second cycle waits a pixel
 (the first cycle's result and the pixel's other operands held, about 80
@@ -310,6 +344,11 @@ the span, in the next row's LOD tile): `rdp_top.v` issues a ghost pixel there,
 as it does for the LOD. About 100 to 200 ALUTs and 80 to 120 flip-flops.
 
 ## The numbers, rule by rule
+
+(The suites' columns are from `run.sh 50`; the "captured dumps" rows are from the first comparison, on 79 captured tasks,
+and are kept for the order of the effects: the figures for the RTL's own rules, on the 138 tasks measured later, are in "In short".
+The model without the switch differs from the first columns' numbers on the random suites by the generator's
+host: the figures here are of the first host, those of `run.sh` on this one are in its log.)
 
 The colour words that differ in `./run.sh 50`, and for `lod2` and `rect` the
 LOD pixels (of those the model drew with an LOD) that take the oracle's inputs
@@ -373,53 +412,56 @@ Notes:
 
 ## What is left
 
-**The random streams**: nothing. Every suite of `run.sh 50` agrees with the
-switch, word for word (colour, hidden bits, depth), and every LOD the model
-draws takes the oracle's inputs and result.
+**The random streams**: with `RDP_EXACT` nothing, every suite of `run.sh 50` agrees word for word
+(colour, hidden bits, depth) and every LOD the model draws takes the oracle's inputs and result. With
+the rules `rtl/rdp` follows (`rdpo_x`): the suites that use the walk's edges and spans, rectangles as
+primitives, the 1-cycle LOD and TEXEL1 a pixel ahead still differ (`run.sh`'s `rdpo_x` lines).
 
-**The captured dumps**: one stream, captured task 002 of one game, 6 primitives, 64
-colour words, no coverage or depth words. They are 1-cycle,
-anti-aliased, depth-compared triangles (AA_EN, Z_CMP, Z_UPD, IM_RD, opaque).
-The console's depth compare reads the depth image's own dz: its code is the
-depth word's two low bits and the word's two hidden bits (which the console
-writes with the depth); the tolerance is the larger power of two of the
-pixel's dz and that memory dz (the memory's doubled and no less than 16 >>
-exponent for exponents under 3, coplanar when it is 0x8000), times 8; and when
-the blender's B is the memory coverage, its two weights are shifted by the
-difference of the two dz codes (up to 4). The model keeps no memory dz (its
-own documented simplification, `rdp.h`): its tolerance is the pixel's step
-alone and the shifts 0 with Z_CMP. On those pixels the two disagree on the
-blend. The model does not follow it under the switch either: following it, the RDP would write the depth image's hidden bits and read them back
-(`rtl/rdp/rdp_mem.v` and the hidden plane), a change of the memory traffic
-as much as of the logic.
+**The captured tasks**: the table above. What the RTL still differs in, 15.7 thousand primitives of 138 tasks, is
+the depth compare's use of the depth image's own dz, and nothing else (every differing primitive is
+AA_EN, Z_CMP, IM_RD, opaque, and the model with `RDP_EXACT` differs in the same primitives). The console's depth compare reads
+the depth image's own dz: its code is the depth word's two low bits and the word's two hidden bits
+(which the console writes with the depth); the tolerance is the larger power of two of the pixel's dz
+and that memory dz (the memory's doubled and no less than 16 >> exponent for exponents under 3,
+coplanar when it is 0x8000), times 8; and when the blender's B is the memory coverage, its two
+weights are shifted by the difference of the two dz codes (up to 4). The model keeps no memory dz (its
+own documented simplification, `rdp.h`): its tolerance is the pixel's step alone and the shifts 0 with Z_CMP.
+Following it, the RDP would write the depth image's hidden bits and read them back (`rtl/rdp/rdp_mem.v` and the
+hidden plane: a copy of the colour image's path for the depth span, one more block RAM, some 200 to 300
+ALMs and a word of the hidden plane read and written for each 16 pixels of a depth span), a change of
+the memory traffic as much as of the logic: not done.
+
+**Not followed, not seen on any captured task**: rule 3 (the LOD in 1-cycle and copy mode), rule 7
+(TEXEL1 a pixel ahead; no task's second combiner cycle reads TEXEL1, no 1-cycle combiner either), the walk's
+edges and spans of rule 6 (a row with an edge past 2,047 pixels; the 12-bit wrap of a scissored
+span's count of pixels), rectangles as the console's primitives (partial coverage at a fractional
+edge: no captured rectangle differs), and a triangle drawn in copy mode with the console's attribute walk. Rules 3, 6 (edges) and 7 have a minimal stream each in `sim/rdp_oracle/streams/`
+that the model with `RDP_EXACT` draws as the oracle does and the RTL does not (`lod1_*`, `copy_detail`, `edge_2048`, `cycle2_texel1`).
 
 Not covered by the comparison, so not known to agree: YUV textures, dithering
 and the noise (each side has its own generator), 32-bit colour images,
 the blender beyond passing the pixel in most streams, the alpha compare in
-2-cycle mode (the oracle's structure takes it from the next pixel's first
-cycle, and the blender's shade alpha likewise; no stream turns the compare on
-in 2-cycle mode), copy mode of a 4-, 8- or 32-bit texture without the TLUT (the console
-copies TMEM's raw bits, two 8-bit texels a pixel; the model and the RTL decode
-and re-encode; a 16-bit texel and a TLUT entry are copied raw, as the console's:
-`streams/copy_raw16.rdps`),
-and a texture rectangle drawn with PERSP (with the switch it goes through the
-perspective divide with W = 0, as on the console; untested).
+2-cycle mode (the oracle's structure takes it from the next pixel's first cycle, and the blender's
+shade alpha likewise; no stream turns the compare on in 2-cycle mode), copy mode of a 4-, 8- or 32-bit
+texture without the TLUT (the console copies TMEM's raw bits, two 8-bit texels a pixel; the model and
+the RTL decode and re-encode; a 16-bit texel and a TLUT entry are copied raw, as the console's:
+`streams/copy_raw16.rdps`), and a texture rectangle drawn with PERSP (with the switch it goes through
+the perspective divide with W = 0, as on the console; untested).
 
 ## The RTL, in all
 
-| rule | where | about |
-|---|---|---|
-| 1 perspective divide | `rdp_pix.v` P1 to P4 | done |
-| 2 rectangle next line | `rdp_top.v` `rect_setup`, `rdp_pix.v` L1 | 0 with rule 6, else 20 to 30 ALUTs |
-| 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | 170 to 270 ALUTs, 100 FFs |
-| 4 attributes | `rdp_top.v` S_SETUP, `rdp_pix.v` P0, the dz code | 280 to 380 ALUTs, 80 FFs, 8 more multiplier clocks a row |
-| 5 untextured PERSP | `rdp_pix.v` P4 | done |
-| 6 edges, rows, rectangles, copy | `rdp_top.v` AA walker, S_AASPAN, S_PIX, the rectangle path; `rdp_pix.v` P5b (the CVG_X_ALPHA write rule: done) | about even |
-| 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | 100 to 200 ALUTs, 80 to 120 FFs |
-| **total** | | **about 550 to 900 ALUTs (360 to 600 ALMs), 260 to 300 FFs, no DSP block** |
+| rule | where | status | cost, fitted ALMs (RDP alone, 3 seeds) |
+|---|---|---|---|
+| 1 perspective divide | `rdp_pix.v` P1 to P4 | done | |
+| 2 rectangle next line | `rdp_top.v` `dy_s`, `dy_t` | done | 0 |
+| 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | not done | doc: 100 to 160, 100 FFs |
+| 4 attributes: the pixel side, dz code | `rdp_pix.v` P0, `rdp_top.v` S_VSET | done | see docs/rdp.md "Resources" |
+| 4 attributes: the span's start | `rdp_top.v` S_AASUB, S_VSET, S_SETUP | done | |
+| 5 untextured PERSP | `rdp_pix.v` P4 | done | |
+| 6 edges, rows, spans | `rdp_top.v` AA walker, S_AASPAN, S_PIX | not done (field mode, the CVG_X_ALPHA write rule, fill and copy rectangles at the scissor's edge are) | about even |
+| 6 rectangles as primitives | `rdp_top.v` the rectangle path | not done | about even |
+| 6 copy mode | `rdp_pix.v` P5b, `rdp_top.v` `cp_m` | done (texture rectangles) | |
+| 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | not done | doc: 60 to 110, 80 to 120 FFs |
 
-The order that keeps the lockstep benches useful: rule 1 is in; rules 4 and 6
-together (the walk: the rectangles become its primitives, and the span start
-is where rule 4 acts), then 5, 2 (free by then), 7 and 3. A model built with
-only some rules on does not exist yet: rule 1 left the switch when the RTL
-followed it, and the others can leave it the same way, one at a time.
+The order that keeps the lockstep benches useful: each rule leaves the switch as the RTL follows it
+(`build_rtl.sh`'s `XR`, the oracle Makefile's `XRULES`).

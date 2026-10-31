@@ -60,12 +60,12 @@ for m in "dy:s/^#define LOD_DY_MASK   (~0x7FFF)/#define LOD_DY_MASK   (~0)/" \
     ${CC:-cc} -O2 -w -DRDP_N64 -I"$model" rdpo.c build/mut/$n.c build/oracle.o -o build/mut/rdpo_$n
     printf '%-9s %-19s %s\n' "mutant" "$n" "$(./build/mut/rdpo_$n build/streams/units_cc[0-9]_*.rdps | sed -n 's/^TOTAL //p')"
 done
-echo "== the minimal streams (streams/): colour, coverage and depth words that differ; without RDP_EXACT | with it"
+echo "== the minimal streams (streams/): colour, coverage and depth words that differ; without RDP_EXACT | the rules rtl/rdp follows | with it"
 words() {    # words BUILD STREAM: its differing colour, coverage and depth words
     ./build/$1 -q "$2" | sed -nE 's/^(SAME|DIFF) [^:]*: .*\(([0-9]+) colour, ([0-9]+) coverage, ([0-9]+) depth.*/\2 \3 \4/p'
 }
 for f in streams/*.rdps; do
-    printf '%-26s %-18s | %s\n' "$(basename "$f" .rdps)" "$(words rdpo "$f")" "$(words rdpo_exact "$f")"
+    printf '%-26s %-18s | %-18s | %s\n' "$(basename "$f" .rdps)" "$(words rdpo "$f")" "$(words rdpo_x "$f")" "$(words rdpo_exact "$f")"
 done
 # the captured task dumps under build/triage (TRIAGE_DIR=<dir> for others), if there are any
 dumps=$(find "${TRIAGE_DIR:-../../build/triage}" -name 'task_gfx_*.bin' 2>/dev/null | sort)

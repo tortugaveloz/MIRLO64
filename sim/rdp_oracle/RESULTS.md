@@ -15,6 +15,9 @@ oracle's inputs and result), on every stream of `streams/`, and on 78 of the
 [docs/rdp_exact.md](../../docs/rdp_exact.md), each rule, its numbers and what
 the RTL must change.
 
+> The figures in this file are of the first comparison (the model as it was, and 79 captured tasks). The
+> rules the RTL follows now and the comparison's current numbers are in [docs/rdp_exact.md](../../docs/rdp_exact.md).
+
 ## In short
 
 * **The LOD logic agrees everywhere.** `rdp_lod` (the distance, its ones'

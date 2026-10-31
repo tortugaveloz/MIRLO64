@@ -182,11 +182,17 @@ AA_EN.
   sample 7, the pixel's top-left corner, is covered. The coverage is the
   mask's count in both cases.
 * **Attributes.** The attribute words wait in a 64-word staging RAM. Each
-  attribute's value, DaDx and DaDe are put together there from their integer
-  and fraction halves. The row-start values step by DaDe each row; a pixel's
-  value is the plane at its top-left corner. DaDy is not read, except Z's.
-* **Z.** Z moves from the corner to the pixel's first covered sample, by
-  DzDx and DzDy in quarter pixels. The shade is not moved.
+  attribute's value, DaDx, DaDe and DaDy are put together there from their integer
+  and fraction halves. The row-start values step by DaDe each row. A row's span starts as the
+  console starts it: from the major edge's pixel, `((e & ~0x1FF) + dif - xfrac * ((DaDx >> 8) & ~1)) &
+  ~0x3FF`, e the row's value on the edge, xfrac the edge's 8-bit x fraction on the subscanline the attributes
+  are taken on and dif, when the edge leans away from the walk, 3/4 of DaDe - DaDy (the low 9 bits of each cleared);
+  a pixel is that plus its distance from the edge's pixel times DaDx without its low 5 bits (Z whole)
+  ([rdp_exact.md](rdp_exact.md), rule 4).
+* **Z and the shade.** A pixel without full coverage takes its Z and shade at its first covered
+  sample (the topmost covered subscanline's leftmost one, `ox` quarters right and `oy` subscanlines down), by the
+  steps `(A >> 14) * 4 + ox * DaDx' + oy * DaDy'` for the shade (13-bit steps, 9 bits kept: 256..383 is 255, 384..511
+  is 0) and the same of the attribute >> 10 for Z (22 bits, the 19-bit result kept to 18: 10 is all ones, 11 is 0).
 * **S, T, W.** S and T are s10.5 in the integer half and W is s.15; they are
   shifted into the pipeline's units where the pixels start.
 * **Depth step.** From DzDx and DzDy the walker derives the primitive's
@@ -215,7 +221,10 @@ A texture rectangle steps S by DsDx along the row and T by DtDy down the
 rows; the flipped one swaps the two. The attribute stepped down the rows
 starts at YH's whole row. The one stepped along the row is the plane at XH
 itself: at column x, its value plus DsDx (or DtDy) times `(4x - XH) / 4` --
-copy mode has no fraction there, and its DsDx counts a quarter of its value.
+in copy mode the one stepped along the row steps once a group of 4 pixels (8 in an 8-bit
+image), from the first pixel drawn (a scissor on the left shifts the texture, it does not cut it), by DsDx (DtDy)
+counted as a quarter of its value, and the pixel's place in its group (0 to 3, 0 to 7) is added to its texel,
+which is mirrored and masked (a mask of at most 10 bits) and never clamped ([rdp_exact.md](rdp_exact.md), rule 6).
 A fill rectangle outside fill mode goes through the pixel pipeline like any
 untextured primitive.
 
@@ -362,7 +371,7 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
 * An alpha result of bit 8 alone, or exactly 255, counts as 256 where the
   coverage is multiplied by it (CVG_X_ALPHA): a fully covered opaque texel
   keeps all 8 samples.
-* SHADE is saturated to a byte, 0..255, when it enters the pipeline.
+* SHADE is a byte, 0..255, when it enters the pipeline: 9 bits of it, 256..383 saturated to 255 and 384..511 (a negative shade) to 0.
 * The primitive LOD fraction is an input, and the LOD fraction (a signed
   9-bit number, as K5) in a 2-cycle primitive with the LOD ([lod.md](lod.md));
   in 1-cycle mode all ones for a primitive with a level count of 0 (without
@@ -553,32 +562,46 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 
 ## Not implemented, or approximated
 
-The model built with `RDP_EXACT` follows the console on the LOD, TEXEL1,
-and shade items below, and on edges, spans, rectangles and the
-attributes' arithmetic ([rdp_exact.md](rdp_exact.md), with the RTL change each
-needs); the RTL, and the model as its benches build it, do not.
+The model built with `RDP_EXACT` follows the console on every item below that is a rule of
+[rdp_exact.md](rdp_exact.md); `rtl/rdp` follows rules 1, 2, 4, 5 and 6's copy mode of it, the
+others not. The RTL, and the model as its benches build it, do not follow:
 
+* **Depth**: the memory's dz is kept to its top two bits, as the word has
+  room for, and the depth compare's tolerance and the blender's coverage weight do not use it (the
+  console's use the depth image's own dz, with the two hidden bits of each depth word it writes). On 138
+  captured tasks (92,498 primitives, 34.8 million pixels) this is the one difference from the oracle
+  that is left in the model with every rule of `RDP_EXACT`: 15.7 thousand AA_EN, Z_CMP, IM_RD primitives,
+  64.6 thousand colour words (0.19 % of the pixels, at the edges where two surfaces meet).
+  Costing some 200 to 300 ALMs, a block RAM and a word of the hidden plane for each 16 pixels of a depth span.
+* **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
+  copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
+  samples its primitive's tile and the LOD fraction is the console's only at a
+  level count of 0 (all ones), 0 otherwise (rule 3: `RDP_EXACT`'s model does it; no captured task
+  draws with it).
+* **TEXEL1** is the next tile at the same coordinates. In the second cycle
+  of a 2-cycle pixel it is the tile's own sample, not the next pixel's (rule 7; no captured task reads it
+  there).
+* **Edges, spans, rectangles** (rule 6): an edge's 12 bits of whole pixels and the rows' limits are the model's
+  own 32-bit ones (a row with an edge past 2,047 pixels is drawn), a rectangle is walked by its own
+  formulas (a fractional corner's partial coverage is not the console's; rectangles in a captured task do not differ).
 * **Colour images**: an 8-bit one is written only (no image read, no depth,
   no hidden coverage). A 32-bit one is drawn as the model draws it, from
   the programming manual's rules ([cimg32.md](cimg32.md),
   "Choices"); a 32-bit picture is shown at five bits a channel.
-* **Depth**: the memory's dz is kept to its top two bits, as the word has
-  room for, and the blender's coverage weight does not use it.
-* **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
-  copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
-  samples its primitive's tile and the LOD fraction is the console's only at a
-  level count of 0 (all ones), 0 otherwise. A texture
-  rectangle's next line is its exact next row, where the console keeps 17
-  bits of it ([lod.md](lod.md), "Choices").
-* **TEXEL1** is the next tile at the same coordinates. In the second cycle
-  of a 2-cycle pixel it is the tile's own sample, not the next pixel's.
 * **YUV** textures are converted only from 16-bit YUV tiles, each channel
   clamped to a byte (the console keeps 9 bits); a pass that converts takes
   the texel at the coordinates, unfiltered. SET_KEY is skipped; the key
   inputs of the combiner read 0. The noise is the RDP's own LFSR, not the
   console's sequence.
-* **Shade** is not corrected to the covered sample; only Z is.
 * **Other modes**: the key enable is not read.
+
+Done, as the console does them: the shade and Z at a pixel's first covered sample, the dz code the
+depth word keeps, a triangle's attributes from the major edge's pixel and fraction (the span's start), a
+texture rectangle's LOD next line, and a texture rectangle's copy mode (groups of 4 or 8 pixels,
+the texel never clamped). Of 138 captured tasks measured against the independent pixel-exact software RDP
+([rdp_exact.md](rdp_exact.md)), the model of `rtl/rdp` differs in 15,745 primitives and 218,324
+colour words, from 51,889 and 383,878 before these rules (153,755 of the words are the noise dither's, whose
+random numbers each side has of its own).
 
 ## How it is verified
 
@@ -589,7 +612,7 @@ needs); the RTL, and the model as its benches build it, do not.
 | RTL against the model, random | `tb_rdp -r SEED [N]` | random state, loads of every kind from any alignment, triangles and rectangles in every cycle type |
 | 32-bit colour images | `TB_C32=1 tb_rdp -r SEED [N]` | random streams into a 32-bit colour image at widths 320, 296, 640 and 1,000 (the wide ones' spans in two halves) |
 | the texture LOD | `TB_LOD=1 tb_rdp -r SEED [N]` | random streams made for the LOD (2-cycle mostly, DaDy on the scale of DaDx, the LOD blend combiner, the minimum level) |
-| the console's rules | `sim/rdp_oracle` (`./setup.sh`, `make`, `./run.sh 50`); `make rdp_task EXACT=1` in `sim/rdp` | the model, command for command, against an independent pixel-exact software RDP fetched by `setup.sh`: the colour image, its hidden bits and the depth image after every primitive, and each pixel's LOD inputs and result, on random suites, minimal streams and captured dumps. Built with `RDP_EXACT` the model agrees on every random suite; without it, the differences [rdp_exact.md](rdp_exact.md) lists. `build_rtl.sh` builds the model without `RDP_EXACT` |
+| the console's rules | `sim/rdp_oracle` (`./setup.sh`, `make`, `./run.sh 50`); `make rdp_task EXACT=1` in `sim/rdp` | the model, command for command, against an independent pixel-exact software RDP fetched by `setup.sh`: the colour image, its hidden bits and the depth image after every primitive, and each pixel's LOD inputs and result, on random suites, minimal streams and captured dumps. Built with `RDP_EXACT` the model agrees on every random suite; `rdpo_x`, the model with the rules `rtl/rdp` follows, differs where [rdp_exact.md](rdp_exact.md) says. `build_rtl.sh` builds the model with those rules (`RDP_X_*`) |
 | the combiner's arithmetic | `sim/rdp/cc_unit.sh` | the functions between `cc_begin` and `cc_end` of `rdp_pix.v`, extracted and compared with the model's over a stride of the operand space and random operands |
 | the dither | `sim/rdp_dither/tb_dither.sv`, `gradient_test.c` | the threshold table and the adder for every value; a shaded gradient through the model for each RGB_DITHER_SEL |
 | the command fetch | `DPC=1 ./build_rtl.sh`, `obj_rdp_dpc/tb_dpc task...` | the RSP's RTL with `rdp_dpc` (`rsp_dpc_wrap.sv`): the words handed on are the RSP model's, in order, on captured tasks, on `gen_xbus_task.py`'s XBUS ones and on `gen_xbus_ring.py`'s (a ring in DMEM, START and END pairs that wait; `TB_CREADY=15`, a slow RDP, keeps lists under way) |
@@ -615,11 +638,13 @@ switches:
   cycles spent in each sequencer state; `TB_CMDT=<file>` logs when each
   command word is taken.
 
+`TB_COPY=1` makes copy mode three modes in four (texture rectangles by groups of pixels, with `TB_C8=1` in groups of 8), `TB_RECT=1` adds texture rectangles (with `TB_LOD=1`, a rectangle's LOD next line).
+
 `tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
 at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
 seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
 (`TB_C8`, at widths 320 and 292 and with `TB_SDRAM`), seeds with a 32-bit
-colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, and
+colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, seeds with `TB_COPY` (also 8-bit, and with the SDRAM's timing), seeds with `TB_LOD` and `TB_RECT`, and
 `cc_unit.sh`.
 A run passes when the bench prints `RTL == model`.
 
@@ -658,6 +683,11 @@ Where the area goes, without figures:
 * **Registered stages.** Each combiner and blender cycle is two stages, the
   operand selects then the arithmetic, and the decoded texels are registered
   before the filter.
+
+The console's rules ([rdp_exact.md](rdp_exact.md): the shade and Z at a pixel's first covered sample, the span's start from the
+major edge's pixel, a rectangle's LOD next line, copy mode by groups) cost 291 fitted ALMs in the RDP (3 seeds, 4,891 to 5,182)
+and 2 DSP blocks fewer (Z's), no block RAM, and a row's setup one clock more (the RDP's cycles on 138 captured tasks: 95,115,501 to 95,126,383, +0.01 %);
+sim/area_study.md, round 7.
 
 ### A timing option kept in reserve
 
