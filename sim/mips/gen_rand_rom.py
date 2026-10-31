@@ -12,11 +12,16 @@ back to back with the moves from HI and LO.
 
     gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|div|i32|i32d|nomd|alu|base]
 
+An argument "tlb" adds the TLB: windows at 0x0800_0000, 0x0A00_0000, 0x0C00_0000 and 0x0E00_0000 whose pages are the scratch
+memory (pairs of 4, 16 and 64 KiB pages, an ASID or global, valid / dirty / uncached as the program makes them), loads and stores
+through them -- ll, sc, ld, sd, ldl, sdl among them -- and random tlbwi, tlbwr, tlbp, tlbr, ASID changes and reads of the TLB's
+registers; a TLB exception's handler (at both vectors) steps over the instruction.
 A last argument "k1" has the program run from KSEG1 (its own code fetched
 uncached, a word at a time; the trap handler stays in KSEG0). An argument "ua"
 adds ldl, ldr, sdl and sdr (the core's W64_UA) at every byte address, through
 the cache and around it, and as often as ld and sd.
 """
+import os
 import random
 import struct
 import sys
@@ -30,6 +35,11 @@ SPECIAL = [0, 1, 0xFFFFFFFFFFFFFFFF, 0x8000000000000000, 0x7FFFFFFFFFFFFFFF, 0x0
            0x0000000100000000, 0x8000000080000000, 2, 0xFFFFFFFFFFFFFFFE]
 GP = list(range(1, 26))         # the registers the program computes in
 K0, K1, UNC, CACHED, TAB = 26, 27, 28, 29, 30
+MAPPED = 31                     # ("tlb") the address of a window
+WINDOWS = [0x08000000, 0x0A000000, 0x0C000000, 0x0E000000]
+WSIZE = [(0x1E000, 0x10000), (0, 0x1000), (0x6000, 0x4000), (0x1E000, 0x10000)]   # a window's pages: their PageMask and size. Every entry of a
+# window has them: entries of two sizes that overlap are undefined on the VR4300 (the TLB has no defined first match)
+FRAME = 0xF0000                 # the scratch memory's physical page (64 KiB aligned): the windows' even pages
 
 
 def main():
@@ -54,6 +64,7 @@ def main():
     e2e = len(sys.argv) > 5 and sys.argv[5] == "e2e"
     k1 = sys.argv[-1] == "k1"
     ua = "ua" in sys.argv[5:] and not base
+    tlb = "tlb" in sys.argv[5:] and not e2e
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -81,10 +92,61 @@ def main():
                0x00000000, 0x00000000,
                0x42000018,                      # eret
                0x00000000]
-    li32(K1, 0x80000180)
-    for i, w in enumerate(handler if not e2e else []):
-        li32(K0, w)
-        I(0x2B, K1, K0, 4 * i)                  # sw
+    for vec in ((0x80000000, 0x80000180) if tlb else (0x80000180,)):
+        li32(K1, vec)
+        for i, w in enumerate(handler if not e2e else []):
+            li32(K0, w)
+            I(0x2B, K1, K0, 4 * i)              # sw
+    LO = lambda pa, c, d, v, g: ((pa >> 12) << 6) | (c << 3) | (d << 2) | (v << 1) | g
+    mtc0 = lambda rt, rd: emit(0x40800000 | rt << 16 | rd << 11)
+    mfc0 = lambda rt, rd: emit(0x40000000 | rt << 16 | rd << 11)
+
+    def tlbent(op, idx, pm, hi, lo0, lo1):
+        # the entry's registers, then tlbwi (op 2) at idx or tlbwr (6): through K0, which only the handler uses
+        for v, r in ((pm, 5), (hi, 10), (lo0, 2), (lo1, 3), (idx, 0)):
+            li32(K0, v)
+            mtc0(K0, r)
+        emit(0x42000000 | op)
+
+    def tlbrand():
+        # an entry for a window (or not), pages of 4, 16 or 64 KiB onto the scratch frame and the one after it
+        wi = rnd.randrange(4)
+        w = WINDOWS[wi] + (1 << 24 if rnd.random() < 0.1 else 0)           # (and now and then another VA: tlbp finds nothing there)
+        pm, size = WSIZE[wi]
+        asid = rnd.choice([0, 1, 0])
+        g = rnd.random() < 0.4
+        def lo(pa):
+            if rnd.random() < 0.1: return 0
+            return LO(pa, rnd.choice([2, 3, 3]), int(rnd.random() < 0.8), int(rnd.random() < 0.9), int(g))
+        idx = rnd.randrange(4) if rnd.random() < 0.15 else rnd.randrange(4, 32)
+        tlbent(2 if "wr" in TLBOFF else rnd.choice([2, 2, 2, 6]), idx, pm, w | asid, lo(FRAME), lo(FRAME + size))
+
+    TLBOFF = os.environ.get("TLBGEN_OFF", "")           # (for finding a difference: "ops", "asid", "wr", "p", "r" leave that out)
+    def tlbops():
+        k = rnd.random()
+        if "ops" in TLBOFF: return
+        if k < 0.35: tlbrand()
+        elif k < 0.55:                          # tlbp: Index (P for none)
+            li32(K0, rnd.choice(WINDOWS) | rnd.choice([0, 0, 1]) | (rnd.randrange(2) << 13))
+            mtc0(K0, 10)
+            emit(0x42000008)
+            mfc0(reg(), 0)
+        elif k < 0.70:                          # tlbr: the registers it loads
+            li32(K0, rnd.randrange(32))
+            mtc0(K0, 0)
+            emit(0x42000001)
+            for r in rnd.sample([5, 10, 2, 3], 2): mfc0(reg(), r)
+        elif k < 0.80:                          # another ASID
+            if "asid" in TLBOFF: return
+            li32(K0, rnd.choice([0, 1, 1]))
+            mtc0(K0, 10)
+        else:                                   # what a TLB exception or ll left
+            mfc0(reg(), rnd.choice([4, 8, 10, 17, 1, 6]))
+
+    if tlb:                                     # four windows: 64 KiB pages global, 4 KiB pages of ASID 1, 16 KiB pages, 64 KiB pages global
+        for i, (pm, size, w, asid, g) in enumerate([(*WSIZE[0], WINDOWS[0], 0, 1), (*WSIZE[1], WINDOWS[1], 1, 0),
+                                                    (*WSIZE[2], WINDOWS[2], 0, 0), (*WSIZE[3], WINDOWS[3], 0, 1)]):
+            tlbent(2, i, pm, w | asid, LO(FRAME, 3, 1, 1, g), LO(FRAME + size, 3 if i != 2 else 2, 1, 1, g))
     li32(UNC, SCRATCH | 0x20000000)
     li32(CACHED, SCRATCH)
     li32(TAB, TABLE)
@@ -147,11 +209,15 @@ def main():
                          0x28, 0x29, 0x2A, 0x2B, 0x2E, 0x3F, 0x3F, 0x2B])
         if ua and rnd.random() < 0.3:
             op = rnd.choice([0x1A, 0x1B, 0x2C, 0x2D])
+        if tlb and rnd.random() < 0.1: op = rnd.choice([0x30, 0x38])           # ll, sc
         off = rnd.randrange(512)
+        if tlb and rnd.random() < 0.6:                                          # through a window, the even page or the odd one
+            li32(MAPPED, rnd.choice(WINDOWS) + rnd.choice([0, 0, 0x1000, 0x4000, 0x10000]))
+            base = MAPPED
         if op in (0x37, 0x3F): off &= ~7
-        elif op in (0x23, 0x27, 0x2B): off &= ~3
+        elif op in (0x23, 0x27, 0x2B, 0x30, 0x38): off &= ~3
         elif op in (0x21, 0x25, 0x29): off &= ~1
-        I(op, base, (wreg() if op in (0x27, 0x37, 0x1A, 0x1B) else nreg()) if op < 0x28 or op == 0x37 else src(), off)
+        I(op, base, (wreg() if op in (0x27, 0x37, 0x1A, 0x1B) else nreg()) if op < 0x28 or op == 0x37 or op == 0x30 else src(), off)
 
     def trap():
         # (on 32-bit values: with any other the core has a Reserved Instruction)
@@ -196,6 +262,7 @@ def main():
         elif k < 0.52: alu()
         elif k < 0.80: mem()
         elif k < 0.95: branch()
+        elif tlb and k < 0.98: tlbops()
         elif not e2e: trap()
     if e2e:
         li32(TAB, RESULT)
