@@ -269,6 +269,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         s4 = f[2:0] == 3'd4;
         s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
         s7 = f[2:0] == 3'd7;
+        // (one pass: VSAR reads the accumulator through this adder -- the product is no term of it)
+        if (NP == 1 && f[5:4] != 2'b00) begin s1 = 1'b0; s4 = 1'b0; s5 = 1'b0; s7 = 1'b0; end
         term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
     end
     accn = term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
@@ -334,7 +336,7 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
             tt = tt ^ {4{f[0]}};
         end
         a_nt = !c_x && pk == 2'd2;
-        for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? nt[i] : tt[{s[i], t[i]}];
+        for (int i = 0; i < 16; i++) accl[i] = c_l ? lo[i] : a_nt ? nt[i] : (NP == 1 && f == 6'h1D) ? accn[i] : tt[{s[i], t[i]}];
         o.acc[15:0] = accl;
         // vd: the clamped result, or VSAR's word of the accumulator
         abs_sat = f == 6'h13 && s[15] && t == 16'h8000;
@@ -344,7 +346,12 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         clo = abs_sat || !b16;
         if (is_resv(f)) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
         // (VSAR: the accumulator's word e names -- vs, the lane's -- or 0)
-        if (f == 6'h1D) begin rsel = (e == 4'd8 || e == 4'd9 || e == 4'd10) ? 2'd2 : 2'd3; c15 = 1'b0; clo = 1'b0; end
+        // (one pass: the accumulator's word from the multiply adder, which adds 0 to it: the high word (2), the middle (1) or the low (0, accl))
+        if (f == 6'h1D) begin
+            if (NP == 1) rsel = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
+            else         rsel = (e == 4'd8 || e == 4'd9 || e == 4'd10) ? 2'd2 : 2'd3;
+            c15 = 1'b0; clo = 1'b0;
+        end
         // the flags
         unique case (f)
         6'h10, 6'h11:  o.co_w = 1'b1;                                                                    // VADD, VSUB
@@ -369,7 +376,7 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         unique case (rsel)
         2'd0:    o.res[i] = o.acc[i];
         2'd1:    o.res[i] = accn[16 + i];
-        2'd2:    o.res[i] = vs[i];
+        2'd2:    o.res[i] = NP == 1 ? accn[32 + i] : vs[i];
         default: o.res[i] = (i == 15) ? c15 : clo;
         endcase
     return o;
