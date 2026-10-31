@@ -161,9 +161,14 @@ always_ff @(posedge clk_r) begin
     else if (dpc_start_we || dpc_end_we || dpc_status_we) dq_t <= !dq_t;
     if (dpc_start_we || dpc_end_we || dpc_status_we) begin ds_k <= {dpc_status_we, dpc_end_we, dpc_start_we}; ds_wd <= dpc_wdata; end
 end
-// (on the whole clock: the RSP's wait for the write to come back ends with an edge that must find the registers new)
+// (the DPC's values are logic of clk_sys: a register of clk_sys first, so that the path to clk_c is register to register, and
+// one cycle later than dpa_t's change at the least; on the whole clk_c: the RSP's wait for the write to come back ends with an
+// edge that must find the registers new)
+logic [23:0] dq_start, dq_end, dq_current;
+logic [31:0] dq_status;
+always_ff @(posedge clk) begin dq_start <= s_dpc_start; dq_end <= s_dpc_end; dq_current <= s_dpc_current; dq_status <= s_dpc_status; end
 always_ff @(posedge clk_c) begin
-    dpc_start_r <= {8'd0, s_dpc_start}; dpc_end_r <= {8'd0, s_dpc_end}; dpc_current_r <= {8'd0, s_dpc_current}; dpc_status_r <= s_dpc_status;
+    dpc_start_r <= {8'd0, dq_start}; dpc_end_r <= {8'd0, dq_end}; dpc_current_r <= {8'd0, dq_current}; dpc_status_r <= dq_status;
 end
 always_ff @(posedge clk) begin
     dq_s <= dq_t;
