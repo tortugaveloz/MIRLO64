@@ -670,11 +670,12 @@ always_comb
 // registers of vt's group, a lane of each along a diagonal, a byte a cycle.
 //   LTV  byte n of the window from (e + (addr & 8))  ->  byte n of register (e / 2 + n / 2) & 7
 //   STV  byte (n - (e & ~1)) & 15 of register n / 2  ->  byte n of the window from (addr & 7) - (e & ~1)
-logic [3:0]  tv_n, tv_off;
-logic [11:0] tv_base;
+logic [3:0]  tv_n, tv_oa;               // the beat, and its place in the 16 bytes from the window's start (counted on, wrapping)
+logic [11:0] tv_base, tv_base16;      // ... the window's start, and 16 more
 wire  [3:0]  tv_idx  = tv_n - {el[3:1], 1'b0};                        // STV: the register's byte
 wire  [4:0]  tv_reg  = {ltn[4:3], swc2 ? tv_n[3:1] : el[3:1] + tv_n[3:1]};
-wire  [11:0] tv_addr = tv_base + {8'd0, tv_off + tv_n};
+wire  [11:0] tv_addr = tv_base + {8'd0, tv_oa};
+wire  [11:0] tv_addr16 = tv_base16 + {8'd0, tv_oa};
 wire         in_tv   = st == V_TV;
 
 // a store's (and MFC2's) bytes: the register's 16 (sarr: its bytes, or for
@@ -824,7 +825,7 @@ always_comb begin
     m_valid = (start_nc && ls_go) || (in_tv && !m_stall);
     m_we    = swc2;
     m_addr  = in_tv ? tv_addr : ls_win;
-    m_addr16 = in_tv ? tv_addr + 12'd16 : ls_win16;
+    m_addr16 = in_tv ? tv_addr16 : ls_win16;
     m_be    = in_tv ? 16'd1 << tv_addr[3:0] : st_be;
     m_rot   = in_tv ? tv_addr[3:0] - tv_n : o - el;
     for (int i = 0; i < 16; i++) m_wpre[127 - 8 * i -: 8] = sarr[i];
@@ -842,17 +843,13 @@ always_comb begin
     if (in_tv && tv_n == 4'd15 && !m_stall) done = 1'b1;
     res = 32'd0;
     // the register write: EX2's, a load's bytes, MTC2
-    wr_reg = y_vdn; wr_be = 16'd0;
+    // (a load's write, in_v, cannot meet EX2's -- that is put off, x_defer -- nor a put-off write's: it is the last choice)
+    wr_reg = wp ? w_vdn : y_vdn;
+    wr_be = wp ? w_be : y_wr ? (y_one ? 16'd3 << {y_de, 1'b0} : 16'hFFFF) : 16'd0;
     wr_en = wp || y_wr || in_v;
     for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
     if (!wp) for (int l = 0; l < LANES; l++) wr_d[l] = y_mul ? mres[l] : ex2[l].res;
-    if (wp) begin wr_reg = w_vdn; wr_be = w_be; end                // (the put-off write)
-    if (y_wr) begin
-        wr_be = 16'hFFFF;
-        if (y_one) begin
-            wr_be = 16'd3 << {y_de, 1'b0};
-        end
-    end else if (in_v) begin
+    if (in_v) begin
         wr_reg = lw_reg;
         wr_be = in_pk ? 16'hFFFF : in_be;
         for (int g = 0; g < 8; g++) wr_d[g] = ld_d[g];
@@ -877,8 +874,13 @@ always_ff @(posedge clk) begin
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;
 
         // ---- EX2
-        y_v <= x_ex2;
-        y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
+        // (EX2 takes EX1's computation, or SEL's -- a fast one, when EX1 is empty -- whatever SEL does: only y_v is its choice)
+        y_v <= x_ex2 || (sel0 && fn_fast);
+        if (x_v) begin
+            y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
+        end else begin
+            y_fn <= fn; y_yd <= ydecode(fn); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
+        end
         if (y_v) begin
             for (int l = 0; l < LANES; l++) begin
                 if (!y_mul) begin
@@ -941,11 +943,6 @@ always_ff @(posedge clk) begin
             end
         end
 
-        // ---- a fast computation goes to EX2 from SEL (EX1 and MUL are empty then)
-        if (sel0 && fn_fast) begin
-            y_v <= 1'b1; y_fn <= fn; y_yd <= ydecode(fn); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
-        end
-
         // ---- the MUL stage, and a multiply's start of EX1 behind it
         m_v <= sel0 && fn_mul;
         if (sel0) begin m_fn <= fn; m_vdn <= vdn; end
@@ -958,13 +955,13 @@ always_ff @(posedge clk) begin
         unique case (st)
         V_IDLE: if (start_nc) begin
             if (ls_tv && ls_known) begin
-                tv_n <= 4'd0; tv_base <= {ls_addr[11:3], 3'd0};
-                tv_off <= swc2 ? {1'b0, ls_addr[2:0]} - {el[3:1], 1'b0} : el + {ls_addr[3], 3'd0};
+                tv_n <= 4'd0; tv_base <= {ls_addr[11:3], 3'd0}; tv_base16 <= {ls_addr[11:3], 3'd0} + 12'd16;
+                tv_oa <= swc2 ? {1'b0, ls_addr[2:0]} - {el[3:1], 1'b0} : el + {ls_addr[3], 3'd0};
                 st <= V_TV;
             end
         end
         V_TV: if (!m_stall) begin
-            tv_n <= tv_n + 4'd1;
+            tv_n <= tv_n + 4'd1; tv_oa <= tv_oa + 4'd1;
             if (tv_n == 4'd15) st <= V_IDLE;
         end
         default: st <= V_IDLE;
