@@ -712,14 +712,14 @@ module rdp_top (
     // has one adder and nothing behind it (the fitter put a second source of a register's behind its own adder in a
     // route-through LUT a bit: 170 of them, and a mux).
     wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp;
-    wire [31:0] cur_ldv = e_q + mul_p[47:16];
+    // (a texrect's S and T are t_xl's halves, shifted, plus the product: the same adder as a triangle's e + the product)
     wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
     wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
-    wire        rs_on = st == S_SETUP && !kind_tri;
+    wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
     wire [7:0]  cur_ld;
     genvar cg;
     generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
-        assign cur_ld[cg] = st == S_SETUP && kind_tri && mi == cg + 2;     // (e[ea] with ea = mi - 2)
+        assign cur_ld[cg] = st == S_SETUP && (kind_tri ? mi == cg + 2 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
     end endgenerate
     // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
     // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
@@ -737,8 +737,6 @@ module rdp_top (
             if (cur_ld[ci] || cur_stp)
                 cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
         end
-        if (rs_on && mi == 5'd2) cur[4] <= (rs_sv <<< rs_ds) + mul_p[33:2];
-        if (rs_on && mi == 5'd3) cur[5] <= (rs_tv <<< 5) + mul_p[33:2];
     end
 
     integer i;
