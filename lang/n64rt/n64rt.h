@@ -292,6 +292,9 @@ void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
 u8   n64rt_pak_crc(const u8 *block);
+void n64rt_pak_state_begin(void);         /* around the copy of the runtime's memory in a save state: a real Transfer Pak is unplugged in it */
+void n64rt_pak_state_end(void);
+void n64rt_pak_state_resumed(u64 delta);  /* after a state is put back */
 /* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
 void n64rt_cheat_init(void);
 void n64rt_cheat_field(void);
@@ -302,6 +305,8 @@ u32  n64rt_gbv_id(int n);                 /* its header's CRC */
 void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
+u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
+void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */

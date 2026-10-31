@@ -300,6 +300,39 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
     return 0;
 }
 
+/* ---- the accessory in a save state ------------------------------------------------------------------------------
+ * A real Transfer Pak's cartridge is outside the core: its RAM, its mapper and its clock are its own, which no state can hold. So the state
+ * has the pak unplugged (off, no cartridge there, "changed"), in the copy of the runtime's memory it makes -- the game that goes on does not see
+ * it -- and the game that is put back finds the pak gone and looks again: the cartridge is in the Pocket's slot still, and the next time the game reads the
+ * status the slot is looked at. The virtual one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
+ * on as it was, unless its ROM is not there again (n64rt_gbv_resume) -- then it is unplugged, as well. */
+static __typeof__(s_tpv) s_tp_keep;
+static __typeof__(s_slotv) s_slot_keep;
+void n64rt_pak_state_begin(void)
+{
+    memcpy(s_tp_keep, s_tpv, sizeof s_tpv);
+    memcpy(s_slot_keep, s_slotv, sizeof s_slotv);
+    for (int ch = 0; ch < NPAK; ch++)
+        if (n64rt_pak_kind(ch) == N64RT_PAK_TRANSFER) {
+            s_tpv[ch].on = 0; s_tpv[ch].access = 0; s_tpv[ch].changed = 1;
+            s_slotv[ch].in = 0; s_slotv[ch].bus = 0; s_slotv[ch].pulled = 1;
+        }
+}
+void n64rt_pak_state_end(void)
+{
+    memcpy(s_tpv, s_tp_keep, sizeof s_tpv);
+    memcpy(s_slotv, s_slot_keep, sizeof s_slotv);
+}
+void n64rt_pak_state_resumed(u64 delta)
+{
+    for (int ch = 0; ch < NPAK; ch++) {
+        s_ch = ch;
+        s_slot.looked = 0;                              /* (a time of the old clock: look again at the next status read) */
+        if (n64rt_pak_kind(ch) == N64RT_PAK_VIRTUAL) { n64rt_gbv_resume(ch, delta); slot_look(1); }   /* (still in: nothing changes for the game) */
+    }
+    s_ch = 0;
+}
+
 /* the joybus's checksum of a block's 32 bytes */
 u8 n64rt_pak_crc(const u8 *d)
 {

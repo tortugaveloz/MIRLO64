@@ -189,6 +189,30 @@ int n64rt_gbv_look(int n)
 }
 u32 n64rt_gbv_id(int n) { sel(n); return g.id; }
 
+/* a save state: the RAM and the clock's footer, as many bytes as the cartridge has, rounded to the words the state's tokens are */
+u32 n64rt_gbv_state_bytes(int n)
+{
+    sel(n);
+    if (!g.in) return 0;
+    rtc_tick(); rtc_store();
+    return (g.ram_bytes + (g.timer ? RTC_FOOT : 0u) + 15u) & ~15u;
+}
+/* after a state is put back (the cartridge's registers and RAM are in it): the clock, which counts the SoC's cycles, goes on from where it was; and the
+ * ROM, which the Pocket loads as for any launch, must be the same file: with none, or another, the cartridge is not in */
+void n64rt_gbv_resume(int n, u64 delta)
+{
+    sel(n);
+    if (!g.in) return;
+    g.t0 += delta;
+    u32 size = n64rt_slot_size(n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
+    if (size > LAYOUT_GBROM_MAX) size = LAYOUT_GBROM_MAX;
+    if (size < 0x150u) { g.in = 0; return; }
+    u8 h[0x50];
+    flush_cpu_dcache_range((const void *)(ROM_MEM + 0x100), sizeof h);
+    for (u32 i = 0; i < sizeof h; i++) h[i] = ROM_MEM[0x100u + i];
+    if (crc32(h, sizeof h) != g.id || size != g.rom_bytes) g.in = 0;
+}
+
 /* the cartridge's reset */
 void n64rt_gbv_power(int n, int on)
 {

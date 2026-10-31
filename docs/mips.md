@@ -834,7 +834,7 @@ The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one
   there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
   (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
 * **The clock** counts seconds while the core runs. The core has no calendar, so the time the Pocket is off is not counted.
-* **No save state** while the setting is a Transfer Pak, either kind: the Pocket's Sleep and Memories are refused ([Save states](#save-states)).
+* **Save states** (Sleep, Memories): the virtual cartridges are in them, with their RAM and clock; a real one in the Pocket's slot is unplugged ([Save states](#save-states)).
 
 `lang/n64rt/test` runs it under libultra's own code (`pak_test`; its header says how).
 
@@ -885,7 +885,7 @@ while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with t
    registers: COP0 (Count, Compare, EPC, the TLB's registers, Cause's software bits) and the FPU's condition bit, the MI's
    mode, interrupts and mask, the VI's registers, base, field and line, the AI's rate and its DMA enable, the PIF RAM, the
    SI's address and whether the PIF has run commands, DMEM, the RSP's status, PC and semaphore, the DPC's registers, and
-   the sizes the Pocket's table has for the save's and the pak's slots. Its header names the runtime (a sum of its code)
+   the sizes the Pocket's table has for the saves' and the paks' slots (the Game Boy saves' too). Its header names the runtime (a sum of its code)
    and the ROM (its header's check words, title and ID): a state is refused by another `n64rt.sys` or another game.
    The game then goes on (a Memory) as from the moment the hardware came to rest: the VI's line is waited for and Count,
    Compare and the MI's interrupts are put back, so the copies' time is none of the game's.
@@ -911,8 +911,13 @@ while the Pocket copies one in. `lang/n64rt/n64rt_state.c` does the work, with t
 
 Not in a state, because the hardware is at rest when it is made: IMEM and the RSP's registers (every task loads its
 microcode and sets its registers), the AI's queue and the SI's DMA. Nor the RDP's modes and TMEM, which nothing reads
-back: a game sets what it draws with in every frame's display list. A state is refused while controller 1 has the
-Transfer Pak, the Game Boy cartridge in the Pocket's slot (its RAM and clock are its own) or the virtual one (its RAM and mapper are not in a state yet), and the core says it takes none when no game runs.
+back: a game sets what it draws with in every frame's display list. A Game Boy cartridge in the Pocket's slot, in the Transfer Pak, is unplugged in the state: its RAM, mapper and
+clock are its own, which a state cannot hold. The pak is made off, with no cartridge and "changed" in the copy of the runtime's memory that the state takes (the game that
+goes on does not see it, `n64rt_pak_state_begin`); the game that is put back finds it gone and looks again, and the cartridge is in the slot still. The virtual Transfer Paks are in the
+state: their registers are in the runtime's memory, and the RAM and the clock of each cartridge that is in have a region of their own (`RG_GB1`, `RG_GB2`) and the
+sizes of their save files their place in the table; the clock goes on from where it was. Their ROMs the Pocket loads as for any launch, and
+must be the same file (its header's CRC) when the state is put back: otherwise that cartridge is not in, for the game, as a ROM taken out. The core tells the Pocket it takes a state
+when a game runs, and none when it does not.
 `sim/mips_soc`'s `SS_SAVE`, `SS_LOAD` and `sim/mips_soc/state_compare.py` make a state, load it into another run and
 compare the two runs' pictures and sound.
 
