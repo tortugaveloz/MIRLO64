@@ -12,7 +12,7 @@ B := build
 # (-Drdp_init: the model names a function rdp_init too)
 ORC_CFLAGS := -O2 -g -w -Drdp_init=orc_rdp_init -I$(ORC)
 
-all: $(B)/rdpo $(B)/rdpo_exact $(B)/rdpgen
+all: $(B)/rdpo $(B)/rdpo_x $(B)/rdpo_exact $(B)/rdpgen
 
 $(B):
 	mkdir -p $(B)
@@ -38,6 +38,11 @@ $(B)/oracle.o: oracle_glue.c $(ORC)/n64video.c | $(B)
 # the model as the RTL is
 $(B)/rdpo: rdpo.c $(B)/oracle.o $(B)/rdp_hooked.c $(M)/rdp.h | $(B)
 	$(CC) $(CFLAGS) -DRDP_N64 -I$(M) rdpo.c $(B)/rdp_hooked.c $(B)/oracle.o -o $@
+
+# the model with the rules rtl/rdp follows (XRULES, the same default as sim/rdp/build_rtl.sh): the RTL's differences from the oracle
+XRULES ?= -DRDP_X_RECTLOD -DRDP_X_COPY
+$(B)/rdpo_x: rdpo.c $(B)/oracle.o $(B)/rdp_hooked.c $(M)/rdp.h | $(B)
+	$(CC) $(CFLAGS) -DRDP_N64 $(XRULES) -I$(M) rdpo.c $(B)/rdp_hooked.c $(B)/oracle.o -o $@
 
 # the model with RDP_EXACT (docs/rdp_exact.md: the console's rules, which the RTL does not follow yet)
 $(B)/rdpo_exact: rdpo.c $(B)/oracle.o $(B)/rdp_hooked.c $(M)/rdp.h | $(B)

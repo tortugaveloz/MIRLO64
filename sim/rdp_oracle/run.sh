@@ -1,7 +1,7 @@
 #!/bin/sh
 # Generate every suite's streams (build/streams/) and run them through the model
 # against the oracle: the model without RDP_EXACT (rdpo) and with it
-# (rdpo_exact: docs/rdp_exact.md, the console's rules). One TOTAL line a suite and build;
+# (rdpo_x: the rules rtl/rdp follows; rdpo_exact: docs/rdp_exact.md, all the console's rules). One TOTAL line a suite and build;
 # the full reports go to build/logs/. Usage: ./run.sh [seeds] (default 10)
 set -e
 cd "$(dirname "$0")"
@@ -41,11 +41,11 @@ run() {    # run BUILD SUITE...
     done
 }
 echo "== calibration, no LOD (rdpo; rdpo_exact: RDP_EXACT)"
-for b in rdpo rdpo_exact; do
+for b in rdpo rdpo_x rdpo_exact; do
     run $b cal_flat cal_aa cal_shade cal_z cal_aff cal_persp cal_rect cal_t1
 done
 echo "== LOD (rdpo: the model without RDP_EXACT; rdpo_exact: with it)"
-for b in rdpo rdpo_exact; do
+for b in rdpo rdpo_x rdpo_exact; do
     run $b units_cc0 units_cc1 units_cc2 units_cc3 floor floor_affine lod2 lod2_exact frac2 frac2_exact rect lod1 lod1_control lod1_level0 lod1_level0_detail lod2_t1 lod1_t1
 done
 echo "== sensitivity: the model with one LOD choice changed, on the units streams (each should differ)"
@@ -77,6 +77,8 @@ if [ -n "$dumps" ]; then
     done
     ./build/rdpo -q build/frames/*.rdps > build/logs/frames.log 2>&1 || true
     echo "== captured frames (build/triage, rdpo): $(sed -n 's/^TOTAL //p' build/logs/frames.log)"
+    ./build/rdpo_x -q build/frames/*.rdps > build/logs/frames_x.log 2>&1 || true
+    echo "== captured frames (build/triage, rdpo_x: the rules rtl/rdp follows): $(sed -n 's/^TOTAL //p' build/logs/frames_x.log)"
     ./build/rdpo_exact -q build/frames/*.rdps > build/logs/frames_exact.log 2>&1 || true
     echo "== captured frames (build/triage, rdpo_exact): $(sed -n 's/^TOTAL //p' build/logs/frames_exact.log)"
 fi

@@ -180,6 +180,9 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  *   RDP_EXACT      the console's rules where the model had its own (docs/rdp_exact.md): its span start and attribute
  *                  steps, its 12-bit edges, rectangles walked as its primitives, copy mode by groups of pixels, TEXEL1
  *                  a pixel ahead, the LOD in 1-cycle and copy mode too. Off, as rtl/rdp does not follow them yet
+ *   RDP_X_*       one of RDP_EXACT's rules by itself, for the benches of an RTL that follows some and not all
+ *                  (RDP_X_RECTLOD: a texture rectangle's LOD next line; RDP_X_SHADE: the shade and Z at the first covered sample, the console's dz code; RDP_X_COPY: copy mode by groups of pixels, its
+ *                  texel never clamped); RDP_EXACT is all of them
  * (Without RDP_NO_BLEND, RDP_CVG, the model is rtl/rdp's: also the texture
  * level of detail of a 2-cycle primitive, the level's tiles and LOD_FRACTION
  * (rdp.c, docs/lod.md), the console's perspective divide, rdp_n64_div, and

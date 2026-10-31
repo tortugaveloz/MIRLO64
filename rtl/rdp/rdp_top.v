@@ -266,8 +266,9 @@ module rdp_top (
     reg  [16:0] ldy_s, ldy_t, ldy_w;
     wire        lpass = !pix_valid;
     wire        rflip = op == 6'h25;
-    wire [31:0] dy_s = p_direct ? (rflip ? {{16{t_dxl[31]}}, t_dxl[31:16]} : 32'd0) : {ldy_s, 15'd0};
-    wire [31:0] dy_t = p_direct ? (rflip ? 32'd0 : {{16{t_dxl[15]}}, t_dxl[15:0]}) : {ldy_t, 15'd0};
+    // (the console keeps a rectangle's row step to the same 17 bits of a 16.16 DaDy as a triangle's: DsDx's or DtDy's low 4 bits are 0)
+    wire [31:0] dy_s = p_direct ? (rflip ? {{16{t_dxl[31]}}, t_dxl[31:20], 4'd0} : 32'd0) : {ldy_s, 15'd0};
+    wire [31:0] dy_t = p_direct ? (rflip ? 32'd0 : {{16{t_dxl[15]}}, t_dxl[15:4], 4'd0}) : {ldy_t, 15'd0};
     wire [31:0] cur_s = cur[4] + (lpass ? dy_s : 32'd0);
     wire [31:0] cur_t = cur[5] + (lpass ? dy_t : 32'd0);
     wire [31:0] cur_w = {cur[6][31:15] + ((lpass && !p_direct) ? ldy_w : 17'd0), cur[6][14:0]};
@@ -320,7 +321,7 @@ module rdp_top (
         .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
         .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(sc_field ? y[2:1] : y[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
-        .in_s(pr_s), .in_t(pr_t), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
+        .in_s(pr_s), .in_t(pr_t), .in_m(cp_m_q), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
         .tm_q0(tm_q0), .tm_q1(tm_q1), .tm_q2(tm_q2), .tm_h0(tm_h0), .tm_h1(tm_h1), .tm_h2(tm_h2),
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
@@ -421,6 +422,7 @@ module rdp_top (
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
     reg [4:0]  mi;                  // multiplier sequence index
+    reg  [2:0] cp_m_q;           // the place in its group of the pixel issued (copy mode)
     reg        kind_tri, kind_texrect, kind_fillmode, kind_rect;   // what is being drawn
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
@@ -671,7 +673,7 @@ module rdp_top (
     wire signed [10:0] r_dc11 = $signed({1'b0, xs}) - $signed({1'b0, rx0});      // (11 and 13 bits, then extended)
     // in quarter pixels, the products then over 4: the rows from YH's whole row, the columns from XH itself
     // (4 (xs - XH's column) - XH's fraction; none in copy mode): the column-stepped attribute is the plane at XH
-    wire [31:0] r_dcol = {{19{r_dc11[10]}}, r_dc11, 2'b00} - {30'd0, rxf};
+    wire [31:0] r_dcol = (cyc == 2'd2) ? 32'd0 : {{19{r_dc11[10]}}, r_dc11, 2'b00} - {30'd0, rxf};     // (copy: the group count starts at the first pixel drawn)
     wire [31:0] r_drow = {rdiff(y, ry0), 2'b00};
     wire [11:0] md_b = (mi == 5'd2) ? ymr : ((st == S_TRI_INIT && mi == 5'd11) || st == S_RECT_INIT) ? 12'd0 : y0r;
     wire [31:0] md_k = rdiff(y, md_b);
@@ -723,11 +725,16 @@ module rdp_top (
     // pixels' step. A triangle's load goes through the step's adder, as 0 + the value in place of cur + adx: each attribute
     // has one adder and nothing behind it (the fitter put a second source of a register's behind its own adder in a
     // route-through LUT a bit: 170 of them, and a mux).
-    wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp;
+    // copy mode (a texture rectangle's): S or T steps once a group of 4 pixels (8 in an 8-bit image) -- the issue of a group's first
+    // pixel -- and the pixel's place in its group goes down the pipe to the texel (docs/rdp_exact.md, rule 6)
+    reg  [2:0]  cp_m;
+    wire        cp_on = p_direct && cyc == 2'd2;
+    wire        cp_end = cp_m == (cimg8 ? 3'd7 : 3'd3);
+    wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp && (!cp_on || cp_m == 3'd0);
     // (a texrect's S and T are t_xl's halves, shifted, plus the product: the same adder as a triangle's e + the product)
     wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
     wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
-    wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
+    wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : (cyc == 2'd2 && op == 6'h25 && !mi[0]) ? mul_p[31:0] : mul_p[33:2]);
     wire [7:0]  cur_ld;
     genvar cg;
     generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
@@ -1101,13 +1108,13 @@ module rdp_top (
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
                         shS <= rs_ds;
-                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
+                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : cyc == 2'd2 ? {r_dsdx[29:0], 2'd0} : r_dsdx;     // (copy: a group's step, /128)
                         adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
                         if (mi == 5'd3) st <= S_PIX;
                     end
                 end
-                px_cnt <= 10'd0;
+                px_cnt <= 10'd0; cp_m <= 3'd0;
                 pix_stp <= 1'b0; pix_fol <= 1'b0; pix_g0 <= lod_on && !lod_lft;
             end
 
@@ -1143,10 +1150,12 @@ module rdp_top (
                 end else if (pix_go) begin
                     pix_valid <= 1'b1; pix_ghost <= 1'b0;
                     pix_x <= xs + px_cnt;
+                    cp_m_q <= cp_m;
                     pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
                     pix_stp <= 1'b1;
                     pix_fol <= lod_on && lod_lft;
                     px_cnt <= px_cnt + 10'd1;
+                    cp_m <= cp_end ? 3'd0 : cp_m + 3'd1;
                     // (walking right with the LOD the row ends with the last pixel's ghost)
                     if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe && !(lod_on && lod_lft)) begin
                         st <= spl ? S_SPL : S_NEXT;

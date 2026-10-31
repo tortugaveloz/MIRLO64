@@ -20,6 +20,12 @@ TB_C8=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 36 150
 # the SoC's memory
 for s in 41 42 43 44 45 46 47 48; do TB_C32=1 run ./obj_rdp/tb_rdp -r $s 200; done
 for s in 49 50; do TB_C32=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r $s 150; done
+# copy mode by groups of pixels, the scissor cutting a rectangle, mirrors and masks (rule 6), 8-bit images in groups of 8
+for s in 71 72 73 74 75 76 77 78; do TB_COPY=1 run ./obj_rdp/tb_rdp -r $s 200; done
+for s in 79 80; do TB_COPY=1 TB_C8=1 run ./obj_rdp/tb_rdp -r $s 200; done
+TB_COPY=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 81 150
+# a texture rectangle's LOD: the next line as the console keeps it (rule 2)
+for s in 101 102 103 104 105 106; do TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rdp -r $s 300; done
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))

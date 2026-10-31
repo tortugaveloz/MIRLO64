@@ -196,11 +196,15 @@ static const bool cc_mode = getenv("TB_CC") != nullptr;
 // texel to tens, the LOD blend (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0 often, SET_PRIM_COLOR's minimum level, more
 // YUV tiles. Without it the streams are what they were, call for call.
 static const bool lod_mode = getenv("TB_LOD") != nullptr;
+// TB_COPY=1: copy mode three modes in four (texture rectangles by groups of pixels, the scissor cutting them, mirrors and masks)
+static const bool copy_mode = getenv("TB_COPY") != nullptr;
+// TB_RECT=1: a texture rectangle in a command in six more (with TB_LOD: the LOD's next line of a rectangle)
+static const bool rect_mode = getenv("TB_RECT") != nullptr;
 static void rand_modes()
 {
     static const unsigned cyc[10] = { 0, 0, 0, 0, 1, 1, 1, 2, 3, 0 };
     uint32_t h = gr() & 0x00FFFFFFu & ~(3u << 20), l = gr() << 8 | gr(256);
-    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : cyc[gr(10)]) << 20;
+    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : (copy_mode && gr(4)) ? 2u : cyc[gr(10)]) << 20;
     if (lod_mode && gr(2)) h |= 1u << 16;               // (TEX_LOD three times in four)
     if (cc_mode) l &= ~(0xF0000000u | 1u << 14);
     if (gr(3)) h &= ~(1u << 15);                       // the TLUT mostly off
@@ -372,7 +376,8 @@ static void rand_stream(unsigned seed, int n)
     rand_timg(); rand_modes(); rand_combine();
     for (int i = 0; i < n; i++) {
         unsigned k = gr(100);
-        if (k < 30) rand_tri();
+        if (rect_mode && k >= 60 && k < 66) rand_rect(1);
+        else if (k < 30) rand_tri();
         else if (k < 38) rand_rect(1);
         else if (k < 42) rand_rect(0);
         else if (k < 52) rand_modes();

@@ -87,6 +87,7 @@ module rdp_pix (
     input  wire        in_set,           // the row's line-buffer set
     input  wire [1:0]  row_y,                  // the row (its low bits), steady while its pixels run
     input  wire [31:0] in_r, in_g, in_b, in_a, in_w, in_z,
+    input  wire [2:0]  in_m,                 // copy mode: the pixel's place in its group of 4 (8) pixels
     input  wire [15:0] in_s, in_t,           // S and T in 16 bits: the integer halves the perspective divide takes, or a rectangle's s10.5
     input  wire [7:0]  in_mask,          // the pixel's samples (bit 7 the top-left; 0xFF: all)
 
@@ -302,6 +303,7 @@ module rdp_pix (
         // gives while it waits: S = T = W = 0 there too)
         if (!dup0 || lod_on) begin
             s0r <= p_tex ? in_s : 16'd0; t0r <= p_tex ? in_t : 16'd0; w0r <= p_tex ? in_w : 32'd0;
+            m0r <= in_m;
         end
     end
     wire [31:0] zin_c = z0r + zc0;
@@ -403,11 +405,13 @@ module rdp_pix (
     reg [9:0]  sl1;
     reg [7:0]  f1;
     reg [3:0]  sh1;
+    reg [2:0]  m0r, m1r, m2r, m3r, m4r;   // (copy mode's place in the group, with S, T from P0 to P4)
     reg [15:0] s1r, t1r;
     always @(posedge clk) begin
         v1 <= v0 & ~rst; ph1 <= ph0; g1 <= g0;
         pt1 <= dv_pt; sl1 <= dv_sl; f1 <= wn[7:0]; sh1 <= sh_c;
         s1r <= s0r; t1r <= t0r;
+        m1r <= m0r; m2r <= m1r; m3r <= m2r; m4r <= m3r;
         wle1 <= w0r[31] || w0r[30:16] == 15'd0;
     end
 
@@ -633,6 +637,7 @@ module rdp_pix (
     wire signed [23:0] vt5 = tcs_t - $signed({9'd0, t_ult, 3'd0});
     reg        v5;
     reg signed [23:0] vs5r, vt5r;
+    reg [2:0]  m5r;                   // copy mode: the pixel's place in its group
     always @(posedge clk) begin
         // (with the LOD the passes come D clocks after their perspective divides: L3's)
         v5 <= (lod_on ? (p5_a || p5_b) : v4) & ~rst;
@@ -645,6 +650,7 @@ module rdp_pix (
         c5_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
         conv5 <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
         vs5r <= vs5; vt5r <= vt5;
+        m5r <= m4r;
     end
 
     // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction
@@ -653,14 +659,27 @@ module rdp_pix (
         input  [11:0] lo, hi;
         input  clampbit, mirror;
         input  [3:0] mask;
+        input        cpy;              // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped
+        input  [2:0] cm;
         output [10:0] c0, c1;
         output [4:0]  fr;
         reg signed [18:0] i, j, mx, m;
         reg [4:0] f;
+        reg [3:0] mc;
         begin
             i = v >>> 5;
             f = v[4:0];
+            if (cpy) i = i + $signed({16'd0, cm});
             j = i + 19'sd1;
+            if (cpy) begin
+                // (at most 10 bits of the mask count; none without one)
+                mc = mask > 4'd10 ? 4'd10 : mask;
+                if (mask != 4'd0) begin
+                    if (mirror && ((i >>> mc) & 19'sd1)) i = ~i;
+                    i = i & (((19'sd1 <<< mask) - 19'sd1) & 19'sd1023);
+                end
+                j = i; f = 5'd0;
+            end else
             if (clampbit || mask == 4'd0) begin
                 mx = ($signed({7'd0, hi}) - $signed({7'd0, lo})) >>> 2;
                 if (i < 0) begin i = 0; j = 0; f = 0; end
@@ -679,11 +698,12 @@ module rdp_pix (
         end
     endtask
 
+    wire       cpy5 = cyc == 2'd2 && p_direct && p_tex;
     reg [10:0] s0c, s1c, t0c, t1c;
     reg [4:0]  fsc, ftc;
     always @(*) begin
-        tc_axis(vs5r, u5_uls, u5_lrs, u5_cs, u5_ms, u5_masks, s0c, s1c, fsc);
-        tc_axis(vt5r, u5_ult, u5_lrt, u5_ct, u5_mt, u5_maskt, t0c, t1c, ftc);
+        tc_axis(vs5r, u5_uls, u5_lrs, u5_cs, u5_ms, u5_masks, cpy5, m5r, s0c, s1c, fsc);
+        tc_axis(vt5r, u5_ult, u5_lrt, u5_ct, u5_mt, u5_maskt, cpy5, 3'd0, t0c, t1c, ftc);
     end
     reg        v6;
     reg [10:0] s06, s16, t06, t16;
