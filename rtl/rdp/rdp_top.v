@@ -712,8 +712,18 @@ module rdp_top (
     generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
         assign cur_ld[cg] = st == S_SETUP && kind_tri && mi == cg + 2;     // (e[ea] with ea = mi - 2)
     end endgenerate
+    // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
+    // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
+    wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
+    wire        ax_stp = st == S_AASUB && !aa_j[2];
+    wire        ex_ld  = st == S_TRI_INIT && mi == 5'd2;
+    wire        ex_stp = st == S_NEXT && (!kind_tri || es_done);
     integer ci;
     always @(posedge clk) begin
+        if (ax_ldh || ax_stp) ax_h <= (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
+        if (ax_ldm || ax_stp) ax_m <= (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
+        if (ax_ldl || ax_stp) ax_l <= (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
+        if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
                 cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
@@ -990,7 +1000,6 @@ module rdp_top (
                     // (the operands: mul_ad / mul_bd)
                     // products come back two cycles later
                     case (mi)
-                        5'd2:  exh <= aa_init;
                         // 5..12: e[mi - 5] = e + k DaDe (the RAM writes below)
                         5'd13: row_off <= cimg8 ? mul_p[31:0] : {mul_p[30:0], 1'b0};
                         default: ;
@@ -1008,9 +1017,8 @@ module rdp_top (
             S_AAINIT: begin
                 case (mi)
                     5'd0, 5'd1: ;
-                    5'd2: ax_h <= aa_init;
-                    5'd3: ax_m <= aa_init;
-                    default: begin ax_l <= aa_init; st <= S_ROW; end
+                    5'd2, 5'd3: ;
+                    default: st <= S_ROW;
                 endcase
                 mi <= mi + 5'd1;
             end
@@ -1045,9 +1053,6 @@ module rdp_top (
 
             // ---- AA_EN: the row's four subscanlines (and a clock for the last's stage 2)
             S_AASUB: begin
-                if (!aa_j[2]) begin
-                    ax_h <= ax_h + aq_h; ax_m <= ax_m + aq_m; ax_l <= ax_l + aq_l;
-                end
                 aa_j <= aa_j + 3'd1;
                 aa_lo <= (aa_yq + 14'sd1) < ym_s;
                 if (aa_j == 3'd4) st <= S_AASPAN;
@@ -1172,7 +1177,6 @@ module rdp_top (
             S_NEXT: if (!kind_tri || es_done) begin
                 y <= y + 12'sd1;
                 row_off <= row_off + (cimg8 ? {21'd0, cimg_width} : {20'd0, cimg_width, 1'b0});
-                exh <= exh + t_dxh;
                 es_done <= 1'b0;
                 st <= S_ROW;
             end else if (es == 4'd8) es <= 4'd0;
