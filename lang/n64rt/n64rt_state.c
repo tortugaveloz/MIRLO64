@@ -50,7 +50,7 @@
 #include "n64rt.h"
 
 #define SS_MAGIC    0x4D535331u         /* "MSS1" */
-#define SS_VERSION  3u
+#define SS_VERSION  4u
 /* the state's block (layout.h LAYOUT_STATE, LAYOUT_STATE_BYTES, its largest): the header and the registers at fixed offsets,
  * then the regions one after the other, each a stream of tokens (rle_put) of the words of a memory */
 #define SS_HEAD     0x000000u           /* ss_head_t */
@@ -99,6 +99,8 @@ typedef struct {
     /* the Game Boy cartridges' RAM (and clock) bytes in their regions: 0 for no cartridge */
     u32 gb_bytes[2];
     u64 uptime;                         /* the SoC's clock when the state was made */
+    /* the CPU's own TLB (n64rt_tlbreal; else zeros): each entry's PageMask, EntryHi, EntryLo0, EntryLo1, as tlbr gives them */
+    u32 tlb[32][4];
 } ss_hw_t;
 _Static_assert(sizeof(ss_head_t) <= 0x1000u && sizeof(ss_hw_t) <= 0x2000u, "the state's header and registers");
 
@@ -141,6 +143,8 @@ static inline void hw_wr(u32 pa, u32 v) { *(volatile u32 *)(uintptr_t)(0xA000000
 
 #define MFC0(r)     ({ u32 _v; __asm__ volatile("mfc0 %0, $" #r : "=r"(_v)); _v; })
 #define MTC0(r, v)  __asm__ volatile("mtc0 %0, $" #r "\n\tnop\n\tnop" :: "r"((u32)(v)))
+#define TLBR()      __asm__ volatile("tlbr\n\tnop\n\tnop")
+#define TLBWI()     __asm__ volatile("tlbwi\n\tnop\n\tnop")
 
 static inline u64 uptime(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
 #define MS(n) ((u64)(n) * (CONFIG_CLOCK_FREQUENCY / 1000u))
@@ -346,6 +350,15 @@ static void save(void)
     w->wired = MFC0(6); w->badvaddr = MFC0(8); w->entryhi = MFC0(10); w->compare = MFC0(11); w->cause = MFC0(13);
     w->epc = MFC0(14); w->config = MFC0(16); w->lladdr = MFC0(17); w->watchlo = MFC0(18); w->watchhi = MFC0(19);
     w->taglo = MFC0(28); w->mctl = MFC0(7);
+    if (n64rt_tlbreal) {
+        /* the game's 32 TLB entries, by tlbr (it loads PageMask, EntryHi and both EntryLos: the registers above are the game's, and
+         * put back) */
+        for (u32 i = 0; i < 32u; i++) {
+            MTC0(0, i); TLBR();
+            w->tlb[i][0] = MFC0(5); w->tlb[i][1] = MFC0(10); w->tlb[i][2] = MFC0(2); w->tlb[i][3] = MFC0(3);
+        }
+        MTC0(0, w->index); MTC0(2, w->entrylo0); MTC0(3, w->entrylo1); MTC0(5, w->pagemask); MTC0(10, w->entryhi);
+    }
     { u32 c; __asm__ volatile(".set push\n.set noreorder\nli %0, 0\nbc1t 1f\nnop\nb 2f\nnop\n1: li %0, 1\n2:\n.set pop" : "=r"(c)); w->fcc = c; }
     /* the MI */
     w->mi_mode = hw_rd(MI_MODE);
@@ -514,6 +527,12 @@ static void load(void)
     ok &= get_region(h, RG_RT, (void *)(uintptr_t)SS_SCR_RT, (h->rt_bytes + 15u) & ~15u);
     flush_cpu_dcache(); flush_cpu_icache();
     n64rt_tr_flush();                                   /* (the CPU's tables: filled again from the state's entries) */
+    if (n64rt_tlbreal) {                                /* (the CPU's own TLB: the game's 32 entries; the registers they go through are put back below) */
+        for (u32 i = 0; i < 32u; i++) {
+            MTC0(0, i); MTC0(5, w->tlb[i][0]); MTC0(10, w->tlb[i][1]); MTC0(2, w->tlb[i][2]); MTC0(3, w->tlb[i][3]);
+            TLBWI();
+        }
+    }
     mi_put(w);
     /* COP0 (BadVAddr, Context's BadVPN2, Index's P, Cause's BD and ExcCode: the monitor level's to write) */
     MTC0(0, w->index); MTC0(2, w->entrylo0); MTC0(3, w->entrylo1); MTC0(5, w->pagemask); MTC0(6, w->wired);
