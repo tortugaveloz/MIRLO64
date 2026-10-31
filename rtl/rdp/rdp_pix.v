@@ -1148,13 +1148,14 @@ module rdp_pix (
     // the tolerance: the primitive's step (16-bit units: its two low bits set) and no less than what the memory's word has lost
     wire [17:0] ztol11a = {z_tol, 2'b11} | {11'd0, zfl11a};
     wire [18:0] dsum11a = {1'b0, depth11a} + {1'b0, ztol11a};
+    wire [18:0] ddif11a = {1'b0, depth11a} - {1'b0, ztol11a};     // (the borrow: the depth is below the tolerance)
     reg [31:0] mem11;
     always @(posedge clk) begin
         v11 <= v11a & ~rst; x11 <= x11a; bs11 <= bs11a;
         comb11 <= (cyc == 2'd2) ? tex11a : { cc_clamp(c1_w[35:27]), cc_clamp(c1_w[26:18]), cc_clamp(c1_w[17:9]), cc_clamp(c1_w[8:0]) };
         af11 <= (cyc != 2'd2) && cc_a256(c1_w[8:0]);
         shade11 <= shade11a; depth11 <= depth11a;
-        dlo11 <= (depth11a < ztol11a) ? 18'd0 : depth11a - ztol11a;
+        dlo11 <= ddif11a[18] ? 18'd0 : ddif11a[17:0];
         dhi11 <= (dsum11a[18]) ? 18'h3FFFF : dsum11a[17:0];
         zold11 <= zold11a; mem11 <= mem11a;
         memb11 <= memb11a; c0a11 <= c0a11a; c0f11 <= c0f11a; hid11 <= hid11a;
