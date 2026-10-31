@@ -629,8 +629,9 @@ function automatic logic tlb_match(input tlbe_t e, input logic [31:0] va, input 
 endfunction
 // a micro-TLB: the last page translated
 typedef struct packed { logic valid; tlbx_t x; } utlb_t;
-function automatic logic utlb_hit(input utlb_t u, input logic [31:0] va, input logic [7:0] asid);
-    return u.valid && ((va[31:12] ^ u.x.vpage) & ~{7'd0, u.x.om}) == 0 && (u.x.g || u.x.asid == asid);
+// (no ASID in it: a new ASID empties the micro-TLBs, tlb_inval)
+function automatic logic utlb_hit(input utlb_t u, input logic [31:0] va);
+    return u.valid && ((va[31:12] ^ u.x.vpage) & ~{7'd0, u.x.om}) == 0;
 endfunction
 // {hit, valid, dirty, pa}
 function automatic logic [34:0] utlb_res(input tlbx_t x, input logic [31:0] va);
@@ -650,7 +651,7 @@ logic        sc_stale;                       // (TLB_EN) a translation changed d
 logic        tlb_inval, tlb_chg;             // (TLB_EN, this cycle) something changed a translation (tlb_chg: an entry; tlb_inval: or the ASID)
 logic [4:0]  sc_idx;
 tlbx_t       sc_x;
-tlbe_t       sc_e;                           // tlbr's entry
+tlbe_t       sc_e;                           // tlbr's entry (the RAM's, as it is read)
 utlb_t       utlb_f, utlb_m;
 
 // TLB_RAM: the table. Its lookups go through the scanner's request and
@@ -1677,6 +1678,7 @@ always_comb begin
     tlb_wdata.lo1  = c0_entrylo1[31:1];
 end
 
+always_comb sc_e = TLB_EN ? tlb_q : TLBE_RESET;
 // what can change a translation: a write of the TLB, tlbr (it loads EntryHi), a new ASID. The micro-TLBs are emptied and a search under
 // way is stale (F's: its page is searched again)
 assign tlb_chg = TLB_EN && ((m_commit_e && (m_c.tlbwi || m_c.tlbwr)) || (sc == SC_RUN && sc_mode == SCM_READ));
@@ -2039,12 +2041,6 @@ always_ff @(posedge clk) begin
                 if (c0_status[2]) c0_status[2] <= 1'b0; else c0_status[1] <= 1'b0;
                 ll_bit <= 1'b0;
             end
-            if (m_c.tlbr) begin
-                c0_pagemask <= {7'd0, sc_e.mask, 13'd0};
-                c0_entryhi  <= {sc_e.vpn, 5'd0, sc_e.asid};
-                c0_entrylo0 <= {sc_e.lo0, sc_e.g};
-                c0_entrylo1 <= {sc_e.lo1, sc_e.g};
-            end
             if (m_c.tlbp) c0_index <= sc_hit ? {27'd0, sc_idx} : 32'h80000000;
         end
 
@@ -2232,7 +2228,7 @@ always_ff @(posedge clk) begin
         FS_RUN: if (f_ok && !f_have && !f_kill) begin
             f_cnt <= 0; f_discard <= 0; f_xfault <= 0;
             if (!f_kseg) begin
-                if (TLB_EN && utlb_hit(utlb_f, f_pc, c0_entryhi[7:0])) begin fs <= FS_XLAT; f_tlbq <= utlb_res(utlb_f.x, f_pc); f_tc <= utlb_f.x.c && utlb_f.x.pfn[19:11] == 9'd0; end
+                if (TLB_EN && utlb_hit(utlb_f, f_pc)) begin fs <= FS_XLAT; f_tlbq <= utlb_res(utlb_f.x, f_pc); f_tc <= utlb_f.x.c && utlb_f.x.pfn[19:11] == 9'd0; end
                 else begin fs <= FS_WALK; f_wq <= 0; end
             end
             else begin f_fill_pa <= kphys(f_pc); f_fill_col <= f_pc[IW+1:12]; fs <= f_cached ? FS_REFILL : FS_SLOW; end
@@ -2286,7 +2282,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr, c0_entryhi[7:0])) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2353,9 +2349,14 @@ always_ff @(posedge clk) begin
         end
         SC_RUN: begin                                 // tlb_q holds entry sc_k
             if (tlb_inval) sc_stale <= 1'b1;
-            sc_e <= TLB_EN ? tlb_q : TLBE_RESET;
             sc_idx <= sc_k; sc_x <= tlb_xlat(tlb_q, sc_va);
-            if (sc_mode == SCM_READ) sc <= SC_DONE;
+            if (sc_mode == SCM_READ) begin              // tlbr: the registers take the entry (tlbr waits in M for this)
+                sc <= SC_DONE;
+                c0_pagemask <= {7'd0, sc_e.mask, 13'd0};
+                c0_entryhi  <= {sc_e.vpn, 5'd0, sc_e.asid};
+                c0_entrylo0 <= {sc_e.lo0, sc_e.g};
+                c0_entrylo1 <= {sc_e.lo1, sc_e.g};
+            end
             else if (sc_match) begin sc_hit <= 1; sc <= SC_DONE; end
             else if (!TLB_EN || sc_k == 5'(TLB_N - 1)) begin sc_hit <= 0; sc <= SC_DONE; end
             else sc_k <= sc_k + 5'd1;
