@@ -10,7 +10,7 @@ and around it (KSEG1) on the same memory, branches and their likely forms on
 64-bit operands, traps (a handler steps over them), multiplies and divides
 back to back with the moves from HI and LO.
 
-    gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|div|nomd|alu|base]
+    gen_rand_rom.py SEED OUT.z64 [N instructions, default 120000] [full|nodiv|div|i32|i32d|nomd|alu|base]
 
 A last argument "k1" has the program run from KSEG1 (its own code fetched
 uncached, a word at a time; the trap handler stays in KSEG0).
@@ -36,12 +36,15 @@ def main():
     # what the core under test has (mips_core's levels): "full" W64_ALU + SH +
     # MD; "nodiv" without ddiv / ddivu (W64_DIV off); "div" the same as "full" but mostly divides, on the values where a divider
     # goes wrong (zero, one, the limits, powers of two and their neighbours, equal operands, a quotient of one bit or of 64);
+    # "i32" and "i32d": "base" (every register but 20 to 25 holds a 32-bit value) with the multiplies and divides too, dmult(u)
+    # ("i32") or ddiv ("i32d") among them -- to compare the cycles of a core with those of another, an instruction a core
+    # does not do being the point of the other modes;
     # "nomd" without dmult / ddiv; "alu" without the d-shifts too; "base"
     # W64 alone -- 64-bit values come from ld and lwu only, into registers 20
     # to 25, and nothing the core leaves to the runtime reads those
     mode = sys.argv[4] if len(sys.argv) > 4 else "full"
-    assert mode in ("full", "nodiv", "div", "nomd", "alu", "base")
-    nomd, base = mode not in ("full", "nodiv", "div"), mode == "base"
+    assert mode in ("full", "nodiv", "div", "i32", "i32d", "nomd", "alu", "base")
+    nomd, base = mode not in ("full", "nodiv", "div", "i32", "i32d"), mode in ("base", "i32", "i32d")
     WIDE = list(range(20, 26))
     # "e2e": the program as a game under the runtime (n64rt) on the SoC -- no
     # traps and no handler of its own, and at the end every register, HI and
@@ -105,12 +108,15 @@ def main():
             I(op, 0 if op == 0x0F else src() if op in (0x09, 0x0C, 0x18, 0x19) else nsrc(), nreg(), imm)
         elif k < (0.95 if mode == "div" else 0.84):   # multiply, divide, HI and LO
             fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
+            if mode == "i32": fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1A, 0x1B, 0x1C, 0x1D, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
+            if mode == "i32d": fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B, 0x1A, 0x1B, 0x1E, 0x10, 0x12, 0x10, 0x12, 0x11, 0x13])
             if mode == "div" and rnd.random() < 0.8: fn = rnd.choice([0x1A, 0x1B, 0x1E, 0x1F, 0x1E, 0x1F, 0x10, 0x12])
             if nomd and fn in (0x1C, 0x1D, 0x1E, 0x1F): fn = rnd.choice([0x18, 0x19, 0x1A, 0x1B])
             if mode == "nodiv" and fn in (0x1E, 0x1F): fn = rnd.choice([0x1C, 0x1D, 0x1C, 0x1D, 0x10, 0x12])   # (more dmult: back to back, and mfhi / mflo right behind)
             if fn in (0x10, 0x12): R(0, 0, nreg(), 0, fn)
             elif fn in (0x11, 0x13):            # (HI and LO are 32 bits without dmult: a 32-bit value)
                 R(src() if mode in ("full", "nodiv", "div") else nreg() if base else rnd.choice([0, CACHED, UNC]), 0, 0, 0, fn)
+            elif mode in ("i32", "i32d"): R(nsrc(), nsrc(), 0, 0, fn)
             else: R(src(), src(), 0, 0, fn)
         else:                                   # a 64-bit value again
             I(0x37, TAB, wreg(), 8 * rnd.randrange(32))
