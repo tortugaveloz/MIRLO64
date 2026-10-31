@@ -121,7 +121,7 @@ function automatic cdec_t cdecode(input logic [31:0] i);
     // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
     d.fast = f == 6'h27 || mov || (f >= 6'h28 && f <= 6'h2D) || f == 6'h1D || (d.rcp && f[1:0] == 2'd2);
     d.cmp  = f == 6'h13 || (f >= 6'h20 && f <= 6'h23) || d.ch || d.rcp;     // (a reciprocal's accumulator word is vt, too)
-    d.cin  = f == 6'h10 || f == 6'h11 || f == 6'h24;               // reads VCO in EX1: VADD and VSUB for their carry, VCL for its compare
+    d.cin  = f == 6'h10 || f == 6'h11 || (f >= 6'h20 && f <= 6'h26 && f != 6'h21 && f != 6'h22);   // reads the flags in EX1: VADD and VSUB for their carry, the compares and clips for theirs
     unique case (f)
     6'h10:   d.am = 3'd1;
     6'h11:   d.am = 3'd2;
@@ -294,6 +294,29 @@ function automatic add_t lane_x1(input logic [2:0] am, input logic [15:0] s, inp
     return o;
 endfunction
 
+// EX1, a compare or a clip: which of s, t and -t (~t) the result is -- the select of lane_x2, from the adder's flags of this
+// cycle and the flag registers -- registered (pk_r), so that EX2 has no compare in front of its result
+function automatic logic [1:0] lane_pk(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input logic [3:0] fr,
+                                       input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce);
+    logic sign, cout, b16, zero, ones, eq, z17, cs, negside, cond, le_f, ge_f;
+    sign = s[15] ^ t[15];
+    {cout, b16, zero, ones} = fr;
+    eq = zero; z17 = zero && !b16;
+    cs = f == 6'h20 ? (b16 || (eq && co_hi && co_lo)) : (!b16 && !eq) || (eq && !(co_hi && co_lo));      // VLT, VGE
+    if (f == 6'h24) begin                                    // VCL: by VCO, the unsigned compare (cout is s >= t)
+        le_f = (co_lo && !co_hi) ? (ce ? (zero || !cout) : (zero && !cout)) : cc_lo;
+        ge_f = (!co_lo && !co_hi) ? cout : cc_hi;
+        negside = co_lo;
+    end else begin                                           // VCH, VCR: by the signs
+        le_f = sign ? (b16 || z17) : t[15];
+        ge_f = sign ? t[15] : !b16;
+        negside = sign;
+    end
+    cond = negside ? le_f : ge_f;
+    if (f == 6'h20 || f == 6'h23) return cs ? 2'd0 : 2'd1;
+    return !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2;
+endfunction
+
 // EX1, a multiply: the product into the accumulator (all 48 bits)
 function automatic logic [47:0] lane_mac(input logic [5:0] f, input logic signed [33:0] p, input logic [47:0] accm);
     logic signed [47:0] term;
@@ -311,7 +334,7 @@ endfunction
 // EX2, any computation but a multiply: from the registered sum (lo) and flags (fr, the adder's {carry, b16, zero,
 // ones} of its compare) the result, the accumulator's low word, the flags and the register write's data
 function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
-                                  input logic [15:0] lo, input logic [47:0] accm,
+                                  input logic [15:0] lo, input logic [47:0] accm, input logic [1:0] pk_in,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);
     lane_t o = '0;
@@ -359,9 +382,9 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
     cond = negside ? le_f : ge_f;
     unique case (f)
     6'h13:                    pk = s[15] ? 2'd2 : 2'd1;
-    6'h20, 6'h23, 6'h27:      pk = cs ? 2'd0 : 2'd1;
+    6'h27:                    pk = cs ? 2'd0 : 2'd1;
     6'h22:                    pk = 2'd0;
-    6'h24, 6'h25, 6'h26:      pk = !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2;
+    6'h20, 6'h23, 6'h24, 6'h25, 6'h26: pk = pk_in;                 // (made in EX1: lane_pk)
     default:                  pk = 2'd1;                     // VEQ, VRCP.., VMOV: vt
     endcase
     unique case (pk)
@@ -481,11 +504,14 @@ logic [4:0]         x_vdn;
 logic [2:0]         x_de;
 logic [15:0]        lo_r [LANES];             // the adder's sum, and its flags (the first cycle's)
 logic [3:0]         fl_r [LANES];
+logic [1:0]         pk_r [LANES];             // a compare's or a clip's choice among s, t and -t
 add_t               ad [LANES];
+logic [1:0]         pk1 [LANES];
 logic [47:0]        mac [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
         ad[l]  = lane_x1(x_am, s_r[l], t_r[l], vco[l]);
+        pk1[l] = lane_pk(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
         mac[l] = lane_mac(x_fn, p_r[l], {acc_h[l], acc_m[l], acc_l[l]});
     end
 wire x_nm  = x_v && !x_mul;                   // a computation that is not a multiply is in EX1
@@ -501,7 +527,7 @@ lane_t ex2 [LANES];
 logic [15:0] mres [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        ex2[l]  = lane_x2(y_fn, y_ve, s_r[l], t_r[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
         mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]});
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
@@ -839,7 +865,7 @@ always_ff @(posedge clk) begin
             end else begin
                 for (int l = 0; l < LANES; l++) begin
                     lo_r[l] <= ad[l].lo;
-                    if (!x_sec) fl_r[l] <= ad[l].fl;                    // (a clip's second cycle makes -t: its flags are the first's)
+                    if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; end    // (a clip's second cycle makes -t: its flags are the first's)
                 end
                 if (x_wait && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;
             end
