@@ -789,7 +789,8 @@ wire x_free   = !(m_v && m_vdn == rb_live) && !(x_v && x_vdn == rb_live) && !(y_
 wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
 // (a load into the register a computation is to write would be written over by it, put off or not)
 logic [4:0] l_reg;                                            // (the register a load or MTC2 writes: registered with the instruction)
-always_ff @(posedge clk) if (adv) l_reg <= ldecode(lins_n).mtc2 ? lins_n[15:11] : lins_n[20:16];
+wire  mtc2_n = lins_n[31:26] == 6'h12 && !lins_n[25] && lins_n[24:21] == 4'd4;     // (MTC2, of the instruction entering E)
+always_ff @(posedge clk) if (adv) l_reg <= mtc2_n ? lins_n[15:11] : lins_n[20:16];
 wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
 wire ls_go    = ld.go;
 wire m_stall  = swc2 ? m_stall_st : m_stall_ld;                              // (the port, for the load or store of E)
