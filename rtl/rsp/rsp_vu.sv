@@ -762,18 +762,21 @@ logic        ct_v, ct_p;              // CTC2 started last cycle (its write is n
 logic [1:0]  ct_r;
 logic [15:0] ct_d;
 logic [1:0]  cf_r;
-logic [15:0] f_vco, f_vcc;
-logic [7:0]  f_vce;
+// (the register CFC2 names is chosen first, and then only its 16 bits take the older EX's flags: bit g_we of the register
+// as that EX writes it, g_val)
+logic [15:0] cf_base, cf_val, cf_we, cf_o;
 always_comb begin
-    f_vco = vco; f_vcc = vcc; f_vce = vce;
-    if (cf_x && x_exec)
-        for (int l = 0; l < LANES; l++) begin
-            automatic int li = int'(x_pass) * LANES + l;
-            if (ex[l].co_w) begin f_vco[li] = ex[l].co_lo; f_vco[8 + li] = ex[l].co_hi; end
-            if (ex[l].cc_w) begin f_vcc[li] = ex[l].cc_lo; f_vcc[8 + li] = ex[l].cc_hi; end
-            if (ex[l].ce_w) f_vce[li] = ex[l].ce;
-        end
-    res_l = cf_r == 2'd0 ? {{16{f_vco[15]}}, f_vco} : cf_r == 2'd1 ? {{16{f_vcc[15]}}, f_vcc} : {24'd0, f_vce};
+    cf_base = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
+    cf_val = '0; cf_we = '0;
+    for (int l = 0; l < LANES; l++) begin
+        automatic int li = int'(x_pass) * LANES + l;
+        cf_we[li]  = cf_x && x_exec && (cf_r == 2'd0 ? ex[l].co_w : cf_r == 2'd1 ? ex[l].cc_w : ex[l].ce_w);
+        cf_val[li] = cf_r == 2'd0 ? ex[l].co_lo : cf_r == 2'd1 ? ex[l].cc_lo : ex[l].ce;
+        cf_we[8 + li]  = cf_x && x_exec && !cf_r[1] && (cf_r[0] ? ex[l].cc_w : ex[l].co_w);
+        cf_val[8 + li] = cf_r[0] ? ex[l].cc_hi : ex[l].co_hi;
+    end
+    cf_o = (cf_we & cf_val) | (~cf_we & cf_base);
+    res_l = cf_r[1] ? {24'd0, cf_o[7:0]} : {{16{cf_o[15]}}, cf_o};
 end
 
 always_comb begin
