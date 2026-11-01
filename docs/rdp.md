@@ -724,7 +724,8 @@ Where the area goes, without figures:
   load addresses. The pixel pipeline has its own for the perspective divide
   (the reciprocal's table in logic),
   the tile shift, the TMEM row address, the filter, the two combiner cycles,
-  the coverage and the two blender cycles with their divide.
+  the coverage and the two blender cycles with their divide, and the step of the
+  shade and of Z to a pixel's first covered sample (one block a shade channel, two for Z).
 * **Registered stages.** Each combiner and blender cycle is two stages, the
   operand selects then the arithmetic, and the decoded texels are registered
   before the filter.
