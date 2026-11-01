@@ -2036,9 +2036,7 @@ always_ff @(posedge clk) begin
                 // XContext, TagHi and the reserved registers take no write)
                 // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game -- and to put the game's back, a state loaded)
                 5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
-                5'd0:  begin c0_index[5:0] <= m_st_lo[5:0];
-                             // (the monitor does the game's tlbp: its P bit, which no mtc0 of the game's reaches)
-                             if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_index[31] <= m_st_lo[31]; end
+                5'd0:  begin c0_index[5:0] <= m_st_lo[5:0]; c0_index[31] <= m_st_lo[31]; end   // (P is writable, as the VR4300's)
                 5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
                 5'd4:  begin c0_context[31:23] <= m_st_lo[31:23];
                              // (likewise its BadVPN2: the tables' faults do not set it)
@@ -2049,7 +2047,7 @@ always_ff @(posedge clk) begin
                              if (MON && m_st_lo[11]) mon_mem4 <= m_st_lo[10];          // (bit 11: the write is of bit 10)
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)
-                5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo;
+                5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
                 5'd14: c0_epc <= m_st_lo;
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
                 5'd17: c0_lladdr <= m_st_lo;

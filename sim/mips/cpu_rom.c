@@ -88,6 +88,23 @@ static void sec_fcr(void)
     check(0x0303, v, 0);
 }
 
+/* ---- Index and Status: what is writable */
+static void sec_cop0_masks(void)
+{
+    u32 prev = MFC0(0);
+    MTC0(0, 0xFFFFFFFFu);
+    check(0x0401, MFC0(0), 0x8000003F);                                /* P is writable, with the six bits of the index */
+    MTC0(0, 0);
+    check(0x0402, MFC0(0), 0);
+    MTC0(0, prev);
+
+    u32 st = MFC0(12);
+    MTC0(12, st | 0x00080000u);                                        /* bit 19 reads 0 */
+    check(0x0411, MFC0(12), st & ~0x00080000u);
+    MTC0(12, st);
+    check(0x0412, MFC0(12), st);
+}
+
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -98,6 +115,7 @@ int main(void)
         *K1(v + 12) = 0;
     }
     sec_fcr();
+    sec_cop0_masks();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;

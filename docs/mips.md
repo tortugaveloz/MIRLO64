@@ -444,7 +444,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 | 22 | Read only: the physical address a page gave to the last device access through the TLB that the monitor level took; with the tables, the address of the last translation fault it took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
 | 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (1 in the SoC), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
-| 0 (Index) | Bit 31 (P) is writable by `mtc0` while ERL is set |
+| 0 (Index) | Bit 31 (P) is writable by `mtc0`, as the VR4300's |
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
 
