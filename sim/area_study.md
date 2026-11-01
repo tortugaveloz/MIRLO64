@@ -1039,3 +1039,9 @@ Worst setup slack of the last: +1.10 ns (seed 3), the same path as main's (the t
 Verification: `rdp_regress.sh` 80 runs, 0 failed (63 before: the new ones are `TB_COPY` and `TB_LOD` with `TB_RECT`); the 138 captured
 tasks RTL == model, also per command; with the model built without the rules each of the new seeds fails (the benches see them).
 
+
+The whole design (`tools/area2/fit.sh`), the same seeds, main `cb446a5` against this tree: seeds 1 / 2 / 3, main 17,422 / 17,333 / 17,363 ALMs,
+with the rules 17,788 / 18,094 / 17,833 (+532 on average: more than the unit's +291, as a design at 94 to 96 % of the device spends more ALMs on
+placing). Fifteen seeds with the rules: 17,786 to 18,125 ALMs; the 128 timing lines are all at or above 0 on four of them (7, 10, 14 and 15; 17,841
+to 18,063 ALMs) and miss by 0.001 to 0.5 ns on the others, in the CPU's 93.75 MHz domain or in `clk_sys`; main misses on two of its seeds 1 to 3
+(-0.001 and -0.129 ns). The RDP's paths are not the ones that miss.
