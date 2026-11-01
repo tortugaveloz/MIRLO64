@@ -15,7 +15,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
 * **Sleep and Memories**: the Pocket's Sleep and its Memories (save states), with every accessory.
-* **Accessories and saves**: Controller Pak, Transfer Pak compatible with physical GB cartridges in the Pocket GB slot, a Virtual Transfer Pak that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
+* **Accessories and saves**: Controller Pak, Transfer Pak (cartridge) compatible with physical GB cartridges in the Pocket GB slot, a Transfer Pak (SD) that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and plays the console's part around it: the PIF, the cartridge, the RCP registers that are not a block of the hardware, the video and audio events, the saves and the save states. It emulates no instruction of the CPU. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
@@ -25,7 +25,7 @@ MIRLO 64 is experimental and not every game works. What is known of v0.7:
 
 * ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
-* Only controllers 1 and 2 can have a pak, and controller 2's can only be a Virtual Transfer Pak.
+* Only controllers 1 and 2 can have a pak, and controller 2's can only be a Transfer Pak (SD).
 * The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
 
 ## Installing on the Pocket
@@ -64,8 +64,8 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
 | Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
-| Controller 1 pak | **None**, Controller Pak, Transfer Pak, Virtual Transfer Pak | The accessory in controller 1. The Virtual Transfer Pak takes its Game Boy game from "Load Transfer Pak 1" (one of the core's Load entries, with "Load Game": a `.gb` or `.gbc` in `Assets/n64/common/`), and keeps its save in `Saves/n64/common/<N64 game>.gbsav1`: **first copy the Game Boy game's `.sav` there with that name** (see [Saves](#saves)). Sleep and Memories work with it (its RAM is in the state); the Transfer Pak with a cartridge in the Pocket's slot is unplugged in them, and the game finds it gone when it wakes |
-| Controller 2 pak | **None**, Virtual Transfer Pak | A second Virtual Transfer Pak, in controller 2 (a pad that is there, with nothing pressed, when the dock has none). Its Game Boy game is "Load Transfer Pak 2", and its save `Saves/n64/common/<N64 game>.gbsav2`; with no game loaded there the pak has no cartridge, as pak 1 has none with no game loaded. Set it before the game starts, as a game looks for its controllers then |
+| Controller 1 pak | **None**, Controller Pak, Transfer Pak (cartridge), Transfer Pak (SD) | The accessory in controller 1. Transfer Pak (cartridge) is the Transfer Pak with a Game Boy cartridge in the Pocket's slot. **Transfer Pak (SD)** plays a Game Boy game from the SD card, and needs two steps before the N64 game starts: choose it here, and load the Game Boy game with "Load Transfer Pak 1" (one of the core's Load entries, with "Load Game": a `.gb` or `.gbc`), in either order. The core does not choose the pak for you: with None, Controller Pak or Transfer Pak (cartridge) a loaded Game Boy game is ignored. It uses that game's own save, `<Game Boy game>.sav` in the Saves folder of the game's platform (`Saves/gbc/common/` for a game in `Assets/gbc/common/`), the file a Game Boy core keeps too (see [Saves](#saves)). Sleep and Memories work with it (its RAM is in the state); the Transfer Pak with a cartridge in the Pocket's slot is unplugged in them, and the game finds it gone when it wakes |
+| Controller 2 pak | **None**, Transfer Pak (SD) | A second Transfer Pak (SD), in controller 2 (a pad that is there, with nothing pressed, when the dock has none), chosen and loaded in the same two steps: its Game Boy game is "Load Transfer Pak 2", and the same for its save; with no game loaded there the pak has no cartridge, as pak 1 has none with no game loaded. Set it before the game starts, as a game looks for its controllers then |
 | Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
@@ -84,9 +84,8 @@ The Pocket writes them to `Saves/n64/common/` when you quit the core. A file app
 |---|---|
 | `<game>.sav` | The cartridge's save: EEPROM, SRAM or FlashRAM, whichever the game uses |
 | `<game>.mpk` | The Controller Pak, when that setting is on |
-| `<game>.gbsav1`, `<game>.gbsav2` | The Game Boy game of the Virtual Transfer Pak in controller 1, and in controller 2: the cartridge's RAM, as a Game Boy core keeps it (one file each for each N64 game) |
 
-The Game Boy save is named after the N64 game, not after the Game Boy game. **Before using a Game Boy game in the Virtual Transfer Pak, copy its `.sav` (the Game Boy core's, from `Saves/gbc/common/` or `Saves/gb/common/`) to `Saves/n64/common/<N64 game>.gbsav1`** (`.gbsav2` for controller 2's): without that file the game starts with an empty save and writes a new one, so a save you already have is not used. To play that game again on a Game Boy core, copy the `.gbsav1` (or `.gbsav2`) back to `Saves/gbc/common/` (or `Saves/gb/common/`) with the name that core uses (`<Game Boy game>.sav`). Keep a copy of the save the first time.
+The Transfer Pak (SD)'s save is the Game Boy game's own: the file `<Game Boy game>.sav` (the name of the file you loaded, without its extension) in the Saves folder of the game's platform: `Saves/gbc/common/` for a game in `Assets/gbc/common/` (or a `.gbc` anywhere else), `Saves/gb/common/` for one in `Assets/gb/common/` (or a `.gb` anywhere else, or, if it is not there, in `Saves/gbc/common/`, where a Game Boy core that plays both kinds keeps it), so a Game Boy core and the N64 game see the same save. The core reads it when the Transfer Pak (SD) is chosen and the game is loaded, and writes it back when the game takes the Transfer Pak out of its power (as a game does when it leaves its Game Boy menu), when another Game Boy game is loaded or the setting is changed, and a couple of seconds after the game last wrote to it, and only if the game wrote to it. With no such file the game starts with an empty save, and the first write makes the file, at the size the Game Boy game's cartridge has; a file shorter than the cartridge's RAM is left alone (the game starts empty and nothing is written). Quitting the core does not write it: the Pocket tells the core nothing then, so a save is on the card a couple of seconds after the game makes it. The core lists the `gbc` and `gb` platforms for this (the Pocket opens files only in the platforms' folders a core lists). **Keep a copy of your Game Boy saves the first time.**
 
 ### GameShark codes
 

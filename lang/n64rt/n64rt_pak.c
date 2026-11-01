@@ -1,14 +1,14 @@
 /* The accessory in controller 1 -- the core's "Controller 1 pak" setting
  * (interact.json: word 0's bits 4-0), read at every access, so it can be
  * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 0's bits 24-20), None or a
- * Virtual Transfer Pak, which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
+ * Transfer Pak (SD), which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
  * the game finds the pak. The values of controller 1's:
  *   0  nothing (the default, and what the setting word is until the Pocket
  *      has sent it: the cartridge slot is left alone)
  *   1  a Controller Pak
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
  *      own slot
- *   3  a Transfer Pak with a virtual cartridge: a Game Boy ROM and its save,
+ *   3  a Transfer Pak with an SD cartridge: a Game Boy ROM and its save,
  *      files the Pocket loads (the slots "Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
  * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "2"); controllers 3 and 4 have none.
  *
@@ -55,7 +55,7 @@
  * the slot never sees more than reads. On a SoC without the registers
  * (GB_CART.ID reads 0) the Transfer Pak is there with no cartridge in it.
  *
- * The virtual Transfer Pak is the same accessory with another cartridge: what the game reads and writes at 0xC000 goes to
+ * The Transfer Pak (SD) is the same accessory with another cartridge: what the game reads and writes at 0xC000 goes to
  * n64rt_gbvirt.c's mapper, ROM and RAM, and the Pocket keeps its save. The cartridge is looked for in its slot where the
  * physical one is looked for in the Pocket's. It does not touch the port, so a cartridge in the Pocket's slot is left alone. */
 #include <string.h>
@@ -77,7 +77,7 @@ static u8 s_sized;                              /* the Controller Pak's file siz
 #define LOGO_CRC  0x46195417u                   /* CRC-32 of the header's 48 logo bytes */
 static struct {
     u8  hw;                                     /* the SoC has the port */
-    u8  virt;                                   /* the cartridge looked for, and the one the power is on for, is the virtual one */
+    u8  virt;                                   /* the cartridge looked for, and the one the power is on for, is the SD one */
     u8  in;                                     /* a Game Boy cartridge answered the last look */
     u8  bus;                                    /* the port is on (the game's power) */
     u8  pulled;                                 /* another cartridge, or none, since the status was read */
@@ -107,7 +107,7 @@ static int slot_xfer(u32 addr, u32 we, u8 wd, u8 *rd)
     gb_cart_ctrl_write(0);
     return 0;
 }
-/* one byte on the cartridge's bus, the real one's or the virtual one's */
+/* one byte on the cartridge's bus, the real one's or the SD one's */
 static int xfer(u32 addr, u32 we, u8 wd, u8 *rd)
 {
     if (!s_slot.virt) return slot_xfer(addr, we, wd, rd);
@@ -124,7 +124,7 @@ static void slot_power(int on, int virt)
     s_slot.bus = (u8)on;
     if (on) wait_us(200);
 }
-/* is a Game Boy cartridge there? (the port off before and after); the virtual one: is a ROM in its slot */
+/* is a Game Boy cartridge there? (the port off before and after); the SD one: is a ROM in its slot */
 static void slot_look(int virt)
 {
     u8 h[0x50] = { 0 }, was = s_slot.in;
@@ -240,7 +240,7 @@ int n64rt_pak_kind(int ch)
 #else
     u32 k = (apf_interact_interact0_read() >> (ch == 0 ? 0 : 20)) & 31u;
 #endif
-    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the virtual one) */
+    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one) */
     return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
 }
 
@@ -304,7 +304,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
  * A real Transfer Pak's cartridge is outside the core: its RAM, its mapper and its clock are its own, which no state can hold. So the state
  * has the pak unplugged (off, no cartridge there, "changed"), in the copy of the runtime's memory it makes -- the game that goes on does not see
  * it -- and the game that is put back finds the pak gone and looks again: the cartridge is in the Pocket's slot still, and the next time the game reads the
- * status the slot is looked at. The virtual one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
+ * status the slot is looked at. The SD one's registers are in the runtime's memory and its RAM in a region of the state (n64rt_gbvirt.c): it goes
  * on as it was, unless its ROM is not there again (n64rt_gbv_resume) -- then it is unplugged, as well. */
 static __typeof__(s_tpv) s_tp_keep;
 static __typeof__(s_slotv) s_slot_keep;

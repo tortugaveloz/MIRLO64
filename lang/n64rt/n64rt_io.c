@@ -325,6 +325,10 @@ static void vi_field_common(void)
     }
 #endif
     n64rt_cheat_field();
+    n64rt_gbv_field();
+#ifdef N64RT_GBTRACE
+    { extern void n64rt_trace_field(void); n64rt_trace_field(); }
+#endif
 }
 
 /* (n64rt_tick, interrupts off) */
@@ -581,7 +585,7 @@ static void read_pad(OSContPad *p, int index)
 static int pad_there(int i)
 {
     if (i == 0) return 1;
-    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Virtual Transfer Pak": a pad that is there, nothing pressed if the dock has none) */
+    if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
     return KEY_TYPE(k) != 0u;
 }
