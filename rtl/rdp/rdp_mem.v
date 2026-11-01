@@ -234,7 +234,9 @@ module rdp_mem (
     reg [9:0]  w_x0;
     reg [10:0] w_x1;
     reg [8:0]  w_zl;                      // the Z span's last word
-    reg [31:0] w_fillc;
+    // (the fill colour: SET_FILL_COLOR is executed only with the write engine idle and nothing waiting for it, so the register
+    // rdp_top holds stays what it was at the span's request for the whole write)
+    wire [31:0] w_fillc = wr_fillc;
     reg [9:0]  w_idx, w_lastw;            // the word to take from the buffers next, the last (a 32-bit colour span's: x)
     reg        w_all;                     // every word has been taken
     reg        w_pz;                      // the span's second pass: its Z words
@@ -521,7 +523,7 @@ module rdp_mem (
                     w_fillm <= wr_fill; w_z <= wr_z; w_set <= wr_set; w_c8 <= wr_c8; w_c32 <= wr_c32;
                     w_fc <= wr_fill || (wr_c32 && wr_fmode);
                     w_cb <= wr_cbase[31:2]; w_zb <= wr_zbase[31:2];
-                    w_x0 <= wr_x0; w_x1 <= wr_x1; w_fillc <= wr_fillc;
+                    w_x0 <= wr_x0; w_x1 <= wr_x1;
                     // (the colour span first: a 32-bit image's a word a pixel)
                     w_idx <= wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}; w_lastw <= wr_c32 ? wr_xl[9:0] : {1'b0, wr_xl[9:1]};
                     w_zl <= wr_xl[9:1];
