@@ -212,6 +212,8 @@ typedef struct {
     u32          rom_size;
     u32          boot_rom, boot_vram, boot_len;   /* what IPL3 copies (ROM offset -> RDRAM) */
     u32          entry;             /* where IPL3 jumps */
+    u32          ipl3;              /* the boot code's kind: N64RT_IPL3_* (0: the console's, which copies boot_len bytes) */
+    u32          elf_off;           /* N64RT_IPL3_ELF: the ROM offset of the ELF file the boot code loads */
     u32          mem_size;          /* RDRAM the game sees: 4 or 8 MiB */
     u32          cic;               /* 6101..6106: the CIC (osCicId, 0x80000310, is not this number: n64rt_boot.c) */
     const n64rt_patch_t *patches;
@@ -223,6 +225,16 @@ typedef struct {
     const u32   *hooks;
     u32          nhooks;
 } n64rt_game_t;
+
+/* The boot code of an open-source IPL3 (an N64 program's own, in the ROM at 0x40) and what it loads, instead of the console's
+ * copy of boot_len bytes from ROM 0x1000 to the header's entry. N64RT_IPL3_ELF: the program is an ELF file in the ROM (found by
+ * the boot code from ROM 0x1000 on, at a 256-byte boundary, elf_off): every PT_LOAD segment goes to its address, the entry is
+ * the ELF's, the boot flags are in DMEM's first 16 bytes and the rest of DMEM and IMEM are 0, and none of the console's boot
+ * words are in the RDRAM's first 0x400 bytes. N64RT_IPL3_FLAT: a flat file at ROM 0x1000, to the header's entry, as many bytes
+ * as the header's word at 0x10 says (boot_len; 0 or too many for the RDRAM: 1 MiB); the boot words are the console's, DMEM and
+ * IMEM are 0. */
+#define N64RT_IPL3_ELF  1u
+#define N64RT_IPL3_FLAT 2u
 
 /* The word a CIC's IPL3 writes as osCicId (0x8000_0310): the 6103's 0x17D7, the 6105's 0x17D9, the 6106's 0x17D8; the
  * others write nothing there (0). The 6103's and the 6106's IPL3 also leave it in IMEM's first word (n64rt_rsp.c). */
@@ -255,6 +267,8 @@ void n64rt_run(const n64rt_game_t *g) __attribute__((noreturn));
 #define N64RT_ROM_WIN      0x30000000u
 u32  n64rt_rom_word(u32 off);
 void n64rt_rom_copy(void *dst, u32 off, u32 size);
+/* the random word an open-source IPL3 collects while it boots and leaves in DMEM (n64rt_boot.c) */
+extern u32 n64rt_boot_entropy;
 void n64rt_boot_game_file(n64rt_game_t *g) __attribute__((noreturn));
 
 /* the RDRAM window, as the runtime's native code reaches it */

@@ -409,6 +409,8 @@ The loader then:
 3. Takes the TV system from the header's destination code.
 4. Clears the RDRAM, sets the RDP's hidden coverage plane to all ones, and copies 1 MiB from ROM `0x1000` to the entry
    address, as IPL3 does.
+   A ROM whose boot code is an open-source IPL3 (its banner is in ROM `0x40` - `0x1FFF`) is loaded as that boot code
+   would: see "An open-source IPL3" below.
 5. Writes what the CIC's IPL3 leaves behind and the boot information words (below).
 6. Checks the CPU (before anything else, with the layout mark): the five 64-bit levels in COP0 register 7 must all be
    present, or a notice is shown and nothing is started. Reads the translation tables' mark in register 23. The runtime
@@ -445,6 +447,27 @@ first `0x40` bytes as the ROM has them; with another boot code those bytes are 0
 
 The words at `0x8000_0300`: `osTvType` (below), `osRomType` 0, `osRomBase` `0xB000_0000`, `osResetType` 0 (cold),
 `osCicId` as above, `osVersion` 0 and `osMemSize` (8 MiB, or 4 MiB without the Expansion Pak).
+
+### An open-source IPL3
+
+An open-source IPL3 is a program's own boot code, which initialises the RDRAM itself and does not copy 1 MiB to the
+header's entry. The loader knows one by its banner (32 bytes of text in ROM `0x40` - `0x1FFF`; the ROM's checksums are of
+no matter to it) and loads the ROM as its two builds do, whatever the size of the program:
+
+* the ELF build finds an ELF file in the ROM (the first 256-byte boundary from ROM `0x1000` on that holds `\x7FELF`),
+  puts every `PT_LOAD` segment's file bytes at its virtual address (32-bit or 64-bit, big endian; the RDRAM is cleared
+  first, so the rest of a segment is zeros) and enters at the ELF's entry point. A segment that is not 8-byte aligned,
+  whose file offset is odd, that does not fit the RDRAM or is past the end of the ROM, and an ELF the boot code would
+  decompress with a function of its own (the compressed-segment format), stop the boot with a message. What it leaves:
+  DMEM's first 16 bytes are the boot flags -- the RDRAM's size, a random word, then as one word the ROM type, TV type,
+  reset type and console type as bytes (0, the header's region, 0, 0), then the ELF's offset in the ROM in 256-byte pages
+  in the upper half -- and the rest of DMEM and all of IMEM are 0; the boot words at `0x8000_0300` are not written; the
+  random word is also at `0x8000_01A4`. The stack is at the top of the RDRAM.
+* the flat build copies from ROM `0x1000` to the header's entry as many bytes as the header's word at `0x10` says, or
+  1 MiB when it is 0 or more than the RDRAM has left; it writes the boot words as the console's IPL3 does, and DMEM and
+  IMEM are 0.
+
+Such a ROM can be smaller than 1 MiB. The boot segment's patches (below) are not applied to an ELF's segments.
 
 ### The Expansion Pak
 
@@ -576,6 +599,13 @@ can then map code at `0x4000_0000`, unpack an overlay into it and jump there, as
 runtime's helpers that the game's code calls directly (the envelope rate, `n64rt_boot.c`: its entry
 sets Status bit 4, a bit of KSU that the game's code never sets, and the wrapper puts the game's Status back), see the RSP and
 the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code before it is not in the game's view either.
+
+**Exceptions the monitor level cannot do for the game.** The core sends every Reserved Instruction of the game's code to the
+monitor level, and an address error at an address of a device's registers (an unaligned access to them). When the runtime
+has nothing to do for the game there -- no instruction it emulates, no register it serves -- the exception is the game's, as on
+the console: the monitor writes Cause.ExcCode (10 Reserved Instruction, 4 AdEL, 5 AdES), EPC (the branch's, with BD, in a delay
+slot) and Status.EXL, and for an address error BadVAddr and Context's BadVPN2, and returns to `0x8000_0180`. The runtime's
+own fatal stop (`n64rt_fatal`) leaves Status.ERL set so that its code stays at unmapped addresses while it draws its message.
 
 ### 64-bit instructions and the helpers
 
