@@ -449,6 +449,7 @@ function automatic ctl_t decode(input logic [31:0] i);
         // (dmfc0, dmtc0: the registers are 32 bits)
         if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; end
         else if (rs == 5'h04 || (W64 && rs == 5'h05)) begin c.mtc0 = 1; c.use_rt = 1; end
+        else if (rs[4] && fn[5]) begin end           // a CO instruction of an undefined function 0x20 - 0x3F does nothing, whatever its other fields
         else if (rs == 5'h10) begin
             case (fn)
             6'h01: c.tlbr = 1;  6'h02: c.tlbwi = 1; 6'h06: c.tlbwr = 1; 6'h08: c.tlbp = 1;

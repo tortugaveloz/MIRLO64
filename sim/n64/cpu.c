@@ -580,8 +580,13 @@ void n64_cpu_step(n64_t *n)
                 c->next_pc = c->pc + 4;
                 c->ll_bit = 0;
                 break;
-            default: N64_FATAL(n, "unimplemented COP0 %02x at %08x", insn & 63, pc);
+            default: if (insn & 0x20) break;                                        /* (functions 0x20 - 0x3F: no operation, below) */
+                exception(n, pc, dly, EXC_RI, 0);                                   /* the others that are not defined: Reserved Instruction */
+                break;
             }
+        } else if ((fmt & 0x10) && (insn & 0x20)) {
+            /* a CO instruction of an undefined function 0x20 - 0x3F does nothing (the other fields are not looked at): the conformance
+             * suite runs three of them, an emulator's detection and log calls, before it installs its exception handlers */
         } else {
             N64_FATAL(n, "unimplemented COP0 fmt %02x at %08x", fmt, pc);
         }

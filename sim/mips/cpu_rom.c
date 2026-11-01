@@ -105,6 +105,20 @@ static void sec_cop0_masks(void)
     check(0x0412, MFC0(12), st);
 }
 
+/* ---- COP0 CO instructions of an undefined function 0x20 - 0x3F do nothing (no Reserved Instruction), whatever their other fields: a
+ * test suite runs three of them, an emulator's detection and log calls, before it has a handler. The defined ones' neighbours stay RI. */
+static void sec_cop0_co(void)
+{
+    u32 r8 = 0x12345678u;
+    h_count = 0; h_ret = 0;
+    __asm__ volatile(".set noat\n\t.set noreorder\n\tmove $8, %0\n\t.word 0x42800060\n\t.word 0x42848065\n\t.word 0x420000ac\n\t.word 0x4200006c\n\t"
+                     ".word 0x42000020\n\t.word 0x4200003f\n\t.word 0x43f0ffe5\n\tmove %0, $8\n\t.set at\n\t.set reorder" : "+r"(r8) :: "$8", "memory");
+    check(0x0601, h_count, 0);
+    check(0x0602, r8, 0x12345678);
+    __asm__ volatile(".word 0x42000007" ::: "memory");                /* function 7: a Reserved Instruction */
+    check(0x0603, h_count, 1);
+    check(0x0604, h_cause & 0x8000007C, 0x28);
+}
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -116,6 +130,7 @@ int main(void)
     }
     sec_fcr();
     sec_cop0_masks();
+    sec_cop0_co();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;
