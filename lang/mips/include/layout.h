@@ -32,7 +32,7 @@
 #define LAYOUT_FREE         0x34161000      /* unused PSRAM up to the ROM at byte offset 0x00200000 */
 /* The virtual Transfer Paks' Game Boy cartridges (lang/n64rt/n64rt_gbvirt.c), one for each of controllers 1 and 2: a ROM and its battery RAM.
  * Each ROM is up to 3 MiB; each save is 128 KiB and a clock's 48 bytes, nonvolatile. The ROM slots come last in data.json (the Pocket lists
- * every Load entry together, "Load Game" and "Load Virtual Transfer Pak 1" and "2": no `#` in a name, which the Pocket takes for a comment). */
+ * every Load entry together, "Load Game" and "Load Transfer Pak 1" and "2": no `#` in a name, which the Pocket takes for a comment). */
 #define LAYOUT_GBSAVE       0x42D00000      /* slot 5: cartridge 1's RAM (and its clock's 48 bytes), at the bridge's 0x06D0_0000; nonvolatile */
 #define LAYOUT_GBSAVE_SLOT  5
 #define LAYOUT_GBSAVE_MAX   0x00021000

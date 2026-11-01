@@ -164,8 +164,8 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 5 | Game Boy Save 1 | `.gbsav1`, optional, nonvolatile, at most 128 KiB + 48 bytes | `0x06D0_0000` | `0x42D0_0000` |
 | 6 | Game Boy Save 2 | `.gbsav2`, the same, for controller 2's pak | `0x06D5_0000` | `0x42D5_0000` |
 | 7 | Gameshark codes | no file at the start: the runtime opens one by path, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
-| 8 | Virtual Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
-| 9 | Virtual Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
+| 8 | Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
+| 9 | Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
@@ -864,8 +864,8 @@ touched). The game's own `osGbpak*` code runs on it as on the real one.
 
 The setting "Controller 2 pak" (None, or Virtual Transfer Pak) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
 
-* **The ROM** is data slot 8, "Virtual Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Virtual Transfer Pak 2", `0x42E0_0000`. With no
-  file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Virtual Transfer Pak 1"
+* **The ROM** is data slot 8, "Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Transfer Pak 2", `0x42E0_0000`. With no
+  file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Transfer Pak 1"
   loads one from `Assets/n64/common` while the game runs. It is there for the game when its header's checksum and logo are right and its
   cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
   that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM

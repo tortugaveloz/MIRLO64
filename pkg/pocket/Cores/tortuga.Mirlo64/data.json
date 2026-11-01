@@ -88,7 +88,7 @@
         "address": "0x06D40000"
       },
       {
-        "name": "Virtual Transfer Pak 1",
+        "name": "Transfer Pak 1",
         "id": 8,
         "required": false,
         "parameters": "0x1",
@@ -100,7 +100,7 @@
         "address": "0x07400000"
       },
       {
-        "name": "Virtual Transfer Pak 2",
+        "name": "Transfer Pak 2",
         "id": 9,
         "required": false,
         "parameters": "0x1",
