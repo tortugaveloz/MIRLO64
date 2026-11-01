@@ -57,5 +57,10 @@ TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_PX32=1 TB_LOAD=5 run $T 7 0 30 640p;
 TB_BLANK=1 run $T 1 0 30 320; TB_BLANK=1 run $T 3 0 30 640p; TB_BLANK=1 run $T 3 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
 cc -O1 -o obj_vi/vifit_test vifit_test.c && n=$((n+1)) && { out=$(./obj_vi/vifit_test 2>&1); case "$out" in *"vifit: PASS"*) ;; *) echo "FAIL: vifit_test"; echo "$out" | tail -4; fail=$((fail+1));; esac; }
+# the scan-out's base of a serrated picture, field by field (rcp_vi.sv): the woven pitches keep the first field's, any other the field's own
+export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
+"${VERILATOR:-$HOME/local/usr/bin/verilator}" --cc --exe --build -j 8 -O1 -Wno-fatal -Wno-lint -Wno-style --top-module rcp_vi --Mdir obj_origin \
+    "$HERE/../../rtl/soc/rcp_vi.sv" tb_origin.cpp -o tb_origin > obj_origin.log 2>&1 || { grep -E "%Error" obj_origin.log | head; fail=$((fail+1)); }
+n=$((n+1)); out=$(./obj_origin/tb_origin 2>&1); case "$out" in *"tb_origin: PASS"*) ;; *) echo "FAIL: tb_origin"; echo "$out" | tail -6; fail=$((fail+1));; esac
 echo "vi_filter regress: $n runs, $fail failed"
 exit $fail
