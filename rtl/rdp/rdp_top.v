@@ -243,7 +243,10 @@ module rdp_top (
     reg         p_shade, p_tex, p_zbuf, p_direct;
     reg  [2:0]  p_tile;
     reg         pix_valid;
-    reg  [9:0]  pix_x;
+    reg  [9:0]  pix_x;             // (the pixel's place in the row's words: its column plus the row's odd halfword, par)
+    wire        par;                // the row starts on an odd halfword (a 16-bit image of an odd width)
+    wire [9:0]  xsp;                // the span's columns in the row's words: xs + par, xe + par
+    wire [10:0] xep;
     reg  [7:0]  pix_mask;           // its samples (0xFF: all)
     reg         p_aa;               // a triangle: the N64's walker
     reg         p_aaen;             // ... with AA_EN (the pixel is drawn for any sample; else for sample 7 only)
@@ -341,7 +344,7 @@ module rdp_top (
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
         .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
         .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
-        .in_valid(pix_valid), .in_x(pix_x), .in_set(set_cur), .row_y(sc_field ? y[2:1] : y[1:0]),
+        .in_valid(pix_valid), .in_x(pix_x), .in_par(par), .in_set(set_cur), .row_y(sc_field ? y[2:1] : y[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
         .in_s(pr_s), .in_t(pr_t), .in_m(cp_m_q), .in_w(cur_w), .in_z(cur[7]), .in_mask(pix_mask),
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
@@ -390,7 +393,7 @@ module rdp_top (
     rdp_mem mem (
         .clk(clk), .rst(rst),
         .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h), .rd_hz(rq_hz),
-        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(xs), .rd_x1(xe), .rd_set(rq_set), .rd_c32(cimg32),
+        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(xsp), .rd_x1(xep), .rd_set(rq_set), .rd_c32(cimg32),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
@@ -425,7 +428,7 @@ module rdp_top (
     reg        row_wq;              // the row's write-back has been asked for
     // the row's next pixel: its word in the span, and whether what it reads of
     // memory is in the old buffers
-    wire [9:0] pix_wi = ({9'd0, xs[0]} + px_cnt) >> 1;
+    wire [9:0] pix_wi = ({9'd0, xsp[0]} + px_cnt) >> 1;
     // (a 32-bit image's colour span: a word a pixel)
     wire       pix_ok = !rq_pend && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
@@ -501,6 +504,14 @@ module rdp_top (
     wire [31:0] row_off = cimg8 ? row_h : {row_h[30:0], 1'b0};
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
+    // A 16-bit image whose width is odd has rows that start on the odd halfword of a memory word: the row's pixels sit in
+    // its words from halfword `par` on, so a span's columns are counted in words (xsp, xep: the buffers', the reads' and the
+    // write-back's) from there; the pixel pipeline keeps the column itself for what depends on it (the dither). The depth
+    // image is taken to have the same alignment (an image's base is a multiple of 8 bytes: its rows' halfwords are the
+    // colour image's for the same width).
+    assign par = !cimg8 && !cimg32 && crow[1];
+    assign xsp = xs + {9'd0, par};
+    assign xep = xe + {10'd0, par};
     reg [9:0]  px_cnt;
     // loads (lang/c/rdp/rdp.c load_block, load_tlut, load_tile_n64)
     reg [9:0]  tt, tt1;             // LOAD TILE's rows
@@ -1180,7 +1191,7 @@ module rdp_top (
                     // this row's, waiting on pixels the read gates, would hold it forever)
                     if (!wq_pend && !rq_pend) begin
                         wq_pend <= 1'b1; wq_fill <= 1'b0; wq_z <= z_upd; wq_set <= set_cur;
-                        wq_cbase <= crow; wq_zbase <= zimg + row_off; wq_x0 <= xs; wq_x1 <= xe;
+                        wq_cbase <= crow; wq_zbase <= zimg + row_off; wq_x0 <= xsp; wq_x1 <= xep;
                         res_n[set_cur] <= 11'd0; res_d[set_cur] <= 11'd0; res_q[set_cur] <= 11'd0;
                         row_wq <= 1'b1;
                     end
@@ -1198,7 +1209,7 @@ module rdp_top (
                     end
                 end else if (pix_go) begin
                     pix_valid <= 1'b1; pix_ghost <= 1'b0;
-                    pix_x <= xs + px_cnt;
+                    pix_x <= xsp + px_cnt;
                     cp_m_q <= cp_m;
                     pix_mask <= !p_aa ? 8'hFF : (p_aaen || aa_mask[7]) ? aa_mask : 8'h00;   // (no AA_EN: sample 7 or nothing)
                     pix_stp <= 1'b1;
@@ -1218,7 +1229,7 @@ module rdp_top (
             // ---- fill mode rectangles: straight to memory
             S_FILL: if (!wq_pend) begin
                 wq_pend <= 1'b1; wq_fill <= 1'b1; wq_z <= 1'b0; wq_set <= 1'b0;
-                wq_cbase <= crow; wq_x0 <= xs; wq_x1 <= xe;
+                wq_cbase <= crow; wq_x0 <= xsp; wq_x1 <= xep;
                 st <= S_NEXT;
             end
 
