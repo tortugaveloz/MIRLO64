@@ -392,8 +392,16 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
   none; the pattern is the matrix that RGB_DITHER_SEL's low bit names. It is
   added to the combined alpha and to the shade alpha, which saturate at 255.
   Copy mode has none.
-* **Noise.** A 23-bit LFSR that steps for every pixel with coverage, outside
-  fill mode.
+* **Noise.** A 23-bit LFSR (the console's taps, reset to 0), in two modes. By default
+  it is free-running, as the console's: it steps on every clock of the RDP's, and a
+  pixel takes the bits it finds when it reaches the stage that uses them (the combiner's NOISE at the
+  texture stages' end, the alpha dither's and compare's at the combiner's last stage, the colour dither's at the blender's last). Built with
+  `RDP_LFSR_PIXEL` (Verilog; `VDEFS=-DRDP_LFSR_PIXEL` of `sim/rdp/build_rtl.sh`, which sets it by default)
+  it steps for every pixel with coverage, outside fill mode, as the C model does, and a pixel's
+  bits are the state before its own step, so that the lockstep benches compare RTL and model word for word. In the default
+  mode a pixel that reads the noise (the noise colour dither, the alpha dither's noise, DITHER_ALPHA_EN, NOISE in the combiner) is not
+  reproducible against the model or the oracle, whose generators are other sequences anyway (the oracle's is its own): such pixels stay out
+  of every comparison.
 * **CVG_X_ALPHA**: the coverage becomes `(alpha * coverage + 4) >> 8`.
 * **ALPHA_CVG_SEL**: the pixel's alpha becomes the coverage (times the alpha
   with CVG_X_ALPHA).
@@ -657,11 +665,16 @@ switches:
 
 `TB_ZDZ=1` makes streams of shaded, anti-aliased, depth-tested triangles that are points of a few planes (slopes of every dz code, now and then a step within a code's tolerance), the blender's B mostly the memory's coverage: the depth image's own dz.
 
+`TB_FREE=1` checks that the free-running LFSR steps on every clock of the bench (on a build with `VDEFS=` empty: `obj_free`);
+`TB_NONOISE=1` makes streams in which nothing reads the noise (RTL == model in either mode), `TB_NOISE=1` streams with the noise colour
+dither alone and no read of the colour image, in which the free-running RTL differs from the model in colour words by a step of a
+5-bit channel at most (the dither adds one) and in nothing else.
+
 `TB_COPY=1` makes copy mode three modes in four (texture rectangles by groups of pixels, with `TB_C8=1` in groups of 8), `TB_RECT=1` adds texture rectangles (with `TB_LOD=1`, a rectangle's LOD next line).
 
 `tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
 at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
-seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
+seeds of the free-running LFSR (`TB_FREE` with `TB_NONOISE`, with `TB_ZDZ` and the SDRAM's timing, and `TB_NOISE`), seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
 (`TB_C8`, at widths 320 and 292 and with `TB_SDRAM`), seeds with a 32-bit
 colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, seeds with `TB_COPY` (also 8-bit, and with the SDRAM's timing), seeds with `TB_LOD` and `TB_RECT`, seeds with `TB_ZDZ` (also at a width whose rows share depth-hidden groups, with the SDRAM's timing and 32-bit images), and
 `cc_unit.sh`.

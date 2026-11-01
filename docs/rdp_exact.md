@@ -44,7 +44,9 @@ pixels drawn) the model differs from the oracle, by rule:
 | `RDP_EXACT` | 27 | 153,755 |
 
 (The colour words are nearly all 27 primitives drawn with the noise dither, whose random numbers
-are each side's own: they differ whatever the rules.) Rule 8 took away 15.7 thousand primitives
+are each side's own: they differ whatever the rules; the figures are of the RTL's per-pixel noise, `RDP_LFSR_PIXEL`, which the benches build. Its default, a
+free-running LFSR that steps every clock ([rdp.md](rdp.md), "Noise"), gives the noise-reading pixels other bits again: they are not reproducible
+against the model or the oracle, and stay out of the comparison.) Rule 8 took away 15.7 thousand primitives
 and 64.6 thousand colour words (0.19 % of the pixels; 13,060 of them four or more steps of a 5-bit channel off, 33,746 two or three,
 171,518 one, before; the noise's included), the depth compare's and the blender's use of the depth image's own dz. What is left
 is the noise dither's 27 primitives and 11 fill rectangles of no area (XH = XL = 312, one row), a pixel each that the

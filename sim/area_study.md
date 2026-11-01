@@ -1091,3 +1091,21 @@ words of a 32-bit image's span were asked for before the depth image's groups, w
 the rule each `TB_ZDZ` seed fails; and with the oracle's model made without one detail of the rule (the doubling, the floor of 16 >> exponent, the
 coplanar code, the weights' shifts, the shift of the interpenetrating coverage, the hidden bits or the pixel's own dz in the tolerance) `zdz`
 differs in 3 to 426 of its 1,300 primitives in each case.
+
+### The noise LFSR free-running
+
+The RDP's noise generator steps on every clock, as the console's does, instead of once for each pixel with coverage (docs/rdp.md, "Noise"): a pixel
+takes the bits the register holds when it reaches the stage that uses them. The second copy for the combiner's NOISE (`nlfsr`, 23 flip-flops and its
+enable) and the five-stage delay of the colour dither's bits (`nz1` to `nz5`, 45) are gone. The per-pixel LFSR stays behind `RDP_LFSR_PIXEL`, which
+the lockstep benches and `rdp_regress.sh` build (`sim/rdp/build_rtl.sh`); the model is unchanged. This change alone, the RDP alone (`ooc.sh rdp`): 5,279 /
+5,281 / 5,297 fitted ALMs against 5,289 / 5,282 / 5,303 (-6 on average), 27 registers and 5 ALUTs fewer.
+
+The whole design with the depth image's own dz and the free-running LFSR (seeds 1 to 15): 17,667 to 17,765 ALMs (mean 17,711; the dz alone 17,731: inside
+the fitter's noise). The 128 timing lines are all at or above 0 on four seeds (2, 3, 7 and 13; worst slack +0.003 to +0.056 ns) and the other eleven miss by
+0.001 to 0.41 ns: setup in the CPU's domain (seeds 4, 5, 6, 8, 9, 11, 12 and 15), hold (0.006 to 0.053 ns in seeds 1, 5, 10, 12 and 14) and, in seed 15 also,
+the SDRAM PHY's `a_q` (setup, -0.207 ns). No RDP path is among them. (Six of the previous fifteen close, four of round 7's: the number moves
+with the seed, not with these changes, whose paths are not the failing ones.)
+
+Verification: `rdp_regress.sh` 108 runs, 0 failed (93 before: the new ones run the free-running build, `obj_free`, with `TB_FREE` checking that
+the LFSR steps on every clock, `TB_NONOISE` streams, in which nothing reads the noise, RTL == model, and `TB_NOISE` streams, the noise colour dither alone, in
+which the colour words differ from the model's by a step of a 5-bit channel at most and nothing else does).
