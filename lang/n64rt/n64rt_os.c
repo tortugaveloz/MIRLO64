@@ -95,7 +95,11 @@ void n64rt_log(const char *fmt, ...)
 }
 void n64rt_fatal(const char *fmt, ...)
 {
-    __asm__ volatile("mtc0 %0, $12" :: "r"(0u));
+    {   /* (interrupts off, and only that: at the monitor level Status.ERL is set -- the runtime's code is at unmapped addresses
+         * only while it is --, and a 0 here let the next fetch of the runtime's own code miss the game's tables) */
+        u32 st; __asm__ volatile("mfc0 %0, $12" : "=r"(st));
+        __asm__ volatile("mtc0 %0, $12\n\tnop\n\tnop" :: "r"(st & ~1u));
+    }
     static char s_msg[400];
     va_list ap; va_start(ap, fmt); vsnprintf(s_msg, sizeof s_msg, fmt, ap); va_end(ap);
     printf("%s", s_msg);
@@ -1528,6 +1532,31 @@ static int own_tlb_call(n64rt_ctx_t *x)
     x->epc = x->g[31].l;
     return 1;
 }
+/* An exception that nothing here does for the game -- a Reserved Instruction, or an address error at an address of a device the
+ * runtime could not take (an unaligned access) -- is the VR4300's: the game's own handler runs, with EPC (the branch's, with BD,
+ * in a delay slot), Cause.ExcCode, Status.EXL and the vector 0x8000_0180, as tlb_deliver does for a translation fault; an address
+ * error also gives BadVAddr and Context's BadVPN2 the address. (The core sends every Reserved Instruction of the game's code to
+ * the monitor level -- the instructions it lacks are the runtime's to do -- and the accesses to addresses of the RCP's registers.) */
+static void exc_deliver(n64rt_ctx_t *x, u32 code, u32 bd)
+{
+    u32 cause;
+    CP0_GET(13, cause);
+    cause = (cause & ~0x7Cu) | code << 2;
+    if (!(x->status & 2u)) { cause = (cause & 0x7FFFFFFFu) | bd << 31; CP0_SET(14, x->epc); }
+    CP0_SET(13, cause);
+    if (code == 4u || code == 5u) {
+        u32 insn, ctxt;
+        const u32 pc = x->epc + (bd ? 4u : 0u);
+        if (insn_at(pc, &insn)) {
+            const u32 badv = g32(x, (insn >> 21) & 31u) + (u32)(s32)(s16)insn;
+            CP0_GET(4, ctxt);
+            CP0_SET(8, badv);
+            CP0_SET(4, (ctxt & 0xFF800000u) | ((badv >> 13) << 4));
+        }
+    }
+    x->status |= 2u;                                    /* (EXL; the eret to the vector clears ERL) */
+    x->epc = 0x80000180u;
+}
 void n64rt_mon_exception(void)
 {
     n64rt_ctx_t *x = &n64rt_mon_ctx;
@@ -1553,6 +1582,8 @@ void n64rt_mon_exception(void)
         /* the game's own tlbwi / tlbwr / tlbr / tlbp */
     } else if (code == 10 && !bd && own_tlb_call(x)) {
         /* osMapTLB / osUnmapTLB / osUnmapTLBAll, the runtime's (n64rt_boot.c: a core that does not take the TLB instructions) */
+    } else if (code == 10 || code == 4 || code == 5) {
+        exc_deliver(x, code, bd);
     } else {
         u32 epc = x->epc + (bd ? 4u : 0u), insn;
         if (!insn_at(epc, &insn)) insn = 0;
