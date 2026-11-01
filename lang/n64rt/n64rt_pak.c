@@ -9,7 +9,7 @@
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
  *      own slot
  *   3  a Transfer Pak with a virtual cartridge: a Game Boy ROM and its save,
- *      files the Pocket loads (the slots "Virtual Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
+ *      files the Pocket loads (the slots "Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
  * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "2"); controllers 3 and 4 have none.
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
