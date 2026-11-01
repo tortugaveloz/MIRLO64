@@ -84,7 +84,10 @@ lines, in the scaler mode 1. On a television the two fields make that picture; t
   1280 with 1.0 (a pitch of two rows). The frame's line 2 *j* + *p* is the field *p*'s line *j* as the VI shows it: the
   row `VI_Y_SCALE`'s step reaches at the field's line *j*, one row on for the second field -- with 2.0, the picture's rows
   in order. The window is the field's, twice its lines; the crop setting too. A serrated picture of another kind (a
-  240-row buffer, another pitch) is not a pair of fields and is sent as any picture is.
+  240-row buffer, another pitch) is not a pair of fields and is sent as any picture is: a field at a time, from the
+  origin the game wrote for that field. A pitch of two rows of 512 pixels (`VI_WIDTH` 1024), the second field's origin a
+  row on, so shows each field its own rows, as on the console: a game that renders the rows of the field that is not
+  on show while the other is has no half-drawn rows on the screen.
 - **The field** is still the VI's: `VI_CURRENT`'s bit 0 alternates every field while SERRATE is set, and the game's
   handler writes each field's origin as on the console; the frame is sent every field, so a picture that changes from one
   field to the next shows each change.
