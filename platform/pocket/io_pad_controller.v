@@ -113,14 +113,14 @@ always @(posedge clk) begin
             auto_poll_queue <= 0;
 
             tx_word_start <= 1;
-            tx_word <= 32'h4A10000C;
+            tx_hb <= 0;
 
             state <= ST_RX_BUTTON_1;
         end else if(heartbeat_queue) begin
             heartbeat_queue <= 0;
 
             tx_word_start <= 1;
-            tx_word <= 32'h4AFE0000;
+            tx_hb <= 1;
 
             state <= ST_END_TX;
         end
@@ -134,8 +134,9 @@ always @(posedge clk) begin
     ST_RX_BUTTON_2: begin
         if(rx_word_done) begin
             cnt <= cnt + 1'b1;
+            // (rx_word_shift is the word: it keeps it until the next one's first bit, some 25 clocks on)
             pad_we <= cnt < 4'd12;
-            pad_wd <= (cnt == 4'd2 || cnt == 4'd5 || cnt == 4'd8 || cnt == 4'd11) ? {16'd0, rx_word[15:0]} : rx_word;
+            pad_wd <= (cnt == 4'd2 || cnt == 4'd5 || cnt == 4'd8 || cnt == 4'd11) ? {16'd0, rx_word_shift[15:0]} : rx_word_shift;
             case(cnt)
             0:  pad_wa <= 4'd0;     // cont1_key
             1:  pad_wa <= 4'd4;     // cont1_joy
@@ -199,12 +200,11 @@ end
 
     reg         rx_word_done;
     reg [31:0]  rx_word_shift;
-    reg [31:0]  rx_word;
 
     reg         tx_word_start, tx_word_start_1;
     reg         tx_word_done;
-    reg [31:0]  tx_word;
-    reg [31:0]  tx_word_shift;
+    reg         tx_hb;      // the word sent: the heartbeat's, else the poll's
+    wire [31:0] tx_word = tx_hb ? 32'h4AFE0000 : 32'h4A10000C;
 
     reg [7:0]   tr_cnt;
     reg [5:0]   tr_bit;
@@ -235,7 +235,6 @@ always @(posedge clk) begin
 
         if(tx_word_start & ~tx_word_start_1) begin
             // transmit word
-            tx_word_shift <= tx_word;
             tr_state <= TR_TX_START;
         end
 
@@ -262,15 +261,13 @@ always @(posedge clk) begin
             pad_1wire <= 1'b0;
         end
         (BITLEN/3): begin
-            pad_1wire <= tx_word_shift[31];
+            pad_1wire <= tx_word[5'd31 - tr_bit[4:0]];
         end
         (BITLEN*2/3): begin
             pad_1wire <= 1'b1;
         end
         (BITLEN-1): begin
             tr_cnt <= 0;
-            tx_word_shift <= {tx_word_shift[30:0], 1'b1};
-
             tr_bit <= tr_bit + 1'b1;
             if(tr_bit == 31) begin
                 tr_state <= TR_TX_DONE;
@@ -309,7 +306,6 @@ always @(posedge clk) begin
         end
     end
     TR_RX_DONE: begin
-        rx_word <= rx_word_shift;
         rx_word_done <= 1;
         tr_state <= TR_IDLE;
     end
