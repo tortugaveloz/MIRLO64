@@ -14,11 +14,14 @@
 //   V_INTR   the VI interrupt (MI_INTR's VI) rises, once a field, when the line counter reaches V_INTR / 2 (the
 //            half-line's bit 0 is not compared: an interlaced mode's two fields both match). libultra's value 2 is the
 //            line 1: 17 lines (a millisecond) before the latch, for the game's retrace handler to write its ORIGIN.
-//   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res (WIDTH 512 or more)
-//            picture the game gives as two fields' origins one row of the buffer apart (libultra: the second is the first
-//            + WIDTH * 2 bytes) is one frame of both, from the lower: the 640 x 480 frame -- a write of the
-//            base + one row leaves the base as it is. A serrated picture is sent woven, its 480 rows in order from the
-//            base (rtl/soc/n64_video.sv). A serrated picture's origin written in the second field (VI_CURRENT's field
+//   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res picture of the two
+//            pitches sent woven (WIDTH 640 or 1280, `wid_wv`) the game gives as two fields' origins one row of the buffer
+//            apart (libultra: the second is the first + WIDTH * 2 bytes) is one frame of both, from the lower: the
+//            640 x 480 frame -- a write of the base + one row leaves the base as it is. A serrated picture is sent woven,
+//            its 480 rows in order from the base (rtl/soc/n64_video.sv). Any other pitch (WIDTH 1024 with 512 pixels a
+//            row, a field's rows every other row; a game that renders the rows of the field not on show while the other
+//            is) is sent a field at a time and takes each field's origin as written, so each field shows its own rows.
+//            A woven picture's origin written in the second field (VI_CURRENT's field
 //            bit, which libultra's retrace handler reads to pick the field's origin) is that field's: the base is the
 //            row before it, the first field's of the same buffer -- a game that swaps its buffer every field gives
 //            each field's origin in a buffer the other field's is not in, and the frame is the newest buffer whole.
@@ -94,7 +97,8 @@ assign vi_pal = vs_set ? vs_pal : tv_def;
 // buffer's pitch is two rows, Y_SCALE 1.0, so a field is every other row) it is WIDTH bytes
 // (one subtracter: the written origin's distance from the base, mod 2^23, against the two row sizes and, below, against 0)
 wire  [22:0] org_d  = wd[22:0] - org_b;
-wire         row_up = |wid[11:9] && (org_d == {10'd0, wid, 1'b0} || (|wid[11:10] && org_d == {11'd0, wid}));
+wire         wid_wv = wid[11:1] == 11'd320 || wid[11:1] == 11'd640;       // the two pitches of a picture sent woven (n64_video's wv_rq)
+wire         row_up = wid_wv && (org_d == {10'd0, wid, 1'b0} || (|wid[11:10] && org_d == {11'd0, wid}));
 logic [8:0]  nl;
 logic [1:0]  hold;
 logic        field;
@@ -105,7 +109,7 @@ logic        field;
 // the next: the base is then every field's buffer's first row, and the woven frame stays at the same rows. Not when it is
 // the base or a row on (row_up): the same buffer, or the same origin for both fields.
 wire [13:0]  rowb   = (|wid[11:10] ? {2'd0, wid} : {1'd0, wid, 1'b0}) << st_px32;
-wire         org_f2 = field && st_serr && |wid[11:9];
+wire         org_f2 = field && st_serr && wid_wv;
 assign vi_clr = wr_s && a == 4'd4;
 always_ff @(posedge clk) begin
     if (rst) begin org_b <= 23'd0; wid <= 12'd0; vint <= 9'd0; st_gamma <= 1'b0; st_serr <= 1'b0; hs_zero <= 1'b1; st_aa <= 1'b0; st_dv <= 1'b0; st_dd <= 1'b0; st_px32 <= 1'b0; vs_set <= 1'b0; vs_pal <= 1'b0; end
