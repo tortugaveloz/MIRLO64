@@ -1344,6 +1344,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 |---|---|---|
 | `pad_test.py` | on the host (needs gcc) | `n64rt_pad_map()` against an independent table, over every combination of settings |
 | `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the shipped file, random bytes |
+| `cart_host.c` | on the host (the command is in its header) | the cartridge's byte and halfword reads (`n64rt_cart.h`) against the console's: a halfword of odd index reads the next one |
 | `tlb_insn_host.py` | on the host (needs gcc) | the runtime's TLB instructions against a model of the VR4300's registers, on random operations |
 | `rcp_bench.mk` | a ROM the released runtime runs in `sim/mips_soc` | the monitor's RCP emulation against the console's answers |
 | `tlb_bench.mk` | the same, with a runtime built with `TLBPROF=1` | the TLB instructions' results and their cost |
