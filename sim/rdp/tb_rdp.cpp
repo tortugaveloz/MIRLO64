@@ -19,6 +19,7 @@
 //               RTL == model in either mode
 //   TB_NOISE=1  streams with the noise colour dither alone: the free-running RTL differs from the model in a colour word only by a
 //               step of a 5-bit channel (the dither adds one at most), and in nothing else (coverage, depth, hidden bits)
+//   TB_C16=1    the colour image stays a 16-bit one; with TB_CW an odd width, whose rows start on the odd halfword of a word
 //   TB_ZDZ=1    random streams of depth-tested, anti-aliased triangles on a few planes (the depth image's own dz: docs/rdp_exact.md, rule 8)
 #include "Vrdp_top.h"
 #include "Vrdp_top___024root.h"
@@ -222,6 +223,9 @@ static const bool rect_mode = getenv("TB_RECT") != nullptr;
 // streams are made to show: AA_EN, Z_CMP, Z_UPD, IM_RD, mostly the blender's B the memory's coverage; the triangles' depths are
 // the points of a plane (a few at a time, of slopes of every dz code) plus now and then a step within the tolerance of a code
 static const bool zdz_mode = getenv("TB_ZDZ") != nullptr;
+// TB_C16=1: the colour image stays a 16-bit one (a stream's SET_COLOR_IMAGE does not change its size): what an odd TB_CW is for, rows that start on the
+// odd halfword of a memory word (an 8-bit image's, or a 32-bit one's, are not taken to start anywhere but on a word)
+static const bool c16_mode = getenv("TB_C16") != nullptr;
 static const bool noise_mode = getenv("TB_NOISE") != nullptr, nonoise_mode = getenv("TB_NONOISE") != nullptr;   // (the noise LFSR: above)
 static int64_t zp_z, zp_x, zp_y;
 static void zdz_plane()
@@ -448,7 +452,7 @@ static void rand_stream(unsigned seed, int n)
             // triangle), then the colour image again. TB_RAND_CZ=2: the depth image stays
             // the colour image for whatever comes
             static const int cz = getenv("TB_RAND_CZ") ? atoi(getenv("TB_RAND_CZ")) : 0;
-            uint32_t w = 0x3F000000u | ((gr(6) || noise_mode) ? csz : gr(4)) << 19 | cw1;      // (TB_NOISE: always a 16-bit image: an 8-bit one is not dithered, a 32-bit one at 8 bits)
+            uint32_t w = 0x3F000000u | ((gr(6) || noise_mode || c16_mode) ? csz : gr(4)) << 19 | cw1;      // (TB_NOISE: always a 16-bit image: an 8-bit one is not dithered, a 32-bit one at 8 bits)
             if (cz == 1 && gr(3) == 0) {
                 cmd2(0x3F000000u | 2u << 19 | cw1, R_ZIMG);
                 cmd2(0x2F000000u | 3u << 20 | gr(1u << 20), gr());

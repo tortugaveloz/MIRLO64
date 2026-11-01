@@ -84,7 +84,8 @@ module rdp_pix (
 
     // ---- pixels in
     input  wire        in_valid,
-    input  wire [9:0]  in_x,
+    input  wire [9:0]  in_x,             // the pixel's place in its row's words (its column plus par)
+    input  wire        in_par,           // the row starts on an odd halfword: the column is in_x - 1 (what the dither goes by)
     input  wire        in_set,           // the row's line-buffer set
     input  wire [1:0]  row_y,                  // the row (its low bits), steady while its pixels run
     input  wire [31:0] in_r, in_g, in_b, in_a, in_w, in_z,
@@ -259,6 +260,7 @@ module rdp_pix (
     // ======================================================================
     reg        v0;
     reg [9:0]  x0;
+    reg        hp0;
     // the line buffers' set of the pixel's row (rdp_top), along with x
     reg        bs0, bs9, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
     reg [15:0] s0r, t0r;
@@ -317,7 +319,7 @@ module rdp_pix (
         v0 <= (in_valid | dup0) & ~rst;
         ph0 <= dup0;
         if (!dup0) begin             // (the second pass repeats the pixel as it is: rdp_top has gone on)
-            x0 <= in_x; bs0 <= in_set;
+            x0 <= in_x; hp0 <= in_par; bs0 <= in_set;
             shade0 <= p_shade ? {sr9, sg9, sb9, sa9} : 36'd0;
             z0r <= in_z;
             zc0 <= p_aa ? zcorr : 25'sd0;
@@ -372,14 +374,17 @@ module rdp_pix (
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [3:0]  sb_wa;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
-    (* ramstyle = "M10K, no_rw_check" *) reg [70:0] sb_ram [0:15];
-    reg  [70:0] sb_q;
+    (* ramstyle = "M10K, no_rw_check" *) reg [71:0] sb_ram [0:15];
+    reg  [71:0] sb_q;
     always @(posedge clk) begin
-        sb_ram[sb_wa] <= {x0, bs0, shade0, depth_c, cvg0, y0};
+        sb_ram[sb_wa] <= {hp0, x0, bs0, shade0, depth_c, cvg0, y0};
         sb_q <= sb_ram[sb_ra];
         sb_wa <= sb_wa + 4'd1;
     end
     wire [9:0]  x8b     = sb_q[70:61];
+    wire        hp8b    = sb_q[71];
+    // (the row's odd halfword, along with the pixel to the dither: the column is x - hp)
+    reg         hp9, hp10a, hp10, hp11a, hp11, hp11b, hp12a, hp12, hp13a, hp13b;
     wire        bs8b    = sb_q[60];
     wire [35:0] shade8b = sb_q[59:24];
     wire [17:0] depth8b = sb_q[23:6];
@@ -913,7 +918,7 @@ module rdp_pix (
     reg [35:0] shade9;
     reg [17:0] depth9;
     always @(posedge clk) begin
-        v9 <= v8b & ~rst & (!two_pass | ph8b); x9 <= x8b; bs9 <= bs8b;
+        v9 <= v8b & ~rst & (!two_pass | ph8b); x9 <= x8b; hp9 <= hp8b; bs9 <= bs8b;
         lb_raddr <= {bs8b, x8b[9:1]};           // line buffers: data after the next edge, captured at P10b
         clb_raddr <= {bs8b, c32 ? x8b[8:0] : x8b[9:1]};
         hl_raddr <= {bs8b, hw8b[9:3]};          // the hidden word of the pixel's group
@@ -1143,7 +1148,7 @@ module rdp_pix (
     reg [35:0]  shade10a;
     reg [17:0]  depth10a;
     always @(posedge clk) begin
-        v10a <= v9 & ~rst; x10a <= x9; bs10a <= bs9; hk10a <= hk9; hzk10a <= hzk9;
+        v10a <= v9 & ~rst; x10a <= x9; hp10a <= hp9; bs10a <= bs9; hk10a <= hk9; hzk10a <= hzk9;
         o10a <= o0_w;
         tex10a <= tex9; tex1_10a <= tex19; shade10a <= shade9; depth10a <= depth9;
     end
@@ -1181,7 +1186,7 @@ module rdp_pix (
     wire [2:0] bsa10   = !z_cmp ? 3'd0 : (dga10[4] || dga10[3:0] == 4'd0) ? 3'd0 : (dga10[3:0] > 4'd4) ? 3'd4 : dga10[2:0];
     wire [2:0] bsb10   = !z_cmp ? ((dzenc < 4'd11) ? 3'd4 : ~dzenc[2:0]) : (dgb10[4] || dgb10[3:0] == 4'd0) ? 3'd0 : (dgb10[3:0] > 4'd4) ? 3'd4 : dgb10[2:0];
     always @(posedge clk) begin
-        v10 <= v10a & ~rst; x10 <= x10a; bs10 <= bs10a;
+        v10 <= v10a & ~rst; x10 <= x10a; hp10 <= hp10a; bs10 <= bs10a;
         c010 <= c0_w;
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
@@ -1207,7 +1212,7 @@ module rdp_pix (
     reg [7:0]   c0a11a, c0a11;       // 2-cycle: the first cycle's alpha (the alpha compare's)
     reg         c0f11a, c0f11;       // ... and whether it counts 256 (an alpha of 255 does: the coverage's multiply)
     always @(posedge clk) begin
-        v11a <= v10 & ~rst; x11a <= x10; bs11a <= bs10;
+        v11a <= v10 & ~rst; x11a <= x10; hp11a <= hp10; bs11a <= bs10;
         o11a <= o1_w;
         tex11a <= tex10; shade11a <= shade10; mem11a <= mem10;
         depth11a <= depth10; zold11a <= z_dec(zold10);
@@ -1228,7 +1233,7 @@ module rdp_pix (
     wire [19:0] ddif11a = {2'b0, depth11a} - {1'b0, ztol11a};     // (the borrow: the depth is below the tolerance)
     reg [31:0] mem11;
     always @(posedge clk) begin
-        v11 <= v11a & ~rst; x11 <= x11a; bs11 <= bs11a;
+        v11 <= v11a & ~rst; x11 <= x11a; hp11 <= hp11a; bs11 <= bs11a;
         comb11 <= (cyc == 2'd2) ? tex11a : { cc_clamp(c1_w[35:27]), cc_clamp(c1_w[26:18]), cc_clamp(c1_w[17:9]), cc_clamp(c1_w[8:0]) };
         af11 <= (cyc != 2'd2) && cc_a256(c1_w[8:0]);
         shade11 <= shade11a; depth11 <= depth11a;
@@ -1273,7 +1278,7 @@ module rdp_pix (
         else lfsr <= {lfsr[21:0], ~(lfsr[22] ^ lfsr[18])};
 `endif
     wire [2:0] ad_d;
-    rdp_dither_tab adtab (.off(1'b0), .bayer(other_h[6]), .y(dy11), .x(x11[1:0]), .dt(ad_d));
+    rdp_dither_tab adtab (.off(1'b0), .bayer(other_h[6]), .y(dy11), .x(x11[1:0] - {1'b0, hp11}), .dt(ad_d));
     wire [2:0] adith = (cyc == 2'd2) ? 3'd0 : (other_h[5:4] == 2'd0) ? ad_d : (other_h[5:4] == 2'd1) ? ~ad_d
                      : (other_h[5:4] == 2'd2) ? lfsr[10:8] : 3'd0;
     function automatic [7:0] sat9;
@@ -1332,7 +1337,7 @@ module rdp_pix (
     reg [2:0]  mcvg11b;
     reg        ovf11b, zmax11b, zfront11b, znear11b, zfar11b, k0_11b;
     always @(posedge clk) begin
-        v11b <= v11 & ~rst; x11b <= x11; bs11b <= bs11;
+        v11b <= v11 & ~rst; x11b <= x11; hp11b <= hp11; bs11b <= bs11;
         comb11b <= comb11; mem11b <= mem11; shade11b <= shade11; depth11b <= z_enc(depth11);
         cvg_sb <= cvg_s; zdifb <= zdif[3:0];
         pa11b <= pa11; ca11b <= ca11; sha11b <= sha11; athr11b <= athr;
@@ -1463,7 +1468,7 @@ module rdp_pix (
     reg        pass12a, ben12a, ovf12a;
     reg [2:0]  cv312a, cv312, cv313, cv313b;
     always @(posedge clk) begin
-        v12a <= v11b & ~rst; x12a <= x11b; bs12a <= bs11b;
+        v12a <= v11b & ~rst; x12a <= x11b; hp12a <= hp11b; bs12a <= bs11b;
         bo12a <= bo0_w;
         comb12a <= comb11b; mem12a <= mem11b; pa12a <= pa11b; sha12a <= sha11b; mcvg12a <= mcvg11b; bsa12a <= bsa11b; bsb12a <= bsb11b;
         depth12a <= depth11b;
@@ -1480,7 +1485,7 @@ module rdp_pix (
     reg [13:0] depth12;
     reg        pass12, ben12, ovf12;
     always @(posedge clk) begin
-        v12 <= v12a & ~rst; x12 <= x12a; bs12 <= bs12a;
+        v12 <= v12a & ~rst; x12 <= x12a; hp12 <= hp12a; bs12 <= bs12a;
         b0rgb12 <= { s0_w[40:33], s0_w[26:19], s0_w[12:5] };
         comb12 <= comb12a; mem12 <= mem12a; pa12 <= pa12a; sha12 <= sha12a; mcvg12 <= mcvg12a; bsa12 <= bsa12a; bsb12 <= bsb12a;
         depth12 <= depth12a; pass12 <= pass12a; ben12 <= ben12a; ovf12 <= ovf12a; cv312 <= cv312a;
@@ -1501,7 +1506,7 @@ module rdp_pix (
     reg [13:0] depth13;
     reg        pass13, ben13, ovf13;
     always @(posedge clk) begin
-        v13a <= v12 & ~rst; x13a <= x12; bs13a <= bs12;
+        v13a <= v12 & ~rst; x13a <= x12; hp13a <= hp12; bs13a <= bs12;
         bo13a <= bo1_w;
         comb13 <= comb12;
         depth13 <= depth12; pass13 <= pass12; ben13 <= ben12; ovf13 <= ovf12; cv313 <= cv312;
@@ -1518,7 +1523,7 @@ module rdp_pix (
     reg [13:0] depth13b;
     reg        pass13b;
     always @(posedge clk) begin
-        v13b <= v13a & ~rst; x13b <= x13a; bs13b <= bs13a;
+        v13b <= v13a & ~rst; x13b <= x13a; hp13b <= hp13a; bs13b <= bs13a;
         fsum <= s1_w;
         fpm <= bo13a[63:16];
         frc <= bl_recip(bo13a[4:1]);
@@ -1558,7 +1563,7 @@ module rdp_pix (
     // 5-bit step and a compare behind the registers: not on the blender's path).
     wire [2:0] dt13;
     rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1]), .bayer(other_h[6]),
-                         .y(dy13), .x(x13b[1:0]), .dt(dt13));
+                         .y(dy13), .x(x13b[1:0] - {1'b0, hp13b}), .dt(dt13));
 `ifdef RDP_LFSR_PIXEL
     // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
     reg [8:0] nz1, nz2, nz3, nz4, nz5;

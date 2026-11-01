@@ -9,6 +9,14 @@ run() { out=$("$@" 2>&1); rc=$?; n=$((n+1)); case "$out" in *"RTL == model"*) [ 
 for cw in 292 296 320; do
   for s in 1 2 3 4 5 6 7 8; do TB_CW=$cw run ./obj_rdp/tb_rdp -r $s 200; done
 done
+# colour images of an odd width, whose rows start on the odd halfword of a word (16-bit images: TB_C16), alone, in copy mode,
+# with the depth image's own dz, and with the SoC's memory
+for cw in 289 301; do
+  for s in 1 2 3 4 5 6; do TB_C16=1 TB_CW=$cw run ./obj_rdp/tb_rdp -r $s 200; done
+  for s in 71 72 73; do TB_C16=1 TB_CW=$cw TB_COPY=1 run ./obj_rdp/tb_rdp -r $s 200; done
+  for s in 111 112 113; do TB_C16=1 TB_CW=$cw TB_ZDZ=1 run ./obj_rdp/tb_rdp -r $s 200; done
+done
+TB_C16=1 TB_CW=289 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 21 150
 for s in 11 12 13 14; do TB_LFSR=1 TB_STEP=1 run ./obj_rdp/tb_rdp -r $s 100; done
 for s in 21 22 23; do TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r $s 150; done
 # (those: the depth image in the colour image's bank; these: a bank on)

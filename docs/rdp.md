@@ -501,8 +501,19 @@ alpha compare enable.
 ### The colour image
 
 The colour image is the program's: RGBA5551 in the N64's byte order, two
-pixels a 32-bit word with the left one first. A row must start on a 4-byte
-boundary (an image 4-aligned, of even width).
+pixels a 32-bit word with the left one first. A 16-bit image may be of any
+width: when it is odd, every second row starts on the odd halfword of a memory
+word (the pixel's address is the image's plus twice its index in the image,
+y times its width plus x). The RTL counts such a row's columns in its words
+from that halfword (`par` in `rdp_top.v`: bit 1 of the row's byte address, added
+to the span's first and last column and so to every pixel's place in the line
+buffers, the reads and the write-back); what depends on the column itself --
+the dither -- keeps it (`rdp_pix.v` carries the bit along). The fill
+colour's half a pixel takes is the memory halfword's, by the address's bit 1.
+The depth image is taken to start its rows on the same halfword (the
+two images' addresses are multiples of 8 bytes). An 8-bit or a 32-bit image
+(below) is not given this: an 8-bit one's rows must start on a 4-byte boundary,
+a 32-bit one's always do, and the depth image of those is not shifted.
 
 An 8-bit colour image (SET_COLOR_IMAGE's size 1) has a byte a pixel, at the
 image's address plus y times its width plus x -- what software uses to draw a
@@ -651,6 +662,8 @@ switches:
   differs; with `TB_LFSR=1` it compares the LFSR too.
 * `TB_CW=<width>` sets the random stream's colour image width; a width that
   is not a multiple of 16 makes rows share hidden-plane groups.
+* `TB_C16=1` keeps the colour image a 16-bit one (a random stream otherwise changes its size now and then); with an odd
+  `TB_CW` the rows start on the odd halfword of a word.
 * `TB_CC=1` makes random streams in which the combiner's result reaches
   memory unblended.
 * `TB_C8=1` makes the random stream's colour image an 8-bit one, `TB_C32=1`
@@ -673,7 +686,7 @@ dither alone and no read of the colour image, in which the free-running RTL diff
 `TB_COPY=1` makes copy mode three modes in four (texture rectangles by groups of pixels, with `TB_C8=1` in groups of 8), `TB_RECT=1` adds texture rectangles (with `TB_LOD=1`, a rectangle's LOD next line).
 
 `tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
-at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
+at colour image widths 292, 296 and 320 (and, with `TB_C16`, odd ones: 289 and 301, also with `TB_COPY`, `TB_ZDZ` and the SDRAM's timing), seeds with `TB_LFSR` and `TB_STEP`,
 seeds of the free-running LFSR (`TB_FREE` with `TB_NONOISE`, with `TB_ZDZ` and the SDRAM's timing, and `TB_NOISE`), seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
 (`TB_C8`, at widths 320 and 292 and with `TB_SDRAM`), seeds with a 32-bit
 colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, seeds with `TB_COPY` (also 8-bit, and with the SDRAM's timing), seeds with `TB_LOD` and `TB_RECT`, seeds with `TB_ZDZ` (also at a width whose rows share depth-hidden groups, with the SDRAM's timing and 32-bit images), and
