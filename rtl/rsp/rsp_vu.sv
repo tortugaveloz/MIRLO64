@@ -681,6 +681,27 @@ always_comb
         else       ld_d[g] = {dh, dl};
     end
 
+// (one pass) the register write's data as an OR of sources that are 0 when it is not their cycle: the load's bytes and MTC2's
+// word, and the reciprocal's word, one 16-bit word for every lane
+logic [15:0] wr_ld [8], wr_sh;
+logic        wr_xoff;
+always_comb begin
+    logic sel_rd, sel_mt, sel_p6, sel_p7;
+    sel_rd = lw_v && !lw_packed && !lw_mt;
+    sel_mt = lw_v && !lw_packed && lw_mt;
+    sel_p6 = lw_v && lw_packed && lw_p6;
+    sel_p7 = lw_v && lw_packed && !lw_p6;
+    wr_xoff = wp || lw_v || x_rcp;
+    for (int g = 0; g < 8; g++) begin
+        logic [7:0] dp;
+        dp = m_rdata[127 - 8 * g -: 8];
+        wr_ld[g] = ({16{sel_rd}} & {m_rdata[127 - 16 * g -: 8], m_rdata[119 - 16 * g -: 8]})
+                 | ({16{sel_p6}} & {dp, 8'd0}) | ({16{sel_p7}} & {1'b0, dp, 7'd0});
+    end
+    wr_sh = ({16{sel_mt}} & lw_mb)
+          | ({16{x_wr && x_one && x_rcp}} & (x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0]));
+end
+
 // ----------------------------------------------------------- the controls --
 // a computational instruction's SEL: not under an EX that writes what it reads,
 // nor (a reciprocal) under any, nor under a load's write of what it reads
@@ -777,21 +798,27 @@ always_comb begin
     res = {{16{sb[0][7]}}, sb[0], sb[1]};
     // the register write: EX's last pass, a load's bytes, MTC2
     wr_reg = x_vdn; wr_be = 16'd0;
-    for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
-    if (!wp) for (int l = 0; l < LANES; l++) wr_d[(NP - 1) * LANES + l] = ex[l].res;
-    if (!wp && MW && x_mw) for (int l = 0; l < LANES; l++) begin wr_d[l] = ex[l].res; wr_d[LANES + l] = exm[l].res; end
+    if (NP == 2) begin
+        for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
+        if (!wp) for (int l = 0; l < LANES; l++) wr_d[(NP - 1) * LANES + l] = ex[l].res;
+        if (!wp && MW && x_mw) for (int l = 0; l < LANES; l++) begin wr_d[l] = ex[l].res; wr_d[LANES + l] = exm[l].res; end
+    end
     if (wp) begin wr_reg = w_vdn; wr_be = 16'hFFFF; end             // (the late write)
     if (x_wr) begin
         wr_be = 16'hFFFF;
         if (x_one) begin
             wr_be = 16'd3 << {x_de, 1'b0};
-            if (x_rcp) for (int g = 0; g < 8; g++) wr_d[g] = x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0];
+            if (NP == 2 && x_rcp) for (int g = 0; g < 8; g++) wr_d[g] = x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0];
         end
     end else if (in_v) begin
         wr_reg = lw_reg;
         wr_be = in_pk ? 16'hFFFF : in_be;
-        for (int g = 0; g < 8; g++) wr_d[g] = ld_d[g];
+        if (NP == 2) for (int g = 0; g < 8; g++) wr_d[g] = ld_d[g];
     end
+    // (one pass) the register's data is the OR of what each writer brings, every one of them 0 when another's turn: the
+    // result of the lanes (not under a late write, a load's bytes or a reciprocal), the late write's `hold` (0 unless it
+    // is that cycle's), the reciprocal's or MTC2's word, and a load's bytes
+    if (NP == 1) for (int g = 0; g < 8; g++) wr_d[g] = (ex[g].res & {16{!wr_xoff}}) | hold[g] | wr_sh | wr_ld[g];
     // (simulation) instructions whose effects are complete with this cycle,
     // in order: what finishes under a computation not yet written (a load, a
     // store, MFC2 behind its second pass) is counted with it
@@ -838,6 +865,8 @@ always_ff @(posedge clk) begin
             if (NP == 1 && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;   // (a clip's flags are in fl_r: the adder makes -t)
         end
         for (int l = 0; l < LANES; l++) fl_r[l] <= ex[l].fl;
+        // (one pass: `hold` keeps a result for the late write -- wp, the cycle after -- and is 0 otherwise)
+        if (NP == 1) for (int l = 0; l < LANES; l++) hold[l] <= x_defer ? ex[l].res : 16'd0;
         if (x_exec) begin
             for (int l = 0; l < LANES; l++) begin
                 automatic int li = int'(x_pass) * LANES + l;
@@ -848,7 +877,7 @@ always_ff @(posedge clk) begin
                 if (ex[l].co_w) begin vco[li] <= ex[l].co_lo; vco[8 + li] <= ex[l].co_hi; end
                 if (ex[l].cc_w) begin vcc[li] <= ex[l].cc_lo; vcc[8 + li] <= ex[l].cc_hi; end
                 if (ex[l].ce_w) vce[li] <= ex[l].ce;
-                hold[li] <= ex[l].res;
+                if (NP == 2) hold[li] <= ex[l].res;
             end
             if (MW && x_mw)
                 for (int l = 0; l < LANES; l++) begin
