@@ -504,6 +504,9 @@ module rdp_top (
     wire [31:0] row_off = cimg8 ? row_h : {row_h[30:0], 1'b0};
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
+    wire [31:0] zrow = zimg + row_off;            // the depth image's row
+    // (the hidden words' row bases, rwb and rzb, are those addresses' bits 11:2; a 32-bit image has no hidden words, so the
+    // colour image's, where crow differs from cimg + row_off, is not read)
     // A 16-bit image whose width is odd has rows that start on the odd halfword of a memory word: the row's pixels sit in
     // its words from halfword `par` on, so a span's columns are counted in words (xsp, xep: the buffers', the reads' and the
     // write-back's) from there; the pixel pipeline keeps the column itself for what depends on it (the dither). The depth
@@ -1128,7 +1131,7 @@ module rdp_top (
                         set_cur <= !set_cur;
                         rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                         rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                        rwb[!set_cur] <= cimg[11:2] + row_off[11:2]; rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
+                        rwb[!set_cur] <= crow[11:2]; rzb[!set_cur] <= zrow[11:2];
                     end
                 end
             end
@@ -1150,7 +1153,7 @@ module rdp_top (
                     set_cur <= !set_cur;
                     rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                    rwb[!set_cur] <= cimg[11:2] + row_off[11:2]; rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
+                    rwb[!set_cur] <= crow[11:2]; rzb[!set_cur] <= zrow[11:2];
                 end
             end
 
@@ -1245,7 +1248,7 @@ module rdp_top (
                 set_cur <= !set_cur;
                 rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b0; rq_hz <= z_cmp || z_upd; rq_half <= 1'b1; rq_set <= !set_cur;
                 rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
+                rzb[!set_cur] <= zrow[11:2];
             end
 
             // ---- the primitive's end: its pixels out of the pipe and back
