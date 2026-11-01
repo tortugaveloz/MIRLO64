@@ -1115,17 +1115,26 @@ module rdp_pix (
     // words addressed at P9 are captured at P10b.
     // ======================================================================
     // NOISE, the colour combiner's A 7: ((three random bits) << 6) | 0x20 for each pixel, the bits the alpha dither's
-    // noise takes (as the console's, Angrylion's get_dither_noise: the one random number serves both). From a second
-    // copy of the LFSR, stepped here at P9 for the same pixels as the first at P11, so that a pixel's value is the one
-    // the model takes for it (the state before its own step); the second cycle's a stage on.
-    reg  [22:0] nlfsr;
+    // noise takes (as the console's, Angrylion's get_dither_noise: the one random number serves both).
+    // The noise is a 23-bit LFSR (the console's taps), which steps every clock of the RDP's clock (the default: free-running;
+    // a pixel takes the bits it finds when it reaches the stage that uses them). With RDP_LFSR_PIXEL it steps once for each
+    // pixel with coverage instead, as lang/c/rdp/rdp.c does (the benches that compare with the model build so): the combiner's
+    // noise comes from a second copy of the LFSR, stepped here at P9 for the same pixels as the first at P11, so that a pixel's
+    // value is the one the model takes for it (the state before its own step); the second cycle's a stage on.
+    reg  [22:0] lfsr;
     reg  [8:0]  nz10;
+`ifdef RDP_LFSR_PIXEL
+    reg  [22:0] nlfsr;
     wire [8:0]  nz9 = {nlfsr[10:8], 6'h20};
     always @(posedge clk) begin
         if (rst) nlfsr <= 23'd0;
         else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
         nz10 <= nz9;
     end
+`else
+    wire [8:0]  nz9 = {lfsr[10:8], 6'h20};
+    always @(posedge clk) nz10 <= nz9;
+`endif
     wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9, nz9);
     reg         v10a;
     reg [9:0]   x10a;
@@ -1251,16 +1260,18 @@ module rdp_pix (
     // Angrylion's get_dither_noise, the console's dither fetch) as
     // ALPHA_DITHER_SEL takes it -- the pattern, its inverse, noise (three
     // random bits), none. Copy mode: none.
-    // The noise: a 23-bit LFSR (the console's taps), one step for each pixel
-    // with coverage that passes this stage (lang/c/rdp/rdp.c steps it at the
-    // same pixels): the alpha dither's noise and the alpha compare's random
+    // The noise (the LFSR above): the alpha dither's noise and the alpha compare's random
     // threshold (DITHER_ALPHA_EN: the N64 compares with a random 8-bit
     // number, not with a pattern -- a pattern drew a regular grid of a
-    // translucent surface's texels of alpha 0)
-    reg  [22:0] lfsr;
+    // translucent surface's texels of alpha 0). Free-running, it steps every clock; with RDP_LFSR_PIXEL one step for each pixel
+    // with coverage that passes this stage (lang/c/rdp/rdp.c steps it at the same pixels)
     always @(posedge clk)
         if (rst) lfsr <= 23'd0;
+`ifdef RDP_LFSR_PIXEL
         else if (v11 && cvg11 != 4'd0 && cyc != 2'd3) lfsr <= {lfsr[21:0], ~(lfsr[22] ^ lfsr[18])};
+`else
+        else lfsr <= {lfsr[21:0], ~(lfsr[22] ^ lfsr[18])};
+`endif
     wire [2:0] ad_d;
     rdp_dither_tab adtab (.off(1'b0), .bayer(other_h[6]), .y(dy11), .x(x11[1:0]), .dt(ad_d));
     wire [2:0] adith = (cyc == 2'd2) ? 3'd0 : (other_h[5:4] == 2'd0) ? ad_d : (other_h[5:4] == 2'd1) ? ~ad_d
@@ -1538,7 +1549,7 @@ module rdp_pix (
     // screen (0: the magic square, 1: the Bayer matrix: a pixel an eighth of
     // the way to the next step goes up in one of eight places of the matrix),
     // or noise (2: three random bits for each channel, the LFSR's [2:0], [5:3]
-    // and [8:6] as the pixel's alpha dither sees it, carried here in nz1..nz5:
+    // and [8:6] as the pixel's alpha dither sees it (with RDP_LFSR_PIXEL, carried here in nz1..nz5; free-running, as it finds them):
     // the console's dither calculation -- a game's dust, G_CD_NOISE, was
     // drawn as an ordered checker screen with the matrix in its place); 3: off.
     // Without it a smooth shaded or lit surface is cut into flat bands of one
@@ -1548,9 +1559,13 @@ module rdp_pix (
     wire [2:0] dt13;
     rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1]), .bayer(other_h[6]),
                          .y(dy13), .x(x13b[1:0]), .dt(dt13));
+`ifdef RDP_LFSR_PIXEL
     // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
     reg [8:0] nz1, nz2, nz3, nz4, nz5;
     always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz4 <= nz3; nz5 <= nz4; end
+`else
+    wire [8:0] nz5 = lfsr[8:0];
+`endif
     wire dnoise = other_h[7:6] == 2'd2 && !cyc[1];
     reg [14:0] col_t;                           // R5 G5 B5, truncated
     reg [8:0]  col_lo;                          // the low three bits of R, G, B
