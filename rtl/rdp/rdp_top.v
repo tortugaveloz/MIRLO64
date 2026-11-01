@@ -202,25 +202,30 @@ module rdp_top (
     reg  [9:0]  nb_wa;                  // the depth buffers' {set, word}
     reg         nb_x0;                  // the pixel's x[0]: the new colour buffer's address, a 32-bit image's {set, x[8:0]}
     wire [9:0]  cn_wa = cimg32 ? {nb_wa[9], nb_wa[7:0], nb_x0} : nb_wa;
-    reg  [31:0] zn_wd;
+    reg  [35:0] zn_wd;                  // {depth word 16, hidden 2} x 2, the even pixel first (the dz code's low two are the hidden ones)
     reg  [35:0] cn_wd;                  // {colour 16, hidden 2} x 2, the even pixel first (a 32-bit image: {R8 G8, 0, pass, B8 cvg3, 0})
     reg  [1:0]  nb_be, cn_be;
     reg  [1:0]  zm_wd, cm_wd, msk_be;
     wire [9:0]  mem_lb_ra;
-    wire [31:0] znew_rd;
+    wire [35:0] znew_rd;
     wire [35:0] cnew_rd;
     wire [1:0]  zm_rd, cm_rd;
     wire [9:0]  zn_ra = mem_lb_ra;
-    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
+    rdp_sdpram #(.AW(10), .DW(36), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
     rdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(cn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
     // the raw hidden-bit buffers (rdp_mem): the span's groups' words, by {set,
     // group mod 128}, a copy for the pixels and one for the write engine
-    wire        hl_we;
-    wire [7:0]  hl_wa, pix_hl_ra, mem_hl_ra;
-    wire [31:0] pix_hl_rd, mem_hl_rd;
-    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
-    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
+    // The depth image has its own (its dz code's low two bits, rule 8 of docs/rdp_exact.md): a copy for the pixels, and in the
+    // write engine's the two images' words, the colour image's in the lower half
+    wire        hl_we, hl_z;
+    wire [7:0]  hl_wa, pix_hl_ra, pix_hz_ra;
+    wire [8:0]  mem_hl_ra;
+    wire [31:0] pix_hl_rd, pix_hz_rd, mem_hl_rd;
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hraw0 (.clk(clk), .we(hl_we && !hl_z), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hl_ra), .rdata(pix_hl_rd));
+    rdp_sdpram #(.AW(8), .DW(32), .NB(1)) hrawz (.clk(clk), .we(hl_we && hl_z), .waddr(hl_wa), .wdata(mw_data), .wbe(1'b1), .raddr(pix_hz_ra), .rdata(pix_hz_rd));
+    rdp_sdpram #(.AW(9), .DW(32), .NB(1)) hraw1 (.clk(clk), .we(hl_we), .waddr({hl_wa[7], hl_z, hl_wa[6:0]}), .wdata(mw_data), .wbe(1'b1), .raddr(mem_hl_ra), .rdata(mem_hl_rd));
     reg  [9:0]  rwb [0:1];              // the rows' colour word base (bits 9:0), by set
+    reg  [9:0]  rzb [0:1];              // ... and the depth's
     // (a 32-bit image's pass bits are in cnew's entries, so that cmsk keeps zmsk's addresses: the fit packs the two)
     rdp_sdpram #(.AW(10), .DW(2), .NB(2)) zmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(zm_wd), .wbe(msk_be), .raddr(zn_ra), .rdata(zm_rd));
     rdp_sdpram #(.AW(10), .DW(2), .NB(2)) cmsk (.clk(clk), .we(msk_we), .waddr(nb_wa), .wdata(cm_wd), .wbe(msk_be), .raddr(mem_lb_ra), .rdata(cm_rd));
@@ -265,10 +270,10 @@ module rdp_top (
     // wraps wraps there too.
     reg  [16:0] ldy_s, ldy_t, ldy_w;
     // The console moves a pixel without full coverage to its first covered sample by the shade's DaDx and DaDy >> 14 (13 bits;
-    // adx's bits 26:14, sdy), and stores the top two bits of a dz code from the integer halves of DzDx and DzDy: |DzDx| + |DzDy|
+    // adx's bits 26:14, sdy), and takes the console's dz code from the integer halves of DzDx and DzDy: |DzDx| + |DzDy|
     // (a negative one's complement, 15 bits), the place of its top set bit + 1 (docs/rdp_exact.md, rule 4)
     reg  [12:0] sdy [0:3];
-    reg  [1:0]  dzc_r;
+    reg  [3:0]  dzc_r;
     wire [14:0] dzc_a = vgx[31] ? ~vgx[30:16] : vgx[30:16];
     wire [14:0] dzc_b = zdy[31] ? ~zdy[30:16] : zdy[30:16];
     wire [15:0] dzc_s = {1'b0, dzc_a} + {1'b0, dzc_b};
@@ -317,7 +322,8 @@ module rdp_top (
     wire        px_valid, px_cpass, px_zpass, pix_busy, px_set;
     reg         set_cur;            // the line-buffer set of the row being drawn
     wire [9:0]  px_x;
-    wire [15:0] px_color, px_depth;
+    wire [15:0] px_color;
+    wire [17:0] px_depth;
     wire [7:0]  px_r8;
     wire [26:0] px_c27;                 // a 32-bit image's pixel: {R8 G8 B8 cvg3}
     wire [1:0]  px_hid;
@@ -325,7 +331,7 @@ module rdp_top (
         .clk(clk), .rst(rst),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
-        .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .z_tol(p_zbuf ? z_tol : 16'd1), .fill(fill),
+        .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .fill(fill),
         .prim_dz(prim_dz), .need_mem(need_mem), .c8(cimg8), .c32(cimg32), .p_aa(p_aa), .z_dx(adx[7]), .z_dy(zdy),
         .sh_dx({adx[3][26:14], adx[2][26:14], adx[1][26:14], adx[0][26:14]}), .sh_dy({sdy[3], sdy[2], sdy[1], sdy[0]}), .dzc_x(dzc_r),
         .p_shade(p_shade), .p_tex(p_tex), .p_zbuf(p_zbuf), .p_direct(p_direct),
@@ -342,7 +348,7 @@ module rdp_top (
         .tm_q0(tm_q0), .tm_q1(tm_q1), .tm_q2(tm_q2), .tm_h0(tm_h0), .tm_h1(tm_h1), .tm_h2(tm_h2),
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
         .lb_raddr(pix_lb_ra), .clb_raddr(pix_clb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd),
-        .hl_raddr(pix_hl_ra), .hl_rdata(pix_hl_rd), .rwb0(rwb[0]), .rwb1(rwb[1]), .out_hid(px_hid),
+        .hl_raddr(pix_hl_ra), .hl_rdata(pix_hl_rd), .rwb0(rwb[0]), .rwb1(rwb[1]), .hz_raddr(pix_hz_ra), .hz_rdata(pix_hz_rd), .rzb0(rzb[0]), .rzb1(rzb[1]), .out_hid(px_hid),
         .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_r8(px_r8), .out_c27(px_c27), .out_depth(px_depth),
         .out_cpass(px_cpass), .out_zpass(px_zpass), .busy(pix_busy));
 
@@ -351,7 +357,7 @@ module rdp_top (
     // ======================================================================
     // a read request (a row's spans, or a load) and a write request (a row's
     // results, or a fill): each waits here for its engine
-    reg         rq_pend, rq_load, rq_z, rq_c, rq_h, rq_set;
+    reg         rq_pend, rq_load, rq_z, rq_c, rq_h, rq_hz, rq_set, rq_half;
     reg  [31:0] rq_zbase, rq_cbase;
     // (a span's read takes its columns from xs, xe: they stay as they are while the read waits, since the row's pixels
     // wait for it)
@@ -369,9 +375,9 @@ module rdp_top (
     // a span's hidden words are read into its set only when the write engine
     // is not merging from that set -- and, when rows can share a group (the
     // image's rows not 16 pixels wide), only when nothing of the row before is
-    // still to be written
-    wire        hz_ok = !rq_h || (!(wr_busy && wr_seti == rq_set)
-                                  && (cimg_width[3:0] == 4'd0 || (!wr_busy && !wq_pend)));
+    // still to be written -- as for the second half of a 32-bit image's wide span, whose first group may be the first half's last
+    wire        hz_ok = !(rq_h || rq_hz) || (!(wr_busy && wr_seti == rq_set)
+                                  && ((cimg_width[3:0] == 4'd0 && !rq_half) || (!wr_busy && !wq_pend)));
     wire [9:0]  z_have, c_have;
     // a row's results in the new buffers so far, by set -- as the write engine
     // may count on them: two cycles behind (the buffers' write, then its read)
@@ -383,10 +389,10 @@ module rdp_top (
     reg  [4:0]  old_hold [0:1];
     rdp_mem mem (
         .clk(clk), .rst(rst),
-        .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h),
+        .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h), .rd_hz(rq_hz),
         .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(xs), .rd_x1(xe), .rd_set(rq_set), .rd_c32(cimg32),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
-        .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
+        .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
         .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set),
@@ -451,21 +457,9 @@ module rdp_top (
     reg [2:0]  vi;
     reg [3:0]  vs;
     reg [31:0] vgx, vde, vval;
-    // Z's DzDy too (the walker has no use for it): with DzDx, the depth a
-    // pixel's step moves it -- all ones under the top bit of |DzDx| + |DzDy|
-    // in the stored depth's units -- is a decal's tolerance (rdp_pix)
+    // Z's DzDy too (the walker has no use for it): with DzDx, the console's dz code of the primitive (dzc_p), which the
+    // pixel's depth compare and the depth word keep (rdp_pix)
     reg [31:0] zdy;
-    reg [15:0] z_tol;
-    wire [16:0] zt_x = vgx[31] ? ~vgx[31:15] : vgx[31:15];
-    wire [16:0] zt_y = zdy[31] ? ~zdy[31:15] : zdy[31:15];
-    wire [17:0] zt_s = {1'b0, zt_x} + {1'b0, zt_y};
-    reg  [15:0] zt_m;
-    integer zi;
-    always @* begin
-        zt_m[15] = |zt_s[17:15];
-        for (zi = 14; zi >= 0; zi = zi - 1) zt_m[zi] = zt_m[zi + 1] | zt_s[zi];
-        zt_m[0] = 1'b1;
-    end
     reg [2:0]  tflags;              // the triangle's shade / texture / z
     wire [5:0]  vgb = (vi < 3'd4) ? 6'd0 : (vi < 3'd7) ? (tflags[2] ? 6'd16 : 6'd0)
                     : (tflags[2] ? 6'd16 : 6'd0) + (tflags[1] ? 6'd16 : 6'd0);
@@ -1064,7 +1058,7 @@ module rdp_top (
                             3'd6: ldy_w[16:1] <= vhalf;
                             default: ;
                         endcase             // e[vi], ade[vi]: the RAM writes below
-                        if (vz) begin z_tol <= zt_m; dzc_r <= dzc_p[3:2]; end
+                        if (vz) dzc_r <= dzc_p;
                         vs <= 4'd0; vi <= vi + 3'd1;
                         if (vi == 3'd7) st <= S_TRI_INIT;
                     end
@@ -1121,9 +1115,9 @@ module rdp_top (
                         // (a 32-bit image's span of more than 512 pixels: its first half)
                         if (r_cut) begin xe <= {1'b0, xa} + 11'd512; spl <= 1'b1; end
                         set_cur <= !set_cur;
-                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
+                        rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                         rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                        rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
+                        rwb[!set_cur] <= cimg[11:2] + row_off[11:2]; rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
                     end
                 end
             end
@@ -1143,9 +1137,9 @@ module rdp_top (
                     mi <= 5'd0;
                     st <= S_SETUP;
                     set_cur <= !set_cur;
-                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
+                    rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                    rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
+                    rwb[!set_cur] <= cimg[11:2] + row_off[11:2]; rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
                 end
             end
 
@@ -1238,8 +1232,9 @@ module rdp_top (
                 if (lod_on && !lod_lft) pix_stp <= 1'b0;
                 st <= S_PIX;
                 set_cur <= !set_cur;
-                rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b0; rq_set <= !set_cur;
+                rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= 1'b0; rq_hz <= z_cmp || z_upd; rq_half <= 1'b1; rq_set <= !set_cur;
                 rq_zbase <= zimg + row_off; rq_cbase <= crow;
+                rzb[!set_cur] <= zimg[11:2] + row_off[11:2];
             end
 
             // ---- the primitive's end: its pixels out of the pipe and back
@@ -1299,7 +1294,7 @@ module rdp_top (
                     st <= S_IDLE;
                     busy_exec <= 1'b0;
                 end else begin
-                    rq_pend <= 1'b1; rq_load <= 1'b1; rq_z <= 1'b0; rq_c <= 1'b0; rq_h <= 1'b0; rq_set <= 1'b0;
+                    rq_pend <= 1'b1; rq_load <= 1'b1; rq_z <= 1'b0; rq_c <= 1'b0; rq_h <= 1'b0; rq_hz <= 1'b0; rq_set <= 1'b0;
                     rq_cbase <= timg + ((l_kind == 2'd2) ? {8'd0, l_ti, 1'b0}
                                                          : ({9'd0, l_ti} << timg_size) >> 1);
                     rq_ldst <= l_dst; rq_ln <= l_n;

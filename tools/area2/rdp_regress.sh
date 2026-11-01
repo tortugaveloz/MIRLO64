@@ -26,6 +26,12 @@ for s in 79 80; do TB_COPY=1 TB_C8=1 run ./obj_rdp/tb_rdp -r $s 200; done
 TB_COPY=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 81 150
 # a texture rectangle's LOD: the next line as the console keeps it (rule 2)
 for s in 101 102 103 104 105 106; do TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rdp -r $s 300; done
+# the depth image's own dz (rule 8): planes at nearly the same depth, AA_EN, Z_CMP, IM_RD, the blender's B the memory's coverage;
+# a width whose rows share depth-hidden groups, the SoC's memory, and 32-bit images (a wide span in two halves)
+for s in 111 112 113 114 115 116; do TB_ZDZ=1 run ./obj_rdp/tb_rdp -r $s 200; done
+for s in 117 118; do TB_ZDZ=1 TB_CW=292 run ./obj_rdp/tb_rdp -r $s 200; done
+TB_ZDZ=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 119 150
+for s in 120 121 122 123; do TB_ZDZ=1 TB_C32=1 run ./obj_rdp/tb_rdp -r $s 200; done
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))

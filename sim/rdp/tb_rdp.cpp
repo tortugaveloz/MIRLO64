@@ -12,6 +12,7 @@
 // cycle type): what real tasks do not reach.
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
+//   TB_ZDZ=1    random streams of depth-tested, anti-aliased triangles on a few planes (the depth image's own dz: docs/rdp_exact.md, rule 8)
 #include "Vrdp_top.h"
 #include "Vrdp_top___024root.h"
 #include "verilated.h"
@@ -200,6 +201,17 @@ static const bool lod_mode = getenv("TB_LOD") != nullptr;
 static const bool copy_mode = getenv("TB_COPY") != nullptr;
 // TB_RECT=1: a texture rectangle in a command in six more (with TB_LOD: the LOD's next line of a rectangle)
 static const bool rect_mode = getenv("TB_RECT") != nullptr;
+// TB_ZDZ=1: the depth compare's and the blender's use of the depth image's own dz (docs/rdp_exact.md, rule 8) is what the
+// streams are made to show: AA_EN, Z_CMP, Z_UPD, IM_RD, mostly the blender's B the memory's coverage; the triangles' depths are
+// the points of a plane (a few at a time, of slopes of every dz code) plus now and then a step within the tolerance of a code
+static const bool zdz_mode = getenv("TB_ZDZ") != nullptr;
+static int64_t zp_z, zp_x, zp_y;
+static void zdz_plane()
+{
+    zp_z = (int64_t)(gr(0x7000) + 0x400) << 16;
+    auto sl = []() -> int64_t { int64_t v = (int64_t)1 << (12 + gr(15)); return gr(2) ? v + (int64_t)gr((uint32_t)v) : -(v + (int64_t)gr((uint32_t)v)); };
+    zp_x = sl(); zp_y = gr(3) ? sl() : 0;
+}
 static void rand_modes()
 {
     static const unsigned cyc[10] = { 0, 0, 0, 0, 1, 1, 1, 2, 3, 0 };
@@ -209,6 +221,7 @@ static void rand_modes()
     if (cc_mode) l &= ~(0xF0000000u | 1u << 14);
     if (gr(3)) h &= ~(1u << 15);                       // the TLUT mostly off
     if (gr(4) == 0) l &= ~0x30u;                       // sometimes no Z at all
+    if (zdz_mode) { l |= 0x78u; l &= ~(1u << 7); if (gr(3)) l = (l & ~0x000F0000u) | 5u << 16; if (gr(3)) l = (l & ~0x00F00000u) | 5u << 20; if (gr(2)) l &= ~(0xFu << 28); if (gr(6)) h &= ~(3u << 20); }
     if (gr(2)) l &= ~(1u | 1u << 12);                  // alpha compare / coverage-by-alpha half the time
     cmd2(0x2F000000u | h, l);
 }
@@ -281,7 +294,7 @@ static void rand_tri()
     int64_t xh_y1 = x[0] + (int64_t)dxh * (y[1] - y[0]) / 4;
     unsigned lft = x[1] > xh_y1;
     if (gr(40) == 0) lft ^= 1;
-    unsigned fl = gr(8), op = 0x08 | fl;
+    unsigned fl = zdz_mode ? (5u | (gr(5) ? 0u : 2u)) : gr(8), op = 0x08 | fl;
     cmd2((uint32_t)op << 24 | lft << 23 | gr(8) << 19 | gr(8) << 16 | ((uint32_t)y[2] & 0x3FFF), ((uint32_t)y[1] & 0x3FFF) << 16 | ((uint32_t)y[0] & 0x3FFF));
     cmd2((uint32_t)xl, (uint32_t)dxl); cmd2((uint32_t)xh, (uint32_t)dxh); cmd2((uint32_t)xm, (uint32_t)dxm);
     if (fl & 4) {
@@ -309,7 +322,16 @@ static void rand_tri()
         } else
         put_group(v, dx, de);
     }
-    if (fl & 1) {
+    if ((fl & 1) && zdz_mode) {
+        // the plane at this triangle's major edge, on the first row; the step within the tolerance of a code now and then
+        if (gr(6) == 0) zdz_plane();
+        int64_t step = gr(3) ? 0 : (int64_t)(gr(2) ? 1 : -1) * ((int64_t)1 << (16 + gr(14))) * (int64_t)(50 + gr(120)) / 100;
+        int64_t v = zp_z + step + zp_x * (int64_t)(xh >> 16) + zp_y * (int64_t)(y[0] >> 2);
+        v = v < 0 ? 0 : v > 0x7FFFFFFF ? 0x7FFFFFFF : v;
+        int64_t de = zp_y + zp_x * (int64_t)dxh / 65536;
+        cmds.push_back((uint32_t)v); cmds.push_back((uint32_t)zp_x);
+        cmds.push_back((uint32_t)(de > 0x7FFFFFFF ? 0x7FFFFFFF : de < -0x7FFFFFFF ? -0x7FFFFFFF : de)); cmds.push_back((uint32_t)zp_y);
+    } else if (fl & 1) {
         cmds.push_back(gr(8) ? gr(0x7FFF) << 16 | gr(65536) : gr() << 8 | gr(256));
         cmds.push_back((uint32_t)grs(1 << (gr(4) ? 18 : 24))); cmds.push_back((uint32_t)grs(1 << (gr(4) ? 18 : 24))); cmds.push_back(gr() << 8);
     }
@@ -374,6 +396,7 @@ static void rand_stream(unsigned seed, int n)
     cmd2(0x2D000000u, scis);
     for (int t = 0; t < 8; t++) rand_tile((unsigned)t);
     rand_timg(); rand_modes(); rand_combine();
+    if (zdz_mode) zdz_plane();
     for (int i = 0; i < n; i++) {
         unsigned k = gr(100);
         if (rect_mode && k >= 60 && k < 66) rand_rect(1);
@@ -554,7 +577,10 @@ int main(int argc, char **argv)
                     for (size_t i = 0; i < cur.size(); i++) printf("  w%zu %08x\n", i, cur[i]);
                     uint64_t nd = 0;
                     for (uint32_t q = 0; q < MSIZE; q += 2) if (memcmp(rtl_mem + q, mdl_mem + q, 2)) nd++;
-                    printf("  %llu 16-bit words differ\n", (unsigned long long)nd);
+                    printf("  %llu 16-bit words differ", (unsigned long long)nd);
+                    for (uint32_t q = 0, shown = 0; q < MSIZE && shown < 8; q += 2)
+                        if (memcmp(rtl_mem + q, mdl_mem + q, 2)) { printf("%s %06x (rtl %02x%02x model %02x%02x)", shown ? "," : ": at", q, rtl_mem[q], rtl_mem[q + 1], mdl_mem[q], mdl_mem[q + 1]); shown++; }
+                    printf("\n");
                     return 1;
                 }
             }
