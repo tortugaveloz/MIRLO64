@@ -285,7 +285,8 @@ module rdp_pix (
     // The shade as the console takes it (docs/rdp_exact.md, rule 4): a pixel without full coverage moves to its first covered
     // sample -- ox4 quarters right, oy4 subscanlines down -- by the steps DaDx and DaDy >> 14 (13 bits), (A >> 14) * 4 + ox *
     // cd + oy * dy, then 9 bits of it >> 4: 0..255 as they are, 256..383 255, 384..511 (a negative shade) 0. With full
-    // coverage ox4 = oy4 = 0 and that is the integer half. (Products of two bits: shifts and adds.)
+    // coverage ox4 = oy4 = 0 and that is the integer half. (The two products of a 2-bit number by a 13-bit one are one DSP block
+    // a channel, with the sum of the two: 4 DSP blocks in place of ~60 ALUTs a channel in logic.)
     function automatic [8:0] sh_x;
         input [31:0] v;
         input signed [12:0] cd, dy;
@@ -293,8 +294,7 @@ module rdp_pix (
         reg signed [19:0] t;
         reg [8:0] v9;
         begin
-            t = $signed({v[31:14], 2'b00}) + (ox[0] ? cd : 13'sd0) + (ox[1] ? (cd <<< 1) : 14'sd0)
-                                           + (oy[0] ? dy : 13'sd0) + (oy[1] ? (dy <<< 1) : 14'sd0);
+            t = $signed({v[31:14], 2'b00}) + ($signed({1'b0, ox}) * cd + $signed({1'b0, oy}) * dy);
             v9 = t[12:4];
             sh_x = v9 < 9'd256 ? v9 : v9 < 9'd384 ? 9'd255 : 9'd0;
         end
