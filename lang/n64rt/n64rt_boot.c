@@ -293,6 +293,59 @@ static void mf_patch(u32 vram, u32 len)
     }
 }
 #endif
+u32 n64rt_boot_entropy;
+
+/* ---- an open-source IPL3's ELF loader (N64RT_IPL3_ELF) ----------------------------------------------------
+ * What its second stage does with the ELF file it found in the ROM (elf_off): the program headers are read, and each PT_LOAD
+ * segment's p_filesz bytes go from the file to its virtual address (the rest of its p_memsz is the RDRAM's zeros, which
+ * were cleared before), a 32-bit or a 64-bit ELF (of which only the low 32 bits of the addresses count), big endian. It
+ * refuses what it refuses: a segment whose address is not 8-byte aligned or whose file offset is odd, one that does not fit
+ * the RDRAM, a little-endian file -- and a segment it would have to decompress with a function of the ELF's own, which is
+ * game code the runtime does not run for it. Returns the entry address. */
+#define PT_LOAD          1u
+#define PT_N64_DECOMP    0x64E36341u
+#define PF_N64_COMPRESSED 0x1000u
+static u32 rom_half(u32 off)
+{
+    const u32 w = n64rt_rom_word(off & ~3u);
+    return (off & 2u) ? (w & 0xFFFFu) : (w >> 16);
+}
+static u32 load_elf(const n64rt_game_t *g)
+{
+    const u32 e = g->elf_off;
+    const u32 id = n64rt_rom_word(e + 4u);
+    const int elf64 = (id >> 24) == 2u;
+    if (((id >> 16) & 0xFFu) == 1u) n64rt_fatal("n64rt: the ROM's ELF is little endian\n");
+    const u32 phsz = elf64 ? 0x38u : 0x20u;
+    const u32 phoff = n64rt_rom_word(e + (elf64 ? 0x20u + 4u : 0x1Cu));
+    const u32 phnum = rom_half(e + (elf64 ? 0x38u : 0x2Cu));
+    const u32 entry = n64rt_rom_word(e + (elf64 ? 0x18u + 4u : 0x18u));
+    for (u32 i = 0; i < phnum; i++) {
+        const u32 ph = e + phoff + phsz * i;
+        const u32 type = n64rt_rom_word(ph);
+        const u32 off = n64rt_rom_word(ph + (elf64 ? 4u * 3u : 4u)), vaddr = n64rt_rom_word(ph + (elf64 ? 4u * 5u : 8u));
+        const u32 size = n64rt_rom_word(ph + (elf64 ? 4u * 9u : 16u)), memsz = n64rt_rom_word(ph + (elf64 ? 4u * 11u : 20u));
+        const u32 flags = n64rt_rom_word(ph + (elf64 ? 4u : 24u));
+        if (type != PT_LOAD && type != PT_N64_DECOMP) continue;
+        if (!size) continue;
+        if (type == PT_N64_DECOMP || (flags & PF_N64_COMPRESSED))
+            n64rt_fatal("n64rt: the ROM's ELF is compressed (segment %lu): its own decompression function is not run\n", (unsigned long)i);
+        if (vaddr & 7u) n64rt_fatal("n64rt: ELF segment %lu: the address %08lx is not 8-byte aligned\n", (unsigned long)i, (unsigned long)vaddr);
+        if (off & 1u) n64rt_fatal("n64rt: ELF segment %lu: the file offset %08lx is odd\n", (unsigned long)i, (unsigned long)off);
+        if (vaddr + memsz > 0x80000000u + g->mem_size || vaddr < 0x80000000u)
+            n64rt_fatal("n64rt: ELF segment %lu (%08lx, %lu bytes) does not fit the RDRAM\n", (unsigned long)i, (unsigned long)vaddr, (unsigned long)memsz);
+        if (e + off + size > g->rom_size) n64rt_fatal("n64rt: ELF segment %lu is beyond the end of the ROM\n", (unsigned long)i);
+        printf("n64rt: ELF segment %lu: %lu bytes of ROM %08lx to %08lx (%lu in RDRAM)\n", (unsigned long)i, (unsigned long)size,
+               (unsigned long)(e + off), (unsigned long)vaddr, (unsigned long)memsz);
+        const u32 pa = vaddr & 0x1FFFFFFFu;
+        u32 done = 0;
+        if (!((e + off) & 3u) && !(pa & 3u))
+            for (; done + 4u <= size; done += 4u) *rd32(pa + done) = n64rt_rom_word(e + off + done);
+        if (done < size) n64rt_rom_copy(rd32(pa + done), e + off + done, size - done);
+    }
+    return entry;
+}
+
 void n64rt_run(const n64rt_game_t *g)
 {
     n64rt_game = g;
@@ -313,7 +366,16 @@ void n64rt_run(const n64rt_game_t *g)
     /* The RDP's hidden-bit plane (layout.h LAYOUT_HID: the coverage's other two bits of each 16-bit word of RDRAM):
      * all ones, as the hardware starts it -- a pixel the RDP has not drawn has the coverage its bit 0 says (7 or 3) */
     for (u32 a = 0; a < 0x00100000u; a += 4) *(volatile u32 *)(uintptr_t)(LAYOUT_HID + a) = 0xFFFFFFFFu;
-    for (u32 i = 0; i < g->boot_len / 4u; i++) *rd32(g->boot_vram + 4u * i) = n64rt_rom_word(g->boot_rom + 4u * i);
+    /* An open-source IPL3 that loads an ELF file (N64RT_IPL3_ELF) puts each of its segments where it says; the console's
+     * copies boot_len bytes from ROM 0x1000 to the entry. */
+    u32 entry = g->entry;
+    if (g->ipl3 == N64RT_IPL3_ELF) {
+        u32 c; __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+        n64rt_boot_entropy = c ^ 0x9E3779B9u;           /* (what it collects of the boot's timing) */
+        entry = load_elf(g);
+        *rd32(0x1A4u) = n64rt_boot_entropy;             /* (and keeps a copy for a warm boot, in the RDRAM's low area) */
+    } else
+        for (u32 i = 0; i < g->boot_len / 4u; i++) *rd32(g->boot_vram + 4u * i) = n64rt_rom_word(g->boot_rom + 4u * i);
     /* What IPL3 leaves in the RDRAM's first 0x400 bytes: for a CIC-6103 boot, a copy of its own code, ROM 0x4C0..0x8C0 at 0
      * (the game's boot segment, from 0x400 on, covers the rest). Banjo-Kazooie checks three of those words -- 0x1D8, 0x22C,
      * 0x238 (a lui/lw from 0xA0000000, compared with the ROM's own 0x698, 0x6EC, 0x6F8) -- and when one differs it keeps its
@@ -365,13 +427,15 @@ void n64rt_run(const n64rt_game_t *g)
      * decimal CIC number (6101..6106), which no boot code leaves there; libultra itself does not read it.
      * A game's own libultra (N64RT_OWN) has osTvType from the ROM's region (tv_of_region): the console is the one the cartridge
      * was made for; the VI's timing follows what the game then programs (V_SYNC: rtl/soc/rcp_vi.sv), starting from this. */
-    *rd32(BOOT_TV_TYPE) = n64rt_tv;
-    *rd32(BOOT_ROM_TYPE) = 0;
-    *rd32(BOOT_ROM_BASE) = 0xB0000000u;
-    *rd32(BOOT_RESET_TYPE) = 0;
-    *rd32(BOOT_CIC_ID) = n64rt_cic_id(g->cic);
-    *rd32(BOOT_VERSION) = 0;
-    *rd32(BOOT_MEM_SIZE) = g->mem_size;
+    if (g->ipl3 != N64RT_IPL3_ELF) {        /* (the ELF loader's boot flags are in DMEM: n64rt_gfx_init) */
+        *rd32(BOOT_TV_TYPE) = n64rt_tv;
+        *rd32(BOOT_ROM_TYPE) = 0;
+        *rd32(BOOT_ROM_BASE) = 0xB0000000u;
+        *rd32(BOOT_RESET_TYPE) = 0;
+        *rd32(BOOT_CIC_ID) = n64rt_cic_id(g->cic);
+        *rd32(BOOT_VERSION) = 0;
+        *rd32(BOOT_MEM_SIZE) = g->mem_size;
+    }
 
 #ifdef N64RT_OWN
     /* The CPU's translation tables are the runtime's to fill (mips_core TLB_RAM): a game's Super Mario 64 maps its Goddard
@@ -440,13 +504,15 @@ void n64rt_run(const n64rt_game_t *g)
     n64rt_os_init();
 #ifdef N64RT_OWN
     /* (the game's code is its own but for two functions that compute in doubles, which the FPU does as floats) */
-    ul_patch(g->boot_vram, g->boot_len);               /* (the audio library's envelope rate) */
-    mf_patch(g->boot_vram, g->boot_len);               /* (and a matrix conversion through a double's mantissa) */
+    if (g->ipl3 != N64RT_IPL3_ELF) {                   /* (an ELF's segments are not a libultra's boot segment) */
+        ul_patch(g->boot_vram, g->boot_len);           /* (the audio library's envelope rate) */
+        mf_patch(g->boot_vram, g->boot_len);           /* (and a matrix conversion through a double's mantissa) */
+    }
     flush_cpu_dcache();
     flush_cpu_icache();
 #endif
     n64rt_io_init();
-    n64rt_os_start(g->entry, N64RT_K0(g->mem_size - 0x10u));     /* (the RDRAM's top: 8 MiB is not an address of the window) */
+    n64rt_os_start(entry, N64RT_K0(g->mem_size - 0x10u));     /* (the RDRAM's top: 8 MiB is not an address of the window) */
 }
 
 /* ---- the functions in code loaded later (n64rt.h) ---------------------------------
