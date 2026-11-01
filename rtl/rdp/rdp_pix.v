@@ -1187,7 +1187,7 @@ module rdp_pix (
     wire [2:0] bsb10   = !z_cmp ? ((dzenc < 4'd11) ? 3'd4 : ~dzenc[2:0]) : (dgb10[4] || dgb10[3:0] == 4'd0) ? 3'd0 : (dgb10[3:0] > 4'd4) ? 3'd4 : dgb10[2:0];
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; hp10 <= hp10a; bs10 <= bs10a;
-        c010 <= c0_w;
+        c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1197,7 +1197,7 @@ module rdp_pix (
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
         hidz10 <= hz_rdata[{hzk10a, 1'b0} +: 2];
     end
-    wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
+    wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
     wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
