@@ -286,8 +286,20 @@ agree; what is left is in docs/rdp_exact.md, "What is left".
   clamp T to the tile (a 1-row tile read on its second row reads TMEM's next
   row; the model clamps).
 
+* **The depth image's own dz** (`streams/memdz_*.rdps`, the `zdz` suite): the
+  console writes the pixel's 4-bit dz code with its depth (the word's two low
+  bits and two hidden bits) and the next depth compare reads it back: the
+  tolerance is the larger power of 2 of the two dz, and the blender's coverage
+  weights shift by the difference of the codes. The model kept no memory dz
+  (the tolerance its own, the shifts 0 with the compare on): on the captured
+  tasks, 15.7 thousand anti-aliased, depth-tested primitives (docs/rdp_exact.md,
+  rule 8).
+
 ## Not covered
 
 YUV textures (choice 10), 32-bit colour images, dithering and the noise (each
 side has its own generator; every stream turns them off), the blender beyond
-passing the pixel.
+passing the pixel (`zdz` blends, and keeps to the weights the model's divider
+is the console's for: FORCE_BL, or the pixel and the memory by `1 - A`; with the
+memory's coverage as B and no FORCE_BL the weights add up to more than 32, and the model's
+reciprocal is not the console's iterative divider there).

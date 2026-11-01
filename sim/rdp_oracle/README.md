@@ -125,6 +125,7 @@ pixel of every primitive, drawn or not.
 | `frac2` | the same without TEX_LOD (the combiner reads LOD_FRACTION) |
 | `lod1` | 1-cycle triangles with TEX_LOD (`RDPGEN_LEVEL`, `RDPGEN_DETAIL`, `RDPGEN_TEXLOD` to force) |
 | `rect` | texture rectangles and flipped ones with TEX_LOD, 1- and 2-cycle |
+| `zdz` | the depth image's own dz (docs/rdp_exact.md, rule 8): shaded, anti-aliased, depth-tested 1-cycle triangles drawn over each other at nearly the same depth, on planes of every dz code, in every depth mode, the blender's B the memory's coverage (`RDPGEN_CYC=1` makes them 2-cycle, which is not compared: the two disagree there with or without a depth compare, not followed up). `run.sh` runs 24 primitives a seed |
 
 `run.sh` adds two suites from these: `lod2_t1` (`lod2` with `RDPGEN_CC=5`: the
 second cycle reads TEXEL1, the next pixel's first texel on the console) and

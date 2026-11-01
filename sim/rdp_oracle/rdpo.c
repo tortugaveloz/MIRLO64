@@ -259,7 +259,11 @@ static diff_t compare(int count_depth)
         for (int y = 0; y < img_h; y++)
             for (uint32_t x = 0; x < cwidth; x++) {
                 uint32_t a = zimg + (y * cwidth + x) * 2;
-                if (m16(a) != o16(a)) { d.z++; if (count_depth && d.fx < 0) { d.fx = (int)x; d.fy = y; d.fa = a; d.what = 2; } }
+                int dz = m16(a) != o16(a);
+#ifdef RDP_X_MEMDZ
+                dz |= m_hid(a) != orc_hidden(a);      /* (the model keeps the depth image's hidden bits: the dz code's low two) */
+#endif
+                if (dz) { d.z++; if (count_depth && d.fx < 0) { d.fx = (int)x; d.fy = y; d.fa = a; d.what = 2; } }
             }
     return d;
 }
@@ -272,7 +276,11 @@ static void resync(void)
             uint32_t a = cimg + (y * cwidth + x) * bpp;
             for (uint32_t b = 0; b < bpp; b++) mmem[(a + b) & (RSIZE - 1)] = ob(a + b);
             if (bpp == 2) m_hid_set(a, orc_hidden(a));
-            if (have_z && bpp == 2) { uint32_t z = zimg + (y * cwidth + x) * 2; mmem[z & (RSIZE - 1)] = ob(z); mmem[(z + 1) & (RSIZE - 1)] = ob(z + 1); }
+            if (have_z && bpp == 2) { uint32_t z = zimg + (y * cwidth + x) * 2; mmem[z & (RSIZE - 1)] = ob(z); mmem[(z + 1) & (RSIZE - 1)] = ob(z + 1);
+#ifdef RDP_X_MEMDZ
+                m_hid_set(z, orc_hidden(z));
+#endif
+            }
         }
 }
 

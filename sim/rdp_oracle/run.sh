@@ -32,6 +32,7 @@ for s in $seeds; do
     gen lod1_level0_detail "RDPGEN_LEVEL=0 RDPGEN_DETAIL=1 RDPGEN_CC=0" lod1 $s
     gen lod2_t1 "RDPGEN_CC=5" lod2 $s
     gen lod1_t1 "RDPGEN_CC=3" lod1 $s
+    gen zdz "" zdz $s 24
 done
 run() {    # run BUILD SUITE...
     b=$1; shift
@@ -42,7 +43,7 @@ run() {    # run BUILD SUITE...
 }
 echo "== calibration, no LOD (rdpo; rdpo_exact: RDP_EXACT)"
 for b in rdpo rdpo_x rdpo_exact; do
-    run $b cal_flat cal_aa cal_shade cal_z cal_aff cal_persp cal_rect cal_t1
+    run $b cal_flat cal_aa cal_shade cal_z cal_aff cal_persp cal_rect cal_t1 zdz
 done
 echo "== LOD (rdpo: the model without RDP_EXACT; rdpo_exact: with it)"
 for b in rdpo rdpo_x rdpo_exact; do

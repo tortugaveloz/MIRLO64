@@ -113,9 +113,15 @@ static inline int32_t s105_noperp(int32_t s)
 #ifndef RDP_X_SPAN
 #define RDP_X_SPAN
 #endif
+#ifndef RDP_X_MEMDZ
+#define RDP_X_MEMDZ
 #endif
-#if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE) || defined(RDP_X_SPAN)) && !defined(RDP_CVG)
+#endif
+#if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE) || defined(RDP_X_SPAN) || defined(RDP_X_MEMDZ)) && !defined(RDP_CVG)
 #error "RDP_X_* are the N64's pixel pipeline's: build them with RDP_N64 (and without RDP_NO_BLEND)"
+#endif
+#if defined(RDP_X_MEMDZ) && !defined(RDP_X_SHADE)
+#error "RDP_X_MEMDZ is the depth compare with the console's dz code: build it with RDP_X_SHADE"
 #endif
 #ifdef RDP_CVG
 /* ---- the console's perspective divide (RDP_CVG; docs/rdp.md, Coordinates) ---------
@@ -1141,8 +1147,9 @@ static inline uint16_t rgb5551(rdp_rgba_t c, int complete)
  *   exponent   0        1        2        3        4        5        6        7
  *   from       0x00000  0x20000  0x30000  0x38000  0x3C000  0x3E000  0x3F000  0x3F800
  *   lost bits  6        5        4        3        2        1        0        0
- * and, in its two low bits, the top two of the pixel's dz code (its other two are the N64's hidden bits: not kept, and
- * the code is not read back). 0xFFFC, what a game clears its depth image to, is the far plane. A game reads the image as
+ * and, in its two low bits, the top two of the pixel's dz code (its other two are the N64's hidden bits: with
+ * RDP_X_MEMDZ they are written to the hidden plane, with the depth, and read back with it; else not kept, and the code
+ * is not read back). 0xFFFC, what a game clears its depth image to, is the far plane. A game reads the image as
  * the console's: with the CPU, or as a texture. */
 static const uint32_t s_z_base[8] = { 0x00000, 0x20000, 0x30000, 0x38000, 0x3C000, 0x3E000, 0x3F000, 0x3F800 };
 static const unsigned s_z_shift[8] = { 6, 5, 4, 3, 2, 1, 0, 0 };
@@ -1157,6 +1164,12 @@ static inline uint32_t z_dec(uint16_t w)
     const unsigned e = w >> 13;
     return s_z_base[e] | (((uint32_t)(w >> 2) & 0x7FFu) << s_z_shift[e]);
 }
+
+#ifdef RDP_X_MEMDZ
+#define ZHID_SET hid_set(r, zaddr, dzst & 3u);      /* (the depth image's hidden bits: the dz code's low two) */
+#else
+#define ZHID_SET
+#endif
 
 /* does the pixel pipeline read the colour image (rtl/rdp/rdp_top.v need_mem):
  * for the memory coverage (IM_RD, with AA_EN or CVG_X_ALPHA), for CLR_ON_CVG
@@ -1477,15 +1490,35 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         const uint16_t oldw = r->rd16(r->ctx, zaddr);
         const uint32_t old = z_dec(oldw);
         unsigned zmode = (l >> RDP_L_ZMODE_SHIFT) & 3;
+#ifdef RDP_X_MEMDZ
+        /* the console's (docs/rdp_exact.md, rule 8): the memory's dz code is the word's two low bits and the two hidden bits
+         * written with the depth; the tolerance is the larger power of 2 of the pixel's dz and the memory's (the memory's
+         * doubled and no less than 16 >> exponent for exponents under 3; coplanar, at the code's top, when the memory's is
+         * 0x8000), times 8; and the blender's two weights shift by the difference of the two codes, up to 4 */
+        const unsigned rawdz = (unsigned)(oldw & 3u) << 2 | hid_get(r, zaddr);
+        const unsigned pexp = hibit((l & RDP_L_Z_SRC_PRIM) ? r->prim_dz : (pr->xdzpix ? pr->xdzpix : 1u));
+        const unsigned oexp = oldw >> 13;
+        const unsigned dbl = rawdz + 1u > 15u ? 15u : rawdz + 1u;          /* (the memory's dz doubled; 0x8000 is coplanar: the top) */
+        const unsigned mexp = oexp >= 3u ? rawdz : dbl > 4u - oexp ? dbl : 4u - oexp;
+        const unsigned texp = pexp > mexp ? pexp : mexp;                    /* the tolerance is 8 << texp */
+        const int32_t tol = (int32_t)(8u << texp);
+        sh_a = dzst > rawdz ? (dzst - rawdz > 4u ? 4u : dzst - rawdz) : 0u;
+        sh_b = rawdz > dzst ? (rawdz - dzst > 4u ? 4u : rawdz - dzst) : 0u;
+#else
         unsigned dz = pr->zbuf ? pr->dz : 1u;
         const uint32_t tol = (dz << 2 | 3u) | ((oldw >> 13) < 3u ? (0x7Fu >> (oldw >> 13)) : 0u);
+#endif
         int max = old == 0x3FFFF, infront = depth < old;
         int nearer = (int)depth - (int)tol <= (int)old;
         int farther = (int)depth + (int)tol >= (int)old;
         blend_en = (l & RDP_L_FORCE_BL) || (!overflow && aa && farther);
         if (zmode == 1 && infront && farther && overflow) {
             /* interpenetrating: the coverage scaled by how far it is in front, in dz */
+#ifdef RDP_X_MEMDZ
+            unsigned sft = texp;
+#else
             unsigned sft = hibit(dz) + 3;
+#endif
             unsigned coeff = ((old >> sft) - (depth >> sft)) & 0xFu;
             cvg_sel = ((cvg_sel * coeff) >> 3) & 0xFu;
         } else if (zmode == 2) {
@@ -1499,7 +1532,11 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         blend_en = (l & RDP_L_FORCE_BL) || (!overflow && aa);
         /* without a depth compare the memory coverage's weight is shifted by
          * the primitive's dz code */
+#ifdef RDP_X_MEMDZ
+        sh_b = dzst < 11u ? 4u : 15u - dzst;
+#else
         sh_b = dzenc >= 12u ? 15u - dzenc : 4u;
+#endif
     }
     if (!zpass) return;
     /* with AA_EN drawn when a sample is left after CVG_X_ALPHA; without, the
@@ -1549,14 +1586,14 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (CIMG32_DITHER) out = dither_n64(r, out, x, dyr, rnd, 1);
         r->wr16(r->ctx, caddr, (uint16_t)(out.r << 8 | out.g));
         r->wr16(r->ctx, caddr + 2u, (uint16_t)(out.b << 8 | cvg_out << 5));
-        if (l & RDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
+        if (l & RDP_L_Z_UPD) { r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2)); ZHID_SET }
         r->pixels_drawn++;
         return;
     }
     if (cyc != 2) out = dither_n64(r, out, x, dyr, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
-    if ((l & RDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
+    if ((l & RDP_L_Z_UPD) && !copy) { r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2)); ZHID_SET }
     r->pixels_drawn++;
 }
 #endif /* RDP_CVG */

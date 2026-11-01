@@ -1,0 +1,22 @@
+# (Not the LOD: docs/rdp_exact.md, rule 8.) The depth image's own dz. As memdz_tolerance, over depths whose word has an exponent under 3:
+# the memory's dz, doubled, is no less than 16 >> exponent (the tolerance of a surface drawn over itself where the word keeps few bits).
+rdram zero
+cmd 3f10013f 00100000
+cmd 3e000000 00140000
+cmd 2d000000 005003c0
+cmd 2f300000 00000000
+cmd 3f10013f 00140000
+cmd 37000000 fffcfffc
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3f10013f 00100000
+cmd 37000000 42114211
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3b000000 ffffffff
+cmd 3cffffff ffffff3c
+cmd 2f000cf0 00554178
+cmd 0d0001be 012900b6 00cdd4d8 ffffa9c2 00fdd720 ffff175c 00fe4049 fffe594a 00790079 007d00a3 0004ffff fffffff9 7f91e0d2 149196a7 96087545 baadc1ef ffffffff 0001fffd 0003ffff 0000fff8 8393babd 1802c289 ae7c3cab d9021647 29e802a5 ffff1011 000165f9 00008bef
+cmd 2f000cf0 00500678
+cmd 0d000186 01580121 00c62979 00005d06 00e9440d fffec99e 00e99da6 fffd7b29 00670056 008f002e 0005fffd fff9fff6 3c423863 3eba9556 6c62717f c8d4173f 00020002 ffff0000 0008ffff fff7fff4 2e95d0ca 8229f578 c1e8b73e f8f8f1d2 2a004031 ffff1011 0001aed6 00008bef
+cmd 29000000 00000000
