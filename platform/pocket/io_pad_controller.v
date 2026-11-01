@@ -45,18 +45,12 @@ input   wire            reset_n,
 
 inout   reg             pad_1wire,
 
-output  reg     [31:0]  cont1_key,
-output  reg     [31:0]  cont2_key,
-output  reg     [31:0]  cont3_key,
-output  reg     [31:0]  cont4_key,
-output  reg     [31:0]  cont1_joy,
-output  reg     [31:0]  cont2_joy,
-output  reg     [31:0]  cont3_joy,
-output  reg     [31:0]  cont4_joy,
-output  reg     [15:0]  cont1_trig,
-output  reg     [15:0]  cont2_trig,
-output  reg     [15:0]  cont3_trig,
-output  reg     [15:0]  cont4_trig,
+// the controller words, as the core reads them: written one word at a time into a RAM of 16 words (the core's, in the
+// core's own clock; mirlo_regs.sv), at the address of the register's place in the map: 0..3 CONT1..4_KEY, 4..7 CONT1..4_JOY,
+// 8..11 CONT1..4_TRIG (the trigger words' upper half is 0). pad_we is a pulse of this clock
+output  reg             pad_we,
+output  reg     [3:0]   pad_wa,
+output  reg     [31:0]  pad_wd,
 
 output  reg             rx_timed_out
 );
@@ -93,6 +87,7 @@ synch_3 s01(pad_1wire, pad_1wire_s, clk, pad_1wire_r, pad_1wire_f);
 
 always @(posedge clk) begin
     tx_word_start <= 0;
+    pad_we <= 0;
 
     auto_poll_cnt <= auto_poll_cnt + 1'b1;
     heartbeat_cnt <= heartbeat_cnt + 1'b1;
@@ -139,23 +134,25 @@ always @(posedge clk) begin
     ST_RX_BUTTON_2: begin
         if(rx_word_done) begin
             cnt <= cnt + 1'b1;
+            pad_we <= cnt < 4'd12;
+            pad_wd <= (cnt == 4'd2 || cnt == 4'd5 || cnt == 4'd8 || cnt == 4'd11) ? {16'd0, rx_word[15:0]} : rx_word;
             case(cnt)
-            0: cont1_key <= rx_word;
-            1: cont1_joy <= rx_word;
-            2: cont1_trig <= rx_word[15:0];
+            0:  pad_wa <= 4'd0;     // cont1_key
+            1:  pad_wa <= 4'd4;     // cont1_joy
+            2:  pad_wa <= 4'd8;     // cont1_trig
 
-            3: cont2_key <= rx_word;
-            4: cont2_joy <= rx_word;
-            5: cont2_trig <= rx_word[15:0];
+            3:  pad_wa <= 4'd1;
+            4:  pad_wa <= 4'd5;
+            5:  pad_wa <= 4'd9;
 
-            6: cont3_key <= rx_word;
-            7: cont3_joy <= rx_word;
-            8: cont3_trig <= rx_word[15:0];
+            6:  pad_wa <= 4'd2;
+            7:  pad_wa <= 4'd6;
+            8:  pad_wa <= 4'd10;
 
-            9: cont4_key <= rx_word;
-            10: cont4_joy <= rx_word;
+            9:  pad_wa <= 4'd3;
+            10: pad_wa <= 4'd7;
             11: begin
-                cont4_trig <= rx_word[15:0];
+                pad_wa <= 4'd11;    // cont4_trig
                 state <= ST_IDLE;
             end
             endcase
