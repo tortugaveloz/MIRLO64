@@ -63,6 +63,31 @@ static u32 rom_entry(u32 cic)
     return e;
 }
 
+/* ---- an open-source IPL3 ------------------------------------------------------------------------------
+ * A ROM whose boot code is not the console's kind -- one that is a program's own, the open-source IPL3 that initialises
+ * the RDRAM itself -- has a banner in it, which the ROM's checksum does not need to be right for. Such a boot code does not
+ * copy 1 MiB to the header's entry: the ELF build of it finds an ELF file in the ROM (at a 256-byte boundary from ROM
+ * 0x1000 on) and loads its segments, where the program is of any size; the flat build copies from ROM 0x1000 to the
+ * header's entry as many bytes as the header's word at 0x10 says (0, or more than the RDRAM has: 1 MiB). */
+static u32 rom_byte(u32 o) { return (ROM[o >> 2] >> (24 - 8 * (o & 3u))) & 0xFFu; }
+static int rom_has_banner(void)
+{
+    static const char banner[32] = " Libdragon IPL3 " " Coded by Rasky ";
+    for (u32 o = 0x40u; o + 32u <= 0x2000u; o += 4u) {
+        u32 i = 0;
+        while (i < 32u && rom_byte(o + i) == (u8)banner[i]) i++;
+        if (i == 32u) return 1;
+    }
+    return 0;
+}
+/* the ROM offset of the ELF file, or 0 (searched in the whole file; the boot code searches 64 MiB) */
+static u32 rom_elf(u32 size)
+{
+    for (u32 o = 0x1000u; o + 0x40u <= size; o += 0x100u)
+        if (ROM[o >> 2] == 0x7F454C46u) return o;
+    return 0;
+}
+
 int main(void)
 {
     apf_bridge_slot_id_write(0);
@@ -81,7 +106,8 @@ int main(void)
         flush_cpu_dcache(); flush_cpu_icache();
         ((void (*)(void))(uintptr_t)(0x40000000u + N64RT_ROM_FILE_OFF))();
     }
-    if (size < 0x101000u || ROM[0] != 0x80371240u)
+    const int ipl3_own = size >= 0x2000u && ROM[0] == 0x80371240u && rom_has_banner();     /* (a ROM of any size, then) */
+    if ((size < 0x101000u && !ipl3_own) || ROM[0] != 0x80371240u)
         stop(ROM[0] == 0x37804012u || ROM[0] == 0x40123780u ? "the ROM's bytes are swapped: a .z64 is needed" : "no .z64 ROM", 0xF801u);
     const u32 cic = rom_cic(), entry = rom_entry(cic);
     static char name[21];
@@ -96,6 +122,22 @@ int main(void)
     g.boot_vram = entry;
     g.boot_len = 0x100000u;
     g.entry = entry;
+    if (ipl3_own) {
+        const u32 elf = rom_elf(size);
+        if (elf) {                       /* the program is an ELF file: its segments and its entry (n64rt_boot.c) */
+            g.ipl3 = N64RT_IPL3_ELF;
+            g.elf_off = elf;
+            g.entry = ROM[(elf >> 2) + 1u] >> 24 == 2u ? ROM[(elf >> 2) + 7u] : ROM[(elf >> 2) + 6u];    /* (ELF64: the low word) */
+            printf("loader: an open-source IPL3: the ELF file at ROM %08lx, entry %08lx\n", (unsigned long)elf, (unsigned long)g.entry);
+        } else {                         /* a flat file: the header's word says how much */
+            u32 len = ROM[4];
+            if (len == 0 || len > 0x800000u - (entry & 0x1FFFFFFFu) - 0x8000u) len = 0x100000u;
+            if (len > size - 0x1000u) len = size - 0x1000u;               /* (what the ROM has) */
+            g.ipl3 = N64RT_IPL3_FLAT;
+            g.boot_len = len & ~3u;
+            printf("loader: an open-source IPL3, a flat file: %lu bytes from ROM 1000 to %08lx\n", (unsigned long)g.boot_len, (unsigned long)entry);
+        }
+    }
     g.mem_size = GAME_MEM;
     /* The core's "Expansion Pak" setting (interact.json: field 14, INTERACT1's bit 24; 0 with the Pak in, which is how the
      * core starts): without it the console has 4 MiB */

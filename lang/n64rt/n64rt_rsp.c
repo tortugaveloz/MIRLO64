@@ -293,7 +293,14 @@ void n64rt_gfx_init(void)
          * code its first task never ends; another, finding anything else,
          * never starts its game) */
         const u32 fill = n64rt_game->cic == 6103u || n64rt_game->cic == 6106u;
-        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = fill ? 0xFFFFFFFFu : k >= 0x10u || n64rt_game->cic == 6105u ? n64rt_rom_word(4u * k) : 0u; }
+        /* An open-source IPL3 (N64RT_IPL3_*) clears both memories (an RSP DMA of zeros from beyond the RDRAM) and, the ELF
+         * loader's, leaves its boot flags in DMEM's first 16 bytes: the RDRAM's size, a random word, the ROM type (0
+         * cartridge), the TV type, the reset type (0 cold) and the console (0 N64) as one word, and the ELF's offset in the
+         * ROM in 256-byte pages in the upper half of the fourth. */
+        const u32 own = n64rt_game->ipl3;
+        for (u32 k = 0; k < 0x400u; k++) { keep[k] = t[k]; t[k] = own ? 0u : fill ? 0xFFFFFFFFu : k >= 0x10u || n64rt_game->cic == 6105u ? n64rt_rom_word(4u * k) : 0u; }
+        if (own) dma_in(0x1000u, N64RT_PHYS(t), 0x1000u);
+        if (own == N64RT_IPL3_ELF) { t[0] = n64rt_game->mem_size; t[1] = n64rt_boot_entropy; t[2] = n64rt_tv << 16; t[3] = n64rt_game->elf_off << 8; }
         dma_in(0u, N64RT_PHYS(t), 0x1000u);
         if (fill) { t[0] = n64rt_cic_id(n64rt_game->cic); dma_in(0x1000u, N64RT_PHYS(t), 0x1000u); }
         if (n64rt_game->cic == 6105u) rsp_ipl_state(t);
