@@ -510,7 +510,8 @@ logic [31:0] rin;
 logic        r_sqrt, r_zero, r_min, r_mask;
 logic [4:0]  r_sh;
 wire  [31:0] r_data0 = rin ^ {32{rin[31]}};
-wire  [31:0] r_data  = ($signed(rin) > -32'sd32768) ? r_data0 + {31'd0, rin[31]} : r_data0;
+wire         r_ninc  = &rin[31:15];                                     // (rin >= -32768 and negative)
+wire  [31:0] r_data  = r_data0 + {31'd0, r_ninc};
 logic [5:0]  r_clz;
 always_comb begin
     r_clz = 6'd32;
@@ -858,7 +859,7 @@ always_ff @(posedge clk) begin
         lw_v <= 1'b0;
         // the reciprocal: normalised the cycle after its input is taken
         r_sh <= r_clz[4:0]; r_mask <= rin[31];
-        r_zero <= rin == 32'd0; r_min <= rin == 32'hFFFF_8000;
+        r_zero <= r_clz[5]; r_min <= r_ninc && rin[14:0] == 15'd0;      // (r_data is 0 for rin 0 alone; -32768 is the one value of r_ninc that is not negated)
         if (valid && vec && !fn_known) unimpl <= 1'b1;
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;
 
