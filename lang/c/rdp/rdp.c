@@ -100,6 +100,29 @@ static inline int32_t s105_noperp(int32_t s)
 #if defined(RDP_EXACT) && !defined(RDP_CVG)
 #error "RDP_EXACT is the N64's pixel pipeline's: build it with RDP_N64 (and without RDP_NO_BLEND)"
 #endif
+#ifdef RDP_EXACT
+#ifndef RDP_X_RECTLOD
+#define RDP_X_RECTLOD
+#endif
+#ifndef RDP_X_COPY
+#define RDP_X_COPY
+#endif
+#ifndef RDP_X_SHADE
+#define RDP_X_SHADE
+#endif
+#ifndef RDP_X_SPAN
+#define RDP_X_SPAN
+#endif
+#ifndef RDP_X_MEMDZ
+#define RDP_X_MEMDZ
+#endif
+#endif
+#if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE) || defined(RDP_X_SPAN) || defined(RDP_X_MEMDZ)) && !defined(RDP_CVG)
+#error "RDP_X_* are the N64's pixel pipeline's: build them with RDP_N64 (and without RDP_NO_BLEND)"
+#endif
+#if defined(RDP_X_MEMDZ) && !defined(RDP_X_SHADE)
+#error "RDP_X_MEMDZ is the depth compare with the console's dz code: build it with RDP_X_SHADE"
+#endif
 #ifdef RDP_CVG
 /* ---- the console's perspective divide (RDP_CVG; docs/rdp.md, Coordinates) ---------
  * Only the 16-bit integer halves of S (or T, s10.5) and W (s.15) enter it. W's leading zeros among its low 15 bits (up to
@@ -366,7 +389,7 @@ static rdp_rgba_t texture_sample(const rdp_t *r, int tilei, int32_t s105, int32_
     return o;
 }
 
-#ifdef RDP_EXACT
+#ifdef RDP_X_COPY
 /* Copy mode's texel (docs/rdp_exact.md, rule 6): the console's copy takes the group's coordinate through the tile's
  * shift and origin to whole texels and adds the pixel's place in the group (m), then mirrors and masks each by the
  * tile's mask (at most 10 bits; none without a mask), and never clamps: a copy that reads past its tile's rows reads the
@@ -787,6 +810,9 @@ static inline rdp_rgba_t unrgb565(uint16_t v)
 }
 #endif
 
+/* attribute order in the iterators */
+enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
+
 typedef struct {
     int shade, tex, zbuf;          /* which attributes the primitive has */
     int tile;
@@ -800,7 +826,6 @@ typedef struct {
                                       triangle, which the N64 walks right to left) and to the next line (DaDy, as kept) */
     int32_t rnx[2], rny[2];        /* a texture rectangle's S, T (s10.5) at the next pixel and on the next line: set per pixel */
 #endif
-#ifdef RDP_EXACT
     /* the console's walk (docs/rdp_exact.md), set per pixel: where the pixel is in its span and what follows the span,
      * which the 1-cycle LOD and the texels taken a pixel ahead depend on */
     int xj, xlen, xlodlen;         /* the pixel's place from the walk's start (the major edge's end of the span), the
@@ -812,12 +837,11 @@ typedef struct {
     int32_t xcd[5], xdy[5];        /* shade R, G, B, A and Z: a pixel's and a line's step as the console moves them to the
                                       first covered sample (s13 in 1/16ths of the shade's unit; Z s22 in 1/1024ths) */
     unsigned xdzpix;               /* the console's depth step (|DzDx| + |DzDy| of the integer halves, as a power of 2) */
+    int32_t xdyv[NATTR];           /* DaDy of every attribute (RDP_X_SPAN: the span's start value) */
+    int xwalk;                     /* the primitive is walked as the console's (RDP_EXACT's draw_triangle_x)  */
     int xcopy;                     /* copy mode: the pixel's place in its group (its texel is the group's first plus it) */
-#endif
 } prim_t;
 
-/* attribute order in the iterators */
-enum { AR, AG, AB, AA, AS, AT, AW, AZ, NATTR };
 
 /* A 32-bit colour image's RGB is dithered as a 16-bit one's (dither_n64: a channel either kept or taken up to the next
  * multiple of 8) and written whole: the N64 programming manual's blender section says the RGB dither "is enabled even
@@ -1035,7 +1059,7 @@ static const uint32_t s_bl_recip[16] = { 0x3ffff, 0x20001, 0x10001, 0x0aaab, 0x0
 
 /* the highest set bit's place (0 for 0 and 1): the N64's dz encoding */
 static inline unsigned hibit(unsigned v) { unsigned e = 0; while (v > 1) { v >>= 1; e++; } return e; }
-#ifdef RDP_EXACT
+#ifdef RDP_X_SHADE
 /* the console's dz encoding: the OR of the places of the set bits (the place of the one set bit of a power of 2) */
 static inline unsigned x_dzcomp(unsigned v)
 {
@@ -1123,8 +1147,9 @@ static inline uint16_t rgb5551(rdp_rgba_t c, int complete)
  *   exponent   0        1        2        3        4        5        6        7
  *   from       0x00000  0x20000  0x30000  0x38000  0x3C000  0x3E000  0x3F000  0x3F800
  *   lost bits  6        5        4        3        2        1        0        0
- * and, in its two low bits, the top two of the pixel's dz code (its other two are the N64's hidden bits: not kept, and
- * the code is not read back). 0xFFFC, what a game clears its depth image to, is the far plane. A game reads the image as
+ * and, in its two low bits, the top two of the pixel's dz code (its other two are the N64's hidden bits: with
+ * RDP_X_MEMDZ they are written to the hidden plane, with the depth, and read back with it; else not kept, and the code
+ * is not read back). 0xFFFC, what a game clears its depth image to, is the far plane. A game reads the image as
  * the console's: with the CPU, or as a texture. */
 static const uint32_t s_z_base[8] = { 0x00000, 0x20000, 0x30000, 0x38000, 0x3C000, 0x3E000, 0x3F000, 0x3F800 };
 static const unsigned s_z_shift[8] = { 6, 5, 4, 3, 2, 1, 0, 0 };
@@ -1139,6 +1164,12 @@ static inline uint32_t z_dec(uint16_t w)
     const unsigned e = w >> 13;
     return s_z_base[e] | (((uint32_t)(w >> 2) & 0x7FFu) << s_z_shift[e]);
 }
+
+#ifdef RDP_X_MEMDZ
+#define ZHID_SET hid_set(r, zaddr, dzst & 3u);      /* (the depth image's hidden bits: the dz code's low two) */
+#else
+#define ZHID_SET
+#endif
 
 /* does the pixel pipeline read the colour image (rtl/rdp/rdp_top.v need_mem):
  * for the memory coverage (IM_RD, with AA_EN or CVG_X_ALPHA), for CLR_ON_CVG
@@ -1178,7 +1209,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
 
     /* depth: 18 bits (z_enc) */
     uint32_t depth;
-#ifdef RDP_EXACT
+#ifdef RDP_X_SHADE
     /* the console's (docs/rdp_exact.md, rule 4): a pixel without full coverage moves its Z and shade to its first covered
      * sample (offx quarters right, offy subscanlines down: the topmost covered subscanline, its leftmost sample), with
      * the steps' top bits; Z is 22 bits of the attribute >> 10, the depth its 19-bit result kept to 18 (negative: 0,
@@ -1191,7 +1222,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
             while (!((row >> (3 - offx)) & 1u)) offx++;
         } else offy = 0;
     }
-    if (l & RDP_L_Z_SRC_PRIM) {
+    if ((l & RDP_L_Z_SRC_PRIM) || (!pr->zbuf && !pr->xwalk)) {
         depth = (uint32_t)r->prim_z << 2;
     } else {
         const int32_t sz = (at[AZ] >> 10) & 0x3FFFFF;
@@ -1211,7 +1242,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
      * doubled, or of SET_PRIM_DEPTH's delta), 4 bits */
     unsigned dzenc = (l & RDP_L_Z_SRC_PRIM) ? hibit(r->prim_dz) : (pr->zbuf ? hibit(pr->dz) + 3u : 0u);
     if (dzenc > 15u) dzenc = 15u;
-#ifdef RDP_EXACT
+#ifdef RDP_X_SHADE
     /* the dz code the depth word keeps (its top two bits): the console's, the step in its units of 8 depth units (the
      * model's own code above is in depth units, 3 more, and keeps serving its depth compare and blender shifts) */
     const unsigned dzst = x_dzcomp((l & RDP_L_Z_SRC_PRIM) ? r->prim_dz : (pr->xdzpix ? pr->xdzpix : 1u));
@@ -1230,7 +1261,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
     rdp_rgba_t tex_ahead = { 0, 0, 0, 0 };  /* the next pixel's first texel (the second cycle's TEXEL1) */
     int have_ahead = 0;
 #endif
-#ifdef RDP_EXACT
+#ifdef RDP_X_SHADE
     /* (the console's: 9 bits of the shade, at the first covered sample, then 256..383 saturated to 255 and 384..511, a
      * negative shade, to 0) */
     for (int c = 0; c < 4; c++) {
@@ -1296,8 +1327,9 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
             tile0 = L1.tile0;
         }
 #endif
+#ifdef RDP_X_COPY
+        if (cyc == 2 && (pr->texrect || pr->xwalk)) {
 #ifdef RDP_EXACT
-        if (cyc == 2) {
             if (h & RDP_H_TEX_LOD) {
                 /* copy mode with TEX_LOD (rule 3): an LOD from the group's next step and the one after; the tile plus the
                  * level, plus 1 with DETAIL when not magnified */
@@ -1309,6 +1341,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
                 ls[2] = ls[0]; lt[2] = lt[0];
                 tile0 = rdp_lod(h, r->min_level, pr->level, (unsigned)pr->tile, ls, lt, oob).tile0;
             }
+#endif
             in.tex = x_copy_texel(r, tile0, s, t, pr->xcopy);
         } else
 #endif
@@ -1457,15 +1490,35 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         const uint16_t oldw = r->rd16(r->ctx, zaddr);
         const uint32_t old = z_dec(oldw);
         unsigned zmode = (l >> RDP_L_ZMODE_SHIFT) & 3;
+#ifdef RDP_X_MEMDZ
+        /* the console's (docs/rdp_exact.md, rule 8): the memory's dz code is the word's two low bits and the two hidden bits
+         * written with the depth; the tolerance is the larger power of 2 of the pixel's dz and the memory's (the memory's
+         * doubled and no less than 16 >> exponent for exponents under 3; coplanar, at the code's top, when the memory's is
+         * 0x8000), times 8; and the blender's two weights shift by the difference of the two codes, up to 4 */
+        const unsigned rawdz = (unsigned)(oldw & 3u) << 2 | hid_get(r, zaddr);
+        const unsigned pexp = hibit((l & RDP_L_Z_SRC_PRIM) ? r->prim_dz : (pr->xdzpix ? pr->xdzpix : 1u));
+        const unsigned oexp = oldw >> 13;
+        const unsigned dbl = rawdz + 1u > 15u ? 15u : rawdz + 1u;          /* (the memory's dz doubled; 0x8000 is coplanar: the top) */
+        const unsigned mexp = oexp >= 3u ? rawdz : dbl > 4u - oexp ? dbl : 4u - oexp;
+        const unsigned texp = pexp > mexp ? pexp : mexp;                    /* the tolerance is 8 << texp */
+        const int32_t tol = (int32_t)(8u << texp);
+        sh_a = dzst > rawdz ? (dzst - rawdz > 4u ? 4u : dzst - rawdz) : 0u;
+        sh_b = rawdz > dzst ? (rawdz - dzst > 4u ? 4u : rawdz - dzst) : 0u;
+#else
         unsigned dz = pr->zbuf ? pr->dz : 1u;
         const uint32_t tol = (dz << 2 | 3u) | ((oldw >> 13) < 3u ? (0x7Fu >> (oldw >> 13)) : 0u);
+#endif
         int max = old == 0x3FFFF, infront = depth < old;
         int nearer = (int)depth - (int)tol <= (int)old;
         int farther = (int)depth + (int)tol >= (int)old;
         blend_en = (l & RDP_L_FORCE_BL) || (!overflow && aa && farther);
         if (zmode == 1 && infront && farther && overflow) {
             /* interpenetrating: the coverage scaled by how far it is in front, in dz */
+#ifdef RDP_X_MEMDZ
+            unsigned sft = texp;
+#else
             unsigned sft = hibit(dz) + 3;
+#endif
             unsigned coeff = ((old >> sft) - (depth >> sft)) & 0xFu;
             cvg_sel = ((cvg_sel * coeff) >> 3) & 0xFu;
         } else if (zmode == 2) {
@@ -1479,7 +1532,11 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         blend_en = (l & RDP_L_FORCE_BL) || (!overflow && aa);
         /* without a depth compare the memory coverage's weight is shifted by
          * the primitive's dz code */
+#ifdef RDP_X_MEMDZ
+        sh_b = dzst < 11u ? 4u : 15u - dzst;
+#else
         sh_b = dzenc >= 12u ? 15u - dzenc : 4u;
+#endif
     }
     if (!zpass) return;
     /* with AA_EN drawn when a sample is left after CVG_X_ALPHA; without, the
@@ -1529,14 +1586,14 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (CIMG32_DITHER) out = dither_n64(r, out, x, dyr, rnd, 1);
         r->wr16(r->ctx, caddr, (uint16_t)(out.r << 8 | out.g));
         r->wr16(r->ctx, caddr + 2u, (uint16_t)(out.b << 8 | cvg_out << 5));
-        if (l & RDP_L_Z_UPD) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
+        if (l & RDP_L_Z_UPD) { r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2)); ZHID_SET }
         r->pixels_drawn++;
         return;
     }
     if (cyc != 2) out = dither_n64(r, out, x, dyr, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
     hid_set(r, caddr, cvg_out);
-    if ((l & RDP_L_Z_UPD) && !copy) r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2));
+    if ((l & RDP_L_Z_UPD) && !copy) { r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2)); ZHID_SET }
     r->pixels_drawn++;
 }
 #endif /* RDP_CVG */
@@ -1777,9 +1834,18 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
         int32_t exh = (int32_t)((uint32_t)xh + k * (uint32_t)dxh);   /* the row's top: attributes (the N64's, not the pixel centre) */
         int lp[4], rp[4], lf[4], rf[4], valid[4], any = 0;
         int xmin = 0, xmax = 0;
+#ifdef RDP_X_SPAN
+        /* the major edge's x on the subscanline the attributes are taken on (the top, or the bottom when the edge leans away
+         * from the walk): its whole pixels (12 bits) and 8-bit fraction (docs/rdp_exact.md, rule 4) */
+        const int xld = ((dxh < 0) ^ (lft != 0)) ? 0 : 3;
+        uint32_t xr = 0;
+#endif
         for (int j = 0; j < 4; j++) {
             int yq = 4 * y + j;
             uint32_t xa = axh + (uint32_t)j * qh;
+#ifdef RDP_X_SPAN
+            if (j == xld) xr = xa;
+#endif
             uint32_t xb = (yq < ym) ? axm + (uint32_t)j * qm : axl + (uint32_t)j * ql;
             int32_t lx = (int32_t)(lft ? xa : xb), rx = (int32_t)(lft ? xb : xa);
             int crossed = (rx >> 14) < (lx >> 14);
@@ -1815,6 +1881,26 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
             uint32_t e = (uint32_t)at[i].v + k * (uint32_t)at[i].de;
             cur[i] = (int32_t)(e + (uint32_t)(int32_t)(((int64_t)at[i].dx * dx0) >> 16));
         }
+#ifdef RDP_X_SPAN
+        /* each attribute as the console starts its span: on the major edge (A + k DaDe, its low 9 bits cleared), moved to
+         * subscanline 3 and back up when the edge leans away from the walk (3/4 of DaDe - DaDy, each with its low 9 bits
+         * cleared), less the edge's x fraction times (DaDx >> 8) & ~1 (not in copy mode), the low 10 bits cleared; a pixel
+         * is that plus its distance from the edge's pixel times DaDx (its low 5 bits cleared, Z whole) */
+        const int xunscrx = (int32_t)(xr << 4) >> 20, xcpy = ((r->other_h >> RDP_H_CYCLE_SHIFT) & 3) == 2;
+        const uint32_t xfrac = (xr >> 8) & 0xFFu;
+        uint32_t xa0[NATTR], xdp[NATTR];
+        for (int i = 0; i < NATTR; i++) {
+            const uint32_t e = (uint32_t)at[i].v + k * (uint32_t)at[i].de;
+            uint32_t diff = 0;
+            if (xld == 3) {
+                const int32_t de = (int32_t)((uint32_t)at[i].de & ~0x1FFu), dy = (int32_t)((uint32_t)pr->xdyv[i] & ~0x1FFu);
+                diff = (uint32_t)de - (uint32_t)(de >> 2) - (uint32_t)dy + (uint32_t)(dy >> 2);
+            }
+            const uint32_t dxh8 = xcpy ? 0u : (uint32_t)(at[i].dx >> 8) & ~1u;
+            xa0[i] = ((e & ~0x1FFu) + diff - xfrac * dxh8) & ~0x3FFu;
+            xdp[i] = i == AZ ? (uint32_t)at[i].dx : (uint32_t)at[i].dx & ~0x1Fu;
+        }
+#endif
         for (int x = xmin; x <= xmax; x++) {
             if (x > xmin)
                 for (int i = 0; i < NATTR; i++) cur[i] = (int32_t)((uint32_t)cur[i] + (uint32_t)at[i].dx);
@@ -1835,11 +1921,18 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
             if (!aa_en && !(mask & 0x80u)) continue;      /* no AA_EN: drawn only if the top-left sample (sample 7) is covered */
             int32_t pc[NATTR];
             for (int i = 0; i < NATTR; i++) pc[i] = cur[i];
+#ifdef RDP_X_SPAN
+            for (int i = 0; i < NATTR; i++) pc[i] = (int32_t)(xa0[i] + (uint32_t)(x - xunscrx) * xdp[i]);
+#endif
             int oy = 0; while (!cj[oy]) oy++;
             int ox = 0; while (!((cj[oy] >> (3 - ox)) & 1u)) ox++;
             int32_t sx8 = 2 * ox, sy8 = 2 * oy;      /* the sample, from the pixel's top-left corner, 1/8 px (0 for sample 7) */
             uint32_t corr = ((uint32_t)((at[AZ].dx >> 5) * sx8) + (uint32_t)((pr->dzdy >> 5) * sy8)) << 2;
+#ifndef RDP_X_SHADE
             pc[AZ] = (int32_t)((uint32_t)pc[AZ] + corr);
+#else
+            (void)corr;                  /* (draw_pixel_cvg moves Z and the shade, as the console does) */
+#endif
 #ifdef RDP_DEBUG_AA
             fprintf(stderr, "AAPIX x=%d y=%d mask=%02x sx=%d sy=%d z=%08x\n", x, y, mask, sx8, sy8, (uint32_t)pc[AZ]);
 #endif
@@ -1957,6 +2050,7 @@ static void draw_triangle_x(rdp_t *r, prim_t *pr, int aa_en, const xtri_t *T)
 {
     const attr_t *at = T->at;
     const unsigned cyc = (r->other_h >> RDP_H_CYCLE_SHIFT) & 3;
+    pr->xwalk = 1;
     const int ya = x_yhlimit(r, T->yh) >> 2, yb = x_yllimit(r, T->yl) >> 2;   /* (rows ya to yb, both included) */
     if (ya > yb) return;
     for (int k = 0; k < 3; k++) pr->xinc[k] = T->lft ? x_dx(T, AS + k) : (int32_t)(0u - (uint32_t)x_dx(T, AS + k));
@@ -2031,7 +2125,12 @@ static void lod_tri(prim_t *pr, const uint32_t *p, const attr_t *at, int lft)
         int wi = k >> 1, sh = (k & 1) ? 0 : 16;
         uint32_t yi = (p[10 + wi] >> sh) & 0xFFFF, yf = (p[14 + wi] >> sh) & 0xFFFF;
         pr->ddy[k] = (int32_t)(yi << 16 | yf) & LOD_DY_MASK;
-        pr->ddx[k] = lft ? at[AS + k].dx : (int32_t)(0u - (uint32_t)at[AS + k].dx);
+#ifdef RDP_X_SPAN
+        const uint32_t dxs = (uint32_t)at[AS + k].dx & ~0x1Fu;       /* (a pixel's step: DaDx without its low 5 bits) */
+#else
+        const uint32_t dxs = (uint32_t)at[AS + k].dx;
+#endif
+        pr->ddx[k] = lft ? (int32_t)dxs : (int32_t)(0u - dxs);
     }
 }
 #endif
@@ -2071,11 +2170,39 @@ static void draw_triangle(rdp_t *r, const uint32_t *w)
         s |= s >> 1; s |= s >> 2; s |= s >> 4; s |= s >> 8; s |= s >> 16;
         pr.dz = (s & 0xFFFFu) | 1u;
         pr.dzdy = zy;
-#ifdef RDP_EXACT
+#ifdef RDP_X_SHADE
         pr.xdzpix = x_dzpix(zx, zy);
+        pr.xcd[4] = sext((uint32_t)(at[AZ].dx >> 10), 22);
+        pr.xdy[4] = sext((uint32_t)zy >> 10, 22);
 #endif
 #endif
     }
+#ifdef RDP_X_SPAN
+    {
+        /* DaDy of each attribute (the shade's and the texture's at words 10 and 14 of their blocks, Z's the 4th) */
+        const uint32_t *q = w + 8;
+        for (int b = 0; b < 2; b++) {
+            if (!(b ? pr.tex : pr.shade)) continue;
+            for (int i = 0; i < (b ? 3 : 4); i++) {
+                const int wi = i >> 1, sh = (i & 1) ? 0 : 16;
+                pr.xdyv[(b ? AS : AR) + i] = (int32_t)((((q[10 + wi] >> sh) & 0xFFFFu) << 16) | ((q[14 + wi] >> sh) & 0xFFFFu));
+            }
+            q += 16;
+        }
+        if (pr.zbuf) pr.xdyv[AZ] = (int32_t)q[3];
+    }
+#endif
+#ifdef RDP_X_SHADE
+    if (pr.shade) {
+        /* the shade's DaDx and DaDy >> 14 (13 bits): the steps the console moves a pixel to its first covered sample by */
+        for (int i = 0; i < 4; i++) {
+            const int wi = i >> 1, sh = (i & 1) ? 0 : 16;
+            const uint32_t dyv = (((w[8 + 10 + wi] >> sh) & 0xFFFFu) << 16) | ((w[8 + 14 + wi] >> sh) & 0xFFFFu);
+            pr.xcd[i] = sext((uint32_t)at[AR + i].dx >> 14, 13);
+            pr.xdy[i] = sext(dyv >> 14, 13);
+        }
+    }
+#endif
 
     int y0 = yh >> 2;                 /* the integer scanline of XH / XM / A */
     int ymr = ym >> 2;                /* the integer scanline of XL */
@@ -2244,10 +2371,27 @@ static void draw_texrect(rdp_t *r, const uint32_t *w, int flip)
             int cs = q ? 2 : 0;
             at[AS] = flip ? s + ((dsdx * (y - y0)) >> dshift) : s + ((dsdx * cq) >> (dshift + cs));
             at[AT] = flip ? t + ((dtdy * cq) >> (5 + cs)) : t + ((dtdy * (y - y0)) >> 5);
+#ifdef RDP_X_COPY
+            if (cyc == 2) {
+                /* copy mode (docs/rdp_exact.md, rule 6): the column-stepped coordinate moves once a group of 4 pixels (8 in an
+                 * 8-bit image) from the span's first drawn pixel -- the scissor's left edge shifts the texture, it does not
+                 * cut it -- and the pixel's place in its group is added to the texel (x_copy_texel) */
+                const int gsz = r->cimg_size == 1 ? 8 : 4, j = x - xa;
+                pr.xcopy = j % gsz;
+                at[AS] = flip ? s + ((dsdx * (y - y0)) >> 5) : s + ((dsdx * (j / gsz)) >> 5);
+                at[AT] = flip ? t + ((dtdy * (j / gsz)) >> 5) : t + ((dtdy * (y - y0)) >> 5);
+            }
+#endif
 #ifdef RDP_CVG
             /* the LOD's other two points: the N64 walks a rectangle left to right (and its level count is 0) */
             texrect_st(&g, x + 1, y, &pr.rnx[0], &pr.rnx[1]);
             texrect_st(&g, x, y + 1, &pr.rny[0], &pr.rny[1]);
+#ifdef RDP_X_RECTLOD
+            /* the next line, as the console keeps it (docs/rdp_exact.md, rule 2): the row-stepped coordinate with its
+             * fraction plus the row step with its low 4 bits (of DsDx or DtDy) cleared: LOD_DY_MASK's 17 bits */
+            if (flip) pr.rny[0] = s + (((dsdx * (y - y0)) + (dsdx & ~15)) >> 5);
+            else      pr.rny[1] = t + (((dtdy * (y - y0)) + (dtdy & ~15)) >> 5);
+#endif
 #endif
             draw_pixel(r, &pr, x, y, at, 0xFFu);
         }

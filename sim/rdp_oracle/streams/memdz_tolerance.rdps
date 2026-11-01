@@ -1,0 +1,23 @@
+# (Not the LOD: docs/rdp_exact.md, rule 8.) The depth image's own dz. Two anti-aliased, depth-tested triangles, the second over the first at
+# nearly its depth: the first writes its dz code with its depth (the depth word's two low bits and the two hidden bits), and the second's
+# compare has the larger power of 2 of its own dz and the memory's (the memory's doubled, for a word of exponent under 3) as its tolerance.
+rdram zero
+cmd 3f10013f 00100000
+cmd 3e000000 00140000
+cmd 2d000000 005003c0
+cmd 2f300000 00000000
+cmd 3f10013f 00140000
+cmd 37000000 fffcfffc
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3f10013f 00100000
+cmd 37000000 42114211
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3b000000 ffffffff
+cmd 3cffffff ffffff3c
+cmd 2f000cf0 00554578
+cmd 0d800320 02b1029a 00954855 fffe850c 0088f3f4 ffff2772 0086eba5 00024055 004b004e 004f00ed fffcfffd 0005fffc 713bca01 d82d1111 257fe2b9 a3126e00 00030000 fffefffa 0000fffe 0003fff7 5544c21d 64ae7b21 12c2f83c 296775f5 fdf31bff fefdbeca 031fdf1a 02456872
+cmd 2f000cf0 00500478
+cmd 0d800323 030c0296 00914447 fffaee28 0082d47c ffff8eeb 008244dd 00007fea 003c009c 008d0091 fffbfffd 00000001 dabc558f be053ba0 9ef4963e c59492d1 0004fffe 00010002 0002fffd 00020002 da778e47 b67d25c6 eb477d66 0dc4d7b4 0b9eb171 00714e14 ffea8fa6 001c9c49
+cmd 29000000 00000000

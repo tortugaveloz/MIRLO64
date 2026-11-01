@@ -10,7 +10,12 @@ M="$HERE/../../rtl/rdp"
 MD="${MODEL_DIR:-$HERE/../../lang/c/rdp}"     # (the model: MODEL_DIR=<dir> for another copy of it)
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
 V="${VERILATOR:-$HOME/local/usr/bin/verilator}"
-OBJ=${OBJ:-obj_rdp}; CD="-DRDP_N64"
+# (the rules of docs/rdp_exact.md that rtl/rdp follows: the model is built with them; XRULES=-DRDP_EXACT is all of them)
+XR="${XRULES--DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ}"
+# (the noise LFSR steps once for each pixel with coverage, as the model's does: RDP_LFSR_PIXEL, what the lockstep comparison needs. The RTL's default
+# is a free-running one, which steps every clock: VDEFS= (empty) builds that, and obj_rdp/tb_rdp then differs from the model in the noise's bits only)
+VDEFS="${VDEFS--DRDP_LFSR_PIXEL}"
+OBJ=${OBJ:-obj_rdp}; CD="-DRDP_N64 $XR"
 cd "$HERE"
 # (make does not see the model's flags change: a build with other ones starts from an empty directory, or the model's
 # object of the last build stays, with another layout of its state)

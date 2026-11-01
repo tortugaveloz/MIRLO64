@@ -231,10 +231,10 @@ static uint32_t cimg, cwidth = 320, csize = 2, zimg; static int have_z;
 static int is_prim(uint32_t w0) { unsigned op = (w0 >> 24) & 63; return (op >= 8 && op <= 15) || op == 0x24 || op == 0x25 || op == 0x36; }
 static int img_h = 240;                 /* rows compared: the scissor's (SET_SCISSOR) */
 
-typedef struct { uint64_t c, h, z; int fx, fy; uint32_t fa; int what; } diff_t;
+typedef struct { uint64_t c, h, z; int fx, fy; uint32_t fa; int what; uint64_t e1, e2, e4; } diff_t;   /* e1, e2, e4: the differing 16-bit colour words whose largest channel step (5 bits a channel) is 1, 2..3, 4 or more */
 static diff_t compare(int count_depth)
 {
-    diff_t d = { 0, 0, 0, -1, -1, 0, 0 };
+    diff_t d = { 0, 0, 0, -1, -1, 0, 0, 0, 0, 0 };
     if (csize == 2 || csize == 1) {
         uint32_t bpp = csize;
         for (int y = 0; y < img_h; y++)
@@ -242,7 +242,15 @@ static diff_t compare(int count_depth)
                 uint32_t a = cimg + (y * cwidth + x) * bpp;
                 int dc = bpp == 2 ? m16(a) != o16(a) : mmem[a & (RSIZE - 1)] != ob(a);
                 int dh = bpp == 2 && m_hid(a) != orc_hidden(a);
-                if (dc) d.c++;
+                if (dc) {
+                    d.c++;
+                    if (bpp == 2) {
+                        const unsigned mw = m16(a), ow = o16(a);
+                        int md = 0;
+                        for (int sh = 11; sh >= 1; sh -= 5) { int q = (int)((mw >> sh) & 31) - (int)((ow >> sh) & 31); if (q < 0) q = -q; if (q > md) md = q; }
+                        if (md >= 4) d.e4++; else if (md >= 2) d.e2++; else d.e1++;
+                    }
+                }
                 if (dh) d.h++;
                 if ((dc || dh) && d.fx < 0) { d.fx = (int)x; d.fy = y; d.fa = a; d.what = dc ? 0 : 1; }
             }
@@ -251,7 +259,11 @@ static diff_t compare(int count_depth)
         for (int y = 0; y < img_h; y++)
             for (uint32_t x = 0; x < cwidth; x++) {
                 uint32_t a = zimg + (y * cwidth + x) * 2;
-                if (m16(a) != o16(a)) { d.z++; if (count_depth && d.fx < 0) { d.fx = (int)x; d.fy = y; d.fa = a; d.what = 2; } }
+                int dz = m16(a) != o16(a);
+#ifdef RDP_X_MEMDZ
+                dz |= m_hid(a) != orc_hidden(a);      /* (the model keeps the depth image's hidden bits: the dz code's low two) */
+#endif
+                if (dz) { d.z++; if (count_depth && d.fx < 0) { d.fx = (int)x; d.fy = y; d.fa = a; d.what = 2; } }
             }
     return d;
 }
@@ -264,7 +276,11 @@ static void resync(void)
             uint32_t a = cimg + (y * cwidth + x) * bpp;
             for (uint32_t b = 0; b < bpp; b++) mmem[(a + b) & (RSIZE - 1)] = ob(a + b);
             if (bpp == 2) m_hid_set(a, orc_hidden(a));
-            if (have_z && bpp == 2) { uint32_t z = zimg + (y * cwidth + x) * 2; mmem[z & (RSIZE - 1)] = ob(z); mmem[(z + 1) & (RSIZE - 1)] = ob(z + 1); }
+            if (have_z && bpp == 2) { uint32_t z = zimg + (y * cwidth + x) * 2; mmem[z & (RSIZE - 1)] = ob(z); mmem[(z + 1) & (RSIZE - 1)] = ob(z + 1);
+#ifdef RDP_X_MEMDZ
+                m_hid_set(z, orc_hidden(z));
+#endif
+            }
         }
 }
 
@@ -359,8 +375,8 @@ int main(int argc, char **argv)
                 if (first_bad < 0) first_bad = i;
                 if (!quiet && (bad_prims <= 3 || verbose)) {
                     static const char *wn[3] = { "colour", "coverage", "depth" };
-                    printf("  command #%d (line %d, op %02x): %llu colour, %llu coverage, %llu depth words differ; first %s at (%d,%d):",
-                           i, c->line, op, (unsigned long long)d.c, (unsigned long long)d.h, (unsigned long long)d.z, wn[d.what], d.fx, d.fy);
+                    printf("  command #%d (line %d, op %02x): %llu colour (largest channel step 1: %llu, 2-3: %llu, 4+: %llu), %llu coverage, %llu depth words differ; first %s at (%d,%d):",
+                           i, c->line, op, (unsigned long long)d.c, (unsigned long long)d.e1, (unsigned long long)d.e2, (unsigned long long)d.e4, (unsigned long long)d.h, (unsigned long long)d.z, wn[d.what], d.fx, d.fy);
                     if (d.what == 1) printf(" model %u oracle %u\n", m_hid(d.fa), orc_hidden(d.fa));
                     else if (csize == 1 && d.what == 0) printf(" model %02x oracle %02x\n", mmem[d.fa], ob(d.fa));
                     else printf(" model %04x oracle %04x\n", m16(d.fa), o16(d.fa));

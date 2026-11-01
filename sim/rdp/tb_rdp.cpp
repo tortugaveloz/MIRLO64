@@ -12,6 +12,14 @@
 // cycle type): what real tasks do not reach.
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
+//   The noise LFSR (rdp_pix.v): the lockstep comparison needs it to step once for each pixel with coverage, as the model's does (RDP_LFSR_PIXEL,
+//   which build_rtl.sh sets); the RTL's default is a free-running one (VDEFS= builds it), which is checked by
+//   TB_FREE=1   every clock of the RDP's: the LFSR steps (23 bits, the console's taps), counted and reported per stream
+//   TB_NONOISE=1  streams in which nothing reads the noise (no noise dither, no random alpha threshold, no NOISE in the combiner):
+//               RTL == model in either mode
+//   TB_NOISE=1  streams with the noise colour dither alone: the free-running RTL differs from the model in a colour word only by a
+//               step of a 5-bit channel (the dither adds one at most), and in nothing else (coverage, depth, hidden bits)
+//   TB_ZDZ=1    random streams of depth-tested, anti-aliased triangles on a few planes (the depth image's own dz: docs/rdp_exact.md, rule 8)
 #include "Vrdp_top.h"
 #include "Vrdp_top___024root.h"
 #include "verilated.h"
@@ -60,6 +68,8 @@ static unsigned mem_lat = 6, mem_stall = 8;
 // master asks for a random word p % of the cycles (the game CPU's cache
 // misses), served in turn with the RDP.
 static bool sdram;
+static const bool free_chk = getenv("TB_FREE") != nullptr;
+static uint32_t free_prev; static bool free_have; static uint64_t free_n, free_bad;
 static unsigned cpu_pct;
 static struct {
     bool open[4]; uint32_t row[4]; int c_act[4], c_pre[4], c_wr[4]; int c_rd, c_wrany;
@@ -149,6 +159,14 @@ static void tick()
     if (prof) st_cyc[top->rootp->rdp_top__DOT__st & 31]++;
     top->clk = 1; top->eval();
     cycles++;
+    if (free_chk) {          // TB_FREE=1: the LFSR stepped on every clock
+        const uint32_t cur = top->rootp->rdp_top__DOT__pix__DOT__lfsr;
+        if (top->rst) free_have = false;
+        else {
+            if (free_have) { free_n++; if (cur != (((free_prev << 1) & 0x7FFFFFu) | (~((free_prev >> 22) ^ (free_prev >> 18)) & 1u))) free_bad++; }
+            free_prev = cur; free_have = true;
+        }
+    }
     if (cmd_take) {
         // TB_CMDT=<file>: the cycle each command word is taken (rdp_flow.py)
         static FILE *ct = getenv("TB_CMDT") ? fopen(getenv("TB_CMDT"), "w") : nullptr;
@@ -196,15 +214,34 @@ static const bool cc_mode = getenv("TB_CC") != nullptr;
 // texel to tens, the LOD blend (TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0 often, SET_PRIM_COLOR's minimum level, more
 // YUV tiles. Without it the streams are what they were, call for call.
 static const bool lod_mode = getenv("TB_LOD") != nullptr;
+// TB_COPY=1: copy mode three modes in four (texture rectangles by groups of pixels, the scissor cutting them, mirrors and masks)
+static const bool copy_mode = getenv("TB_COPY") != nullptr;
+// TB_RECT=1: a texture rectangle in a command in six more (with TB_LOD: the LOD's next line of a rectangle)
+static const bool rect_mode = getenv("TB_RECT") != nullptr;
+// TB_ZDZ=1: the depth compare's and the blender's use of the depth image's own dz (docs/rdp_exact.md, rule 8) is what the
+// streams are made to show: AA_EN, Z_CMP, Z_UPD, IM_RD, mostly the blender's B the memory's coverage; the triangles' depths are
+// the points of a plane (a few at a time, of slopes of every dz code) plus now and then a step within the tolerance of a code
+static const bool zdz_mode = getenv("TB_ZDZ") != nullptr;
+static const bool noise_mode = getenv("TB_NOISE") != nullptr, nonoise_mode = getenv("TB_NONOISE") != nullptr;   // (the noise LFSR: above)
+static int64_t zp_z, zp_x, zp_y;
+static void zdz_plane()
+{
+    zp_z = (int64_t)(gr(0x7000) + 0x400) << 16;
+    auto sl = []() -> int64_t { int64_t v = (int64_t)1 << (12 + gr(15)); return gr(2) ? v + (int64_t)gr((uint32_t)v) : -(v + (int64_t)gr((uint32_t)v)); };
+    zp_x = sl(); zp_y = gr(3) ? sl() : 0;
+}
 static void rand_modes()
 {
     static const unsigned cyc[10] = { 0, 0, 0, 0, 1, 1, 1, 2, 3, 0 };
     uint32_t h = gr() & 0x00FFFFFFu & ~(3u << 20), l = gr() << 8 | gr(256);
-    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : cyc[gr(10)]) << 20;
+    h |= (cc_mode ? gr(2) : (lod_mode && gr(4)) ? 1u : (copy_mode && gr(4)) ? 2u : cyc[gr(10)]) << 20;
     if (lod_mode && gr(2)) h |= 1u << 16;               // (TEX_LOD three times in four)
     if (cc_mode) l &= ~(0xF0000000u | 1u << 14);
     if (gr(3)) h &= ~(1u << 15);                       // the TLUT mostly off
     if (gr(4) == 0) l &= ~0x30u;                       // sometimes no Z at all
+    if (noise_mode) { h = (h & ~0xF0u) | 2u << 6 | 3u << 4; l &= ~(3u | 3u << 6 | 0xFFFF0000u); }           // (the colour dither's noise alone, and no read of the colour image: a step it moved would grow through a blend)
+    if (nonoise_mode) { h |= 3u << 4; if (((h >> 6) & 3u) == 2u) h &= ~(1u << 7); l &= ~3u; }     // (no noise read: alpha dither off, none of the colour dither's, no random threshold)
+    if (zdz_mode) { l |= 0x78u; l &= ~(1u << 7); if (gr(3)) l = (l & ~0x000F0000u) | 5u << 16; if (gr(3)) l = (l & ~0x00F00000u) | 5u << 20; if (gr(2)) l &= ~(0xFu << 28); if (gr(6)) h &= ~(3u << 20); }
     if (gr(2)) l &= ~(1u | 1u << 12);                  // alpha compare / coverage-by-alpha half the time
     cmd2(0x2F000000u | h, l);
 }
@@ -277,7 +314,7 @@ static void rand_tri()
     int64_t xh_y1 = x[0] + (int64_t)dxh * (y[1] - y[0]) / 4;
     unsigned lft = x[1] > xh_y1;
     if (gr(40) == 0) lft ^= 1;
-    unsigned fl = gr(8), op = 0x08 | fl;
+    unsigned fl = zdz_mode ? (5u | (gr(5) ? 0u : 2u)) : gr(8), op = 0x08 | fl;
     cmd2((uint32_t)op << 24 | lft << 23 | gr(8) << 19 | gr(8) << 16 | ((uint32_t)y[2] & 0x3FFF), ((uint32_t)y[1] & 0x3FFF) << 16 | ((uint32_t)y[0] & 0x3FFF));
     cmd2((uint32_t)xl, (uint32_t)dxl); cmd2((uint32_t)xh, (uint32_t)dxh); cmd2((uint32_t)xm, (uint32_t)dxm);
     if (fl & 4) {
@@ -305,7 +342,16 @@ static void rand_tri()
         } else
         put_group(v, dx, de);
     }
-    if (fl & 1) {
+    if ((fl & 1) && zdz_mode) {
+        // the plane at this triangle's major edge, on the first row; the step within the tolerance of a code now and then
+        if (gr(6) == 0) zdz_plane();
+        int64_t step = gr(3) ? 0 : (int64_t)(gr(2) ? 1 : -1) * ((int64_t)1 << (16 + gr(14))) * (int64_t)(50 + gr(120)) / 100;
+        int64_t v = zp_z + step + zp_x * (int64_t)(xh >> 16) + zp_y * (int64_t)(y[0] >> 2);
+        v = v < 0 ? 0 : v > 0x7FFFFFFF ? 0x7FFFFFFF : v;
+        int64_t de = zp_y + zp_x * (int64_t)dxh / 65536;
+        cmds.push_back((uint32_t)v); cmds.push_back((uint32_t)zp_x);
+        cmds.push_back((uint32_t)(de > 0x7FFFFFFF ? 0x7FFFFFFF : de < -0x7FFFFFFF ? -0x7FFFFFFF : de)); cmds.push_back((uint32_t)zp_y);
+    } else if (fl & 1) {
         cmds.push_back(gr(8) ? gr(0x7FFF) << 16 | gr(65536) : gr() << 8 | gr(256));
         cmds.push_back((uint32_t)grs(1 << (gr(4) ? 18 : 24))); cmds.push_back((uint32_t)grs(1 << (gr(4) ? 18 : 24))); cmds.push_back(gr() << 8);
     }
@@ -330,7 +376,7 @@ static void rand_combine()
         cmd2(0x3C000000u | hi, lo);
         return;
     }
-    unsigned k = cc_mode ? 9 : gr(10);
+    unsigned k = cc_mode ? 9 : (noise_mode || nonoise_mode) ? gr(6) : gr(10);      // (the noise modes: the fixed combiners, none reads NOISE)
     if (k < 4)      cmd2(0x3C000000u | 0xFFFFFFu, 0xFF000000u | 1u << 15 | 7u << 12 | 1u << 9 | 1u << 6 | 7u << 3 | 1u | 7u << 21 | 7u << 18);   // TEXEL0
     else if (k < 6) cmd2(0x3C000000u | 1u << 20 | 4u << 15 | 1u << 12 | 4u << 9 | 1u << 5 | 4u, 0xFF000000u | 7u << 15 | 7u << 12 | 7u << 9 | 7u << 6 | 7u << 3 | 7u | 1u << 21 | 4u << 18);   // TEXEL0 * SHADE
     else {
@@ -370,9 +416,11 @@ static void rand_stream(unsigned seed, int n)
     cmd2(0x2D000000u, scis);
     for (int t = 0; t < 8; t++) rand_tile((unsigned)t);
     rand_timg(); rand_modes(); rand_combine();
+    if (zdz_mode) zdz_plane();
     for (int i = 0; i < n; i++) {
         unsigned k = gr(100);
-        if (k < 30) rand_tri();
+        if (rect_mode && k >= 60 && k < 66) rand_rect(1);
+        else if (k < 30) rand_tri();
         else if (k < 38) rand_rect(1);
         else if (k < 42) rand_rect(0);
         else if (k < 52) rand_modes();
@@ -400,7 +448,7 @@ static void rand_stream(unsigned seed, int n)
             // triangle), then the colour image again. TB_RAND_CZ=2: the depth image stays
             // the colour image for whatever comes
             static const int cz = getenv("TB_RAND_CZ") ? atoi(getenv("TB_RAND_CZ")) : 0;
-            uint32_t w = 0x3F000000u | (gr(6) ? csz : gr(4)) << 19 | cw1;
+            uint32_t w = 0x3F000000u | ((gr(6) || noise_mode) ? csz : gr(4)) << 19 | cw1;      // (TB_NOISE: always a 16-bit image: an 8-bit one is not dithered, a 32-bit one at 8 bits)
             if (cz == 1 && gr(3) == 0) {
                 cmd2(0x3F000000u | 2u << 19 | cw1, R_ZIMG);
                 cmd2(0x2F000000u | 3u << 20 | gr(1u << 20), gr());
@@ -549,7 +597,10 @@ int main(int argc, char **argv)
                     for (size_t i = 0; i < cur.size(); i++) printf("  w%zu %08x\n", i, cur[i]);
                     uint64_t nd = 0;
                     for (uint32_t q = 0; q < MSIZE; q += 2) if (memcmp(rtl_mem + q, mdl_mem + q, 2)) nd++;
-                    printf("  %llu 16-bit words differ\n", (unsigned long long)nd);
+                    printf("  %llu 16-bit words differ", (unsigned long long)nd);
+                    for (uint32_t q = 0, shown = 0; q < MSIZE && shown < 8; q += 2)
+                        if (memcmp(rtl_mem + q, mdl_mem + q, 2)) { printf("%s %06x (rtl %02x%02x model %02x%02x)", shown ? "," : ": at", q, rtl_mem[q], rtl_mem[q + 1], mdl_mem[q], mdl_mem[q + 1]); shown++; }
+                    printf("\n");
                     return 1;
                 }
             }
@@ -560,14 +611,29 @@ int main(int argc, char **argv)
         while (!rtl_idle() && guard++ < 400000000ull) tick();
         for (int i = 0; i < 64; i++) tick();
 
-        uint64_t diff = 0; uint32_t first = 0;
+        uint64_t diff = 0, dither_steps = 0; uint32_t first = 0;
         for (uint32_t o = 0; o < MSIZE; o += 2)
-            if (memcmp(rtl_mem + o, mdl_mem + o, 2)) { if (!diff) first = o; diff++; }
+            if (memcmp(rtl_mem + o, mdl_mem + o, 2)) {
+                if (noise_mode && o < SIZE) {         // a colour word the noise dither moved: each channel by a step at most, its bit 0 as it was
+                    const unsigned a = rtl_mem[o] << 8 | rtl_mem[o + 1], b = mdl_mem[o] << 8 | mdl_mem[o + 1];
+                    bool ok = (a & 1) == (b & 1);
+                    for (int sh = 1; sh <= 11; sh += 5) { int d = (int)((a >> sh) & 31) - (int)((b >> sh) & 31); if (d > 1 || d < -1) ok = false; }
+                    if (ok) { dither_steps++; continue; }
+                }
+                if (!diff) first = o; diff++;
+                if (getenv("TB_DBGW") && diff < 12) fprintf(stderr, "  %06x rtl %02x%02x model %02x%02x\n", o, rtl_mem[o], rtl_mem[o+1], mdl_mem[o], mdl_mem[o+1]);
+            }
         printf("%s: %llu commands, RTL %llu cycles (%llu reads, %llu writes), sync %u/%u loads %u/%u unknown %u/%u, %llu pixels: %s",
                argv[ai], (unsigned long long)ncmd, (unsigned long long)(cycles - c0), (unsigned long long)n_rd, (unsigned long long)n_wr,
                top->sync_count, mdl.sync_count, top->load_count, mdl.load_count, top->unknown_ops, mdl.unknown_ops,
                (unsigned long long)mdl.pixels_drawn, diff ? "MISMATCH" : "RTL == model\n");
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
+        if (noise_mode) printf("    TB_NOISE: %llu colour words differ by a step of a 5-bit channel (the noise dither's), the rest equal\n", (unsigned long long)dither_steps);
+        if (free_chk) {
+            printf("    TB_FREE: the LFSR stepped right on %llu of %llu clocks\n", (unsigned long long)(free_n - free_bad), (unsigned long long)free_n);
+            if (free_bad || !free_n) bad = 1;
+            free_n = free_bad = 0;
+        }
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
         if (prof) {
             static const char *nm[21] = { "idle (waiting for commands)", "triangle start", "row", "setup", "read the span's Z", "read the span's colour", "pixels", "drain the pipeline",
