@@ -187,7 +187,10 @@ module rdp_mem (
     reg [29:0] w_next;                    // the word to ask for
     reg [11:0] l_ask, l_get;              // the words still to ask for less one, still to come back
     reg        issued_all;
-    reg [1:0]  lmode, lo;                 // the mode; the source's byte offset in its word
+    // (the load's request, held by rdp_top until the next one, which waits for the engine: the mode; the source's byte offset in its
+    // word; below, the row count's step and the odd row)
+    wire [1:0] lmode = rd_lmode;
+    wire [1:0] lo    = rd_cbase[1:0];
     reg [10:0] ldst;                      // TMEM's 16-bit word of the next aligned word (mode 1: the texel)
     reg [10:0] lleft;                     // aligned words (mode 2: entries) still to write
     reg        lfirst;                    // the first memory word has not come (an unaligned source: it only primes)
@@ -198,8 +201,10 @@ module rdp_mem (
     // an odd row's 64-bit words go in with their halves changed places (the
     // N64's: undone as they are sampled, rdp_pix): the row count of a LOAD
     // BLOCK is its dxt summed over the words, a LOAD TILE's row is given
-    reg [11:0] lacc, ldxt;
-    reg        lhalf, lodd;
+    reg [11:0] lacc;
+    wire [11:0] ldxt = rd_ldxt;
+    reg        lhalf;
+    wire       lodd = rd_lodd;
     wire       lsw = lodd | lacc[11];
     reg        l_out;                     // mode 2: a read is out (one at a time: an entry takes two cycles to write)
     // a load: its aligned words (a TLUT entry is half of one), and one more
@@ -411,9 +416,8 @@ module rdp_mem (
                         l_ask <= ld_reads - 12'd1;
                         l_get <= ld_reads;
                         issued_all <= 1'b0;
-                        lmode <= rd_lmode; lo <= rd_cbase[1:0];
                         ldst <= rd_ldst; lleft <= rd_ln;
-                        lacc <= 12'd0; ldxt <= rd_ldxt; lhalf <= 1'b0; lodd <= rd_lodd;
+                        lacc <= 12'd0; lhalf <= 1'b0;
                         lfirst <= rd_cbase[1:0] != 2'd0;
                         la_v <= 1'b0; l_out <= 1'b0; lt <= 2'd0;
                         if (rd_ln == 11'd0) r_act <= 1'b0;
