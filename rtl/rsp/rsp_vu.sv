@@ -212,7 +212,7 @@ function automatic logic [2:0] amode(input logic [5:0] f);
 endfunction
 
 function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
-                                  input logic signed [33:0] p, input logic [15:0] vs, input logic [47:0] accm,
+                                  input logic signed [34:0] p, input logic [15:0] vs, input logic [47:0] accm,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);    // (the adder's flags of the cycle before: VCL, VCH and VCR's with one pass)
     lane_t o = '0;
@@ -263,15 +263,11 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     // otherwise), the clamped result
     begin
         logic [47:0] pe;
-        logic s1, s4, s5, s7;
         pe = 48'(p);
-        s1 = f[2:0] == 3'd0 || f[2:0] == 3'd1;
-        s4 = f[2:0] == 3'd4;
-        s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
-        s7 = f[2:0] == 3'd7;
-        // (one pass: VSAR reads the accumulator through this adder -- the product is no term of it)
-        if (NP == 1 && f[5:4] != 2'b00) begin s1 = 1'b0; s4 = 1'b0; s5 = 1'b0; s7 = 1'b0; end
-        term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
+        // (the product is already doubled for VMULF, VMULU, VMACF and VMACU -- mul_s -- and is 0 for VSAR, which reads
+        // the accumulator through this adder: the term is the product, or its high half (VMUDL, VMADL), or the product
+        // shifted up 16 (VMUDH, VMADH))
+        term = (f[2:0] == 3'd4) ? 48'($signed(pe) >>> 16) : (f[2:0] == 3'd7) ? (pe << 16) : pe;
     end
     accn = term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
     o.acc = accn;
@@ -384,18 +380,16 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
 endfunction
 
 // a multiply's lane alone (lane_ex's first half): the lanes MULW adds
-function automatic lane_t lane_mul(input logic [5:0] f, input logic signed [33:0] p, input logic [47:0] acc);
+function automatic lane_t lane_mul(input logic [5:0] f, input logic signed [34:0] p, input logic [47:0] acc);
     lane_t o = '0;
     logic signed [47:0] term, accn;
     begin
         logic [47:0] pe;
-        logic s1, s4, s5, s7;
         pe = 48'(p);
-        s1 = f[2:0] == 3'd0 || f[2:0] == 3'd1;
-        s4 = f[2:0] == 3'd4;
-        s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
-        s7 = f[2:0] == 3'd7;
-        term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
+        // (the product is already doubled for VMULF, VMULU, VMACF and VMACU -- mul_s -- and is 0 for VSAR, which reads
+        // the accumulator through this adder: the term is the product, or its high half (VMUDL, VMADL), or the product
+        // shifted up 16 (VMUDH, VMADH))
+        term = (f[2:0] == 3'd4) ? 48'($signed(pe) >>> 16) : (f[2:0] == 3'd7) ? (pe << 16) : pe;
     end
     accn = term + (f[3] ? $signed(acc) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
     o.acc = accn; o.acc_w = 1'b1;
@@ -441,21 +435,28 @@ wire  [5:0]         fn_m  = (NP == 2 && b1) ? x_fn : fn;
 wire  s_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd5 || fn_m[2:0] == 3'd7;
 wire  t_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd6 || fn_m[2:0] == 3'd7;
 logic [15:0]        s_n [LANES], t_n [LANES];
-logic signed [33:0] p_n [LANES];
+logic signed [34:0] p_n [LANES];
+// (the multiplier's s operand: doubled for VMULF, VMULU, VMACF and VMACU -- their product goes in the accumulator shifted
+// up one -- and 0 for VSAR, whose accumulate has no product)
+function automatic logic signed [17:0] mul_s(input logic [5:0] f, input logic sg, input logic [15:0] s);
+    logic [16:0] s17;
+    s17 = {sg & s[15], s};
+    return (NP == 1 && f == 6'h1D) ? 18'sd0 : (f[5:4] == 2'b00 && f[2:1] == 2'b00) ? $signed({s17, 1'b0}) : $signed({s17[16], s17});
+endfunction
 always_comb
     for (int l = 0; l < LANES; l++) begin
         s_n[l] = (NP == 2 && b1) ? s_hi[l] : qa[l];
         t_n[l] = (NP == 2 && b1) ? t_hi[l] : tv[l];
-        p_n[l] = $signed({s_sgn & s_n[l][15], s_n[l]}) * $signed({t_sgn & t_n[l][15], t_n[l]});
+        p_n[l] = mul_s(fn_m, s_sgn, s_n[l]) * $signed({t_sgn & t_n[l][15], t_n[l]});
     end
 // (MULW) the upper lanes' products, for a multiply
-logic signed [33:0] pm_n [LANES], pm_r [LANES];
+logic signed [34:0] pm_n [LANES], pm_r [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
         logic [15:0] sm, tm;
         sm = qa[((LANES + l) & 7)]; tm = tv[((LANES + l) & 7)];
-        pm_n[l] = 34'sd0;
-        if (MW) pm_n[l] = $signed({s_sgn & sm[15], sm}) * $signed({t_sgn & tm[15], tm});
+        pm_n[l] = 35'sd0;
+        if (MW) pm_n[l] = mul_s(fn_m, s_sgn, sm) * $signed({t_sgn & tm[15], tm});
     end
 
 // EX's registers: the pass, its operands and products, the instruction's fields
@@ -467,7 +468,7 @@ logic [3:0]         x_ve;
 logic [4:0]         x_vdn;
 logic [2:0]         x_de;
 logic [15:0]        s_r [LANES], t_r [LANES];
-logic signed [33:0] p_r [LANES];
+logic signed [34:0] p_r [LANES];
 logic [15:0]        hold [8];                 // the earlier pass's results
 lane_t ex [LANES];
 always_comb
