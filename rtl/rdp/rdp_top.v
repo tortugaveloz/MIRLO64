@@ -808,17 +808,25 @@ module rdp_top (
     wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
     wire        ax_stp = st == S_AASUB && !aa_j[2];
     integer ci;
+    // The shade and W (cur[0..3], cur[6]) step by a DaDx whose low five bits are 0 (adx, above: only Z's are whole), and the pixel
+    // pipeline reads the shade from bit 14 up and W from bit 16: the low five bits of those cur[] cannot carry into the bits above
+    // and nothing reads them. They are made 0 at the load (the choice of ci is a constant of the unrolled loop), and the registers,
+    // the adders' bits and adx's are gone. (S and T, cur[4] and cur[5], are a texture rectangle's too, whose steps are whole; Z, cur[7].)
+    function automatic cur_whole;
+        input integer c;
+        cur_whole = c == 4 || c == 5 || c == 7;
+    endfunction
     always @(posedge clk) begin
         if (ax_ldh || ax_stp) ax_h <= (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
         if (ax_ldm || ax_stp) ax_m <= (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
         if (ax_ldl || ax_stp) ax_l <= (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
-                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
+                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? (cur_whole(ci) ? cur_ldv : (cur_ldv & ~32'h1F)) : adx[ci]);
         end
     end
 
-    integer i;
+    integer i, ai;
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
         pix_valid <= 1'b0;
@@ -1064,7 +1072,7 @@ module rdp_top (
                     4'd6: begin vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
                     4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
-                        adx[vi] <= vz ? vgx : {vgx[31:5], 5'd0};
+                        for (ai = 0; ai < 8; ai = ai + 1) if (vi == ai) adx[ai] <= (ai == 7) ? vgx : {vgx[31:5], 5'd0};
                         if (vi < 3'd4) sdy[vi][12:2] <= vhalf[10:0];
                         if (!vz) case (vi)
                             3'd4: ldy_s[16:1] <= vhalf;
