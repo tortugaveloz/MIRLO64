@@ -270,11 +270,12 @@ module rdp_mem (
     // or in the second pass Z's (dropped when no pixel of it passed)
     reg        p1, p2;
     reg [9:0]  p1_idx, p2_idx;
-    reg [117:0] rf [0:3];                 // {old hidden word, word (10), zdata (36), cdata (36), zmask, cmask}
+    reg [79:0] rf [0:3];                  // {old hidden word, word (10), the pass's data (36), the pass's mask}: the colour pass's, or the second pass's depth
+                                          // (w_pz only changes with the FIFO empty)
     reg [2:0]  rf_wr, rf_rd;
     wire [2:0] rf_cnt = rf_wr - rf_rd;
     wire       rf_room = ({1'b0, rf_cnt} + {3'd0, p1} + {3'd0, p2}) < 4'd4;
-    wire [117:0] rf_head = rf[rf_rd[1:0]];
+    wire [79:0] rf_head = rf[rf_rd[1:0]];
     reg [1:0]  h_ph;                      // the head's commands done: 0 none, 1 its word's (its group's hidden word is next)
     reg [31:0] hacc;                      // the group's hidden word so far (the head's merged in at its pop)
     reg [3:0]  hbe;                       // a fill: the quads touched so far
@@ -303,16 +304,16 @@ module rdp_mem (
                           {2{(xe + 11'd1) >= {1'b0, w_x0} && (xe + 11'd1) < w_x1}} };
         end
     endfunction
-    wire [31:0] h_hold  = rf_head[117:86];
-    wire [9:0]  h_idx   = rf_head[85:76];
-    wire [35:0] h_zd36  = rf_head[75:40];
-    wire [35:0] h_cd36  = rf_head[39:4];
+    wire [31:0] h_hold  = rf_head[79:48];
+    wire [9:0]  h_idx   = rf_head[47:38];
+    wire [35:0] h_zd36  = rf_head[37:2];       // (the pass's: only the pass's own is read)
+    wire [35:0] h_cd36  = rf_head[37:2];
     // (the depth word: {depth 16, hidden 2} x 2, as the colour word's lanes)
     wire [31:0] h_zdata = {h_zd36[35:20], h_zd36[17:2]};
     // the colour word: two 16-bit pixels, or a 32-bit image's R G B with the coverage in the alpha byte's top three bits
     // (rdp_top lays its entry out so: R G in [35:20], B and the alpha byte in [17:2])
     wire [31:0] h_cdata = {h_cd36[35:20], h_cd36[17:2]};
-    wire [1:0]  h_zmask = rf_head[3:2];
+    wire [1:0]  h_zmask = rf_head[1:0];
     wire [1:0]  h_cmask = rf_head[1:0];
     // (a 32-bit colour word is a pixel of the span: all four bytes by its pass bit, the entry's bit 19)
     wire [3:0]  h_range = w_wide ? 4'hF : range_sel(h_idx[8:0]);
@@ -390,8 +391,7 @@ module rdp_mem (
                     m_cmd_we <= 1'b1;
                     m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_wa[20:3], 2'b00} : {h_wa, 2'b00};
                     wf[wf_wr[WF-1:0]] <= (h_c && w_c8) ? {h_c8be, h_c8d}
-                                       : h_c ? {h_csel, w_fc ? w_fillc : h_cdata}
-                                       : h_zz ? {h_zsel, h_zdata}
+                                       : (h_c || h_zz) ? {h_sel, (h_c && w_fc) ? w_fillc : h_cdata}     // (h_cdata is h_zdata: the pass's word)
                                        : {w_fillm ? h_qbe : 4'hF, h_merge};
                     wf_wr <= wf_wr + 1'b1;
                 end
@@ -544,7 +544,7 @@ module rdp_mem (
                 p2 <= p1;
                 p2_idx <= p1_idx;
                 if (p2) begin
-                    rf[rf_wr[1:0]] <= {hlbr_data, p2_idx, lbr_zdata, lbr_cdata, lbr_zmask, lbr_cmask};
+                    rf[rf_wr[1:0]] <= {hlbr_data, p2_idx, w_pz ? lbr_zdata : lbr_cdata, w_pz ? lbr_zmask : lbr_cmask};
                     rf_wr <= rf_wr + 3'd1;
                 end
                 // the next word, when its results are in
