@@ -275,6 +275,10 @@ agree; what is left is in docs/rdp_exact.md, "What is left".
   are 12 bits of whole pixels; an edge past 2047 counts as crossed and the
   row is not drawn; the model draws it. test_lod.c's floor has such rows (229
   to 239, the 3,520 pixels of `floor_affine`).
+* **A fill rectangle into an image of an odd width** (`streams/fill_odd_width.rdps`, from one game's page-turn
+  task dumps): the fill colour's half a pixel takes is the memory halfword's (the oracle: the bit 0 of the
+  halfword's address, image base and pixel index together); the model took the column's parity, so every second row of
+  such an image came out with its halves swapped (fixed; it showed only with a fill colour of two different halves).
 * **A fill rectangle at the scissor's right edge**
   (`streams/fill_scissor_edge.rdps`, from one game's first captured task): in fill mode the console
   fills the scissor's last column (XL = 311 with the scissor's XL 311); the

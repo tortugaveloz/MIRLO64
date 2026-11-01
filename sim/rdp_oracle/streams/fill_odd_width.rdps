@@ -1,0 +1,13 @@
+# A fill rectangle into a 16-bit colour image whose width (289) is odd: its odd rows start on the odd halfword of a memory
+# word, and the fill colour's half a pixel takes is the memory halfword's (the address's bit 1), not the column's: the
+# oracle's first pixel of a row of that kind is the colour's low half. The model took the column's parity (every other
+# row's halves swapped); the RTL left the last pixel of those rows out and shifted them by one pixel.
+rdram zero
+cmd 3f100120 00100000
+cmd 2d000000 00484268
+cmd 2f300000 00000000
+cmd 37000000 f80107c1
+cmd 36484268 00000000
+cmd 37000000 1234cdef
+cmd 36200100 00400048
+cmd 29000000 00000000
