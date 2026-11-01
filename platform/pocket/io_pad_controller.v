@@ -68,10 +68,9 @@ synch_3 s01(pad_1wire, pad_1wire_s, clk, pad_1wire_r, pad_1wire_f);
 
     reg [20:0]  rx_timeout; // ~28ms
 
-    reg [15:0]  auto_poll_cnt; // 882us
     reg         auto_poll_queue;
 
-    reg [18:0]  heartbeat_cnt; // 7ms
+    reg [18:0]  heartbeat_cnt; // 7ms; its low 16 bits are the poll timer, 882us (both counted from the start, each clock)
     reg         heartbeat_queue;
 
 
@@ -89,7 +88,6 @@ always @(posedge clk) begin
     tx_word_start <= 0;
     pad_we <= 0;
 
-    auto_poll_cnt <= auto_poll_cnt + 1'b1;
     heartbeat_cnt <= heartbeat_cnt + 1'b1;
 
     // increment rx timeout, override and reset when idle below
@@ -169,7 +167,7 @@ always @(posedge clk) begin
     endcase
 
 
-    if(&auto_poll_cnt) begin
+    if(&heartbeat_cnt[15:0]) begin
         auto_poll_queue <= 1;
     end
     if(&heartbeat_cnt) begin
