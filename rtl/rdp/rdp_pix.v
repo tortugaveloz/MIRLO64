@@ -303,9 +303,7 @@ module rdp_pix (
     wire [8:0] sb9 = sh_x(in_b, sh_dx[38:26], sh_dy[38:26], ox4, oy4), sa9 = sh_x(in_a, sh_dx[51:39], sh_dy[51:39], ox4, oy4);
     // Z moves the same way: 22 bits of the attribute >> 10 (4 times) plus ox * (DzDx >> 10) + oy * (DzDy >> 10), then >> 5
     wire signed [21:0] zdx22 = $signed(z_dx[31:10]), zdy22 = $signed(z_dy[31:10]);
-    wire signed [24:0] zcx = (ox4[0] ? zdx22 : 22'sd0) + (ox4[1] ? (zdx22 <<< 1) : 23'sd0);
-    wire signed [24:0] zcy = (oy4[0] ? zdy22 : 22'sd0) + (oy4[1] ? (zdy22 <<< 1) : 23'sd0);
-    wire signed [24:0] zcorr = zcx + zcy;
+    wire signed [24:0] zcorr = $signed({1'b0, ox4}) * zdx22 + $signed({1'b0, oy4}) * zdy22;     // (DSP blocks)
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
                       + in_mask[4] + in_mask[5] + in_mask[6] + in_mask[7];
     reg  [31:0] z0r;
