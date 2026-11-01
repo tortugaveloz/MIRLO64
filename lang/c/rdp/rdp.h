@@ -146,7 +146,8 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  * what the word keeps; "within dz" is the primitive's depth step, and no less
  * than what a word of a near depth has lost.
  * The memory's dz is not kept: with Z_CMP the blender's coverage
- * shifts are 0 (the N64: the difference of the two dz encodings). */
+ * shifts are 0 (the N64: the difference of the two dz encodings). With RDP_X_MEMDZ it is: the word's two low bits
+ * and two hidden bits of the depth image (the hidden plane below). */
 #if defined(RDP_N64) && !defined(RDP_NO_BLEND)
 #define RDP_CVG 1
 #endif
@@ -157,7 +158,8 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  * << 2) -- 1 MiB for the 8 MiB (the SoC: SDRAM 0x0370_0000, below the RDRAM;
  * rtl/soc/mirlo_mips.sv maps the RDP's address bit 23 there). Every pixel
  * written writes its two; a fill rectangle those of each 4-pixel quad it
- * touches, {a, a} by its colour's bit 0. */
+ * touches, {a, a} by its colour's bit 0. With RDP_X_MEMDZ the depth image has its own two hidden bits a pixel (the
+ * low two of the dz code), in the same plane at the depth image's addresses. */
 #define RDP_HID_BASE 0x00800000u
 
 /* RDP_N64: the N64's own command stream, as a game's microcode gives it
@@ -180,6 +182,10 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  *   RDP_EXACT      the console's rules where the model had its own (docs/rdp_exact.md): its span start and attribute
  *                  steps, its 12-bit edges, rectangles walked as its primitives, copy mode by groups of pixels, TEXEL1
  *                  a pixel ahead, the LOD in 1-cycle and copy mode too. Off, as rtl/rdp does not follow them yet
+ *   RDP_X_*       one of RDP_EXACT's rules by itself, for the benches of an RTL that follows some and not all
+ *                  (RDP_X_RECTLOD: a texture rectangle's LOD next line; RDP_X_SPAN: a triangle's attributes from the major edge's pixel; RDP_X_SHADE: the shade and Z at the first covered sample, the console's dz code; RDP_X_COPY: copy mode by groups of pixels, its
+ *                  texel never clamped; RDP_X_MEMDZ: the depth compare and the blender's coverage weights use the depth image's own dz, whose
+ *                  two low bits are hidden bits written with the depth, in the hidden plane; needs RDP_X_SHADE); RDP_EXACT is all of them
  * (Without RDP_NO_BLEND, RDP_CVG, the model is rtl/rdp's: also the texture
  * level of detail of a 2-cycle primitive, the level's tiles and LOD_FRACTION
  * (rdp.c, docs/lod.md), the console's perspective divide, rdp_n64_div, and

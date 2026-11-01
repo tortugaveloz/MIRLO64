@@ -1,0 +1,22 @@
+# (Not the LOD: docs/rdp_exact.md, rule 8.) The depth image's own dz. As memdz_tolerance, with a first triangle of a plane so steep that its dz
+# code is 14: doubled, for a word of exponent under 3, the memory's dz is 0x8000 (the code's top), and the second triangle's tolerance is 8 << 15.
+rdram zero
+cmd 3f10013f 00100000
+cmd 3e000000 00140000
+cmd 2d000000 005003c0
+cmd 2f300000 00000000
+cmd 3f10013f 00140000
+cmd 37000000 fffcfffc
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3f10013f 00100000
+cmd 37000000 42114211
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3b000000 ffffffff
+cmd 3cffffff ffffff3c
+cmd 2f000cf0 00500a78
+cmd 0d80017a 01740171 005dc78c ffff9a25 005abd37 0000f920 0059650f 00042dfa 00af00fe 003b0087 ffb80003 0015fff9 2b14dbbb 5a5d8d26 d62e2bf4 13511470 ffffffe7 0029fffd 0044ffe4 00150003 787cb2e6 c5923bad b9149cc1 4324f7aa 1287d54a 1cc03647 2ba669d3 0fabdad3
+cmd 2f000cf0 005545f8
+cmd 0d00017b 016d016c 0059d597 00014d43 005cbc26 00007717 005de2fe fff87a73 00e0007b 0043008e 0043ffe1 ffe5ffe9 5fbeae69 d6c2a8a7 7dac72b2 d27add27 ffe20020 002bfff5 ffc2002e 0037ffff 65183604 0208a3e1 ff986c74 2f8ef013 21615bc8 1034ab8c 18894bcb 10ff5a10
+cmd 29000000 00000000

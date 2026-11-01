@@ -1,0 +1,21 @@
+# (Not the LOD: docs/rdp_exact.md, rule 8.) The depth image's own dz. 1-cycle, FORCE_BL, the blender's B the memory's coverage: a shaded,
+# depth-tested, anti-aliased triangle over a depth image just cleared (memory dz code 0). The two weights of the blend shift by the
+# difference of the pixel's dz code and the memory's (up to 4); the model without the rule shifts by 0 with the depth compare on.
+rdram zero
+cmd 3f10013f 00100000
+cmd 3e000000 00140000
+cmd 2d000000 005003c0
+cmd 2f300000 00000000
+cmd 3f10013f 00140000
+cmd 37000000 fffcfffc
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3f10013f 00100000
+cmd 37000000 42114211
+cmd 364fc3bc 00000000
+cmd 27000000 00000000
+cmd 3b000000 ffffffff
+cmd 3cffffff ffffff3c
+cmd 2f000cf0 00554978
+cmd 0d0002c3 02630209 002e9276 00004f3e 0039501c ffffee5c 00398066 ffff8700 00ad006a 00d000e4 fffdfff4 0013ffff da4220b8 08514278 c873b531 b10a41d6 00010000 fffffffc 0000ffff 0000fffc 0fd74055 597cbde4 e8ba791e b4e1b0c9 2796c2f2 0239eb39 ff28502a ff4f968c
+cmd 29000000 00000000

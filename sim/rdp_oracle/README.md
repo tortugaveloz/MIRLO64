@@ -43,8 +43,8 @@ make                  # build/rdpo, build/rdpo_exact, build/rdpgen
 `TRIAGE_DIR=<dir>` (to `run.sh`) finds the captured task dumps somewhere other
 than `build/triage` at the repository's root.
 
-`run.sh` runs every suite through the model without `RDP_EXACT` (`rdpo`) and
-with it (`rdpo_exact`), builds four copies of the model (without
+`run.sh` runs every suite through the model without `RDP_EXACT` (`rdpo`), with
+the rules the RTL follows (`rdpo_x`) and with all of them (`rdpo_exact`), builds four copies of the model (without
 the switch) with one LOD choice changed (the mutants: all of DaDy, `|d|`, the
 walk reversed, no fraction without TEX_LOD) and shows that each differs from
 the oracle, runs `streams/` through both models, and runs the captured task
@@ -57,6 +57,7 @@ In the tools image: `tools/docker/run.sh make -C sim/rdp_oracle B=build/linux`
 | program | what |
 |---|---|
 | `build/rdpo` | the model without `RDP_EXACT`, as the RTL is, and the LOD comparison |
+| `build/rdpo_x` | the model with the rules `rtl/rdp` follows (`XRULES=`, as `sim/rdp/build_rtl.sh`'s `XRULES`): the RTL's differences from the oracle |
 | `build/rdpo_exact` | the model with `RDP_EXACT` (docs/rdp_exact.md), and the LOD comparison |
 | `build/rdpgen SUITE [SEED [N]]` | writes a stream (below) to stdout |
 | `task2rdps.sh DUMP` | a captured graphics task dump (`build/triage/*/dumps`) as a stream, through `sim/rdp/rdp_task` built here |
@@ -124,6 +125,7 @@ pixel of every primitive, drawn or not.
 | `frac2` | the same without TEX_LOD (the combiner reads LOD_FRACTION) |
 | `lod1` | 1-cycle triangles with TEX_LOD (`RDPGEN_LEVEL`, `RDPGEN_DETAIL`, `RDPGEN_TEXLOD` to force) |
 | `rect` | texture rectangles and flipped ones with TEX_LOD, 1- and 2-cycle |
+| `zdz` | the depth image's own dz (docs/rdp_exact.md, rule 8): shaded, anti-aliased, depth-tested 1-cycle triangles drawn over each other at nearly the same depth, on planes of every dz code, in every depth mode, the blender's B the memory's coverage (`RDPGEN_CYC=1` makes them 2-cycle, which is not compared: the two disagree there with or without a depth compare, not followed up). `run.sh` runs 24 primitives a seed |
 
 `run.sh` adds two suites from these: `lod2_t1` (`lod2` with `RDPGEN_CC=5`: the
 second cycle reads TEXEL1, the next pixel's first texel on the console) and
@@ -148,3 +150,11 @@ each says in its header what it shows.
 | `task2rdps.sh` | a task dump as a stream |
 | `run.sh` | all of it |
 | `streams/*.rdps` | the minimal streams |
+
+## The captured tasks
+
+`TRIAGE_DIR=<dir> ./run.sh` (the dumps are `task_gfx_*.bin` anywhere under `<dir>`, not part of this repository) runs
+each through `task2rdps.sh` and the three builds: one TOTAL line a build, the primitives and colour words that
+differ. The numbers in docs/rdp_exact.md ("In short") are of 138 captured tasks. `rdpo -v` says, for
+each differing primitive, how many of its colour words are 1, 2 to 3 or 4 or more steps of a 5-bit
+channel off, which tells a visible difference from a rounding one.

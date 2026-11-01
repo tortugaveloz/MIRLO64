@@ -15,6 +15,9 @@
  *   frac2   the same without TEX_LOD (the combiner reads LOD_FRACTION)
  *   lod1    1-cycle triangles with TEX_LOD
  *   rect    texture rectangles (and flipped ones) with TEX_LOD, 1- and 2-cycle
+ *   zdz     shaded, depth-tested, anti-aliased triangles over each other at nearly the same depth, with slopes of every
+ *           dz code (the memory's dz against the pixel's: the tolerance and the blender's coverage weights), in every
+ *           depth mode, the blender reading the memory's coverage
  *
  * Environment: RDPGEN_LEVEL, RDPGEN_DETAIL, RDPGEN_SHARPEN, RDPGEN_TEXLOD force those fields (lod1: TEX_LOD);
  * RDPGEN_UNTEXTURED=k: one lod2 / frac2 triangle in k without texture coefficients (8; 0 none). RDPGEN_EXACT=1 keeps triangles on whole pixels with a vertical
@@ -270,7 +273,7 @@ static int env_int(const char *n, int dflt) { const char *v = getenv(n); return 
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: rdpgen cal|units|floor|lod2|frac2|lod1|rect [seed [n]]\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: rdpgen cal|units|floor|lod2|frac2|lod1|rect|zdz [seed [n]]\n"); return 2; }
     const char *suite = argv[1];
     unsigned seed = argc > 2 ? (unsigned)strtoul(argv[2], 0, 0) : 1;
     int nprim = argc > 3 ? atoi(argv[3]) : 12;
@@ -351,6 +354,50 @@ int main(int argc, char **argv)
 
     int is_cal = !strcmp(suite, "cal"), is_lod2 = !strcmp(suite, "lod2"), is_frac2 = !strcmp(suite, "frac2");
     int is_lod1 = !strcmp(suite, "lod1"), is_rect = !strcmp(suite, "rect");
+    if (!strcmp(suite, "zdz")) {
+        /* a scene is a plane z0 + gx x + gy y (slopes of 2^-1 to 2^13 a pixel, so that every dz code turns up) drawn as a triangle,
+         * then over it triangles of a plane at a depth within a few of the first's tolerance (its dz code 2^k): which of the two
+         * dz codes the compare and the blender go by, and where the depth word's exponent is under 3, is what differs */
+        setup(1);
+        cmd(2, 0x3B000000u, 0xFFFFFFFFu);
+        const int zcyc = env_int("RDPGEN_CYC", 0);          /* 1: 2-cycle (the combiner is LOD_FRACTION's, untextured: the blender is what matters) */
+        if (zcyc) combiner2(1); else combiner1(5);
+        for (int i = 0; i < nprim;) {
+            double cx = rf(40, W - 40), cy = rf(40, H - 40), sz = rf(8, 50);
+            double z0 = rn(3) ? rf(100, 24000) : rf(24000, 32700);
+            double gx = exp(rf(log(0.5), log(9000.0))) * (rn(2) ? 1 : -1), gy = exp(rf(log(0.5), log(9000.0))) * (rn(2) ? 1 : -1);
+            if (rn(4) == 0) gy = gx * rf(-1, 1);
+            if (rn(6) == 0) { sz = rf(1.5, 3.5); gx = rf(6000, 9000) * (rn(2) ? 1 : -1); gy = rf(6000, 9000) * (rn(2) ? 1 : -1); z0 = rf(8000, 24000); }   /* the dz code at the top (coplanar) */
+            int nover = 1 + (int)rn(4);
+            for (int j = 0; j <= nover && i < nprim; j++, i++) {
+                unsigned zmode = rn(4), dst = rn(4), force;
+                unsigned lo = 1u << 3 | 1u << 4 | 1u << 5 | 1u << 6 | zmode << 10 | dst << 8 | ((force = rn(2)) ? 1u << 14 : 0u) | (rn(6) == 0 ? 1u << 7 : 0u);
+                /* the blender: with FORCE_BL the pixel and the memory by the memory's coverage, whose weights the dz codes shift; else (the
+                 * model's divider is the console's where the weights add up to 32) the pixel and the memory by 1 - A: which pixels blend
+                 * is what the tolerance decides */
+                lo |= force ? 0x00550000u : 0x00500000u;
+                if (rn(6) == 0) {      /* the primitive depth, flat, and its delta: the dz code is the OR of the places of the set bits of the delta */
+                    lo |= 1u << 2;
+                    cmd(2, 0x2E000000u, (z0 > 32767 ? 32767u : (unsigned)z0) << 16 | (rn(2) ? 1u << rn(16) : rr() & (0xFFFFu >> rn(16))));
+                }
+                cmd(2, 0x2F000000u | modes_h(zcyc, 0, 0, 0, 0, 0), lo);
+                double dz = j ? exp2(floor(rf(0, 14))) * (rn(2) ? 1.0 : -1.0) * (rn(3) ? rf(0.6, 1.7) : 0.0) : 0.0;
+                double ngx = gx, ngy = gy;
+                if (j && rn(3) == 0) { ngx = exp(rf(log(0.5), log(9000.0))) * (rn(2) ? 1 : -1); ngy = exp(rf(log(0.5), log(9000.0))) * (rn(2) ? 1 : -1); }
+                vtx_t p[3];
+                for (int k = 0; k < 3; k++) {
+                    double x = cx + rf(-sz, sz), y = cy + rf(-sz, sz);
+                    vtx_t v = vtx(x, y, 0, 0, 1);
+                    v.z = z0 + dz + ngx * (x - cx) + ngy * (y - cy);
+                    v.z = v.z < 0 ? 0 : v.z > 32767 ? 32767 : v.z;
+                    p[k] = v;
+                }
+                tri(p[0], p[1], p[2], 5, 0, 0, 0);
+            }
+        }
+        cmd(2, 0x29000000u, 0);
+        return 0;
+    }
     if (!(is_cal || is_lod2 || is_frac2 || is_lod1 || is_rect)) { fprintf(stderr, "unknown suite %s\n", suite); return 2; }
     setup(1);
     random_textures();
