@@ -268,7 +268,12 @@ ROM). Independent computations start every cycle. With `MIRLO_RSP_LANES=4`
 (some 220 ALMs fewer, and about 8 % more of a graphics or audio task's
 cycles) it covers the same eight elements with 4 lanes, as follows.
 
-A lane is one signed 17 x 17 multiplier, one 16-bit adder / subtractor that
+A lane is one signed multiplier (18 x 17: the s operand is doubled in front of
+it for VMULF, VMULU, VMACF and VMACU, whose product goes into the accumulator
+shifted up one, and the accumulator's term from the product is then one of
+three alignments: as it is, its high half (VMUDL, VMADL) or shifted up 16
+(VMUDH, VMADH); VSAR, which reads the accumulator through the same adder, has
+s forced to 0), one 16-bit adder / subtractor that
 serves every add, subtract, compare and clip, the 48-bit accumulator adder,
 the clamps and the flag logic (`lane_ex`). The unit has four of them. Next to
 the four lanes stand four multiply-accumulate units (`lane_mul`): a
@@ -332,7 +337,11 @@ that is still busy:
 The register file has one write port. When the last pass's write would fall
 in the cycle a load writes its register, the load has the port and vd is
 written one cycle later, whole, from `hold`; a single-element write (a
-reciprocal, VMOV) waits a cycle instead.
+reciprocal, VMOV) waits a cycle instead. With eight lanes the write's data is
+the OR of what each writer brings, each of them 0 when it is not its cycle:
+the lanes' result (masked by one signal), `hold` (which loads only when a
+write is put off and is cleared otherwise), a load's bytes, and one 16-bit
+word, MTC2's or a reciprocal's, for every lane.
 
 ### Reciprocals
 
