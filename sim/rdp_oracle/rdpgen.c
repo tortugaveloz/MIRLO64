@@ -376,6 +376,10 @@ int main(int argc, char **argv)
                  * model's divider is the console's where the weights add up to 32) the pixel and the memory by 1 - A: which pixels blend
                  * is what the tolerance decides */
                 lo |= force ? 0x00550000u : 0x00500000u;
+                if (rn(6) == 0) {      /* the primitive depth, flat, and its delta: the dz code is the OR of the places of the set bits of the delta */
+                    lo |= 1u << 2;
+                    cmd(2, 0x2E000000u, (z0 > 32767 ? 32767u : (unsigned)z0) << 16 | (rn(2) ? 1u << rn(16) : rr() & (0xFFFFu >> rn(16))));
+                }
                 cmd(2, 0x2F000000u | modes_h(zcyc, 0, 0, 0, 0, 0), lo);
                 double dz = j ? exp2(floor(rf(0, 14))) * (rn(2) ? 1.0 : -1.0) * (rn(3) ? rf(0.6, 1.7) : 0.0) : 0.0;
                 double ngx = gx, ngy = gy;

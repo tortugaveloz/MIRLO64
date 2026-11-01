@@ -12,8 +12,8 @@ benches can follow the ones the RTL has and no more:
 
 | what | where |
 |---|---|
-| the rules, one switch each | `RDP_X_RECTLOD` (rule 2), `RDP_X_COPY` (rule 6's copy mode), `RDP_X_SHADE` (rule 4's pixel side), `RDP_X_SPAN` (rule 4's span start). `sim/rdp/build_rtl.sh` builds the model with the ones `rtl/rdp` follows (`XRULES=` to change them); the oracle's `rdpo_x` is that model |
-| all the rules | `RDP_EXACT`, with `RDP_N64`: the four above and the rest (the walk's edges and spans, rectangles as primitives, the LOD in 1-cycle mode, TEXEL1 a pixel ahead). Off by default |
+| the rules, one switch each | `RDP_X_RECTLOD` (rule 2), `RDP_X_COPY` (rule 6's copy mode), `RDP_X_SHADE` (rule 4's pixel side), `RDP_X_SPAN` (rule 4's span start), `RDP_X_MEMDZ` (rule 8; needs `RDP_X_SHADE`). `sim/rdp/build_rtl.sh` builds the model with the ones `rtl/rdp` follows (`XRULES=` to change them); the oracle's `rdpo_x` is that model |
+| all the rules | `RDP_EXACT`, with `RDP_N64`: the five above and the rest (the walk's edges and spans, rectangles as primitives, the LOD in 1-cycle mode, TEXEL1 a pixel ahead). Off by default |
 | the console's perspective divide | rule 1, the model's whatever the switch, as `rtl/rdp` has it: `rdp_n64_div` in `rdp.c` (declared in `rdp.h`), and `n64_persp` (static) for the texel |
 | a frame | `make rdp_task EXACT=1` in `sim/rdp` |
 | the comparison | `sim/rdp_oracle`: `make` builds `build/rdpo` (no switch), `build/rdpo_x` (the rules the RTL follows) and `build/rdpo_exact` (`RDP_EXACT`); `./run.sh 50` runs them on every suite, the minimal streams and the captured dumps |
@@ -23,14 +23,13 @@ Without a switch the model is as it was.
 
 ## In short
 
-`rtl/rdp` follows rules 1, 2, 5 and 4 whole (the pixel side and the span's start), the copy mode
-of rule 6, and the CVG_X_ALPHA write rule; it does not follow the rest of rule 6 (edges, spans,
-rectangles as primitives), rule 3 (the LOD in 1-cycle and copy mode) or rule 7 (TEXEL1 a pixel
-ahead), nor the depth compare's use of the depth image's own dz ("What is left"). The benches
-build the model with the rules the RTL follows, so `rdp_regress.sh` passes.
+`rtl/rdp` follows rules 1, 2, 5, 4 whole (the pixel side and the span's start) and 8 (the depth image's
+own dz), the copy mode of rule 6, and the CVG_X_ALPHA write rule; it does not follow the rest of rule 6 (edges,
+spans, rectangles as primitives), rule 3 (the LOD in 1-cycle and copy mode) or rule 7 (TEXEL1 a pixel
+ahead). The benches build the model with the rules the RTL follows, so `rdp_regress.sh` passes.
 
-With `RDP_EXACT` the model agrees with the oracle on every suite of `run.sh 50` (25 suites: 528
-calibration primitives, 9,825 random ones and 176 in the worked-step and floor streams; 5.48
+With `RDP_EXACT` the model agrees with the oracle on every suite of `run.sh 50` (26 suites: 528
+calibration primitives, 11,131 random ones and 176 in the worked-step and floor streams; 5.48
 million pixels drawn with an LOD, each with the oracle's inputs and result) and on all the minimal
 streams. On the 138 captured tasks measured for the numbers below (92,498 primitives, 34.8 million
 pixels drawn) the model differs from the oracle, by rule:
@@ -40,13 +39,16 @@ pixels drawn) the model differs from the oracle, by rule:
 | no rule (what the RTL was) | 51,889 | 383,878 |
 | rules 2 and 6's copy mode (no task draws a rectangle in copy mode that they change) | 51,889 | 383,878 |
 | and rule 4's pixel side (the shade, Z, the dz code) | 37,558 | 279,995 |
-| and rule 4's span start (what the RTL is) | 15,745 | 218,324 |
-| `RDP_EXACT` | 15,734 | 218,372 |
+| and rule 4's span start | 15,745 | 218,324 |
+| and rule 8, the depth image's own dz (what the RTL is) | 38 | 153,707 |
+| `RDP_EXACT` | 27 | 153,755 |
 
-(153,755 of the colour words are 27 primitives drawn with the noise dither, whose random numbers
-are each side's own: they differ whatever the rules.) What is left, 15.7 thousand primitives and 64.6
-thousand colour words (0.19 % of the pixels, 13 thousand of them four or more steps of a 5-bit channel off),
-is one thing: the depth compare's and the blender's use of the depth image's own dz, below.
+(The colour words are nearly all 27 primitives drawn with the noise dither, whose random numbers
+are each side's own: they differ whatever the rules.) Rule 8 took away 15.7 thousand primitives
+and 64.6 thousand colour words (0.19 % of the pixels; 13,060 of them four or more steps of a 5-bit channel off, 33,746 two or three,
+171,518 one, before; the noise's included), the depth compare's and the blender's use of the depth image's own dz. What is left
+is the noise dither's 27 primitives and 11 fill rectangles of no area (XH = XL = 312, one row), a pixel each that the
+RTL draws and the console does not (one colour word each, four or more steps off; rule 6, rectangles as primitives, which `RDP_EXACT` draws as the oracle does).
 
 On the suites of `run.sh 50` (colour words that differ; the model with no rule, with the rules the RTL follows, with all):
 
@@ -59,6 +61,7 @@ On the suites of `run.sh 50` (colour words that differ; the model with no rule, 
 | floor, floor_affine (rows past 2,048 pixels) | 10,856, 3,520 | 10,560, 3,520 | 0 |
 | rect (rectangles with the LOD) | 76,359 | 75,975 | 0 |
 | lod1 (the LOD in 1-cycle mode) | 849,469 | 842,687 | 0 |
+| zdz (the depth image's own dz: 1,300 primitives) | 106,113 | 0 | 0 |
 
 ## The rules
 
@@ -190,7 +193,7 @@ DaDx is large, the shade by an LSB, the depth by a few.
 **With it**: `x_row` (the span start), `draw_triangle_x` (the walk), and in
 `draw_pixel_cvg` the coverage correction of the shade and Z, the 9-bit shade,
 the 19-bit Z and the dz code (`x_dzpix`, `x_dzcomp`). The model's own dz code
-keeps serving its depth compare and blender shifts (see "What is left").
+keeps serving its depth compare and blender shifts until rule 8.
 
 **RTL**: done, in two parts, each with a model switch.
 
@@ -201,7 +204,7 @@ keeps serving its depth compare and blender shifts (see "What is left").
   (`z_dx`, `z_dy` >> 10) with the 19-bit wrap; the products of two bits are shifts and adds (the first version's
   `*` took eight DSP blocks and missed timing by up to 0.6 ns). The depth word's dz code is the
   console's: the place of the top set bit of |DzDx| + |DzDy| of the integer halves, plus 1
-  (`dzc_p`); the model's own code keeps serving the compare and the blender's shifts.
+  (`dzc_p`); the compare and the blender's shifts use it from rule 8 on.
 * The span's start (`RDP_X_SPAN`; `rdp_top.v` S_AASUB, S_VSET, S_SETUP): the walker's major edge
   `ax_h` is captured on the subscanline the attributes are taken on (`unscrx`, `xfrac`); `dif_ram` has an
   attribute's 3/4 of DaDe - DaDy (0 when the edge does not lean away from the walk), made as DaDy is
@@ -343,6 +346,49 @@ before (its texel held). The span's end needs one texel more (the point after
 the span, in the next row's LOD tile): `rdp_top.v` issues a ghost pixel there,
 as it does for the LOD. About 100 to 200 ALUTs and 80 to 120 flip-flops.
 
+### 8. The depth image's own dz
+
+**The console** writes with each depth the pixel's dz code (rule 4: four bits, the place of the top bit of
+|DzDx| + |DzDy| of the integer halves, plus 1; for the primitive depth, the OR of the places of the set bits of
+SET_PRIM_DEPTH's delta). The code's top two bits are the depth word's two low bits; its low two are the depth
+image's two hidden bits, in the hidden plane at the depth image's addresses. A depth compare reads the code back:
+
+* the tolerance is the larger power of 2 of the pixel's dz and the memory's (1 << its code; for a word of exponent
+  under 3 the memory's is doubled and no less than 16 >> exponent, and a memory dz of 0x8000 is coplanar), times 8:
+  `nearer` is the depth less the tolerance at most the memory's, `farther` the depth plus it at least the memory's,
+  for opaque, decal, the blend enable and the interpenetrating coverage (its shift is the tolerance's exponent);
+* with the memory's coverage as the blender's B, the two weights shift by the difference of the two codes, up to 4: A by the
+  pixel's less the memory's, B by the memory's less the pixel's (without Z_CMP, B by the pixel's own: 4 under 11, else 15 less the code).
+
+**Without the switch** the model keeps the top two bits of the code in the word, none in the plane, and reads none back: its
+tolerance is the pixel's step alone (its own units, 16-bit with the two low bits set) and no less than what a word of exponent
+0 to 2 has lost, the shifts 0 with Z_CMP, and its own dz code (3 higher) serves the shift without Z_CMP and the interpenetrating coverage's.
+
+**With it** (`RDP_X_MEMDZ`, which needs `RDP_X_SHADE`): `draw_pixel_cvg` reads the memory's code (`rawdz`, with `hid_get` at the depth
+address), takes the tolerance's exponent `texp` and the two shifts from it, and writes the pixel's code with its depth (`ZHID_SET`:
+`hid_set` of the code's low two bits); the code is rule 4's (`dzst`), and the model's own serves nothing any more.
+
+**RTL**: done.
+
+* `rdp_pix.v`: the depth image's hidden pair is read at P9 from a raw hidden buffer of its own beside the colour's (`hz_raddr`,
+  the group arithmetic from a row base `rzb` of the depth image, as `hw8b` from `rwb`) and registered at P10 (`hidz10`). From it and the
+  depth word's two low bits (`rawdz10`), at P10: the tolerance's exponent `texp10` (the memory's, doubled and floored by the word's exponent, or
+  as it is, against the pixel's `dzhbp`) and the two shifts `bsa10`, `bsb10`; `texp` is decoded and added to the depth at P11a in place of
+  the primitive's step and the 7 flip-flops of the word's floor, and is the interpenetrating shift (it was static); the shifts travel with
+  the pixel to the blender's two stages (30 flip-flops). The pixel's code is static: `dzenc` (the four bits `dzc_p` of `rdp_top.v`, or the primitive
+  depth's), `dzhbp` the place its tolerance goes by. The old `z_tol` path (a priority encoder over the primitive's step, `zt_m` in `rdp_top.v`) is gone.
+* `rdp_mem.v`: the read engine asks for the depth span's hidden groups after the colour span's, in the same phase, before the words (`rd_hz`; when the
+  colour image has none, for a 32-bit image, the depth span's start the clock after the request is taken; the depth span's first and last group are made from
+  the registered base with two small adders); the write engine's depth pass writes each group's hidden word back as the colour pass does, merged
+  from the new depth buffer's lanes, now {depth word 16, hidden 2} (36 bits, the same four block RAMs) with the colour pass's merge logic: the
+  pass selects its lanes and hidden bits (`h_sel`, `h_nhid`) and its image's base. The raw hidden buffers: `hrawz`, the pixels' copy of the depth image's,
+  and the write engine's copy twice as deep (`hraw1`, the depth image's groups in its upper half): three block RAMs more.
+* `rdp_top.v`: `rq_hz` (a span reads the depth image's groups when it has Z_CMP or Z_UPD), `rzb`, and `rq_half`: the second half of a 32-bit image's
+  span of more than 512 pixels waits for the first half's write when the two share a hidden group (the colour image has no hidden bits there; the
+  depth image's has).
+* Benches: `TB_ZDZ=1` streams in `rdp_regress.sh` (also with the SDRAM's timing, a width whose rows share groups, and 32-bit images); with the model built
+  without the rule every one of them fails. Cost and cycles: below.
+
 ## The numbers, rule by rule
 
 (The suites' columns are from `run.sh 50`; the "captured dumps" rows are from the first comparison, on 79 captured tasks,
@@ -394,7 +440,8 @@ attribute rounding, 0 with rule 4), `texrect_next_line` (224; rule 2),
 `lod1_levels`, `lod1_detail_level0`, `lod1_fraction` (160 each) and
 `copy_detail` (4; rule 3), `untextured_persp` (800; rule 5), `edge_2048`
 (3,100 colour and 3,100 coverage words) and `fill_scissor_edge` (199; rule 6),
-`cycle2_texel1` (120; rule 7). No rule raises the dumps' count.
+`cycle2_texel1` (120; rule 7), `memdz_weights` (256 colour and 256 depth words), `memdz_tolerance` (388 colour, 12 coverage and 370 depth),
+`memdz_floor` (66 colour, 1,060 depth) and `memdz_coplanar` (8 colour, 3 coverage, 10 depth; rule 8). No rule raises the dumps' count.
 
 Notes:
 
@@ -417,21 +464,15 @@ Notes:
 the rules `rtl/rdp` follows (`rdpo_x`): the suites that use the walk's edges and spans, rectangles as
 primitives, the 1-cycle LOD and TEXEL1 a pixel ahead still differ (`run.sh`'s `rdpo_x` lines).
 
-**The captured tasks**: the table above. What the RTL still differs in, 15.7 thousand primitives of 138 tasks, is
-the depth compare's use of the depth image's own dz, and nothing else (every differing primitive is
-AA_EN, Z_CMP, IM_RD, opaque, and the model with `RDP_EXACT` differs in the same primitives). The console's depth compare reads
-the depth image's own dz: its code is the depth word's two low bits and the word's two hidden bits
-(which the console writes with the depth); the tolerance is the larger power of two of the pixel's dz
-and that memory dz (the memory's doubled and no less than 16 >> exponent for exponents under 3,
-coplanar when it is 0x8000), times 8; and when the blender's B is the memory coverage, its two
-weights are shifted by the difference of the two dz codes (up to 4). The model keeps no memory dz (its
-own documented simplification, `rdp.h`): its tolerance is the pixel's step alone and the shifts 0 with Z_CMP.
-Following it, the RDP would write the depth image's hidden bits and read them back (`rtl/rdp/rdp_mem.v` and the
-hidden plane: a copy of the colour image's path for the depth span, one more block RAM, some 200 to 300
-ALMs and a word of the hidden plane read and written for each 16 pixels of a depth span), a change of
-the memory traffic as much as of the logic: not done.
+**The captured tasks**: the table above. What the RTL still differs in, 38 primitives of 138 tasks, is the noise dither's
+(27 primitives: each side has its own random numbers, so they differ whatever the rules) and 11 fill rectangles of no area
+(rule 6, rectangles as the console's primitives: below). The depth compare's and the blender's use of the depth image's own
+dz, the one thing left of the 15.7 thousand primitives that differed (every one AA_EN, Z_CMP, IM_RD, opaque), is rule 8, done. One
+case of it is not followed: with the memory's coverage as B in the first blender cycle of a 2-cycle pixel, the console shifts the weights by the
+pixel before's memory dz (and the code of this pixel), here the pixel's own; no captured task blends so, and the
+comparison does not reach it (the `zdz` suite is 1-cycle).
 
-**Not followed, not seen on any captured task**: rule 3 (the LOD in 1-cycle and copy mode), rule 7
+**Not followed, not seen on any captured task** (but for the 11 fill rectangles above): rule 3 (the LOD in 1-cycle and copy mode), rule 7
 (TEXEL1 a pixel ahead; no task's second combiner cycle reads TEXEL1, no 1-cycle combiner either), the walk's
 edges and spans of rule 6 (a row with an edge past 2,047 pixels; the 12-bit wrap of a scissored
 span's count of pixels), rectangles as the console's primitives (partial coverage at a fractional
@@ -440,7 +481,7 @@ that the model with `RDP_EXACT` draws as the oracle does and the RTL does not (`
 
 Not covered by the comparison, so not known to agree: YUV textures, dithering
 and the noise (each side has its own generator), 32-bit colour images,
-the blender beyond passing the pixel in most streams, the alpha compare in
+the blender beyond passing the pixel in most streams (the `zdz` suite blends in 1-cycle mode, with weights the model's divider is the console's for), the alpha compare in
 2-cycle mode (the oracle's structure takes it from the next pixel's first cycle, and the blender's
 shade alpha likewise; no stream turns the compare on in 2-cycle mode), copy mode of a 4-, 8- or 32-bit
 texture without the TLUT (the console copies TMEM's raw bits, two 8-bit texels a pixel; the model and
@@ -457,6 +498,7 @@ the perspective divide with W = 0, as on the console; untested).
 | 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | not done | doc: 100 to 160, 100 FFs |
 | 4 attributes: the pixel side, dz code | `rdp_pix.v` P0, `rdp_top.v` S_VSET | done | see docs/rdp.md "Resources" |
 | 4 attributes: the span's start | `rdp_top.v` S_AASUB, S_VSET, S_SETUP | done | |
+| 8 the depth image's own dz | `rdp_pix.v` P10 to P11b, `rdp_mem.v` hidden phase and depth pass, `rdp_top.v` `rq_hz`, `rzb` | done | ALMS |
 | 5 untextured PERSP | `rdp_pix.v` P4 | done | |
 | 6 edges, rows, spans | `rdp_top.v` AA walker, S_AASPAN, S_PIX | not done (field mode, the CVG_X_ALPHA write rule, fill and copy rectangles at the scissor's edge are) | about even |
 | 6 rectangles as primitives | `rdp_top.v` the rectangle path | not done | about even |

@@ -1045,3 +1045,49 @@ with the rules 17,788 / 18,094 / 17,833 (+532 on average: more than the unit's +
 placing). Fifteen seeds with the rules: 17,786 to 18,125 ALMs; the 128 timing lines are all at or above 0 on four of them (7, 10, 14 and 15; 17,841
 to 18,063 ALMs) and miss by 0.001 to 0.5 ns on the others, in the CPU's 93.75 MHz domain or in `clk_sys`; main misses on two of its seeds 1 to 3
 (-0.001 and -0.129 ns). (Seeds 1, 2, 4, 5, 9 and 13 miss in the CPU's domain only; seeds 3, 6 and 8 in `clk_sys` by 0.002 to 0.03 ns, 3 in setup and 6 and 8 in hold; 11 and 12 also in a third clock. The paths themselves were not traced.)
+
+## Round 8: the depth image's own dz in the RDP (docs/rdp_exact.md, rule 8)
+
+The depth compare's tolerance and the blender's coverage weights use the depth image's own dz, which the RDP writes with each depth (the dz
+code's low two bits in the hidden plane, at the depth image's addresses) and reads back: a hidden-plane word of the depth span read and written
+for each 16 pixels, as the colour span's. The RDP alone (`ooc.sh rdp`, `FIT="1 2 3"`), the tree of round 7 (`8454ce2`) against this one:
+
+| | ALUTs | registers | DSP | block RAMs (whole design) | fitted ALMs, seeds 1 / 2 / 3 | mean |
+|---|---|---|---|---|---|---|
+| round 7 | 7,892 | 6,452 | 37 | 231 | 5,181 / 5,179 / 5,186 | 5,182 |
+| the depth image's own dz | 8,058 | 6,512 | 37 | 234 | 5,289 / 5,282 / 5,303 | 5,291 (+109) |
+
+The estimate in rdp_exact.md (200 to 300 ALMs) was high: the second hidden buffer, its address arithmetic and the write engine's merge are shared with
+the colour image's (the merge is one logic for both passes, which select their lanes and their hidden bits), and the tolerance's decode replaces
+the old step's priority encoder (`z_tol`, `zt_m`) and the word's floor (7 flip-flops). The new pieces: the depth image's row base (`rzb`, 20 flip-flops
+and an adder), the hidden pair read and the memory's code (`rawdz`, `texp`, the two shifts: 30 flip-flops down the blender's two stages), two
+adders of the read engine for the depth span's first and last group, a phase flag, and the 36-bit depth lane (4 flip-flops a stage of the write
+engine's queue). Three block RAMs: the pixels' copy of the depth image's raw hidden buffer (256 x 32), the write engine's copy twice as deep
+(512 x 32, the depth image's groups in the upper half); the depth buffer of the new results is 36 bits wide in the same four blocks.
+
+Cycles, on the 138 captured tasks (the RDP alone, `tb_rdp`): the bench's memory 95,133,674 to 96,770,887 (+1.7 %); the SDRAM controller's rules
+(`TB_SDRAM=1`: a row open per bank, precharge and activate, turns) 91,983,477 to 97,401,049 (+5.9 %). The command channel is the limit in a
+span of two images: a word of two pixels is one read and one write of each image, and the hidden words add one read and one write of each a group
+of eight words (36 against 34 commands a 16 pixels, +5.9 % where it limits). On the SDRAM the depth image's rows of the hidden plane
+are two more row changes a span (in the bench's layout the hidden words of the two images lie in one bank): without the depth image's hidden reads (the
+compare then wrong) the first 40 tasks cost +2.6 % in place of +6.1 % (a row's pixels wait for them, behind the colour image's), and without its hidden
+writes the first 93 cost +4.1 % in place of +5.6 %. A mitigation that was not tried: writing a span's hidden words in a batch at its end (one row change, not two a group), which would help the
+colour image's hidden writes as much.
+
+The whole design (`tools/area2/fit.sh`, seeds 1 to 15, this tree): 17,652 to 17,803 ALMs (mean 17,731), against 17,786 to 18,125 (mean 17,875) of round 7's
+fifteen: the same seeds fit smaller (seeds 1 / 2 / 3: 17,735 / 17,702 / 17,716 against 17,788 / 18,094 / 17,833), which the RDP's +109 ALMs do not explain
+in themselves (the fitter's packing moves a design this full by more than that from one run to another; it is not a saving to count on). The 128
+timing lines are all at or above 0 on six seeds (4, 5, 6, 8, 14 and 15; 17,652 to 17,767 ALMs, worst slack +0.021 to +0.075 ns) against four of round 7's;
+the nine others miss by 0.004 to 0.6 ns: in the CPU's 93.75 MHz domain, in setup (seeds 1, 2, 7, 10 to 13) or by hold (0.010 to 0.089 ns in seeds 1, 2, 3, 7 and 9). None
+of the RDP's new paths is among the failing ones (the worst is the CPU's `e_c.alu` to `m_res`; the hold of seed 1 is `c5_line` to `u6_line` of the LOD, untouched), so
+there was nothing in the compare to pipeline.
+
+Verification: `rdp_regress.sh` 93 runs, 0 failed (80 before: the new ones are `TB_ZDZ`, also with the SDRAM's timing, a width whose rows share
+hidden groups and 32-bit images); the 138 captured tasks RTL == model, with the SDRAM's timing too; `run.sh 50`: the new `zdz` suite (1,300
+primitives, the oracle against the model with the rule: 0 words differ; 106,113 colour words without it) and four minimal streams
+(`memdz_*`). Found by the benches while it was made: the read engine must hold a span's words back until the hidden words are all asked for (the
+words of a 32-bit image's span were asked for before the depth image's groups, whose data then came back as the words); the second half of a
+32-bit image's wide span reads the depth image's groups only after the first half's write, as they may share one. With the model built without
+the rule each `TB_ZDZ` seed fails; and with the oracle's model made without one detail of the rule (the doubling, the floor of 16 >> exponent, the
+coplanar code, the weights' shifts, the shift of the interpenetrating coverage, the hidden bits or the pixel's own dz in the tolerance) `zdz`
+differs in 3 to 426 of its 1,300 primitives in each case.

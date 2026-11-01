@@ -422,10 +422,19 @@ end of the range keeps all 18 bits; the near end (exponent 0, the first
 half) keeps 12. 0xFFFC is the far plane. A game can read the image with the
 CPU or as a texture as it would on the console.
 
+The pixel's dz code is the console's four bits: the place of the top bit of
+|DzDx| + |DzDy| of the integer halves, plus 1 (15 from 0x4000 up; 0 for a
+primitive without Z coefficients; SET_PRIM_DEPTH's delta for the primitive
+depth). Its top two bits are the word's two low bits, and its low two are the
+depth image's hidden bits, in the hidden plane (below) at the depth image's
+addresses, written with the depth.
+
 The compares are of the 18 bits against what the word keeps. The modes, with
-dz the primitive's depth step (and never less than what the memory's word
-has lost at its exponent, so that a surface drawn over itself is within it
-at any depth):
+dz the larger power of 2 of the pixel's dz and the memory's, times 8 (the
+memory's is the code the word and the plane hold, doubled for a word of
+exponent under 3 and then no less than 16 >> exponent, so that a surface drawn
+over itself is within it at any depth; a dz of 0x8000, the code 15 or 14 doubled,
+is within at any depth):
 
 * **Opaque**: in front, or -- without a coverage overflow -- within dz behind.
 * **Interpenetrating**: as opaque; and where a pixel in front, within dz,
@@ -450,8 +459,11 @@ A stored depth at the far plane is the cleared one and passes the first three.
   an alpha of 255, is P too.
 * In 2-cycle mode the first cycle always blends, `>> 5`.
 * CLR_ON_CVG without a coverage overflow keeps M.
-* The memory's dz is not stored. With Z_CMP the blender's coverage weight is
-  not shifted; without it the shift comes from the primitive's own dz.
+* With the memory's coverage as B (and Z_CMP), the two weights are shifted by the
+  difference of the two dz codes: the A weight right by the pixel's less the
+  memory's, the B weight by the memory's less the pixel's, up to 4. Without
+  Z_CMP the B weight shifts by the pixel's own code (4 under 11, else 15 less
+  the code).
 
 ### RGB dither
 
@@ -517,6 +529,14 @@ the N64's hidden bits, are in a plane of their own:
   the span's new bits merged in, when a pixel of the group was written.
 * **Fills.** A fill writes each 4-pixel quad it touches by byte enables,
   from bit 0 of the fill colour's halves, with no read.
+* **The depth image's** two bits a pixel are in the same plane, at the depth
+  image's addresses: the low two bits of the pixel's dz code, which the next
+  depth compare reads back (rule 8 of [rdp_exact.md](rdp_exact.md)). A span
+  with Z_CMP or Z_UPD reads the groups' words of its depth span after the
+  colour span's, and the write engine's second pass, the depth words, writes
+  each group back as the colour pass does. (A 32-bit colour image has no
+  hidden coverage bits; its depth image has these.) A fill of the depth image
+  as the colour image writes {a, a} there, 0 for 0xFFFC, the usual clear.
 * **Start.** The runtime starts the plane all ones (`n64rt_boot.c`).
 
 ### The memory port
@@ -563,16 +583,12 @@ the alpha byte's top three bits as its coverage, so the filters see what a
 ## Not implemented, or approximated
 
 The model built with `RDP_EXACT` follows the console on every item below that is a rule of
-[rdp_exact.md](rdp_exact.md); `rtl/rdp` follows rules 1, 2, 4, 5 and 6's copy mode of it, the
+[rdp_exact.md](rdp_exact.md); `rtl/rdp` follows rules 1, 2, 4, 5, 8 and 6's copy mode of it, the
 others not. The RTL, and the model as its benches build it, do not follow:
 
-* **Depth**: the memory's dz is kept to its top two bits, as the word has
-  room for, and the depth compare's tolerance and the blender's coverage weight do not use it (the
-  console's use the depth image's own dz, with the two hidden bits of each depth word it writes). On 138
-  captured tasks (92,498 primitives, 34.8 million pixels) this is the one difference from the oracle
-  that is left in the model with every rule of `RDP_EXACT`: 15.7 thousand AA_EN, Z_CMP, IM_RD primitives,
-  64.6 thousand colour words (0.19 % of the pixels, at the edges where two surfaces meet).
-  Costing some 200 to 300 ALMs, a block RAM and a word of the hidden plane for each 16 pixels of a depth span.
+* **Depth, 2-cycle mode**: with the memory's coverage as B in the first blender cycle, the console takes the shifts
+  from the pixel before's dz (and the pixel's own code); here that cycle shifts by the pixel's own. No captured
+  task blends so (every captured task agrees with the oracle apart from the noise dither, below).
 * **LOD**: in 2-cycle mode only. The console computes it in 1-cycle and
   copy mode too, from the next two pixels of the walk; here a 1-cycle pixel
   samples its primitive's tile and the LOD fraction is the console's only at a
@@ -598,9 +614,10 @@ others not. The RTL, and the model as its benches build it, do not follow:
 Done, as the console does them: the shade and Z at a pixel's first covered sample, the dz code the
 depth word keeps, a triangle's attributes from the major edge's pixel and fraction (the span's start), a
 texture rectangle's LOD next line, and a texture rectangle's copy mode (groups of 4 or 8 pixels,
-the texel never clamped). Of 138 captured tasks measured against the independent pixel-exact software RDP
-([rdp_exact.md](rdp_exact.md)), the model of `rtl/rdp` differs in 15,745 primitives and 218,324
-colour words, from 51,889 and 383,878 before these rules (153,755 of the words are the noise dither's, whose
+the texel never clamped), and the depth image's own dz (the depth compare's tolerance and the blender's coverage
+weights, with the dz code's low two bits written to the hidden plane). Of 138 captured tasks measured against the independent
+pixel-exact software RDP ([rdp_exact.md](rdp_exact.md)), the model of `rtl/rdp` differs in 38 primitives and 153,707
+colour words, from 51,889 and 383,878 before these rules (nearly all the words are the noise dither's, in 27 primitives, whose
 random numbers each side has of its own).
 
 ## How it is verified
@@ -638,13 +655,15 @@ switches:
   cycles spent in each sequencer state; `TB_CMDT=<file>` logs when each
   command word is taken.
 
+`TB_ZDZ=1` makes streams of shaded, anti-aliased, depth-tested triangles that are points of a few planes (slopes of every dz code, now and then a step within a code's tolerance), the blender's B mostly the memory's coverage: the depth image's own dz.
+
 `TB_COPY=1` makes copy mode three modes in four (texture rectangles by groups of pixels, with `TB_C8=1` in groups of 8), `TB_RECT=1` adds texture rectangles (with `TB_LOD=1`, a rectangle's LOD next line).
 
 `tools/area2/rdp_regress.sh` builds the bench and runs the lot: random seeds
 at colour image widths 292, 296 and 320, seeds with `TB_LFSR` and `TB_STEP`,
 seeds with `TB_SDRAM` and `TB_CPU=30`, seeds with an 8-bit colour image
 (`TB_C8`, at widths 320 and 292 and with `TB_SDRAM`), seeds with a 32-bit
-colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, seeds with `TB_COPY` (also 8-bit, and with the SDRAM's timing), seeds with `TB_LOD` and `TB_RECT`, and
+colour image (`TB_C32`, and with `TB_SDRAM`), seeds with `TB_CC`, seeds with `TB_COPY` (also 8-bit, and with the SDRAM's timing), seeds with `TB_LOD` and `TB_RECT`, seeds with `TB_ZDZ` (also at a width whose rows share depth-hidden groups, with the SDRAM's timing and 32-bit images), and
 `cc_unit.sh`.
 A run passes when the bench prints `RTL == model`.
 
@@ -688,6 +707,14 @@ The console's rules ([rdp_exact.md](rdp_exact.md): the shade and Z at a pixel's 
 major edge's pixel, a rectangle's LOD next line, copy mode by groups) cost 291 fitted ALMs in the RDP (3 seeds, 4,891 to 5,182)
 and 2 DSP blocks fewer (Z's), no block RAM, and a row's setup one clock more (the RDP's cycles on 138 captured tasks: 95,115,501 to 95,126,383, +0.01 %);
 sim/area_study.md, round 7.
+
+The depth image's own dz (rule 8: its hidden bits read and written with the depth) costs 109 more ALMs in the RDP (3 seeds: 5,289 / 5,282 / 5,303
+against 5,181 / 5,179 / 5,186), 60 more registers and 3 more block RAMs (the pixels' copy of the depth image's raw hidden buffer, and the write
+engine's copy twice as deep; the new depth buffer is 36 bits wide in the same four blocks), no DSP block. It also takes a hidden-plane word read and
+another written for each 16 pixels of a depth span, and its own row of the SDRAM: the RDP's cycles on 138 captured tasks go from 95,133,674 to
+96,770,887 (+1.7 %) with the bench's memory, and from 91,983,477 to 97,401,049 (+5.9 %) with the SDRAM controller's row timing
+(`TB_SDRAM=1`: the hidden words' rows of the colour image and of the depth image are two more row changes a span);
+sim/area_study.md, round 8.
 
 ### A timing option kept in reserve
 
