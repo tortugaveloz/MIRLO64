@@ -1621,7 +1621,10 @@ static void draw_pixel(rdp_t *r, const prim_t *pr, int x, int y, const int32_t *
     }
 #endif
     if (cyc == 3) {                                /* fill mode */
-        r->wr16(r->ctx, caddr, (x & 1) ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16));
+        /* (the fill colour's half is the memory halfword's: its address's bit 1, not the column's -- a row of an image
+         * of an odd width starts on the odd halfword) */
+        const unsigned lo = (caddr >> 1) & 1u;
+        r->wr16(r->ctx, caddr, lo ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16));
 #ifdef RDP_CVG
         /* the hidden bits: each pixel's {a, a}, a its colour's bit 0 -- a fill
          * rectangle's for every 4-pixel quad it touches (as the N64 writes its
@@ -1631,7 +1634,7 @@ static void draw_pixel(rdp_t *r, const prim_t *pr, int x, int y, const int32_t *
             for (unsigned i = 0; i < 4; i++)
                 hid_set(r, q + 2u * i, ((r->fill >> ((i & 1u) ? 0 : 16)) & 1u) ? 3u : 0u);
         } else
-            hid_set(r, caddr, ((x & 1) ? r->fill : r->fill >> 16) & 1u ? 3u : 0u);
+            hid_set(r, caddr, (lo ? r->fill : r->fill >> 16) & 1u ? 3u : 0u);
 #endif
         r->pixels_drawn++;
         return;
