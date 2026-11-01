@@ -1315,8 +1315,10 @@ instruction's address, word and written register (64 bits), on every exception a
 SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
 `ddiv(u)`; the argument `tlb` adds four windows of mapped pages onto the scratch memory, loads and stores through them with
 `ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
-`tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
-set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
+`tlb_rom.sh <out.z64> [cpu_rom.c]` builds `tlb_rom.c`, a directed TLB program (or the source it is given): every page size, ASID and G, a refill and a fault in a delay slot and with EXL
+set, a fault of a fetch. `cpu_rom.c` is a directed program that knows the answers: the values a conformance suite found the VR4300 to give
+(one section for each group of behaviours: the FPU's FCR0, the writable bits of Index and Status, the undefined COP0 CO functions); it
+writes its verdict, and the id and the two values of each check that failed, where `tb -x rom.z64` reads them, beside the usual lockstep. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 `gen_rand_fpu_rom.py SEED out.z64 N irq` (also with `w64`) turns the VI's interrupt on, one every 6,000 instructions or so, with a handler
 that acknowledges it: the interrupts come in the middle of FPU operations, which the core flushes (the model is told when the core takes
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench

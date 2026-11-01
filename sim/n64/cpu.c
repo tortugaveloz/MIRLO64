@@ -251,7 +251,7 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
         switch (fmt) {
         case 0x00: *gpr_out = SX(c->f[fs]); return 1;                               /* mfc1 */
         case 0x01: if (n64_no64 > 0) return -1; *gpr_out = (uint64_t)fl_get(c, fs); return 1;   /* dmfc1: the pair */
-        case 0x02: *gpr_out = SX(fs == 31 ? c->fcr31 : fs == 0 ? 0x00000B00u : 0); return 1;   /* cfc1 */
+        case 0x02: *gpr_out = SX(fs == 31 ? c->fcr31 : fs == 0 ? 0x00000A00u : 0); return 1;   /* cfc1 */
         case 0x04: c->f[fs] = rt32; break;                                          /* mtc1 */
         case 0x05: if (n64_no64 > 0) return -1; fl_set(c, fs, (int64_t)rt); break;  /* dmtc1 */
         case 0x06: if (fs == 31) c->fcr31 = rt32 & 0x0183FFFFu; break;              /* ctc1 */
