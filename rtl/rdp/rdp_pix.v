@@ -828,8 +828,9 @@ module rdp_pix (
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 
-    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The first
-    // edge goes to B for an upper triangle and to C for a lower one, the second to the other
+    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The edges are
+    // always B - A and C - A (texels 1 and 2 less the corner); an upper triangle weights them by the fractions, a lower one
+    // crosswise by the complements (below), so that no choice is made among the 32-bit texels
     function automatic [9:0] edge1;
         input [7:0] p, x;
         edge1 = $signed({2'b0, p}) - $signed({2'b0, x});
@@ -838,21 +839,21 @@ module rdp_pix (
         input [31:0] p, x;
         edge4 = { edge1(p[31:24], x[31:24]), edge1(p[23:16], x[23:16]), edge1(p[15:8], x[15:8]), edge1(p[7:0], x[7:0]) };
     endfunction
-    wire [39:0] e1w8t = edge4(up8t ? tx1 : tx2, tx0);
-    wire [39:0] e2w8t = edge4(up8t ? tx2 : tx1, tx0);
+    wire [39:0] e1w8t = edge4(tx1, tx0);
+    wire [39:0] e2w8t = edge4(tx2, tx0);
 
     // P8b: the decoded texels, registered (the memories through the decode
     // into the filter's multipliers is too long a path); x, the set, the shade,
     // the depth come out of sb_ram here
     reg        v8b;
     reg [31:0] ta8b;                        // the corner (A or D)
-    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
-    reg [5:0]  ws8b, wt8b;                  // the weights of those edges
+    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to texels 1 and 2, 10 bits a channel
+    reg [5:0]  ws8b, wt8b;                  // the weights of those edges (an upper triangle: S fraction, T fraction; a lower one: 32 - T's, 32 - S's)
     always @(posedge clk) begin
         v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
-        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
-        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
+        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, ft8t};
+        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, fs8t};
     end
 
     // ======================================================================
