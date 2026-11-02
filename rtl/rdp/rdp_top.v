@@ -442,15 +442,11 @@ module rdp_top (
     // ======================================================================
     reg        row_wq;              // the row's write-back has been asked for
     // The row walker (wk): the next row's span is walked (a triangle's subscanlines) and its reads asked for while the
-    // pixels of the row before issue; its place waits (W_RDY: nxs, nxe, nspl, npar, ny, and the subscanlines' registers aa_*)
-    // for the pixels to be done, and S_GO takes it. The walker goes on to the row after that when the row taken has
+    // pixels of the row before issue; its place waits (W_RDY: in aa_min, aa_max and the subscanlines' registers aa_* for a
+    // triangle, in xa, xb for a rectangle; y and row_h as they are) for the pixels to be done, and S_GO takes it. The walker goes on to the row after that when the row taken has
     // set itself up (W_HOLD), and its write-back has been asked for, since the row's base address moves on then.
     localparam W_OFF = 4'd0, W_ROW = 4'd1, W_SUB = 4'd2, W_SPAN = 4'd3, W_RDY = 4'd4, W_HOLD = 4'd5, W_ADV = 4'd6, W_END = 4'd7, W_SKIP = 4'd8;
     reg [3:0]  wk;
-    reg [9:0]  nxs;
-    reg [10:0] nxe;
-    reg        nspl, npar;
-    reg [2:0]  ny;
     wire       hold_ok = cimg32 ? st == S_GO : (st == S_PIX && row_wq);
     // the row's next pixel: its word in the span, and whether what it reads of
     // memory is in the old buffers
@@ -1180,7 +1176,10 @@ module rdp_top (
             // ---- the row walker has the next row's place ready: take it, and set up its attributes
             S_GO: begin
                 if (wk == W_RDY && (!kind_tri || es[3])) begin
-                    xs <= nxs; xe <= nxe; spl <= nspl; par_c <= npar; cy <= ny;
+                    xs <= kind_tri ? aa_min : xa;
+                    xe <= kind_tri ? (a_cut ? aa_m512 : aa_xe) : r_cut ? {1'b0, xa} + 11'd512 : {1'b0, xb};
+                    spl <= kind_tri ? a_cut : r_cut;
+                    par_c <= par; cy <= y[2:0];
                     set_cur <= !set_cur;
                     mi <= 5'd0;
                     st <= S_SETUP;
@@ -1383,9 +1382,6 @@ module rdp_top (
                 end else if (sc_skip) wk <= W_SKIP;               // (a row of the field not kept)
                 else if (!rq_pend) begin
                     // rectangles: columns fixed (a 32-bit image's span of more than 512 pixels: its first half)
-                    nxs <= xa;
-                    nxe <= r_cut ? {1'b0, xa} + 11'd512 : {1'b0, xb};
-                    nspl <= r_cut; npar <= par; ny <= y[2:0];
                     rq_x0 <= xa + {9'd0, par}; rq_x1 <= (r_cut ? {1'b0, xa} + 11'd512 : {1'b0, xb}) + {10'd0, par};
                     rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= crow;
@@ -1407,9 +1403,6 @@ module rdp_top (
                         lod_lft <= n_lodlft; lod_lvl <= n_lodlvl; p_aa <= 1'b1; p_aaen <= n_aaen; dzc_r <= dzc_n;
                         cmt <= 1'b0;
                     end
-                    nxs <= aa_min;
-                    nxe <= a_cut ? aa_m512 : aa_xe;
-                    nspl <= a_cut; npar <= par; ny <= y[2:0];
                     rq_x0 <= aa_min + {9'd0, par}; rq_x1 <= (a_cut ? aa_m512 : aa_xe) + {10'd0, par};
                     rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_hz <= z_cmp || z_upd; rq_half <= 1'b0; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= crow;
