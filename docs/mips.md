@@ -205,7 +205,7 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
 - **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a backward branch
-  taken, a forward one not; a register jump to its register as D reads it, when nothing ahead of it in E or M is to write
+  taken, a forward one when it was taken the last time (below); a register jump to its register as D reads it, when nothing ahead of it in E or M is to write
   that register -- every function's return, mostly -- and not taken otherwise), and a wrong guess costs two cycles. A delay slot costs nothing. The
   branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
   it was taken, and the fetch chooses between them behind the registers.
@@ -236,14 +236,14 @@ branch costs no more than a branch that is not.
 | `ld`, `sd` | 1 | 2 (two words) |
 | `ldl` and `ldr`, `sdl` and `sdr` | 1 each | about 14 each (a byte a cycle, `W64_UA`) |
 | a branch not taken, with its delay slot | 2 | 2 |
-| a forward branch taken, with its delay slot | 2 | 4 (the guess is not taken: the fetch is put right two cycles later) |
+| a forward branch taken, with its delay slot | 2 | 2 when it was taken the last time (the table above), else 4 (the fetch is put right two cycles later) |
 | a backward branch taken, with its delay slot | 2 | 2 |
 | `beql` not taken (slot annulled) | 2 | 2 |
 
-The branch is the one place where this core is slower than the console on instructions that every program has: a forward branch that is
-taken pays the two cycles of its wrong guess. A table of the last outcome of 64 branches (the guess for a forward one following it) was
-tried: 1.3 % fewer cycles of the game CPU on a title screen of the console model (3.277 to 3.234 cycles an instruction), and, in two fits,
-no timing closure (-0.076 and -0.125 ns, 230 ALMs more than the same fits without it, against a closing +0.080 and +0.030); it was left out.
+The fetch follows a guess that a branch is taken when it is a backward one, or a forward one that was taken the last time (a table of
+64 bits, by the low bits of the branch's address, written as the branch leaves E): a taken branch costs what the console's does when the
+guess is right, and two cycles when it is wrong. `int64_test` takes 2.0 % fewer cycles, `cpu_test` 0.1 %, and a title screen of the console
+model 1.3 % fewer (3.277 to 3.234 cycles an instruction).
 
 ### Caches and memory
 
