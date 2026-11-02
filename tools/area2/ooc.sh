@@ -1,5 +1,5 @@
 #!/bin/bash
-# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), rdp (rdp_top), rsp (rsp_top),
+# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), fpd (fpu_d64), rdp (rdp_top), rsp (rsp_top),
 # video (n64_video), regs (mirlo_regs), and the SoC's smaller blocks -- soc (mirlo_mips whole: its entity table), glue
 # (mirlo_mips with the three cores as stubs), ai, si, vi
 # (rcp_ai, rcp_si, rcp_vi), arb (sdr_arb, six ports), sdr (sdr_ctrl), dpc (rdp_dpc with rcp_dpc_view), cport (cpu_port),
@@ -107,7 +107,8 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rdpw rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+fpd) top=fpu_d64 ;;      # the double unit alone (the FPD64 level's fpu_d64)
+*) echo "unit: cpu fpd rdp rdpw rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
@@ -118,6 +119,7 @@ esac
   for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9 ${EXTRA_MACROS:-}; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
+  [ $unit = fpd ] && echo 'set_global_assignment -name MUX_RESTRUCTURE OFF'      # (as mips_sys, which holds it, has it)
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"
