@@ -117,8 +117,8 @@
 //         another line is dropped there a cycle later (d_fmiss), the line is
 //         read and the fetch made again.
 //      D  a branch is not decided there. The fetch follows a guess -- a
-//         jump's target, a backward branch taken, a forward one as it was
-//         the last time (bh_t), a register jump not -- and the branch is
+//         jump's target, a conditional branch by a 2-bit counter of its
+//         address (bh), a register jump not -- and the branch is
 //         decided at E on forwarded operands, as any other instruction's
 //         (it no longer waits in D for them). A wrong guess is put right in
 //         the cycle after (rd_res, rd_fix): what was fetched behind the
@@ -780,8 +780,12 @@ logic        rd_res, rd_fix, e_bp;
 // FAST: what the last time a conditional branch (by the low bits of its address) did, kept for the guess: a forward branch that was
 // taken is guessed taken, as a backward one always is (the console's pipeline loses nothing on a taken branch: docs/mips.md)
 localparam int BH = 6;
-logic        bh_t [0:(1 << BH) - 1];
-initial for (int i = 0; i < (1 << BH); i++) bh_t[i] = 1'b0;
+// (a 2-bit counter by the branch's address: its upper bit is the guess of a forward branch, and a backward one is guessed taken unless the
+// counter is 0. The counter F read goes down the pipeline with the branch (d_bs, e_bs, rd_bs), and what it becomes is written from there)
+(* ramstyle = "MLAB, no_rw_check" *) logic [1:0] bh [0:(1 << BH) - 1];
+initial for (int i = 0; i < (1 << BH); i++) bh[i] = 2'd0;
+logic [1:0]  d_bs, e_bs, rd_bs;
+wire  [1:0]  bh_rd = bh[f_pc[BH+1:2]];
 logic [BH-1:0] rd_bi;                       // the address bits of the branch that left E (rd_res)
 logic        rd_bc;                         // it was a conditional one
 logic        d_k_cti, d_k_pred;              // FAST: D's instruction is a branch; guessed taken
@@ -937,7 +941,7 @@ wire [31:0] d_target = d_c.br == B_J  ? {d_pc[31:28], d_insn[25:0], 2'b00}
 wire d_cti = d_c.br != B_NONE && !d_fexc;
 // FAST: where the fetch goes after the delay slot, before the branch is decided
 function automatic logic guess(input ctl_t c, input logic [31:0] i);
-    return c.br == B_J || (c.br != B_NONE && c.br != B_JR && i[15]);
+    return c.br == B_J;
 endfunction
 // (JRP: a register jump guessed taken goes to its register's value, D's read of it)
 wire [31:0] d_ptarget = (JRP && d_c.br == B_JR) ? rf_a : d_c.br == B_J ? {d_pc[31:28], d_insn[25:0], 2'b00}
@@ -2163,6 +2167,7 @@ always_ff @(posedge clk) begin
             e_serial <= d_serial;
             e_bp <= d_k_pred && f_deliver;
             e_ptarget <= d_ptarget;
+            e_bs <= d_bs;
             e_k_grp <= 2'd3; e_k_op <= 3'd1; e_k_f <= 1'b0;                 // (nothing)
             e_k_shv <= d_insn[5:0] == 6'h04 || d_insn[5:0] == 6'h06 || d_insn[5:0] == 6'h07;
             e_k_sub <= d_cx.alu != A_ADD;                                   // (the adder subtracts: sub, and for the compares)
@@ -2199,9 +2204,10 @@ always_ff @(posedge clk) begin
         if (FAST && !flush && e_adv && e_valid && e_cti) begin
             rd_res <= 1'b1; rd_fix <= e_taken != e_bp;
             rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= e_pc + 32'd8;
-            rd_bi <= e_pc[BH+1:2]; rd_bc <= e_c.br != B_J && e_c.br != B_JR;
+            rd_bi <= e_pc[BH+1:2]; rd_bs <= e_bs; rd_bc <= e_c.br != B_J && e_c.br != B_JR;
         end
-        if (rd_res && rd_bc) bh_t[rd_bi] <= rd_tk;
+        if (rd_res && rd_bc)             // (the counter counts up when taken, down when not, and stays within 0 .. 3)
+            bh[rd_bi] <= rd_tk ? {rd_bs[1] | rd_bs[0], rd_bs[1] | !rd_bs[0]} : {rd_bs[1] & rd_bs[0], rd_bs[1] & !rd_bs[0]};
         if (flush) begin
             d_valid <= 0; ds_next <= 0; rd_pend <= 0;
         end else begin
@@ -2224,7 +2230,8 @@ always_ff @(posedge clk) begin
                     d_c_r <= fc;
                     d_k_cti <= fc.br != B_NONE;
                     // (JRP: a register jump whose register nothing in D or E -- in E and M when it is in D -- is to write)
-                    d_k_pred <= guess(fc, f_insn) || (fc.br != B_NONE && fc.br != B_J && fc.br != B_JR && bh_t[f_pc[BH+1:2]]) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
+                    d_bs <= bh_rd;
+                    d_k_pred <= guess(fc, f_insn) || (fc.br != B_NONE && fc.br != B_J && fc.br != B_JR && (bh_rd[1] || (f_insn[15] && bh_rd[0]))) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
                                                       !(e_live && e_c.wr && e_c.rd == f_insn[25:21]));
                     // (a delay slot: dropped if its branch is known to annul it; one
                     // that enters before that is known is dropped where it is by then)

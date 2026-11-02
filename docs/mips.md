@@ -208,9 +208,8 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
-- **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a backward branch
-  taken, a forward one when it was taken the last time (below); a register jump to its register as D reads it, when nothing ahead of it in E or M is to write
-  that register -- every function's return, mostly -- and not taken otherwise), and a wrong guess costs two cycles. A delay slot costs nothing. The
+- **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a conditional branch by a 2-bit
+  counter of its address (below); a register jump not taken), and a wrong guess costs two cycles. A delay slot costs nothing. The
   branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
   it was taken, and the fetch chooses between them behind the registers.
 - **M**: a load takes the D-cache's word before its tag is compared. A load of the wrong line is not written back; the
@@ -243,15 +242,18 @@ branch costs no more than a branch that is not.
 | `lw` and the `addu` that uses it | 1 + 1 + 1 | 3 |
 | `ld`, `sd` | 1 | 2 (two words) |
 | `ldl` and `ldr`, `sdl` and `sdr` | 1 each | about 14 each (a byte a cycle, `W64_UA`) |
-| a branch not taken, with its delay slot | 2 | 2 |
-| a forward branch taken, with its delay slot | 2 | 2 when it was taken the last time (the table above), else 4 (the fetch is put right two cycles later) |
-| a backward branch taken, with its delay slot | 2 | 2 |
-| `beql` not taken (slot annulled) | 2 | 2 |
+| a branch not taken, with its delay slot | 2 | 2 when its counter (below) says not taken, else 4 (the fetch is put right two cycles later) |
+| a branch taken, with its delay slot | 2 | 2 when its counter says taken, else 4 |
+| `beql` not taken (slot annulled) | 2 | as a branch not taken |
 
-The fetch follows a guess that a branch is taken when it is a backward one, or a forward one that was taken the last time (a table of
-64 bits, by the low bits of the branch's address, written as the branch leaves E): a taken branch costs what the console's does when the
-guess is right, and two cycles when it is wrong. `int64_test` takes 2.0 % fewer cycles, `cpu_test` 0.1 %, and a title screen of the console
-model 1.3 % fewer (3.277 to 3.234 cycles an instruction).
+The fetch follows a guess that a branch is taken, by a 2-bit counter (0 to 3, up when the branch is taken, down when not) in a table of 64, by the
+low bits of the branch's address and for forward and backward branches alike: a forward branch is guessed taken when its counter is 2 or 3, a backward one
+(a loop's) unless it is 0. A branch costs what the console's does when the guess is right, and two cycles more when it is wrong. The counter F reads
+goes down the pipeline with the branch (it is what the branch's outcome moves), and is written from there as the branch leaves E, not in the path of
+the decision; a branch that comes round again before that has not seen the outcome of the one ahead of it. The table of 64 bits that guessed
+forward branches only (one bit: the last outcome) got 25.5 % of the branches of one game's attract mode wrong and 13.0 % of another's; the counters,
+18.1 % and 7.0 % (`sim/mips/branch_pred.py` on the branches the console model counted, 16.0 and 3.0 million; a table of 256 counters would get 18.0 % and 5.4 %).
+On the SoC, in 30 fields of two games' attract modes, cycles an instruction go from 1.5409 to 1.5238 and from 1.3336 to 1.2803 (1.1 % and 4.0 % fewer).
 
 ### Caches and memory
 
