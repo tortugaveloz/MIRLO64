@@ -24,9 +24,11 @@ set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 # The build's Verilog macros: the depth of the RDP's command FIFO in the
 # register block (rtl/soc/mirlo_regs.sv) and the JTAG UART left out
-# (rtl/soc/mirlo_mips.sv).
+# (rtl/soc/mirlo_mips.sv), and the FPU's double-precision add, subtract and
+# multiply (rtl/mips/fpu_d64.sv; docs/mips.md, "FPD64").
 set_global_assignment -name VERILOG_MACRO "CMDQ_AW=12"
 set_global_assignment -name VERILOG_MACRO "MIRLO_NO_JTAG_UART=1"
+set_global_assignment -name VERILOG_MACRO "MIRLO_FPD64=1"
 set_global_assignment -name SAVE_DISK_SPACE OFF
 # The design uses about 97 % of the device's ALMs (projects/fits.json records
 # the fits that closed, with their ALMs), and whether it closes timing
@@ -34,7 +36,7 @@ set_global_assignment -name SAVE_DISK_SPACE OFF
 # negative, compile three seeds in parallel (copies of projects/ with a
 # different SEED each) and keep the one that closes. With
 # PLACEMENT_EFFORT_MULTIPLIER 10.0 (below).
-set_global_assignment -name SEED 34
+set_global_assignment -name SEED 21
 # Off: smart recompilation can skip synthesis when only a memory's init file
 # changed -- the game CPU's boot ROM is one.
 set_global_assignment -name SMART_RECOMPILE OFF
