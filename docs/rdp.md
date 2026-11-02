@@ -96,11 +96,27 @@ also pulses the DP interrupt of the MI (`rcp_mi`).
 
 ## Commands
 
-`rdp_top` takes one command at a time. Its length comes from the first word:
+`rdp_top` executes one command at a time, but takes the next one's words while
+the one before executes. Its length comes from the first word:
 a triangle is 8 words plus 16 for shade, 16 for texture and 4 for Z; a
-texture rectangle is 4; everything else is 2. State commands wait for the
-primitive before them to finish, so the pixel pipeline never sees a state
-change with pixels in flight.
+texture rectangle is 4; everything else is 2. The first two words go to
+registers of their own (`nw0`, `nw1`: the executing command keeps its copy),
+and every word to a 64-word staging RAM (word k at k), from which a triangle's
+edges (words 2 to 7), its attributes (from 8 on) and a texture rectangle's S,
+T and steps (2 and 3) are read back when the command starts (`S_TLOAD`,
+`S_VSET`). The words are taken once the command executing has read its own out
+of that RAM (not in `S_TLOAD`, `S_XL`, `S_VSET`): a triangle's up to 44 words,
+a word a clock, come in under the rows of the primitive before it.
+
+State commands start only when the primitive before them has finished and
+drained, so the pixel pipeline never sees a state change with pixels in
+flight. A triangle starts earlier: while the primitive before it drains (its
+last pixels through the pipeline and back in memory) it reads its words, sets
+up its attributes and edges and walks its first row, since none of that is
+read by the pixels in flight. What the pixel pipeline reads of it (its flags,
+its tile, the LOD's walk and level count, the depth's dz code) waits in
+registers of their own (`n_*`, `dzc_n`) until its first span is asked for of
+memory, which waits for the drain.
 
 | op | command | notes |
 |---|---|---|
@@ -128,16 +144,34 @@ Any other opcode (set key, the undefined ones) is counted in
 
 ## Drawing a primitive
 
-A primitive is drawn row by row. For each row the sequencer:
+A primitive is drawn row by row. A row walker (`wk`) and the pixel sequencer
+(`st`) work on consecutive rows at once. For each row the walker:
 
-1. finds the row's span (the walker for a triangle, fixed columns for a
+1. finds the row's span (the edge walker for a triangle, fixed columns for a
    rectangle);
 2. asks the memory engine for what the pixels need of memory: the depth span
    with Z_CMP, the colour span when the blender or the coverage reads it, and
    the span's hidden coverage words;
+
+and the sequencer, when the pixels of the row before are all issued and the
+walker has the next row ready (`S_GO`):
+
 3. sets up the attributes at the span's first pixel;
 4. issues the pixels, one a clock as their memory words come in;
 5. asks for the write-back of the row's results.
+
+The walker goes on to the row after the next while the pixels of this one
+issue: the next row's subscanlines are walked (the registers of the walk that
+the pixels read are copied where the row is taken, `pc_*`), the step of the
+attributes' row values runs, and the row's reads are asked for, so that its
+words are coming into the other set of line buffers while the row before is
+drawn. The read engine takes the request when the set's last user is done with
+it: the last pixel of the row two before has left the old buffers (`old_hold`)
+and, for the hidden words, the write engine is not merging from the set. The
+walker holds back while the row being drawn has not asked for its write-back,
+since the row's base address in the images moves on then. A 32-bit colour
+image's rows are not walked ahead (a span of more than 512 pixels is two rows
+of the sets, the second half read when the first is done).
 
 What memory holds and what the pixels produce sit in on-chip line buffers of
 512 words, two pixels a word, so a span is at most 1024 pixels. There are two
@@ -567,7 +601,20 @@ writes. In the SoC the port is one of the SDRAM arbiter's.
 
 Nothing in the engine orders a read after a write of the same word. The
 sequencer starts a primitive's reads, and a load, only with the write engine
-idle.
+idle; a row's reads, one row ahead of its pixels, wait for the write engine to
+be idle when the image's rows can share a word (a width that is not a multiple
+of 16 pixels).
+
+**Where the hidden plane is in the SDRAM's banks.** The SDRAM keeps one row
+open in each of its four banks (a byte address's bank is its bits 12:11), and
+the colour image's row, the depth image's and the hidden words of each are four
+streams that the RDP reads and writes by turns. The plane is laid out so that
+the hidden words of an image's row are never in that row's own bank (`hmap` in
+`rtl/soc/sdr_arb.sv`: a bijection of the plane's own words, which the CPU, the
+scan-out and the RDP all see linear): they no longer close each other's row at
+each change between a group's colour words and its hidden word. It does not
+help when the colour and the depth image are in the same bank (their addresses
+equal modulo 8 KiB), whose rows still close each other's.
 
 ### The scan-out
 
@@ -673,8 +720,16 @@ switches:
 * `TB_SDRAM=1` gives the memory the SDRAM controller's timing (rows, turns
   between reads and writes, refresh); `TB_CPU=<percent>` adds another master.
 * `TB_FAST=1` is a memory that takes every request; `TB_PROF=1` prints the
-  cycles spent in each sequencer state; `TB_CMDT=<file>` logs when each
-  command word is taken.
+  cycles spent in each sequencer state with the memory commands taken in it,
+  and why the pixel state waits (for the row's write-back request, for the row
+  before's, for the row's reads to be taken or for their words);
+  `TB_CMDT=<file>` logs when each command word is taken; `TB_CLS=<file>` the
+  time of every command (its start and the next's) for `sim/rdp/rdp_classes.py`,
+  which adds it up by kind of primitive.
+* `TB_HREMAP=<k>` (with `TB_SDRAM=1`) places the hidden plane in the SDRAM's
+  banks as `rtl/soc/sdr_arb.sv` does (k = 2: the bank two on from the image's
+  row's); `TB_MISS=1` counts the SDRAM's row changes by what they are between
+  (colour, depth, hidden words of either).
 
 `TB_ZDZ=1` makes streams of shaded, anti-aliased, depth-tested triangles that are points of a few planes (slopes of every dz code, now and then a step within a code's tolerance), the blender's B mostly the memory's coverage: the depth image's own dz.
 
@@ -704,6 +759,51 @@ CPU and the scan-out:
   `sim/mips_soc` (`PRELOAD=<dump>@0x437FFFF0`; `MEMSTAT=1` for the SDRAM's
   use by port): the RSP's time to its BREAK and the RDP's to its SYNC FULL,
   with the scan-out reading and the CPU idle or busy in memory.
+
+## Speed
+
+The RDP's time on 138 captured graphics tasks (92,498 primitives, 34.8 million pixels), with `tb_rdp` (`sim/rdp/rdp_classes.py`
+for the table by kind of primitive), in clock cycles of the RDP alone:
+
+| the memory | before | after | |
+|---|---|---|---|
+| every request taken at once, a word 6 clocks on (`TB_FAST=1`) | 83,374,871 | 75,127,338 | -9.9 % |
+| the SDRAM controller's rules (`TB_SDRAM=1`), the hidden plane in the banks it was | 97,442,135 | 88,630,707 | -9.0 % |
+| the same with the hidden plane's banks (`TB_HREMAP=2`; `sdr_arb.sv`) | 93,694,655 | 84,514,421 | -13.3 % |
+
+(the hidden plane's banks alone take 3.8 % off the before). With every request taken at once, by kind of primitive:
+
+| | commands | before | after | clocks a pixel before, after |
+|---|---|---|---|---|
+| triangles, shade, texture, depth test, 1-cycle | 34,138 | 19.0 M | 16.2 M (-14.8 %) | 6.95, 5.92 |
+| triangles, shade, texture, depth test, 2-cycle | 28,472 | 17.2 M | 14.7 M (-14.5 %) | 8.42, 7.19 |
+| texture rectangles, 1-cycle | 9,007 | 11.2 M | 10.0 M (-10.5 %) | 1.48, 1.32 |
+| texture loads | 24,692 | 9.7 M | 9.6 M (-1.5 %) | |
+| fill rectangles, fill mode | 6,312 | 9.0 M | 9.0 M | 0.61, 0.61 |
+| triangles, shade and depth test (small ones) | 9,358 | 2.8 M | 2.3 M (-18 %) | 16, 13 |
+
+Where the time went before, with every request taken at once: the pixel state 40 % (of which one clock in five was spent
+waiting for the row's words), the triangles' setup 12 % (span setup 11 clocks a row, 5 for the walk, one to start and
+end a row), their attributes 6 %, the command words 5 % (a triangle's 44 words, a word a clock, with the RDP doing nothing
+else), texture loads 11 % (87 % of their clocks a memory word: they are the memory's), fill 11 % (95 %: a word of two
+pixels a clock). With the SDRAM's rules a fifth of the clocks are row changes: 4.7 million of them for 46.7 million words
+moved, 40 % of them between a group of pixels and its hidden word, which the banks' placement takes away.
+
+What is not faster, and why:
+
+* **Fills and texture loads** are the memory's own rate, a 32-bit word a clock.
+* **A small triangle's rows** (8 to 10 pixels, most triangles of a 3D scene) are bound by the two sets of line buffers: a set
+  is read, drawn, drained (14 clocks from the last pixel's issue to its last result) and written back before it is read
+  again, about 40 clocks for two rows. Setting a row up in nothing (a test with the span setup at 2 clocks, not kept)
+  takes 1.2 % more off, as the stalls for the row's words and for the write-back move to where the setup was. A third
+  set of buffers would be about a dozen more block RAMs and a change of the addressing of every buffer in `rdp_pix`.
+* **The span setup's 11 clocks** could run under the row before, with the first values of its 8 attributes held in about
+  230 more registers: not done for the 1.2 % above.
+* **A triangle's attributes** (72 clocks) read each attribute's group of 16 words once for each of its four (three)
+  attributes; reading them once would take them to 44 clocks (2.6 % of the time) with registers for four attributes at
+  once, or a second read port of the staging RAM and a new step sequence.
+* **A bank hash** of the SDRAM (the bank xor-ed with the row's bits) took 0.5 % off the before, and on top of the hidden
+  plane's placement it made the time 5 % longer (the placement is the part of the layout that is known).
 
 ## Resources
 
@@ -742,6 +842,13 @@ another written for each 16 pixels of a depth span, and its own row of the SDRAM
 96,770,887 (+1.7 %) with the bench's memory, and from 91,983,477 to 97,401,049 (+5.9 %) with the SDRAM controller's row timing
 (`TB_SDRAM=1`: the hidden words' rows of the colour image and of the depth image are two more row changes a span);
 sim/area_study.md, round 8.
+
+The commands' words coming in under the rows of the one before, a triangle starting under the drain of the primitive
+before and the row walker ([Speed](#speed)) cost the RDP alone 173 ALUTs and 231 registers (7,539 to 7,712 ALUTs, 6,199 to 6,430
+registers, `tools/area2/ooc.sh rdpw`; no block RAM, no DSP block): the first two words of the next command (64), what the
+pixel pipeline reads of a triangle that starts under a drain (16), the columns of a read request (21), the copies of the
+subscanlines' registers the pixels read (116), the read engine's counters by set (21) and the walker's own few. In the whole design the same seeds took 56 to 66 more ALMs (seed 3: 17,169 to 17,225,
+seed 4: 17,173 to 17,239, seed 1: 17,204 to 17,280); the fitter's own spread from one seed to the next is a hundred and more.
 
 ### A timing option kept in reserve
 
