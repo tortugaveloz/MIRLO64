@@ -285,7 +285,8 @@ module rdp_pix (
     // The shade as the console takes it (docs/rdp_exact.md, rule 4): a pixel without full coverage moves to its first covered
     // sample -- ox4 quarters right, oy4 subscanlines down -- by the steps DaDx and DaDy >> 14 (13 bits), (A >> 14) * 4 + ox *
     // cd + oy * dy, then 9 bits of it >> 4: 0..255 as they are, 256..383 255, 384..511 (a negative shade) 0. With full
-    // coverage ox4 = oy4 = 0 and that is the integer half. (Products of two bits: shifts and adds.)
+    // coverage ox4 = oy4 = 0 and that is the integer half. (The two products of a 2-bit number by a 13-bit one are one DSP block
+    // a channel, with the sum of the two: 4 DSP blocks in place of ~60 ALUTs a channel in logic.)
     function automatic [8:0] sh_x;
         input [31:0] v;
         input signed [12:0] cd, dy;
@@ -293,8 +294,7 @@ module rdp_pix (
         reg signed [19:0] t;
         reg [8:0] v9;
         begin
-            t = $signed({v[31:14], 2'b00}) + (ox[0] ? cd : 13'sd0) + (ox[1] ? (cd <<< 1) : 14'sd0)
-                                           + (oy[0] ? dy : 13'sd0) + (oy[1] ? (dy <<< 1) : 14'sd0);
+            t = $signed({v[31:14], 2'b00}) + ($signed({1'b0, ox}) * cd + $signed({1'b0, oy}) * dy);
             v9 = t[12:4];
             sh_x = v9 < 9'd256 ? v9 : v9 < 9'd384 ? 9'd255 : 9'd0;
         end
@@ -303,9 +303,7 @@ module rdp_pix (
     wire [8:0] sb9 = sh_x(in_b, sh_dx[38:26], sh_dy[38:26], ox4, oy4), sa9 = sh_x(in_a, sh_dx[51:39], sh_dy[51:39], ox4, oy4);
     // Z moves the same way: 22 bits of the attribute >> 10 (4 times) plus ox * (DzDx >> 10) + oy * (DzDy >> 10), then >> 5
     wire signed [21:0] zdx22 = $signed(z_dx[31:10]), zdy22 = $signed(z_dy[31:10]);
-    wire signed [24:0] zcx = (ox4[0] ? zdx22 : 22'sd0) + (ox4[1] ? (zdx22 <<< 1) : 23'sd0);
-    wire signed [24:0] zcy = (oy4[0] ? zdy22 : 22'sd0) + (oy4[1] ? (zdy22 <<< 1) : 23'sd0);
-    wire signed [24:0] zcorr = zcx + zcy;
+    wire signed [24:0] zcorr = $signed({1'b0, ox4}) * zdx22 + $signed({1'b0, oy4}) * zdy22;     // (DSP blocks)
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
                       + in_mask[4] + in_mask[5] + in_mask[6] + in_mask[7];
     reg  [31:0] z0r;
@@ -828,8 +826,9 @@ module rdp_pix (
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 
-    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The first
-    // edge goes to B for an upper triangle and to C for a lower one, the second to the other
+    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The edges are
+    // always B - A and C - A (texels 1 and 2 less the corner); an upper triangle weights them by the fractions, a lower one
+    // crosswise by the complements (below), so that no choice is made among the 32-bit texels
     function automatic [9:0] edge1;
         input [7:0] p, x;
         edge1 = $signed({2'b0, p}) - $signed({2'b0, x});
@@ -838,21 +837,21 @@ module rdp_pix (
         input [31:0] p, x;
         edge4 = { edge1(p[31:24], x[31:24]), edge1(p[23:16], x[23:16]), edge1(p[15:8], x[15:8]), edge1(p[7:0], x[7:0]) };
     endfunction
-    wire [39:0] e1w8t = edge4(up8t ? tx1 : tx2, tx0);
-    wire [39:0] e2w8t = edge4(up8t ? tx2 : tx1, tx0);
+    wire [39:0] e1w8t = edge4(tx1, tx0);
+    wire [39:0] e2w8t = edge4(tx2, tx0);
 
     // P8b: the decoded texels, registered (the memories through the decode
     // into the filter's multipliers is too long a path); x, the set, the shade,
     // the depth come out of sb_ram here
     reg        v8b;
     reg [31:0] ta8b;                        // the corner (A or D)
-    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
-    reg [5:0]  ws8b, wt8b;                  // the weights of those edges
+    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to texels 1 and 2, 10 bits a channel
+    reg [5:0]  ws8b, wt8b;                  // the weights of those edges (an upper triangle: S fraction, T fraction; a lower one: 32 - T's, 32 - S's)
     always @(posedge clk) begin
         v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
-        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
-        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
+        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, ft8t};
+        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, fs8t};
     end
 
     // ======================================================================
@@ -1187,7 +1186,7 @@ module rdp_pix (
     wire [2:0] bsb10   = !z_cmp ? ((dzenc < 4'd11) ? 3'd4 : ~dzenc[2:0]) : (dgb10[4] || dgb10[3:0] == 4'd0) ? 3'd0 : (dgb10[3:0] > 4'd4) ? 3'd4 : dgb10[2:0];
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; hp10 <= hp10a; bs10 <= bs10a;
-        c010 <= c0_w;
+        c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1197,7 +1196,7 @@ module rdp_pix (
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
         hidz10 <= hz_rdata[{hzk10a, 1'b0} +: 2];
     end
-    wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
+    wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
     wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;

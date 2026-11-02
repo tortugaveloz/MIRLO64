@@ -203,8 +203,9 @@ keeps serving its depth compare and blender shifts until rule 8.
   takes its shade and Z at its first covered sample by `(A >> 14) * 4 + ox * DaDx' + oy * DaDy'`
   (shade, steps of 13 bits: `adx`'s bits 26:14 and `sdy`, the DaDy of the four shade
   attributes read in S_VSET with the others), a 9-bit result kept 0..255 / 255 / 0, and Z in 22 bits
-  (`z_dx`, `z_dy` >> 10) with the 19-bit wrap; the products of two bits are shifts and adds (the first version's
-  `*` took eight DSP blocks and missed timing by up to 0.6 ns). The depth word's dz code is the
+  (`z_dx`, `z_dy` >> 10) with the 19-bit wrap; the two products of a 2-bit number and their sum are one DSP
+  block a shade channel and two for Z (shifts and adds in logic first, after a version with a block for each product
+  that missed timing by up to 0.6 ns: sim/area_study.md, round 9). The depth word's dz code is the
   console's: the place of the top set bit of |DzDx| + |DzDy| of the integer halves, plus 1
   (`dzc_p`); the compare and the blender's shifts use it from rule 8 on.
 * The span's start (`RDP_X_SPAN`; `rdp_top.v` S_AASUB, S_VSET, S_SETUP): the walker's major edge

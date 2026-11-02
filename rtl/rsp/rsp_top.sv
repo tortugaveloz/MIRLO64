@@ -175,13 +175,16 @@ wire  [31:0] s_rw = {sm_wdata, sm_wdata} >> {sa[1:0], 3'b000};
 logic [15:0] s_be;
 always_comb
     for (int b = 0; b < 16; b++) s_be[b] = 4'(4'(b) - sa) <= {2'd0, sm_n};
+// (the DMA's word and the scalar unit's both go to all four banks: chosen as a word, then against the vector unit's 16 bytes)
+wire  [31:0] w_wd = dm_valid ? dm_wdata : s_rw;
 always_comb begin
     if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_addr = dm_addr; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
-                           x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
+                           x_rot_n = dm_addr[3:0]; end
     else if (vu_own) begin x_valid = vm_valid; x_we = vm_we; x_addr = vm_addr; x_be16 = vm_be;
-                           x_wd = vm_wdata; x_rot_n = vm_rot; end
+                           x_rot_n = vm_rot; end
     else             begin x_valid = sm_valid; x_we = sm_we; x_addr = sm_addr; x_be16 = s_be;
-                           x_wd = {4{s_rw}}; x_rot_n = sa; end
+                           x_rot_n = sa; end
+    x_wd = (dm_valid || !vu_own) ? {4{w_wd}} : vm_wdata;
 end
 // (x_be16 is in address order, bit b the byte at address mod 16 = b; bank k
 // takes x_addr's row, or the next one for the words before x_addr's in its line)
@@ -196,7 +199,8 @@ rsp_dpram dmem (.clk, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), 
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
 // byte m of the result is byte (m + x_rot) mod 16 of the line: by words, then bytes
-logic [127:0] q_w, x_rd;
+logic [127:0] q_w;
+(* keep *) logic [127:0] x_rd;
 always_comb begin
     for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = q16[127 - 8 * ((m + 4 * int'(x_rot[3:2])) & 15) -: 8];
     for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = q_w[127 - 8 * ((m + int'(x_rot[1:0])) & 15) -: 8];

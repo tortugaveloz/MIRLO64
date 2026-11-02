@@ -3,6 +3,8 @@
 # video (n64_video), regs (mirlo_regs), and the SoC's smaller blocks -- soc (mirlo_mips whole: its entity table), glue
 # (mirlo_mips with the three cores as stubs), ai, si, vi
 # (rcp_ai, rcp_si, rcp_vi), arb (sdr_arb, six ports), sdr (sdr_ctrl), dpc (rdp_dpc with rcp_dpc_view), cport (cpu_port),
+# rdpw (rdp_top with its ports as mirlo_mips.sv uses them: load_count and unknown_ops unread, the address as the SoC maps it -- the
+# count of the RDP in the design, where rdp counts what the SoC prunes),
 # ports (port_rdp and port_apf), psram, gbc (gb_cart) -- with the project's synthesis settings and fit.sh's macros, in
 # projects_ooc_<tag>/ of this worktree (OOC_ROOT=<dir>: under that directory instead; the unit of another tree: its path as
 # the third argument). FIT="1 2 3": then the unit fitted alone, every pin virtual, once a seed (fit_<seed>.rpt, its
@@ -53,6 +55,20 @@ endmodule
 SV
 ;;
 rdp)  top=rdp_top ;;
+rdpw) cat > top.sv <<SV
+module ooc_rdpw (input wire clk, rst, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
+    output wire m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,
+    output wire m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we,
+    input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy);
+    wire [31:0] rdp_addr;
+    rdp_top rdp (.clk, .rst, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
+        .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we, .m_rdata_valid, .m_rdata,
+        .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(), .unknown_ops(), .idle(rdp_idle), .tmem_busy(rdp_tmem_busy));
+    // (rtl/soc/mirlo_mips.sv: the address bits it reads, the hidden plane's remap; the load and unknown counters are not read)
+    assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
+endmodule
+SV
+;;
 regs) top=mirlo_regs ;;
 soc)  top=mirlo_mips ;;
 glue) top=mirlo_mips                    # (mirlo_mips with the CPU, the RSP and the RDP as glue_stubs.sv's stubs: minutes, not twenty)
@@ -91,7 +107,7 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+*) echo "unit: cpu rdp rdpw rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
