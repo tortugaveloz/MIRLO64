@@ -212,7 +212,7 @@ function automatic logic [2:0] amode(input logic [5:0] f);
 endfunction
 
 function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
-                                  input logic signed [33:0] p, input logic [15:0] vs, input logic [47:0] accm,
+                                  input logic signed [34:0] p, input logic [15:0] vs, input logic [47:0] accm,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);    // (the adder's flags of the cycle before: VCL, VCH and VCR's with one pass)
     lane_t o = '0;
@@ -263,15 +263,11 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
     // otherwise), the clamped result
     begin
         logic [47:0] pe;
-        logic s1, s4, s5, s7;
         pe = 48'(p);
-        s1 = f[2:0] == 3'd0 || f[2:0] == 3'd1;
-        s4 = f[2:0] == 3'd4;
-        s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
-        s7 = f[2:0] == 3'd7;
-        // (one pass: VSAR reads the accumulator through this adder -- the product is no term of it)
-        if (NP == 1 && f[5:4] != 2'b00) begin s1 = 1'b0; s4 = 1'b0; s5 = 1'b0; s7 = 1'b0; end
-        term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
+        // (the product is already doubled for VMULF, VMULU, VMACF and VMACU -- mul_s -- and is 0 for VSAR, which reads
+        // the accumulator through this adder: the term is the product, or its high half (VMUDL, VMADL), or the product
+        // shifted up 16 (VMUDH, VMADH))
+        term = (f[2:0] == 3'd4) ? 48'($signed(pe) >>> 16) : (f[2:0] == 3'd7) ? (pe << 16) : pe;
     end
     accn = term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
     o.acc = accn;
@@ -384,18 +380,16 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
 endfunction
 
 // a multiply's lane alone (lane_ex's first half): the lanes MULW adds
-function automatic lane_t lane_mul(input logic [5:0] f, input logic signed [33:0] p, input logic [47:0] acc);
+function automatic lane_t lane_mul(input logic [5:0] f, input logic signed [34:0] p, input logic [47:0] acc);
     lane_t o = '0;
     logic signed [47:0] term, accn;
     begin
         logic [47:0] pe;
-        logic s1, s4, s5, s7;
         pe = 48'(p);
-        s1 = f[2:0] == 3'd0 || f[2:0] == 3'd1;
-        s4 = f[2:0] == 3'd4;
-        s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
-        s7 = f[2:0] == 3'd7;
-        term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
+        // (the product is already doubled for VMULF, VMULU, VMACF and VMACU -- mul_s -- and is 0 for VSAR, which reads
+        // the accumulator through this adder: the term is the product, or its high half (VMUDL, VMADL), or the product
+        // shifted up 16 (VMUDH, VMADH))
+        term = (f[2:0] == 3'd4) ? 48'($signed(pe) >>> 16) : (f[2:0] == 3'd7) ? (pe << 16) : pe;
     end
     accn = term + (f[3] ? $signed(acc) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
     o.acc = accn; o.acc_w = 1'b1;
@@ -441,21 +435,28 @@ wire  [5:0]         fn_m  = (NP == 2 && b1) ? x_fn : fn;
 wire  s_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd5 || fn_m[2:0] == 3'd7;
 wire  t_sgn = fn_m[2:0] == 3'd0 || fn_m[2:0] == 3'd1 || fn_m[2:0] == 3'd6 || fn_m[2:0] == 3'd7;
 logic [15:0]        s_n [LANES], t_n [LANES];
-logic signed [33:0] p_n [LANES];
+logic signed [34:0] p_n [LANES];
+// (the multiplier's s operand: doubled for VMULF, VMULU, VMACF and VMACU -- their product goes in the accumulator shifted
+// up one -- and 0 for VSAR, whose accumulate has no product)
+function automatic logic signed [17:0] mul_s(input logic [5:0] f, input logic sg, input logic [15:0] s);
+    logic [16:0] s17;
+    s17 = {sg & s[15], s};
+    return (NP == 1 && f == 6'h1D) ? 18'sd0 : (f[5:4] == 2'b00 && f[2:1] == 2'b00) ? $signed({s17, 1'b0}) : $signed({s17[16], s17});
+endfunction
 always_comb
     for (int l = 0; l < LANES; l++) begin
         s_n[l] = (NP == 2 && b1) ? s_hi[l] : qa[l];
         t_n[l] = (NP == 2 && b1) ? t_hi[l] : tv[l];
-        p_n[l] = $signed({s_sgn & s_n[l][15], s_n[l]}) * $signed({t_sgn & t_n[l][15], t_n[l]});
+        p_n[l] = mul_s(fn_m, s_sgn, s_n[l]) * $signed({t_sgn & t_n[l][15], t_n[l]});
     end
 // (MULW) the upper lanes' products, for a multiply
-logic signed [33:0] pm_n [LANES], pm_r [LANES];
+logic signed [34:0] pm_n [LANES], pm_r [LANES];
 always_comb
     for (int l = 0; l < LANES; l++) begin
         logic [15:0] sm, tm;
         sm = qa[((LANES + l) & 7)]; tm = tv[((LANES + l) & 7)];
-        pm_n[l] = 34'sd0;
-        if (MW) pm_n[l] = $signed({s_sgn & sm[15], sm}) * $signed({t_sgn & tm[15], tm});
+        pm_n[l] = 35'sd0;
+        if (MW) pm_n[l] = mul_s(fn_m, s_sgn, sm) * $signed({t_sgn & tm[15], tm});
     end
 
 // EX's registers: the pass, its operands and products, the instruction's fields
@@ -467,7 +468,7 @@ logic [3:0]         x_ve;
 logic [4:0]         x_vdn;
 logic [2:0]         x_de;
 logic [15:0]        s_r [LANES], t_r [LANES];
-logic signed [33:0] p_r [LANES];
+logic signed [34:0] p_r [LANES];
 logic [15:0]        hold [8];                 // the earlier pass's results
 lane_t ex [LANES];
 always_comb
@@ -509,7 +510,8 @@ logic [31:0] rin;
 logic        r_sqrt, r_zero, r_min, r_mask;
 logic [4:0]  r_sh;
 wire  [31:0] r_data0 = rin ^ {32{rin[31]}};
-wire  [31:0] r_data  = ($signed(rin) > -32'sd32768) ? r_data0 + {31'd0, rin[31]} : r_data0;
+wire         r_ninc  = &rin[31:15];                                     // (rin >= -32768 and negative)
+wire  [31:0] r_data  = r_data0 + {31'd0, r_ninc};
 logic [5:0]  r_clz;
 always_comb begin
     r_clz = 6'd32;
@@ -680,6 +682,27 @@ always_comb
         else       ld_d[g] = {dh, dl};
     end
 
+// (one pass) the register write's data as an OR of sources that are 0 when it is not their cycle: the load's bytes and MTC2's
+// word, and the reciprocal's word, one 16-bit word for every lane
+logic [15:0] wr_ld [8], wr_sh;
+logic        wr_xoff;
+always_comb begin
+    logic sel_rd, sel_mt, sel_p6, sel_p7;
+    sel_rd = lw_v && !lw_packed && !lw_mt;
+    sel_mt = lw_v && !lw_packed && lw_mt;
+    sel_p6 = lw_v && lw_packed && lw_p6;
+    sel_p7 = lw_v && lw_packed && !lw_p6;
+    wr_xoff = wp || lw_v || x_rcp;
+    for (int g = 0; g < 8; g++) begin
+        logic [7:0] dp;
+        dp = m_rdata[127 - 8 * g -: 8];
+        wr_ld[g] = ({16{sel_rd}} & {m_rdata[127 - 16 * g -: 8], m_rdata[119 - 16 * g -: 8]})
+                 | ({16{sel_p6}} & {dp, 8'd0}) | ({16{sel_p7}} & {1'b0, dp, 7'd0});
+    end
+    wr_sh = ({16{sel_mt}} & lw_mb)
+          | ({16{x_wr && x_one && x_rcp}} & (x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0]));
+end
+
 // ----------------------------------------------------------- the controls --
 // a computational instruction's SEL: not under an EX that writes what it reads,
 // nor (a reciprocal) under any, nor under a load's write of what it reads
@@ -740,18 +763,21 @@ logic        ct_v, ct_p;              // CTC2 started last cycle (its write is n
 logic [1:0]  ct_r;
 logic [15:0] ct_d;
 logic [1:0]  cf_r;
-logic [15:0] f_vco, f_vcc;
-logic [7:0]  f_vce;
+// (the register CFC2 names is chosen first, and then only its 16 bits take the older EX's flags: bit g_we of the register
+// as that EX writes it, g_val)
+logic [15:0] cf_base, cf_val, cf_we, cf_o;
 always_comb begin
-    f_vco = vco; f_vcc = vcc; f_vce = vce;
-    if (cf_x && x_exec)
-        for (int l = 0; l < LANES; l++) begin
-            automatic int li = int'(x_pass) * LANES + l;
-            if (ex[l].co_w) begin f_vco[li] = ex[l].co_lo; f_vco[8 + li] = ex[l].co_hi; end
-            if (ex[l].cc_w) begin f_vcc[li] = ex[l].cc_lo; f_vcc[8 + li] = ex[l].cc_hi; end
-            if (ex[l].ce_w) f_vce[li] = ex[l].ce;
-        end
-    res_l = cf_r == 2'd0 ? {{16{f_vco[15]}}, f_vco} : cf_r == 2'd1 ? {{16{f_vcc[15]}}, f_vcc} : {24'd0, f_vce};
+    cf_base = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
+    cf_val = '0; cf_we = '0;
+    for (int l = 0; l < LANES; l++) begin
+        automatic int li = int'(x_pass) * LANES + l;
+        cf_we[li]  = cf_x && x_exec && (cf_r == 2'd0 ? ex[l].co_w : cf_r == 2'd1 ? ex[l].cc_w : ex[l].ce_w);
+        cf_val[li] = cf_r == 2'd0 ? ex[l].co_lo : cf_r == 2'd1 ? ex[l].cc_lo : ex[l].ce;
+        cf_we[8 + li]  = cf_x && x_exec && !cf_r[1] && (cf_r[0] ? ex[l].cc_w : ex[l].co_w);
+        cf_val[8 + li] = cf_r[0] ? ex[l].cc_hi : ex[l].co_hi;
+    end
+    cf_o = (cf_we & cf_val) | (~cf_we & cf_base);
+    res_l = cf_r[1] ? {24'd0, cf_o[7:0]} : {{16{cf_o[15]}}, cf_o};
 end
 
 always_comb begin
@@ -776,21 +802,27 @@ always_comb begin
     res = {{16{sb[0][7]}}, sb[0], sb[1]};
     // the register write: EX's last pass, a load's bytes, MTC2
     wr_reg = x_vdn; wr_be = 16'd0;
-    for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
-    if (!wp) for (int l = 0; l < LANES; l++) wr_d[(NP - 1) * LANES + l] = ex[l].res;
-    if (!wp && MW && x_mw) for (int l = 0; l < LANES; l++) begin wr_d[l] = ex[l].res; wr_d[LANES + l] = exm[l].res; end
+    if (NP == 2) begin
+        for (int g = 0; g < 8; g++) wr_d[g] = hold[g];
+        if (!wp) for (int l = 0; l < LANES; l++) wr_d[(NP - 1) * LANES + l] = ex[l].res;
+        if (!wp && MW && x_mw) for (int l = 0; l < LANES; l++) begin wr_d[l] = ex[l].res; wr_d[LANES + l] = exm[l].res; end
+    end
     if (wp) begin wr_reg = w_vdn; wr_be = 16'hFFFF; end             // (the late write)
     if (x_wr) begin
         wr_be = 16'hFFFF;
         if (x_one) begin
             wr_be = 16'd3 << {x_de, 1'b0};
-            if (x_rcp) for (int g = 0; g < 8; g++) wr_d[g] = x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0];
+            if (NP == 2 && x_rcp) for (int g = 0; g < 8; g++) wr_d[g] = x_fn[1:0] == 2'd2 ? div_out[31:16] : r_res[15:0];
         end
     end else if (in_v) begin
         wr_reg = lw_reg;
         wr_be = in_pk ? 16'hFFFF : in_be;
-        for (int g = 0; g < 8; g++) wr_d[g] = ld_d[g];
+        if (NP == 2) for (int g = 0; g < 8; g++) wr_d[g] = ld_d[g];
     end
+    // (one pass) the register's data is the OR of what each writer brings, every one of them 0 when another's turn: the
+    // result of the lanes (not under a late write, a load's bytes or a reciprocal), the late write's `hold` (0 unless it
+    // is that cycle's), the reciprocal's or MTC2's word, and a load's bytes
+    if (NP == 1) for (int g = 0; g < 8; g++) wr_d[g] = (ex[g].res & {16{!wr_xoff}}) | hold[g] | wr_sh | wr_ld[g];
     // (simulation) instructions whose effects are complete with this cycle,
     // in order: what finishes under a computation not yet written (a load, a
     // store, MFC2 behind its second pass) is counted with it
@@ -827,7 +859,7 @@ always_ff @(posedge clk) begin
         lw_v <= 1'b0;
         // the reciprocal: normalised the cycle after its input is taken
         r_sh <= r_clz[4:0]; r_mask <= rin[31];
-        r_zero <= rin == 32'd0; r_min <= rin == 32'hFFFF_8000;
+        r_zero <= r_clz[5]; r_min <= r_ninc && rin[14:0] == 15'd0;      // (r_data is 0 for rin 0 alone; -32768 is the one value of r_ninc that is not negated)
         if (valid && vec && !fn_known) unimpl <= 1'b1;
         if (start_nc && (lwc2 || swc2) && !ls_known) unimpl <= 1'b1;
 
@@ -837,6 +869,8 @@ always_ff @(posedge clk) begin
             if (NP == 1 && (x_am == 3'd4 || x_am == 3'd5 || x_am == 3'd6)) x_am <= 3'd7;   // (a clip's flags are in fl_r: the adder makes -t)
         end
         for (int l = 0; l < LANES; l++) fl_r[l] <= ex[l].fl;
+        // (one pass: `hold` keeps a result for the late write -- wp, the cycle after -- and is 0 otherwise)
+        if (NP == 1) for (int l = 0; l < LANES; l++) hold[l] <= x_defer ? ex[l].res : 16'd0;
         if (x_exec) begin
             for (int l = 0; l < LANES; l++) begin
                 automatic int li = int'(x_pass) * LANES + l;
@@ -847,7 +881,7 @@ always_ff @(posedge clk) begin
                 if (ex[l].co_w) begin vco[li] <= ex[l].co_lo; vco[8 + li] <= ex[l].co_hi; end
                 if (ex[l].cc_w) begin vcc[li] <= ex[l].cc_lo; vcc[8 + li] <= ex[l].cc_hi; end
                 if (ex[l].ce_w) vce[li] <= ex[l].ce;
-                hold[li] <= ex[l].res;
+                if (NP == 2) hold[li] <= ex[l].res;
             end
             if (MW && x_mw)
                 for (int l = 0; l < LANES; l++) begin

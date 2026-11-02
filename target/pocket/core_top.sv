@@ -211,18 +211,11 @@ module core_top (
     //   [ 7: 0] ltrig
     //   [15: 8] rtrig
     //
-    input wire [31:0] cont1_key,
-    input wire [31:0] cont2_key,
-    input wire [31:0] cont3_key,
-    input wire [31:0] cont4_key,
-    input wire [31:0] cont1_joy,
-    input wire [31:0] cont2_joy,
-    input wire [31:0] cont3_joy,
-    input wire [31:0] cont4_joy,
-    input wire [15:0] cont1_trig,
-    input wire [15:0] cont2_trig,
-    input wire [15:0] cont3_trig,
-    input wire [15:0] cont4_trig,
+    // the pads, a word at a time (io_pad_controller.v): into the RAM that mirlo_regs.sv reads them from, by clk_74a:
+    // 0..3 CONT1..4_KEY, 4..7 CONT1..4_JOY, 8..11 CONT1..4_TRIG
+    input wire        pad_we,
+    input wire [3:0]  pad_wa,
+    input wire [31:0] pad_wd,
 
     input  wire altera_reserved_tck,
     input  wire altera_reserved_tdi,
@@ -1011,21 +1004,10 @@ module core_top (
 
       .apf_id_chip_id(chip_id),
 
-      .apf_input_cont1_key (cont1_key),
-      .apf_input_cont1_joy (cont1_joy),
-      .apf_input_cont1_trig(cont1_trig),
-
-      .apf_input_cont2_key (cont2_key),
-      .apf_input_cont2_joy (cont2_joy),
-      .apf_input_cont2_trig(cont2_trig),
-
-      .apf_input_cont3_key (cont3_key),
-      .apf_input_cont3_joy (cont3_joy),
-      .apf_input_cont3_trig(cont3_trig),
-
-      .apf_input_cont4_key (cont4_key),
-      .apf_input_cont4_joy (cont4_joy),
-      .apf_input_cont4_trig(cont4_trig),
+      .apf_pad_clk(clk_74a),
+      .apf_pad_we(pad_we),
+      .apf_pad_wa(pad_wa),
+      .apf_pad_wd(pad_wd),
 
       .apf_interact_address(interact_addr),
       .apf_interact_data(interact_data),

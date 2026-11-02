@@ -45,18 +45,12 @@ input   wire            reset_n,
 
 inout   reg             pad_1wire,
 
-output  reg     [31:0]  cont1_key,
-output  reg     [31:0]  cont2_key,
-output  reg     [31:0]  cont3_key,
-output  reg     [31:0]  cont4_key,
-output  reg     [31:0]  cont1_joy,
-output  reg     [31:0]  cont2_joy,
-output  reg     [31:0]  cont3_joy,
-output  reg     [31:0]  cont4_joy,
-output  reg     [15:0]  cont1_trig,
-output  reg     [15:0]  cont2_trig,
-output  reg     [15:0]  cont3_trig,
-output  reg     [15:0]  cont4_trig,
+// the controller words, as the core reads them: written one word at a time into a RAM of 16 words (the core's, in the
+// core's own clock; mirlo_regs.sv), at the address of the register's place in the map: 0..3 CONT1..4_KEY, 4..7 CONT1..4_JOY,
+// 8..11 CONT1..4_TRIG (the trigger words' upper half is 0). pad_we is a pulse of this clock
+output  reg             pad_we,
+output  reg     [3:0]   pad_wa,
+output  reg     [31:0]  pad_wd,
 
 output  reg             rx_timed_out
 );
@@ -74,10 +68,9 @@ synch_3 s01(pad_1wire, pad_1wire_s, clk, pad_1wire_r, pad_1wire_f);
 
     reg [20:0]  rx_timeout; // ~28ms
 
-    reg [15:0]  auto_poll_cnt; // 882us
     reg         auto_poll_queue;
 
-    reg [18:0]  heartbeat_cnt; // 7ms
+    reg [18:0]  heartbeat_cnt; // 7ms; its low 16 bits are the poll timer, 882us (both counted from the start, each clock)
     reg         heartbeat_queue;
 
 
@@ -93,8 +86,8 @@ synch_3 s01(pad_1wire, pad_1wire_s, clk, pad_1wire_r, pad_1wire_f);
 
 always @(posedge clk) begin
     tx_word_start <= 0;
+    pad_we <= 0;
 
-    auto_poll_cnt <= auto_poll_cnt + 1'b1;
     heartbeat_cnt <= heartbeat_cnt + 1'b1;
 
     // increment rx timeout, override and reset when idle below
@@ -118,14 +111,14 @@ always @(posedge clk) begin
             auto_poll_queue <= 0;
 
             tx_word_start <= 1;
-            tx_word <= 32'h4A10000C;
+            tx_hb <= 0;
 
             state <= ST_RX_BUTTON_1;
         end else if(heartbeat_queue) begin
             heartbeat_queue <= 0;
 
             tx_word_start <= 1;
-            tx_word <= 32'h4AFE0000;
+            tx_hb <= 1;
 
             state <= ST_END_TX;
         end
@@ -139,23 +132,26 @@ always @(posedge clk) begin
     ST_RX_BUTTON_2: begin
         if(rx_word_done) begin
             cnt <= cnt + 1'b1;
+            // (rx_word_shift is the word: it keeps it until the next one's first bit, some 25 clocks on)
+            pad_we <= cnt < 4'd12;
+            pad_wd <= (cnt == 4'd2 || cnt == 4'd5 || cnt == 4'd8 || cnt == 4'd11) ? {16'd0, rx_word_shift[15:0]} : rx_word_shift;
             case(cnt)
-            0: cont1_key <= rx_word;
-            1: cont1_joy <= rx_word;
-            2: cont1_trig <= rx_word[15:0];
+            0:  pad_wa <= 4'd0;     // cont1_key
+            1:  pad_wa <= 4'd4;     // cont1_joy
+            2:  pad_wa <= 4'd8;     // cont1_trig
 
-            3: cont2_key <= rx_word;
-            4: cont2_joy <= rx_word;
-            5: cont2_trig <= rx_word[15:0];
+            3:  pad_wa <= 4'd1;
+            4:  pad_wa <= 4'd5;
+            5:  pad_wa <= 4'd9;
 
-            6: cont3_key <= rx_word;
-            7: cont3_joy <= rx_word;
-            8: cont3_trig <= rx_word[15:0];
+            6:  pad_wa <= 4'd2;
+            7:  pad_wa <= 4'd6;
+            8:  pad_wa <= 4'd10;
 
-            9: cont4_key <= rx_word;
-            10: cont4_joy <= rx_word;
+            9:  pad_wa <= 4'd3;
+            10: pad_wa <= 4'd7;
             11: begin
-                cont4_trig <= rx_word[15:0];
+                pad_wa <= 4'd11;    // cont4_trig
                 state <= ST_IDLE;
             end
             endcase
@@ -171,7 +167,7 @@ always @(posedge clk) begin
     endcase
 
 
-    if(&auto_poll_cnt) begin
+    if(&heartbeat_cnt[15:0]) begin
         auto_poll_queue <= 1;
     end
     if(&heartbeat_cnt) begin
@@ -202,12 +198,11 @@ end
 
     reg         rx_word_done;
     reg [31:0]  rx_word_shift;
-    reg [31:0]  rx_word;
 
     reg         tx_word_start, tx_word_start_1;
     reg         tx_word_done;
-    reg [31:0]  tx_word;
-    reg [31:0]  tx_word_shift;
+    reg         tx_hb;      // the word sent: the heartbeat's, else the poll's
+    wire [31:0] tx_word = tx_hb ? 32'h4AFE0000 : 32'h4A10000C;
 
     reg [7:0]   tr_cnt;
     reg [5:0]   tr_bit;
@@ -238,7 +233,6 @@ always @(posedge clk) begin
 
         if(tx_word_start & ~tx_word_start_1) begin
             // transmit word
-            tx_word_shift <= tx_word;
             tr_state <= TR_TX_START;
         end
 
@@ -265,15 +259,13 @@ always @(posedge clk) begin
             pad_1wire <= 1'b0;
         end
         (BITLEN/3): begin
-            pad_1wire <= tx_word_shift[31];
+            pad_1wire <= tx_word[5'd31 - tr_bit[4:0]];
         end
         (BITLEN*2/3): begin
             pad_1wire <= 1'b1;
         end
         (BITLEN-1): begin
             tr_cnt <= 0;
-            tx_word_shift <= {tx_word_shift[30:0], 1'b1};
-
             tr_bit <= tr_bit + 1'b1;
             if(tr_bit == 31) begin
                 tr_state <= TR_TX_DONE;
@@ -312,7 +304,6 @@ always @(posedge clk) begin
         end
     end
     TR_RX_DONE: begin
-        rx_word <= rx_word_shift;
         rx_word_done <= 1;
         tr_state <= TR_IDLE;
     end

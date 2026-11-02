@@ -285,18 +285,9 @@ mf_ddio_bidir_12 isclk(
 
 
 // controller data (pad) controller.
-    wire    [31:0]  cont1_key;
-    wire    [31:0]  cont2_key;
-    wire    [31:0]  cont3_key;
-    wire    [31:0]  cont4_key;
-    wire    [31:0]  cont1_joy;
-    wire    [31:0]  cont2_joy;
-    wire    [31:0]  cont3_joy;
-    wire    [31:0]  cont4_joy;
-    wire    [15:0]  cont1_trig;
-    wire    [15:0]  cont2_trig;
-    wire    [15:0]  cont3_trig;
-    wire    [15:0]  cont4_trig;
+    wire            pad_we;
+    wire    [3:0]   pad_wa;
+    wire    [31:0]  pad_wd;
 
 io_pad_controller ipm (
     .clk            ( clk_74a ),
@@ -304,18 +295,9 @@ io_pad_controller ipm (
 
     .pad_1wire      ( bridge_1wire ),
 
-    .cont1_key          ( cont1_key ),
-    .cont2_key          ( cont2_key ),
-    .cont3_key          ( cont3_key ),
-    .cont4_key          ( cont4_key ),
-    .cont1_joy          ( cont1_joy ),
-    .cont2_joy          ( cont2_joy ),
-    .cont3_joy          ( cont3_joy ),
-    .cont4_joy          ( cont4_joy ),
-    .cont1_trig         ( cont1_trig ),
-    .cont2_trig         ( cont2_trig ),
-    .cont3_trig         ( cont3_trig ),
-    .cont4_trig         ( cont4_trig )
+    .pad_we             ( pad_we ),
+    .pad_wa             ( pad_wa ),
+    .pad_wd             ( pad_wd )
 );
 
 
@@ -466,18 +448,9 @@ core_top ic (
     .altera_reserved_tdo(altera_reserved_tdo),
     .altera_reserved_tms(altera_reserved_tms),
 
-    .cont1_key              ( cont1_key ),
-    .cont2_key              ( cont2_key ),
-    .cont3_key              ( cont3_key ),
-    .cont4_key              ( cont4_key ),
-    .cont1_joy              ( cont1_joy ),
-    .cont2_joy              ( cont2_joy ),
-    .cont3_joy              ( cont3_joy ),
-    .cont4_joy              ( cont4_joy ),
-    .cont1_trig             ( cont1_trig ),
-    .cont2_trig             ( cont2_trig ),
-    .cont3_trig             ( cont3_trig ),
-    .cont4_trig             ( cont4_trig )
+    .pad_we                 ( pad_we ),
+    .pad_wa                 ( pad_wa ),
+    .pad_wd                 ( pad_wd )
 );
 
 endmodule
