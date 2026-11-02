@@ -214,7 +214,9 @@ int main(void)
         check("store refill: the refill vector", REFILLS, 1);
         check("store refill: BadVAddr", h_badv, va + 0x1010);
         check("store refill: landed", *K1(0x00501010), 0x57A7E001u);
-        /* an invalid page (the entry is there): the general vector, TLBL for a load */
+        /* an invalid page (the entry is there): the general vector, TLBL for a load. (The refill above wrote its entry with tlbwr, at
+         * Random's index: an entry of a lower index for this page would win over the invalid one, so it goes first) */
+        tlb_unmap_all();
         tlb_wi(4, 0, va | 0x23u, LO(0x00500000, LD), LO(0x00501000, LV | LD));
         GENERALS = 0; REFILLS = 0;
         act(A_REPAIR, 0, va | 0x23u, LO(0x00500000, LV | LD), LO(0x00501000, LV | LD));
