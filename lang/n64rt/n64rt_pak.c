@@ -69,6 +69,12 @@
 #define PAK_BYTES     ((u32)LAYOUT_PAK_BYTES)
 
 #define NPAK 2                                  /* the controllers with an accessory: 1 and 2 */
+#ifdef N64RT_GBTRACE
+void n64rt_trace_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define GBLOG(...) do { n64rt_log(__VA_ARGS__); n64rt_trace_log(__VA_ARGS__); } while (0)
+#else
+#define GBLOG(...) n64rt_log(__VA_ARGS__)
+#endif
 static struct { u8 on, access, changed, bank; } s_tpv[NPAK];   /* the Transfer Pak of each */
 static u8 s_sized;                              /* the Controller Pak's file size is in the table */
 
@@ -291,6 +297,12 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
         /* (libultra: no bit 7 is PFS_ERR_NO_GBCART; osGbpakReadId wants bit 3 after the power-on) */
         memset(b, (s_slot.in ? 0x80 : 0) | (s_tp.access ? (s_slot.in ? 0x09 : 0x01) : 0) | (s_tp.changed ? 0x04 : 0)
                   | (s_slot.pulled ? 0x40 : 0), 32);
+#if defined(N64RT_GBTRACE) || defined(N64RT_DEBUG)
+        {   /* (a test build: the status the game reads, the first time after the game starts and whenever it changes) */
+            static u8 s_seen[NPAK], s_last[NPAK];
+            if (!s_seen[ch] || s_last[ch] != b[0]) { s_seen[ch] = 1; s_last[ch] = b[0]; GBLOG("n64rt: Transfer Pak %d: the game reads the status %02x (%s)\n", ch + 1, b[0], b[0] & 0x80 ? "a cartridge" : "no cartridge"); }
+        }
+#endif
         s_tp.changed = 0;
         s_slot.pulled = 0;
     } else if (hi >= 0xCu && s_tp.access && s_slot.in) {

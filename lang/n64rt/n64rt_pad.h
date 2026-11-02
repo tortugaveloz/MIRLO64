@@ -22,7 +22,7 @@
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
  *                        (the stick stays centred); any other value is the D-pad
- *          [21:20]  n=12 free
+ *          [21:20]  n=12 "Restart Game": the action's value (1) when it is chosen, cleared by the runtime (n64rt_restart.c); not a setting
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
  *          [24]     n=14 free (was "Show FPS", which nothing ever read)
  *          [25]     n=15 free (was "Start = Select+Start")

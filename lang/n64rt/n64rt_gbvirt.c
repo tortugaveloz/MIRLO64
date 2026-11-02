@@ -408,31 +408,51 @@ void n64rt_gbv_power(int n, int on)
  * slot makes its cartridge and reads its save, one that is gone writes it back --; and a cartridge whose RAM the game wrote and has not written for
  * FLUSH_QUIET is written back, as a core that is quit leaves no word for the runtime (the Pocket tells the core nothing then) */
 #define FLUSH_QUIET (2u * CONFIG_CLOCK_FREQUENCY)
+static void poll(int n, int look)
+{
+    sel(n);
+    if (n64rt_pak_kind(n) != N64RT_PAK_VIRTUAL) {      /* (a ROM is loaded for a pak that is not the SD one: nothing is read or written for it) */
+        if (g.have) { flush("the pak is not the SD one"); g.have = 0; g.in = 0; }
+        return;
+    }
+    if (look || !g.have) {
+        u8 h[0x50];
+        u32 size, id;
+        g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
+        if (!rom_probe(h, &size, &id)) {
+            if (g.have) { flush("the ROM is gone"); g.have = 0; g.in = 0; }
+        } else if (!g.have || id != g.id || size != g.rom_bytes) rom_new(h, size, id);
+    }
+    if (!g.have) return;
+    if (g.req) { g.req = 0; flush("the cartridge's power off"); }
+    if (!g.dirty || !g.wr) return;
+    if (g.wcount != g.wseen) { g.wseen = g.wcount; g.t_dirty = now(); return; }
+    if (now() >= g.t_dirty && now() - g.t_dirty >= FLUSH_QUIET) flush("quiet");
+}
 void n64rt_gbv_field(void)
 {
     static u32 s_f;
     const int look = (s_f++ & 7u) == 0;
+    for (int n = 0; n < 2; n++) poll(n, look);
+}
+
+/* The game is about to start over (n64rt_restart.c, the "Restart Game" action), as if the console were switched off and on with the
+ * cartridges left in the Transfer Paks. The ROM loaded last is looked at now (a cartridge not made yet is made, and its save read), the RAM the
+ * game wrote is written to the file at once (the quiet moment is not waited for), and each cartridge is powered off and on, which resets its
+ * mapper. The cartridges themselves -- ROM, RAM, clock, the file's path -- stay as they are (n64rt_gbv_keep): the first status the game reads
+ * after it starts finds them in. */
+void n64rt_gbv_restart_prep(void)
+{
     for (int n = 0; n < 2; n++) {
+        poll(n, 1);
         sel(n);
-        if (n64rt_pak_kind(n) != N64RT_PAK_VIRTUAL) {      /* (a ROM is loaded for a pak that is not the SD one: nothing is read or written for it) */
-            if (g.have) { flush("the pak is not the SD one"); g.have = 0; g.in = 0; }
-            continue;
-        }
-        if (look || !g.have) {
-            u8 h[0x50];
-            u32 size, id;
-            g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
-            if (!rom_probe(h, &size, &id)) {
-                if (g.have) { flush("the ROM is gone"); g.have = 0; g.in = 0; }
-            } else if (!g.have || id != g.id || size != g.rom_bytes) rom_new(h, size, id);
-        }
-        if (!g.have) continue;
-        if (g.req) { g.req = 0; flush("the cartridge's power off"); }
-        if (!g.dirty || !g.wr) continue;
-        if (g.wcount != g.wseen) { g.wseen = g.wcount; g.t_dirty = now(); continue; }
-        if (now() >= g.t_dirty && now() - g.t_dirty >= FLUSH_QUIET) flush("quiet");
+        flush("the game restarts");
+        n64rt_gbv_power(n, 0);
+        n64rt_gbv_power(n, 1);
     }
 }
+/* the cartridges' state, which a restart keeps whole (the runtime's other memory starts over) */
+void *n64rt_gbv_keep(u32 *bytes) { *bytes = sizeof s_gbv; return s_gbv; }
 
 /* ---- the bus ----------------------------------------------------------------------- */
 static u8 rom_at(u32 off) { return off < g.rom_bytes ? ROM_MEM[off] : 0xFFu; }

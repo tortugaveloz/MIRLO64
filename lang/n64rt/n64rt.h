@@ -321,6 +321,16 @@ void n64rt_gbv_write(int n, u32 addr, u8 value);
 void n64rt_gbv_field(void);               /* every video field: a new ROM makes its cartridge and reads its save, the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file; the only place that talks to the Pocket */
 u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
 void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
+void n64rt_gbv_restart_prep(void);         /* the game is about to start over (n64rt_restart.c): the ROMs just loaded made cartridges, the RAM written back, the cartridges power-cycled */
+void *n64rt_gbv_keep(u32 *bytes);          /* the cartridges' state, which a restart keeps */
+/* "Restart Game" (n64rt_restart.c): the action in the core's settings starts the game over, as a console switched off and on */
+void n64rt_restart_snapshot(void);         /* main(), at the program's own start: the .data a restart puts back */
+void n64rt_restart_booted(void);           /* main(), on a start that is a restart's: says so */
+void n64rt_restart_poll(void);             /* every tick (MONITOR.PEND bit 2): was the action chosen */
+extern u32 n64rt_restarted;                /* 0, or how many times the program has started over */
+#ifdef N64RT_RESTART_FP
+void n64rt_restart_fp(void);               /* a test build: the hardware's registers as the game is about to start, one line each */
+#endif
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */
 /* a task of another microcode (not graphics or audio): a game port may
  * provide it (weak; 1 = done) */

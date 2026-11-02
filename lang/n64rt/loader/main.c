@@ -90,10 +90,12 @@ static u32 rom_elf(u32 size)
 
 int main(void)
 {
+    if (!n64rt_restarted) n64rt_restart_snapshot();        /* (the .data a "Restart Game" puts back: n64rt_restart.c) */
     apf_bridge_slot_id_write(0);
     for (volatile int i = 0; i < 2000; i++) ;       /* (the slot's size: read in the bridge's clock) */
     u32 size = apf_bridge_file_size_read();
     printf("\nMirlo's N64 loader: a file of %lu bytes in slot 0\n", (unsigned long)size);
+    if (n64rt_restarted) n64rt_restart_booted();
     /* a small file that is no ROM: a program linked to run where it is (a
      * test of the core's: lang/mips/test, its memory from 1 MiB) -- copied
      * there, to the SDRAM, from the PSRAM the Pocket wrote it to */

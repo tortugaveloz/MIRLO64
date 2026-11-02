@@ -267,6 +267,8 @@ static int quiesce(int force)
     return 1;
 }
 
+int n64rt_hw_quiesce(int force) { return quiesce(force); }       /* (n64rt_restart.c: the hardware at rest before a restart) */
+
 /* ---- the RSP's DMEM, through the RDRAM's first 4 KiB (its DMA reaches the RDRAM only) --------------------------- */
 static void sp_dma(u32 sp, u32 rdram, u32 bytes, int to_rdram)
 {
@@ -561,6 +563,8 @@ void n64rt_state_resumed(const ss_hw_t *w)
     if (w->fcc) __asm__ volatile("c.ueq.s $f0, $f0");   /* (the FPU's condition bit: $f0 is the game's again on the way out) */
     else __asm__ volatile("c.f.s $f0, $f0");
 }
+
+int n64rt_state_busy(void) { return s_in; }   /* (n64rt_restart.c: a state is being made or put back) */
 
 /* MONITOR.PEND bit 5 (n64rt_rcp_events): the Pocket asks */
 void n64rt_state_event(void)
