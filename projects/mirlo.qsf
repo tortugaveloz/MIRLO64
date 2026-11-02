@@ -34,7 +34,7 @@ set_global_assignment -name SAVE_DISK_SPACE OFF
 # negative, compile three seeds in parallel (copies of projects/ with a
 # different SEED each) and keep the one that closes. With
 # PLACEMENT_EFFORT_MULTIPLIER 10.0 (below).
-set_global_assignment -name SEED 1
+set_global_assignment -name SEED 4
 # Off: smart recompilation can skip synthesis when only a memory's init file
 # changed -- the game CPU's boot ROM is one.
 set_global_assignment -name SMART_RECOMPILE OFF
