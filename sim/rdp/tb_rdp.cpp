@@ -186,7 +186,7 @@ static void tick()
         if (top->m_cmd_valid && top->m_cmd_ready) (top->m_cmd_we ? st_wr : st_rd)[top->rootp->rdp_top__DOT__st & 31]++;
         if ((top->rootp->rdp_top__DOT__st & 31) == 6) {      // S_PIX: why the clock was spent
             auto *r = top->rootp;
-            int k = !r->rdp_top__DOT__row_wq ? 0 : r->rdp_top__DOT__pix_gh ? 1 : r->rdp_top__DOT__pix_go ? 2 : !r->rdp_top__DOT__pix_slot ? 3 : (r->rdp_top__DOT__rq_pend && r->rdp_top__DOT__rq_set == r->rdp_top__DOT__set_cur) ? 4 : 5;
+            int k = !r->rdp_top__DOT__row_wq ? 0 : r->rdp_top__DOT__pix_gh ? 1 : r->rdp_top__DOT__pix_go ? 2 : (r->rdp_top__DOT__lod_on && r->rdp_top__DOT__pix_valid) ? 3 : (r->rdp_top__DOT__rq_pend && r->rdp_top__DOT__rq_set == r->rdp_top__DOT__set_cur) ? 4 : 5;
             pix_why[k]++;
             if (k == 0) pix_why2[1][6 + (r->rdp_top__DOT__wq_pend ? 0 : 1)]++;
             if (k == 4 || k == 5) {         // the own row's read request still to be taken (k 4), or its words not in (k 5): why
