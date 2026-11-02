@@ -19,7 +19,8 @@ registers; a TLB exception's handler (at both vectors) steps over the instructio
 of itself, at 0x1000_0000 (two pairs of global 64 KiB pages, entries 0 and 1, which the random TLB writes leave alone: Wired is 2): its fetches go through
 the TLB, a TLB write and an ASID change in the middle of them.
 A last argument "k1" has the program run from KSEG1 (its own code fetched
-uncached, a word at a time; the trap handler stays in KSEG0). An argument "ua"
+uncached, a word at a time; the trap handler stays in KSEG0). An argument "jmp" adds register jumps in loops (a computed jump into a slide, calls and returns, jalr), for a jump-target table.
+An argument "ua"
 adds ldl, ldr, sdl and sdr (the core's W64_UA) at every byte address, through
 the cache and around it, and as often as ld and sd.
 """
@@ -68,6 +69,7 @@ def main():
     ua = "ua" in sys.argv[5:] and not base
     tlb = "tlb" in sys.argv[5:] and not e2e
     tlbx = tlb and "tlbx" in sys.argv[5:]
+    jmp = "jmp" in sys.argv[5:] and not e2e and not tlb          # (r31 is a TLB window's there)
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -257,6 +259,74 @@ def main():
         alu() if rnd.random() < 0.7 else mem()          # the delay slot
         for _ in range(skip): alu()
 
+    def jumps():
+        # ("jmp") register jumps: a computed jump into a slide of instructions that every pass of a loop may enter at another one, a call and
+        # its return (the return address kept in memory, or reloaded just before the jr), a call through a register (jalr), a jr to the next
+        # instruction. They run in a loop that goes round 2 to 5 times, so that what a table of jump targets learns is used, and wrong
+        # when the target changes. K1 is the loop's counter; the targets are in K0.
+        k = rnd.randrange(5)
+        n = rnd.randrange(2, 6)
+        here = lambda: ENTRY + 4 * len(code)
+        li32(K1, n)
+        top = len(code)
+        for _ in range(rnd.randrange(3)): alu()
+        if k == 0:                              # computed jump into a slide of 4
+            x = reg()
+            I(0x0C, src(), x, rnd.choice([1, 3, 3]))                 # andi x, s, 1 or 3
+            R(0, x, x, 2, 0x00)                                      # sll x, x, 2
+            li32(K0, here() + 4 * 5)                                 # (the slide: after the li32 [2], addu, jr, slot)
+            R(K0, x, K0, 0, 0x21)                                    # addu k0, k0, x
+            R(K0, 0, 0, 0, 0x08)                                     # jr k0
+            alu()                                                    # its delay slot
+            for _ in range(4): alu()
+        elif k == 1:                            # a call and its return
+            ra_mem = rnd.random() < 0.6
+            I(0x03, 0, 0, 0)                                         # jal (patched below)
+            j_at = len(code) - 1
+            alu()                                                    # its delay slot
+            # the return point: jump over the callee
+            emit(0x08000000)                                         # j (patched below)
+            jo_at = len(code) - 1
+            emit(0)                                                  # nop in its slot
+            f = ENTRY + 4 * len(code)
+            code[j_at] = 0x03 << 26 | (f >> 2) & 0x3FFFFFF
+            if ra_mem: I(0x2B, CACHED, 31, 504)                      # sw ra, 504(cached)
+            for _ in range(rnd.randrange(3)): alu()
+            if ra_mem: I(0x23, CACHED, 31, 504)                      # lw ra, 504(cached), and the jr right behind it or one instruction later
+            if ra_mem and rnd.random() < 0.5: alu()
+            R(31, 0, 0, 0, 0x08)                                     # jr ra
+            alu()
+            e = ENTRY + 4 * len(code)
+            code[jo_at] = 0x02 << 26 | (e >> 2) & 0x3FFFFFF
+        elif k == 2:                            # jalr through a register, the callee returns
+            li32(K0, here() + 4 * 6)
+            rd = 31                                                  # (a GP register would be clobbered by the code in between)
+            R(K0, 0, rd, 0, 0x09)                                    # jalr rd, k0
+            alu()
+            emit(0x08000000); jo_at = len(code) - 1                  # j over the callee
+            emit(0)
+            for _ in range(rnd.randrange(3)): alu()
+            R(rd, 0, 0, 0, 0x08)                                     # jr rd
+            alu()
+            e = ENTRY + 4 * len(code)
+            code[jo_at] = 0x02 << 26 | (e >> 2) & 0x3FFFFFF
+        elif k == 3:                            # jr to the next instruction but one, the target set just before
+            li32(K0, here() + 4 * 4)
+            R(K0, reg() if rnd.random() < 0.3 else 0, 0, 0, 0x08)     # (the rt field is not looked at: now and then it names the register ahead)
+            alu()
+            alu()
+        else:                                   # jr back over the loop's top, once: a computed target that is the loop's own start
+            li32(K0, here() + 4 * 5)
+            I(0x09, 0, 25, 1)
+            R(K0, 0, 0, 0, 0x08)
+            alu()
+            alu()
+        # the loop: K1 counts down
+        I(0x09, K1, K1, -1)
+        off = (top - (len(code) + 1)) & 0xFFFF
+        I(0x05, K1, 0, off)                                          # bne k1, zero, top
+        alu()
+
     def fpu64():
         # ("e2e") the FPU's 64-bit integers, which the core leaves to the runtime
         # whole: through f4, f6, f8 and back into an integer register
@@ -274,6 +344,7 @@ def main():
     while len(code) < n:
         k = rnd.random()
         if e2e and k < 0.04: fpu64()
+        elif jmp and k < 0.08: jumps()
         elif k < 0.52: alu()
         elif k < 0.80: mem()
         elif k < 0.95: branch()

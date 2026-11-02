@@ -198,6 +198,7 @@ integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
+| `JT` | 1 | The register jumps' guess (a stack of return addresses); 0: they are guessed not taken |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -209,7 +210,7 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
 - **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a conditional branch by a 2-bit
-  counter of its address (below); a register jump not taken), and a wrong guess costs two cycles. A delay slot costs nothing. The
+  counter of its address (below); a register jump to the return address on top of a stack (below)), and a wrong guess costs two cycles. A delay slot costs nothing. The
   branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
   it was taken, and the fetch chooses between them behind the registers.
 - **M**: a load takes the D-cache's word before its tag is compared. A load of the wrong line is not written back; the
@@ -245,6 +246,9 @@ branch costs no more than a branch that is not.
 | a branch not taken, with its delay slot | 2 | 2 when its counter (below) says not taken, else 4 (the fetch is put right two cycles later) |
 | a branch taken, with its delay slot | 2 | 2 when its counter says taken, else 4 |
 | `beql` not taken (slot annulled) | 2 | as a branch not taken |
+| `jal` and `j`, with the delay slot | 2 | 2 |
+| `jr $ra` (a return), with the delay slot | 2 | 2 when the stack has the address (the calls that left D pushed it), else 4 |
+| `jr`, `jalr` through another register, with the delay slot | 2 | 4 |
 
 The fetch follows a guess that a branch is taken, by a 2-bit counter (0 to 3, up when the branch is taken, down when not) in a table of 64, by the
 low bits of the branch's address and for forward and backward branches alike: a forward branch is guessed taken when its counter is 2 or 3, a backward one
@@ -254,6 +258,22 @@ the decision; a branch that comes round again before that has not seen the outco
 forward branches only (one bit: the last outcome) got 25.5 % of the branches of one game's attract mode wrong and 13.0 % of another's; the counters,
 18.1 % and 7.0 % (`sim/mips/branch_pred.py` on the branches the console model counted, 16.0 and 3.0 million; a table of 256 counters would get 18.0 % and 5.4 %).
 On the SoC, in 30 fields of two games' attract modes, cycles an instruction go from 1.5409 to 1.5238 and from 1.3336 to 1.2803 (1.1 % and 4.0 % fewer).
+
+A register jump (`jr`, `jalr`) was guessed not taken, so each one cost the two cycles of a wrong guess, every function's return among them. With `JT` it is
+guessed taken, to the top of a stack of 4 return addresses (`ras`: a call -- `jal`, `jalr`, a branch and link -- pushes the address after its delay
+slot as it leaves D, a `jr $ra` pops one as it leaves D; a stack that has nothing is no guess), which F reads as the jump is delivered to D (`d_jt`, a
+word address, from where the fetch goes). It is a function's return that this gets right; a `jr` through another register (a switch's, a function pointer's) and a
+`jalr` are guessed to the same place and are wrong, as they were. E compares the register with the target guessed -- by the comparator of
+`beq`: the guessed target is the jump's second operand, `e_rb`, and the forwarding into it is off for a jump -- and a different target puts the fetch right
+as a wrong guess of a branch is, two cycles late: a wrong guess costs what the missing one did. A call or return on a wrong path pushes or pops on the stack
+and spoils what follows (nothing is repaired); the check keeps the program right. The stack is a small RAM of logic (an MLAB). On the register jumps that four games'
+windows ran (`sim/mips/jump_pred.py`) a stack of 4 gets 99.3 %, 73.0 %, 78.2 % and 83.2 % right (99.7, 98.8, 92.3 and 94.4 % of the `jr $ra`; the rest are the
+jumps through other registers), a stack of 2 gets 98.7, 71.7, 72.0 and 77.1 %. In the same 30 fields of the two games' attract modes cycles an instruction go from
+1.5238 to 1.5133 and from 1.2803 to 1.2693 with the stack (0.7 % and 0.9 % fewer than with the counters alone; 1.8 % and 4.8 % fewer than before both).
+A table of 16 last targets by the jump's address for the jumps through other registers (a quarter of one game's) was tried with the stack: it takes 0.7 % more off that game's cycles
+and nothing off the others', costs 13 ALUTs and 5 registers more in the CPU's synthesis, and 0 of the 6 seeds closed timing with it (3 of 6 with the stack alone).
+`gen_rand_rom.py` with `jmp` adds loops with a computed jump into a slide of instructions (its target changes), calls and returns with the return address
+reloaded just before the jump, and `jalr`.
 
 ### Caches and memory
 
