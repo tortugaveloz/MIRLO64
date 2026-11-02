@@ -129,7 +129,7 @@ each setting has an address of its own and needs no mask.
 | 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
 | 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
 | 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
-| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Start button |
+| 12 | `0x1000_0130` | `INTERACT1[21:20]` | Restart Game: an action (`interact.json` type `action`) that writes 1 here whenever it is chosen; the runtime clears the field when it has seen it, so that the next choice is a change again (the Pocket writes the same value every time) |
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |

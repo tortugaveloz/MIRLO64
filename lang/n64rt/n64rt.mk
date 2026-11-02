@@ -23,7 +23,7 @@ N64RT_F3D := -DF3D_N64RAM $(if $(filter 1,$(RAWCC)),-DF3D_RAW_CC) -DF3D_TRACE=0
 # RSP=1: for the SoC built with MIRLO_RSP -- the game's tasks on its own
 # microcode (n64rt_rsp.c): no translator, no geom or audio firmware.
 ifeq ($(RSP),1)
-N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_gs.o n64rt_cheat.o n64rt_exc.o n64rt_rsp.o n64rt_savedb.o n64rt_state.o $(if $(GBTRACE),n64rt_trace.o))
+N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_gs.o n64rt_cheat.o n64rt_exc.o n64rt_rsp.o n64rt_savedb.o n64rt_state.o n64rt_restart.o $(if $(GBTRACE),n64rt_trace.o))
 CFLAGS += -DN64RT_RSP $(if $(GBTRACE),-DN64RT_GBTRACE)
 else
 N64RT_OBJECTS = $(addprefix $(BUILD)/,n64rt_boot.o n64rt_os.o n64rt_io.o n64rt_pak.o n64rt_gbvirt.o n64rt_gs.o n64rt_cheat.o n64rt_exc.o n64rt_gfx.o n64rt_savedb.o \
@@ -33,7 +33,7 @@ CFLAGS += -I$(RT) -I$(MIRLO)/lang/c/game -I$(MIRLO)/lang/c/geom -I$(MIRLO)/lang/
           -fno-strict-aliasing $(N64RT_F3D) $(if $(DEBUG),-DN64RT_DEBUG) \
           $(if $(RSPDUMP),-DN64RT_RSPDUMP) $(if $(PAK_FORCE),-DN64RT_PAK_FORCE=$(PAK_FORCE)u) \
           $(if $(SI_GAME),-DN64RT_SI_GAME=$(SI_GAME)) $(if $(filter 1,$(STATS)),-DN64RT_STATS) \
-          $(if $(filter 1,$(OWN)),-DN64RT_OWN -DN64RT_SI_GAME=1) $(if $(TLB_FATAL),-DN64RT_TLB_FATAL) $(if $(EEP16K),-DN64RT_EEP16K) $(if $(PADLOG),-DN64RT_PADLOG) $(if $(TLBPROF),-DN64RT_TLBPROF) $(if $(TLBKEEP_CHECK),-DN64RT_TLBKEEP_CHECK=$(TLBKEEP_CHECK)u) $(if $(NO_TLBKEEP),-DN64RT_NO_TLBKEEP)
+          $(if $(filter 1,$(OWN)),-DN64RT_OWN -DN64RT_SI_GAME=1) $(if $(TLB_FATAL),-DN64RT_TLB_FATAL) $(if $(EEP16K),-DN64RT_EEP16K) $(if $(PADLOG),-DN64RT_PADLOG) $(if $(TLBPROF),-DN64RT_TLBPROF) $(if $(TLBKEEP_CHECK),-DN64RT_TLBKEEP_CHECK=$(TLBKEEP_CHECK)u) $(if $(NO_TLBKEEP),-DN64RT_NO_TLBKEEP) $(if $(RESTART_FP),-DN64RT_RESTART_FP)
 
 GEOM_FW_H  := $(abspath $(BUILD))/geom/geom_fw.h
 # (no display-list cache on the geom core: an N64 game's lists are rebuilt

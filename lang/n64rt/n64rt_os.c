@@ -108,7 +108,7 @@ void n64rt_fatal(const char *fmt, ...)
      * first 150 KiB -- the game is not going on */
     monitor_ctl_write(1u);
     notice(N64RT_RDRAM_SDRAM, s_msg);
-    for (;;) ;
+    for (;;) n64rt_restart_poll();                       /* (the core's "Restart Game" starts the game over from here too) */
 }
 
 /* ---- interrupts ------------------------------------------------------------ */
@@ -1687,6 +1687,9 @@ void n64rt_os_start(u32 entry, u32 sp)
         /* (the AI in hardware: MONITOR.CTL bit 4, the resampler at its default rate; AI_DACRATE's write wakes the monitor) */
         if (n64rt_ai_hw()) { extern void n64rt_ai_hw_reset(void); n64rt_ai_hw_reset(); }
     }
+#endif
+#ifdef N64RT_RESTART_FP
+    n64rt_restart_fp();
 #endif
     n64rt_resume();
 }

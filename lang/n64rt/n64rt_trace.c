@@ -15,9 +15,16 @@
 #define TR_MAX  0xF000u
 #define TR_PATH "/Saves/gbc/common/mirlo_trace.txt"
 static u64 now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
-static u32 s_len, s_wlen;
-static u64 s_t0, s_last;
-static u8 s_init;
+/* (one struct: a restart keeps it, n64rt_trace_keep, and the file goes on from where it was) */
+static struct { u32 len, wlen; u64 t0, last; u8 init; u32 sz[2]; int kind[2]; } s_tr = { .kind = { -1, -1 } };
+#define s_len  s_tr.len
+#define s_wlen s_tr.wlen
+#define s_t0   s_tr.t0
+#define s_last s_tr.last
+#define s_init s_tr.init
+#define s_sz   s_tr.sz
+#define s_kind s_tr.kind
+void *n64rt_trace_keep(u32 *bytes) { *bytes = sizeof s_tr; return &s_tr; }
 
 void n64rt_trace_log(const char *fmt, ...)
 {
@@ -37,8 +44,6 @@ void n64rt_trace_log(const char *fmt, ...)
     if (line[n - 1] != '\n') TR_MEM[s_len++] = '\n';
 }
 
-static u32 s_sz[2];
-static int s_kind[2] = { -1, -1 };
 void n64rt_trace_field(void)
 {
     if (!s_init) { s_init = 1; s_t0 = now(); n64rt_trace_log("trace start\n"); }
