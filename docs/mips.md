@@ -110,6 +110,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42E0_0000` | up to 3 MiB | The Transfer Pak (SD) 2's Game Boy ROM |
 | `0x42D3_0000` | 4 KiB | The parameter struct of the runtime's open command ([GameShark codes](#gameshark-codes)) |
 | `0x42D4_0000` | up to 64 KiB | The game's GameShark codes, a text file |
+| `0x42DD_0000` | 8 KiB | The runtime's `.data` as it was when the program started, which [Restart Game](#restart-game) puts back |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak (SD) 1's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
@@ -459,7 +460,7 @@ What it needs to know comes from the ROM's header and boot code.
 must stay under 960 KiB: with its stack it occupies the megabyte below the ROM. Switches of `lang/n64rt/n64rt.mk`:
 `DEBUG=1` (a detailed log on the UART), `PADLOG=1` (a line when a pad's words change), `EEP16K=1` (a 16 Kbit EEPROM
 whatever the database says), `STATS=1` (counts what the game asks of the runtime; the fast path is off),
-`GAME_MEM=<bytes>` (the RDRAM the game sees), and `RSPDUMP=1` and `TLBPROF=1` for the simulation's marks.
+`GAME_MEM=<bytes>` (the RDRAM the game sees), `RSPDUMP=1` and `TLBPROF=1` for the simulation's marks, and `RESTART_FP=1` (a line for each hardware register as the game is about to start, to be compared between a start and a restart: [Restart Game](#restart-game)). `GBTRACE=1` also logs the Transfer Pak status the game reads and the restart.
 
 ### Boot
 
@@ -962,14 +963,14 @@ touched). The game's own `osGbpak*` code runs on it as on the real one.
 
 The setting "Controller 2 pak" (None, or Transfer Pak (SD)) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
 
-**Two steps, both before the N64 game starts**: choose "Transfer Pak (SD)" in "Controller 1 pak" (or 2), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak (cartridge) a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it.
+**Two steps, both before the N64 game starts**: choose "Transfer Pak (SD)" in "Controller 1 pak" (or 2), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak (cartridge) a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it, or the core's Restart Game after them ([Restart Game](#restart-game)).
 
 * **The ROM** is data slot 8, "Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Transfer Pak 2", `0x42E0_0000`. With no
   file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Transfer Pak 1"
   loads one while the game runs (the Pocket lists the `.gb` and `.gbc` files of the folders of the platforms in `core.json`: `Assets/n64/common`, `Assets/gbc/common`, `Assets/gb/common`). It is there for the game when its header's checksum and logo are right and its
   cartridge type (`0x147`) is one of the mappers below. A ROM put in or taken out is seen as a cartridge put in or taken out, as with the real one: a game
-  that polls the status finds it within a second. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
-  loaded after that. A ROM that replaces another with the same header and size (a copy under another name) is not told apart from it.
+  that polls the status finds it within a second. A ROM that was loaded before the game starts is made a cartridge as the game starts (`n64rt_pak_init`), so the first status a game reads has it in, however soon after its start it reads. A game that looks for the cartridge only when it starts (as a console's power-on) does not see a ROM
+  loaded after that: load the ROM, then choose **Restart Game** (below), and the game starts over with the cartridge in. A ROM that replaces another with the same header and size (a copy under another name) is not told apart from it.
 * **The RAM** is memory only: `0x42D0_0000` (controller 2's: `0x42D5_0000`), the cartridge's RAM as the emulators keep it (its size is the header's, `0x149`) and for MBC3 with a clock 48 bytes after it: the clock's
   registers and the latched ones as ten little-endian words, and a 64-bit time that is left 0. Its file is the Game Boy game's own save, which a Game Boy core keeps as well: `<ROM's name>.sav` in the `Saves` folder of the platform of the ROM's folder
   (`/Assets/gbc/common/x.gb`: `/Saves/gbc/common/x.sav`); a ROM in no gb or gbc folder (as `Assets/n64/common`): `Saves/gbc/common` for a `.gbc` and for a `.gb` `Saves/gb/common`, else `Saves/gbc/common` (a Game Boy core that plays both kinds keeps a `.gb`'s save in gbc). It is read and written **by path** (below). The Pocket's own save files (the nonvolatile slots, named after the N64 game) are not used for it: they cannot name another game's file.
@@ -990,6 +991,7 @@ The setting "Controller 2 pak" (None, or Transfer Pak (SD)) puts a second one in
 * **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
   there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
   (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
+* **The cache.** The Pocket's bridge writes the ROM, and the RAM from the save's file, under the CPU's data cache (which writes through but does not watch the bridge): the cache's lines of a block are dropped before the pak reads it (`n64rt_gbv_block`), and every line at the cartridge's power-on, so that the game reads what the memory has.
 * **The clock** counts seconds while the core runs. The core has no calendar, so the time the Pocket is off is not counted.
 * **Save states** (Sleep, Memories): the SD cartridges are in them, with their RAM and clock; a real one in the Pocket's slot is unplugged ([Save states](#save-states)).
 
@@ -1079,6 +1081,45 @@ when a game runs, and none when it does not.
 `sim/mips_soc`'s `SS_SAVE`, `SS_LOAD` and `sim/mips_soc/state_compare.py` make a state, load it into another run and
 compare the two runs' pictures and sound.
 
+### Restart Game
+
+The last entry of the core's settings, **Restart Game**, starts the N64 game over as a console does when it is switched off and on again, with the
+Pocket's data slots as they are: the ROM, the saves, the Controller Pak and the Transfer Paks' ROMs, so their cartridges stay in. It exists for a game that
+looks at its Transfer Pak once, a moment after it boots, and never again: the Game Boy ROM is loaded ("Load Transfer Pak 1") while the N64 game runs,
+so the game has to start after that. A game that looks at its pak again, at its menus, needs no restart. The restart is only ever made by choosing the entry. It also gets a game out of the runtime's own stop (the notice on the screen after an exception the runtime cannot do).
+
+**How a choice is seen.** The entry is an `interact.json` variable of type `action` (id 251; no `persist`, so nothing about it is stored or replayed when the core starts).
+Choosing it makes the Pocket write its `value`, 1, to `0x1000_0130`, the field `INTERACT1[21:20]`; it writes the same value every time, so a field that kept it would hide the
+next choice. At every tick (`MONITOR.PEND` bit 2, 4.2 ms) the runtime reads the field and, if it is not 0, clears it (a write of `INTERACT1` with that field's bits 0; the
+Pocket writes the word only when the entry is chosen, so nothing else changes in the microseconds between the read and the write) and starts the restart. The tick is the monitor's,
+which the game cannot mask: the restart is made whatever the game is doing, a hung game included. It waits only for what the monitor is doing at that moment (an emulated register access, a cartridge copy it is making for the game), which is short. While a save state is being made or put back the field is left, and seen at a later tick.
+
+**What it does** (`lang/n64rt/n64rt_restart.c`), at the monitor level, in this order:
+
+1. Stops the RSP where it is, lets the RDP's list and the AI's buffers run on, and writes back what is dirty. Each Transfer Pak (SD) looks at its ROM slot first (a ROM loaded a moment ago is made a cartridge and its save read), then
+   the cartridge's RAM goes to the Game Boy game's save file if the game wrote to it (the quiet moment is not waited for), and the cartridge is powered off and on, which resets its mapper registers as a real cartridge's reset does.
+   The N64 game's own save (EEPROM, SRAM, FlashRAM) and the Controller Pak are memory the Pocket reads back into their files when the core quits; nothing of them is pending, and they are not touched.
+2. Waits for the hardware to be at rest, as a save state does (`n64rt_hw_quiesce`): the RSP's DMA, the RDP's list, the PI's engine and the SI done, the AI's buffers played. After a second it goes on regardless.
+3. Puts the RCP's registers where the SoC's reset leaves them. The monitor's modes and mask off. The RSP halted with no break, interrupt, single step or signal, PC 0, the semaphore free, IMEM zero. The RDP's DPC with no XBUS, no freeze, START and END 0, and
+   the status bits only a SYNC FULL clears, cleared by one. The MI's mode bits, mask and interrupts clear. Every VI register 0, with its origin and field. The AI off, its address and rate 0. The SI's address and status and the PIF RAM 0. FlashRAM mode off.
+   The Game Boy cartridge port off. And the game CPU's: the VR4300's own TLB (the tables' CPU has its tables cleared by the start), Wired, Index, Compare, Cause, and the monitor level's modes (`MCTL`: the game's vector, the pass-through, the 4 MiB window, the game's view, the SP registers).
+4. Leaves the monitor for the program's start (`n64rt_restart_go`): the stack at the boot stack, Status as `init_asm.S` sets it. The program's `.data` is put back from a copy made when the program first started (`n64rt_restart_snapshot`, at `0x42DD_0000`),
+   its `.bss` is zeroed, the Transfer Paks' cartridges (`n64rt_gbv_keep`; and a test build's trace) are put back, and `main()` runs again. The loader reads the ROM the Pocket put in the SDRAM, which is still there (the Pocket is not asked for it again), finds its CIC, clears the RDRAM and the coverage plane,
+   copies the boot segment, writes the boot words, loads DMEM and enters the game, exactly as at the first start. Every other variable of the runtime starts as it does then: the threads and message queues, the PI and RI registers, the VI's and AI's computed values,
+   the save kinds, the GameShark's codes (read again in the next field), the pak state machines. What the loader reads when a game starts is read again, so a change of the Expansion Pak setting takes effect.
+
+The Transfer Pak (SD) is therefore polled afresh, and its cartridge is in when the game first looks: the pak's own first look at the cartridge slot (`n64rt_pak_init`) finds it already made.
+In a `GBTRACE=1` build `Saves/gbc/common/mirlo_trace.txt` has the lines `restart: the game restarts` (with the RSP's, the RDP's and the AI's state when the entry was chosen), `restart: the saves written in x ms, the hardware at rest in y ms`, `restart: the game starts again (n)` and, for each start,
+`Transfer Pak n: the game reads the status XX (a cartridge / no cartridge)`, the first time the game reads it and whenever it changes. It also has the game's other accesses to each pak, the first 128 lines of each controller in each start (`pak1 R c140 b0 c0140 m5 rom1 ram0 en0 md0 in1: <the block's first 8 bytes> s<the sum of its 32>`: the pak's address, its bank register, the cartridge address that makes, the mapper (5: MBC5) and its registers; a run of blocks one after another is its first block and a line with their number and the sum of their bytes), and the CRC-32 of the cartridge's ROM and RAM as the CPU reads them and as the memory has them (`SD cartridge 0 (made | the game restarts | the game powers it on)`; `DIFFERENT` when the cache had a stale line). The trace goes on across the restart.
+
+**What a restart does not reset**: the SoC's uptime counter and the game CPU's Count, which go on (a console's Count at the game's start is whatever its boot took; no game depends on it); the SI's flag that the PIF RAM holds commands and
+the VI's "V_SYNC has been written" flag (the game's TV system stays until the game writes its own: the same game writes the same value), which only the SoC's reset clears; the RDP's modes, tiles and TMEM (a display list sets what it draws with);
+the Controller Pak and the cartridge's save, which are the console's non-volatile memory; a game that was left with the RDP frozen and a list pending, or the RSP in a DMA that never ends, is gone over after a second (the start follows, the RDP may draw its list into the cleared RDRAM).
+The settings are the Pocket's and stay as the user set them.
+
+`RESTART_FP=1` builds a runtime that prints the hardware's registers as the game is about to start (the `fp:` lines: RSP, DPC, MI, VI, AI, SI, the PIF RAM, DMEM and IMEM sums, the monitor's registers, COP0, the scan-out's);
+`sim/mips_soc/restart_check.sh` compares them between the first start and each restart, and the pictures of a game from each start.
+
 ## Controllers and settings
 
 The Pocket writes each setting of `pkg/pocket/Cores/tortuga.Mirlo64/interact.json` to a field of the two
@@ -1101,6 +1142,7 @@ scan-out instead.
 | Start macro | `0x1000_0120` | `interact1[4:0]` | **None** (0), C-Down + C-Up (14), C-Left + C-Right (13), C-Down + C-Left (15), C-Down + C-Right (16), C-Up + C-Left (17), C-Up + C-Right (18): the two keys together are the Start; the Start key alone is then C-up |
 | R as modifier | `0x1000_0110` | `interact0[14:10]` | **None** (0), Face C buttons (1): R held turns X, B, Y, A into C-up, C-down, C-left, C-right; Joystick half press (2): R held makes the D-pad's stick 60 % |
 | C buttons | `0x1000_0128` | `interact1[14:10]` | **None** (0), D-pad (3), L stick (2), R stick (1) |
+| Restart Game | `0x1000_0130` | `interact1[21:20]` | An action, not a setting: the last entry of the list; writes 1 when it is chosen, and the runtime starts the game over ([Restart Game](#restart-game)) |
 
 The Pocket's own Controls menu (`input.json`) lists A, B, C-Down (Select), C-Left (Y), C-Right (X), C-Up, L (ZL, `pad_trig_l2`), R (R), Z (L) and Start; C-Up is on ZR (`pad_trig_r2`: a key the documentation does not list); it remaps what
 each button sends, and the runtime sees only the resulting key bits (so remapping its "Start" moves the Start key itself).
@@ -1213,7 +1255,7 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 
 | Variable | Effect |
 |---|---|
-| `SLOT<n>=<file>`, `SLOTS_FIRST=1` | a slot's file (1 the save, 2 the Controller Pak, 4 the database) |
+| `SLOT<n>=<file>`, `SLOTS_FIRST=1` | a slot's file (1 the save, 2 the Controller Pak, 4 the database, 8 and 9 the Transfer Paks' ROMs) |
 | `SLOTS_OUT=<dir>` | at the end, the nonvolatile slots are read back through the bridge, as when the core quits |
 | `BRIDGE_ALL=1`, `VERIFY=1` | everything through the bridge's port; memory compared with the files |
 | `INTERACT=<address>:<value>,...` | the core's settings |
@@ -1229,6 +1271,9 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
 | `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
+| `INTERACT_AT=<field>:<address>:<value>,...` | the Pocket writes a setting when that scan-out frame is over (`0x10000130:1` chooses Restart Game) |
+| `SLOT_AT=<field>:<slot>:<file>,...` | the Pocket loads a file into a slot (8, 9: the Transfer Paks' ROMs) while the game runs, through the bridge's port; `SLOT8=` and `SLOT9=` load one before the start |
+| `POCKET_FS=<dir>` | the Pocket's target commands for a file the program names by its path (`n64rt_gbvirt.c`): GETFILE gives the ROM's path (`SLOT8_PATH=`, else `/Assets/gbc/common/<name>`), OPENFILE opens `<dir><path>` into the slot (flag 1 makes it), READ and WRITE move it |
 
 ### Programs for the SoC: `lang/mips/test`
 
@@ -1295,6 +1340,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 | `tlb_bench.mk` | the same, with a runtime built with `TLBPROF=1` | the TLB instructions' results and their cost |
 | `tlbkeep_test.mk` | a ROM with a refill handler of its own | the entries kept when a `tlbwr` puts them out, and each rule that drops one |
 | `mem4_test.mk` | a ROM that sizes the memory itself | the "Expansion Pak" setting: 8 MiB with it, 4 MiB without (`INTERACT=0x10000138:1` in the simulator) |
+| `restart_test.mk` | a ROM that reads its Transfer Pak's status once, a moment after it starts, and leaves the RSP, the RDP and the AI busy | "Restart Game": `sim/mips_soc/restart_check.sh pak` loads the Game Boy ROM while the game runs and chooses the action twice, and checks that the first status the restarted game reads has the cartridge in, that the cartridge's RAM is written to its save file, and that the hardware's registers are the same at every start; `preload` checks a ROM loaded before the game starts; `game <rom>` compares a game's pictures at each start (`INTERACT_AT`, `SLOT_AT` and `POCKET_FS` are the bench's: above) |
 | `Makefile` (`pak_test`) | a program for `sim/mips_soc`, with `+gbcart=` | libultra's Controller Pak file system and Transfer Pak functions on `n64rt_pak.c` |
 | `si_test.mk` | a ROM and a runtime built for it | libultra's controller, EEPROM and pak code, and a pad that comes and goes |
 

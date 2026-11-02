@@ -9,6 +9,8 @@ module soc_sim_top (
     output wire         file_size_wr,       // the program sets the selected slot's size (what the Pocket writes back)
     output wire  [31:0] file_size_new,
     input  wire         br_complete,
+    input  wire   [2:0] br_result,          // the last command's result code (the Pocket's target commands the bench models: tb_soc.cpp, POCKET_FS)
+    output wire         br_req_getfile, br_req_openfile, br_req_write,
     input  wire         ss_save_t, ss_load_t,   // the Pocket's save states (SS_SAVE, SS_LOAD): a request is a turn of one
     output wire         ss_done_t, ss_err, ss_sup,
     output wire         br_req_read,
@@ -118,11 +120,11 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .altera_reserved_tck(1'b0), .altera_reserved_tdi(1'b0), .altera_reserved_tdo(), .altera_reserved_tms(1'b0),
     .apf_audio_buffer_fill(aud_fill), .apf_audio_bus_out(audio_out), .apf_audio_bus_wr(audio_wr), .apf_audio_flush(aud_flush),
     .apf_audio_playback_en(aud_play),
-    .apf_bridge_boot_ready(boot_ready), .apf_bridge_command_result_code(3'd0), .apf_bridge_complete_trigger(br_complete),
+    .apf_bridge_boot_ready(boot_ready), .apf_bridge_command_result_code(br_result), .apf_bridge_complete_trigger(br_complete),
     .apf_bridge_current_address(32'd0), .apf_bridge_data_offset(br_offset), .apf_bridge_file_size(file_size),
     .apf_bridge_file_size_wr(file_size_wr), .apf_bridge_host_loaded(host_loaded), .apf_bridge_host_reset_n(host_reset_n),
     .apf_bridge_length(br_length), .apf_bridge_new_file_size_data(file_size_new), .apf_bridge_ram_data_address(br_addr),
-    .apf_bridge_request_getfile(), .apf_bridge_request_openfile(), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(),
+    .apf_bridge_request_getfile(br_req_getfile), .apf_bridge_request_openfile(br_req_openfile), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(br_req_write),
     .apf_bridge_slot_id(br_slot), .apf_id_chip_id(64'd0),
     .apf_ss_save_t(ss_save_t), .apf_ss_load_t(ss_load_t), .apf_ss_done_t(ss_done_t), .apf_ss_err(ss_err), .apf_ss_sup(ss_sup),
     .apf_pad_clk(clk_sys), .apf_pad_we(1'b1), .apf_pad_wa(pad_i), .apf_pad_wd(pad_w),

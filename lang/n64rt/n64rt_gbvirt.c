@@ -333,6 +333,31 @@ int n64rt_gbv_look(int n)
     g.in = 1;
     return 1;
 }
+#ifdef N64RT_GBTRACE
+/* (a GBTRACE build) the CRC-32 of the ROM and of the RAM as the CPU reads them (through its D-cache) and as the memory has them: a difference is a line
+ * of the cache that the Pocket's bridge wrote under. `rom` is how much of the ROM from its start. */
+static u32 s_crct[256];
+static u32 crc_of(const volatile u8 *p, u32 n)
+{
+    if (!s_crct[1]) for (u32 i = 0; i < 256u; i++) { u32 c = i; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); s_crct[i] = c; }
+    u32 c = 0xFFFFFFFFu;
+    while (n--) c = s_crct[(c ^ *p++) & 0xFFu] ^ (c >> 8);
+    return ~c;
+}
+static void trace_crcs(const char *why, u32 rom)
+{
+    const u32 ram = g.ram_bytes + (g.timer ? RTC_FOOT : 0u);
+    if (rom > g.rom_bytes) rom = g.rom_bytes;
+    const u32 rc = crc_of(ROM_MEM, rom), ac = crc_of(RAM_MEM, ram);
+    flush_cpu_dcache();
+    const u32 rm = crc_of(ROM_MEM, rom), am = crc_of(RAM_MEM, ram);
+    GBLOG("n64rt: SD cartridge %d (%s): ROM %lu bytes crc %08lx (memory %08lx), RAM %lu bytes crc %08lx (memory %08lx)%s\n", g.n, why, (unsigned long)rom,
+          (unsigned long)rc, (unsigned long)rm, (unsigned long)ram, (unsigned long)ac, (unsigned long)am, rc != rm || ac != am ? " DIFFERENT" : "");
+}
+#else
+#define trace_crcs(why, rom) ((void)0)
+#endif
+
 /* A ROM that is new to the slot (called from n64rt_gbv_field): the cartridge it was is written back to its own file, and the new one made, with its
  * save read from the Game Boy game's own file. */
 static void rom_new(const u8 *h, u32 size, u32 id)
@@ -362,6 +387,7 @@ static void rom_new(const u8 *h, u32 size, u32 id)
     g.in = 1;
     GBLOG("n64rt: SD cartridge %d: type %02x, %lu ROM banks, %lu bytes of RAM%s\n", g.n, t, (unsigned long)g.rom_banks,
           (unsigned long)g.ram_bytes, timer ? ", a clock" : "");
+    trace_crcs("made", g.rom_bytes);
 }
 u32 n64rt_gbv_id(int n) { sel(n); return g.id; }
 
@@ -398,6 +424,10 @@ void n64rt_gbv_power(int n, int on)
     if (on) {
         g.ram_en = 0; g.mode = 0; g.hi2 = 0; g.ram_sel = 0; g.latch_arm = 0;
         g.rom_bank = 1;
+        flush_cpu_dcache();                     /* (what the Pocket's bridge wrote to the ROM's and the RAM's memory since the cartridge was made is read, not what the cache has) */
+#ifdef N64RT_GBTRACE
+        { static u8 s_first[2]; if (g.in && !s_first[g.n]) { s_first[g.n] = 1; trace_crcs("the game powers it on", 0x10000u); } }
+#endif
     } else {
         g.req = 1;                              /* (written back by n64rt_gbv_field: no command to the Pocket from the game's own access) */
         if (g.in && g.timer) { rtc_tick(); rtc_store(); }
@@ -408,31 +438,62 @@ void n64rt_gbv_power(int n, int on)
  * slot makes its cartridge and reads its save, one that is gone writes it back --; and a cartridge whose RAM the game wrote and has not written for
  * FLUSH_QUIET is written back, as a core that is quit leaves no word for the runtime (the Pocket tells the core nothing then) */
 #define FLUSH_QUIET (2u * CONFIG_CLOCK_FREQUENCY)
+static void poll(int n, int look)
+{
+    sel(n);
+    if (n64rt_pak_kind(n) != N64RT_PAK_VIRTUAL) {      /* (a ROM is loaded for a pak that is not the SD one: nothing is read or written for it) */
+        if (g.have) { flush("the pak is not the SD one"); g.have = 0; g.in = 0; }
+        return;
+    }
+    if (look || !g.have) {
+        u8 h[0x50];
+        u32 size, id;
+        g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
+        if (!rom_probe(h, &size, &id)) {
+            if (g.have) { flush("the ROM is gone"); g.have = 0; g.in = 0; }
+        } else if (!g.have || id != g.id || size != g.rom_bytes) rom_new(h, size, id);
+    }
+    if (!g.have) return;
+    if (g.req) { g.req = 0; flush("the cartridge's power off"); }
+    if (!g.dirty || !g.wr) return;
+    if (g.wcount != g.wseen) { g.wseen = g.wcount; g.t_dirty = now(); return; }
+    if (now() >= g.t_dirty && now() - g.t_dirty >= FLUSH_QUIET) flush("quiet");
+}
 void n64rt_gbv_field(void)
 {
     static u32 s_f;
     const int look = (s_f++ & 7u) == 0;
+    for (int n = 0; n < 2; n++) poll(n, look);
+}
+
+/* The pak's setting is the SD one and a ROM is in the slot: its cartridge is made now, not at the next video field (n64rt_pak_init, as the game starts: a game
+ * that looks at its pak once, soon after it boots, finds a ROM that was loaded before it started; the pak's first look at the slot is this one) */
+void n64rt_gbv_make(int n) { poll(n, 1); }
+
+/* The game is about to start over (n64rt_restart.c, the "Restart Game" action), as if the console were switched off and on with the
+ * cartridges left in the Transfer Paks. The ROM loaded last is looked at now (a cartridge not made yet is made, and its save read), the RAM the
+ * game wrote is written to the file at once (the quiet moment is not waited for), and each cartridge is powered off and on, which resets its
+ * mapper. The cartridges themselves -- ROM, RAM, clock, the file's path -- stay as they are (n64rt_gbv_keep): the first status the game reads
+ * after it starts finds them in. */
+void n64rt_gbv_restart_prep(void)
+{
     for (int n = 0; n < 2; n++) {
+        poll(n, 1);
         sel(n);
-        if (n64rt_pak_kind(n) != N64RT_PAK_VIRTUAL) {      /* (a ROM is loaded for a pak that is not the SD one: nothing is read or written for it) */
-            if (g.have) { flush("the pak is not the SD one"); g.have = 0; g.in = 0; }
-            continue;
-        }
-        if (look || !g.have) {
-            u8 h[0x50];
-            u32 size, id;
-            g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
-            if (!rom_probe(h, &size, &id)) {
-                if (g.have) { flush("the ROM is gone"); g.have = 0; g.in = 0; }
-            } else if (!g.have || id != g.id || size != g.rom_bytes) rom_new(h, size, id);
-        }
-        if (!g.have) continue;
-        if (g.req) { g.req = 0; flush("the cartridge's power off"); }
-        if (!g.dirty || !g.wr) continue;
-        if (g.wcount != g.wseen) { g.wseen = g.wcount; g.t_dirty = now(); continue; }
-        if (now() >= g.t_dirty && now() - g.t_dirty >= FLUSH_QUIET) flush("quiet");
+        flush("the game restarts");
+        if (g.have) trace_crcs("the game restarts", g.rom_bytes);
+        n64rt_gbv_power(n, 0);
+        n64rt_gbv_power(n, 1);
     }
 }
+/* (a GBTRACE build: the mapper's registers, for the trace of the game's accesses to the pak) */
+void n64rt_gbv_regs(int n, u32 *v)
+{
+    sel(n);
+    v[0] = g.kind; v[1] = g.rom_bank; v[2] = g.ram_sel; v[3] = g.ram_en; v[4] = (u32)g.mode | (u32)g.hi2 << 1; v[5] = g.in;
+}
+/* the cartridges' state, which a restart keeps whole (the runtime's other memory starts over) */
+void *n64rt_gbv_keep(u32 *bytes) { *bytes = sizeof s_gbv; return s_gbv; }
 
 /* ---- the bus ----------------------------------------------------------------------- */
 static u8 rom_at(u32 off) { return off < g.rom_bytes ? ROM_MEM[off] : 0xFFu; }
@@ -453,6 +514,21 @@ static u32 ram_off(u32 o)                       /* a RAM address in the 8 KiB wi
     u32 bank = g.kind == K_MBC1 ? (g.mode ? g.hi2 : 0u) : g.ram_sel;
     if (g.ram_bytes < 0x2000u) return o & (g.ram_bytes - 1u);
     return (bank % g.ram_banks) * 0x2000u + o;
+}
+
+/* The pak reads a block of 32 bytes (n64rt_pak.c) from the cartridge address a: the cache's lines of its bytes in the ROM's or the RAM's memory are dropped first,
+ * so that what the game reads is what the memory has -- the Pocket's bridge wrote the ROM, and the RAM from the save's file, under the cache -- not a line
+ * an earlier read left. A block is 32-byte aligned and so is in one bank. */
+void n64rt_gbv_block(int n, u32 a)
+{
+    sel(n);
+    if (!g.in) return;
+    if (a < 0x4000u) flush_cpu_dcache_range((const void *)(ROM_MEM + ((g.kind == K_MBC1 && g.mode ? ((u32)g.hi2 << 5) & (g.rom_banks - 1u) : 0u) << 14 | a)), 32);
+    else if (a < 0x8000u) flush_cpu_dcache_range((const void *)(ROM_MEM + (bank_hi() << 14 | (a & 0x3FFFu))), 32);
+    else if (a >= 0xA000u && a < 0xC000u && g.ram_en) {
+        const u32 r = ram_off(a & 0x1FFFu);
+        if (r < g.ram_bytes) flush_cpu_dcache_range((const void *)(RAM_MEM + r), 32);
+    }
 }
 
 u8 n64rt_gbv_read(int n, u32 a)

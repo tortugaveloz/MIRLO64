@@ -69,6 +69,12 @@
 #define PAK_BYTES     ((u32)LAYOUT_PAK_BYTES)
 
 #define NPAK 2                                  /* the controllers with an accessory: 1 and 2 */
+#ifdef N64RT_GBTRACE
+void n64rt_trace_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define GBLOG(...) do { n64rt_log(__VA_ARGS__); n64rt_trace_log(__VA_ARGS__); } while (0)
+#else
+#define GBLOG(...) n64rt_log(__VA_ARGS__)
+#endif
 static struct { u8 on, access, changed, bank; } s_tpv[NPAK];   /* the Transfer Pak of each */
 static u8 s_sized;                              /* the Controller Pak's file size is in the table */
 
@@ -222,6 +228,7 @@ void n64rt_pak_init(void)
     for (int ch = 0; ch < NPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);
+        if (k == N64RT_PAK_VIRTUAL) n64rt_gbv_make(ch);        /* (a ROM loaded before the game starts is a cartridge when the game first looks) */
         if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
     }
     s_ch = 0;
@@ -245,6 +252,46 @@ int n64rt_pak_kind(int ch)
 }
 
 /* a block of 32 bytes at address a (its low 5 bits clear); 0, or 1 with no pak there */
+#ifdef N64RT_GBTRACE
+void n64rt_gbv_regs(int n, u32 *v);
+/* The game's accesses to the pak other than its status, the first TRACE_LINES lines of each controller in each start: the address, the pak's bank and the
+ * cartridge address that makes, the mapper's registers, and the block's first bytes and its sum. A run of blocks one after the other (the same
+ * direction, each the next 32 bytes) is its first block and a line at its end with the number of blocks and the sum of all their bytes; the same access
+ * again with the same first byte is not logged. */
+#define TRACE_LINES 128u
+static struct { u32 n, last, run, run_sum, next; u8 run_w; } s_tr[NPAK];
+static void trace_run_end(int ch)
+{
+    if (s_tr[ch].run > 1u && s_tr[ch].n++ < TRACE_LINES)
+        GBLOG("n64rt: pak%d %c run of %lu blocks to %04lx, the sum of their bytes %lu\n", ch + 1, s_tr[ch].run_w ? 'W' : 'R', (unsigned long)s_tr[ch].run,
+              (unsigned long)(s_tr[ch].next - 0x20u), (unsigned long)s_tr[ch].run_sum);
+    s_tr[ch].run = 0;
+}
+static void trace_access(int ch, u32 a, int write, const u8 *b)
+{
+    const u32 hi = a >> 12, key = a << 9 | (u32)write << 8 | b[0];
+    u32 sum = 0;
+    for (int i = 0; i < 32; i++) sum += b[i];
+    if (hi == 0xBu && !write) { trace_run_end(ch); return; }       /* (a read of the status ends a run) */
+    if (hi < 0x8u) return;
+    if (s_tr[ch].run && s_tr[ch].run_w == (u8)write && a == s_tr[ch].next && hi >= 0xCu) {      /* (the next block of a run) */
+        s_tr[ch].run++; s_tr[ch].run_sum += sum; s_tr[ch].next = a + 0x20u;
+        return;
+    }
+    trace_run_end(ch);
+    if (key == s_tr[ch].last) return;
+    s_tr[ch].last = key;
+    if (s_tr[ch].n++ >= TRACE_LINES) return;
+    s_tr[ch].run = 1; s_tr[ch].run_sum = sum; s_tr[ch].next = a + 0x20u; s_tr[ch].run_w = (u8)write;
+    u32 v[6] = { 0 };
+    if (s_slotv[ch].virt) n64rt_gbv_regs(ch, v);
+    GBLOG("n64rt: pak%d %c %04lx b%u c%04lx m%lu rom%lu ram%lu en%lu md%lu in%lu: %02x %02x %02x %02x %02x %02x %02x %02x s%lu\n", ch + 1, write ? 'W' : 'R',
+          (unsigned long)a, s_tpv[ch].bank, (unsigned long)(hi >= 0xCu ? (u32)s_tpv[ch].bank << 14 | (a & 0x3FFFu) : 0u), (unsigned long)v[0], (unsigned long)v[1],
+          (unsigned long)v[2], (unsigned long)v[3], (unsigned long)v[4], (unsigned long)v[5], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], (unsigned long)(sum & 0xFFFFu));
+}
+#else
+#define trace_access(ch, a, write, b) ((void)0)
+#endif
 int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
 {
     int kind = n64rt_pak_kind(ch), virt = kind == N64RT_PAK_VIRTUAL;
@@ -280,6 +327,7 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
             u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
             if (s_slot.in && s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 1, b[i], 0); i++) { }
         }
+        trace_access(ch, a, 1, b);
         return 0;
     }
     if (hi == 0xBu && s_tp.on && !s_tp.access && now() - s_slot.looked > CONFIG_CLOCK_FREQUENCY)
@@ -291,12 +339,20 @@ int n64rt_pak_rw(int ch, u32 a, u8 *b, int write)
         /* (libultra: no bit 7 is PFS_ERR_NO_GBCART; osGbpakReadId wants bit 3 after the power-on) */
         memset(b, (s_slot.in ? 0x80 : 0) | (s_tp.access ? (s_slot.in ? 0x09 : 0x01) : 0) | (s_tp.changed ? 0x04 : 0)
                   | (s_slot.pulled ? 0x40 : 0), 32);
+#if defined(N64RT_GBTRACE) || defined(N64RT_DEBUG)
+        {   /* (a test build: the status the game reads, the first time after the game starts and whenever it changes) */
+            static u8 s_seen[NPAK], s_last[NPAK];
+            if (!s_seen[ch] || s_last[ch] != b[0]) { s_seen[ch] = 1; s_last[ch] = b[0]; GBLOG("n64rt: Transfer Pak %d: the game reads the status %02x (%s)\n", ch + 1, b[0], b[0] & 0x80 ? "a cartridge" : "no cartridge"); }
+        }
+#endif
         s_tp.changed = 0;
         s_slot.pulled = 0;
     } else if (hi >= 0xCu && s_tp.access && s_slot.in) {
         u32 g = (u32)s_tp.bank << 14 | (a & 0x3FFFu);
+        if (s_slot.virt) n64rt_gbv_block(ch, g);
         if (s_slot.bus && g < 0xC000u) for (u32 i = 0; i < 32u && xfer(g + i, 0, 0, &b[i]); i++) { }
     }
+    trace_access(ch, a, 0, b);
     return 0;
 }
 

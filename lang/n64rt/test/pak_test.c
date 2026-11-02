@@ -6,13 +6,14 @@
  *     tb_soc build/pak_test.bin -c 120 +gbcart=<rom.gb>
  * Without +gbcart, or on a SoC without the port, the slot's Transfer Pak
  * must be one with no cartridge in it.
- * The Transfer Pak (SD) (n64rt_gbvirt.c) has the same battery, with the ROM
- * and the save as the Pocket's slots 5 and 6:
- *     SLOT5=<rom.gb> [SLOT6=<save>] SLOTS_OUT=<dir> tb_soc build/pak_test.bin -c 150
- * With make_gb.py's ROM it runs the Transfer Pak's checks on it and the RAM it
- * wrote is in <dir>/slot6.bin; with another ROM it reads the whole cartridge,
+ * The Transfer Pak (SD) (n64rt_gbvirt.c) has the same battery, with the ROM the Pocket's slot 8 and its save a file the bench's POCKET_FS
+ * answers for (sim/mips_soc/tb_soc.cpp; the file is <dir>/Saves/gbc/common/<the ROM's name>.sav):
+ *     SLOT8=<rom.gb> SLOT8_PATH=/Assets/gbc/common/<rom.gb's name> POCKET_FS=<dir> tb_soc build/pak_test.bin -c 150
+ * With make_gb.py's ROM it runs the Transfer Pak's checks on it; with another ROM it reads the whole cartridge,
  * through the game's own osGbpakReadWrite, and prints the CRC-32 of some of its ROM's
- * banks and of each of its RAM's: the files', for the host to compare.
+ * banks and of each of its RAM's: the files', for the host to compare. It also runs, three times (as the game starts, after
+ * the cartridge was powered off, and after the game started over), the start-up check of a game with a Transfer Pak menu
+ * (game_check: the connector, the RAM enable, a test pattern, the header from 0x120 and a save's sum), which prints each step that fails.
  * The ROM is make_gb.py's: a valid header, MBC3, each bank's last byte its
  * number. */
 #include <stdio.h>
@@ -21,6 +22,7 @@
 #include "PR/os_gbpak.h"
 
 extern unsigned pak_test_kind;
+void n64rt_gbv_restart_prep(void);
 void pak_test_boot(void);
 int pak_test_slot_port(void);
 enum { NONE, CPAK, SLOT, VIRT };            /* the setting's values */
@@ -191,7 +193,108 @@ static void whole_cartridge(int kind)
             printf("  RAM bank %lu crc %08lx\n", (unsigned long)b, (unsigned long)~crc_add(0xFFFFFFFFu, s_bank, part));
         }
     }
+    if (ram >= 0x4000u) {
+        /* what a game that checks a save's sum does: the header from 0x120 (its destination code), RAM on as a game writes it (a block whose
+         * last byte is 0x0A), RAM bank 1 (a block of 1s to 0x4000), 0xFC0 bytes from RAM 0x580, and their sum with the byte at 0x3523 of the save */
+        static u8 hdr[0x60], buf[0xFC0];
+        check("header", osGbpakReadWrite(&s_pfs, OS_READ, 0x0120, hdr, 0x60), 0);
+        fill(blk, 1, sizeof blk);
+        check("banking mode", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x6000, blk, 32), 0);
+        fill(blk, 0, sizeof blk); blk[31] = 0x0A;
+        check("RAM on, as a game", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x0000, blk, 32), 0);
+        fill(blk, 1, sizeof blk);
+        check("RAM bank 1", osGbpakReadWrite(&s_pfs, OS_WRITE, 0x4000, blk, 32), 0);
+        check("RAM 0x2580", osGbpakReadWrite(&s_pfs, OS_READ, 0xA580, buf, 0xFC0), 0);
+        u32 sum = 0;
+        for (u32 i = 0x18; i <= 0xFA3u; i++) sum += buf[i];
+        printf("  header title \"%.16s\" destination %u; save sum over 0x2598..0x3523: %lu (%s)\n", (const char *)hdr + 0x14, hdr[0x2A],
+               (unsigned long)(sum & 0xFF), (sum & 0xFF) == 0xFF ? "right" : "WRONG");
+    }
     check("osGbpakPower off", osGbpakPower(&s_pfs, OS_GBPAK_POWER_OFF), 0);
+}
+
+/* ---- a game's start-up check of a Game Boy cartridge and its save, in libultra's calls --------------------------------------------------
+ * The sequence a game with a Transfer Pak menu runs when it starts, and again when the player chooses the pak: osGbpakInit and osGbpakReadId, the
+ * connector check, the MBC's RAM enable, a test pattern written to the RAM and read back (the status after it must not say "reset"), the header
+ * from 0x120, and the save's sum (bank 1, 0xFC0 bytes from 0x2580, the sum from 0x2598 to 0x3523 with the byte after it 0xFF), each read between a
+ * status that says the power is on and a status that says no reset since. Every step that fails is printed; `game_errors` counts them. */
+static int game_errors;
+static u8 s_mbc_bank = 0xFF;
+static void game_fail(const char *what, s32 v) { game_errors++; printf("  game check: %s (%ld)\n", what, (long)v); }
+static s32 mbc_bank(u8 bank)
+{
+    u8 b[32];
+    fill(b, bank, sizeof b);
+    s32 r = osGbpakReadWrite(&s_pfs, OS_WRITE, 0x4000, b, 32);
+    if (r == 0) s_mbc_bank = bank;
+    return r;
+}
+static s32 mbc_ram_enable(void)
+{
+    u8 st, b[32];
+    s32 r = osGbpakGetStatus(&s_pfs, &st);
+    if (r) return r;
+    fill(b, 1, sizeof b);
+    if ((r = osGbpakReadWrite(&s_pfs, OS_WRITE, 0x6000, b, 32))) return r;
+    fill(b, 0, sizeof b); b[31] = 0x0A;
+    if ((r = osGbpakReadWrite(&s_pfs, OS_WRITE, 0x0000, b, 32))) return r;
+    s_mbc_bank = 0xFF;
+    r = osGbpakGetStatus(&s_pfs, &st);
+    if (r == 0 && !(st & OS_GBPAK_POWER)) r = PFS_ERR_CONTRFAIL;
+    return r;
+}
+static s32 mbc_rw(int write, u32 address, u8 *buf, u32 size)         /* (the RAM, by its address in the cartridge's 64 KiB of RAM space) */
+{
+    u8 st;
+    s32 r = osGbpakGetStatus(&s_pfs, &st);
+    if (r) return r;
+    u8 bank = (u8)(address >> 13);
+    if (bank != s_mbc_bank && (r = mbc_bank(bank))) return r;
+    r = osGbpakReadWrite(&s_pfs, write ? OS_WRITE : OS_READ, (u16)((address & 0x1FFFu) + 0xA000u), buf, (u16)size);
+    if (r == 0) r = osGbpakGetStatus(&s_pfs, &st);
+    if (r == 0 && !(st & 1)) r = PFS_ERR_CONTRFAIL;
+    return r;
+}
+static int pattern(const u8 *p)
+{
+    u8 back[32], st;
+    static u8 w[32];
+    for (int i = 0; i < 32; i++) w[i] = p[i];
+    if (mbc_rw(1, 0, w, 32) || mbc_rw(0, 0, back, 32) || bcmp(back, p, 32) || osGbpakGetStatus(&s_pfs, &st)) return 0;
+    return !(st & OS_GBPAK_RSTB_DETECTION);
+}
+static void game_check(void)
+{
+    u8 status = 0;
+    OSGbpakId id;
+    game_errors = 0;
+    fill(&s_pfs, 0, sizeof s_pfs);
+    s32 r = osGbpakInit(&pak_test_mq, &s_pfs, 0);
+    if (r) { game_fail("osGbpakInit", r); return; }
+    r = osGbpakReadId(&s_pfs, &id, &status);
+    if (r) { game_fail("osGbpakReadId", r); return; }
+    if (!(status & OS_GBPAK_RSTB_STATUS)) game_fail("no reset line after osGbpakReadId, status", status);
+    r = osGbpakCheckConnector(&s_pfs, &status);
+    if (r) { game_fail("osGbpakCheckConnector", r); return; }
+    if ((r = mbc_ram_enable())) game_fail("RAM enable", r);
+    static u8 p55[32], paa[32], pc[32];
+    fill(p55, 0x55, 32); fill(paa, 0xAA, 32);
+    for (int i = 0; i < 32; i++) pc[i] = (u8)(osGetCount() + (u32)i * 7u);
+    if (!pattern(p55) || !pattern(paa) || !pattern(pc)) game_fail("the test pattern, written and read back", 0);
+    /* (the check of the save: the power is on between the status reads) */
+    static u8 hdr[0x60], save[0xFC0];
+    r = osGbpakGetStatus(&s_pfs, &status);
+    if (r) game_fail("status before the header", r);
+    if ((r = osGbpakReadWrite(&s_pfs, OS_READ, 0x120, hdr, 0x60))) game_fail("the header from 0x120", r);
+    if (hdr[0x2A] != 1) game_fail("the destination code is not 1", hdr[0x2A]);
+    s_mbc_bank = 0xFF;
+    if ((r = mbc_rw(0, 0x2580, save, 0xFC0))) game_fail("the save from 0x2580", r);
+    u32 sum = 0;
+    for (u32 i = 0x18; i <= 0xFA3u; i++) sum += save[i];
+    if ((sum & 0xFF) != 0xFF) game_fail("the save's sum", (s32)(sum & 0xFF));
+    r = osGbpakGetStatus(&s_pfs, &status);
+    if (r || (status & OS_GBPAK_RSTB_DETECTION)) game_fail("status after: a reset since the last status", status);
+    printf("  game check of \"%.16s\": %d errors\n", (const char *)hdr + 0x14, game_errors);
 }
 
 static void no_pak(void)
@@ -234,7 +337,15 @@ int main(void)
         check("osGbpakReadId, virtual", osGbpakReadId(&s_pfs, &id, &status), 0);
         const int mine = bcmp(id.game_title, "MIRLO TEST", 10) == 0;
         printf("  the virtual slot: a cartridge%s\n", mine ? " (make_gb.py's)" : "");
-        if (mine) transfer_pak(VIRT); else whole_cartridge(VIRT);
+        if (mine) transfer_pak(VIRT);
+        else {
+            game_check();
+            whole_cartridge(VIRT);
+            game_check();                               /* (and again after the cartridge was powered off and the game started over) */
+            n64rt_gbv_restart_prep();
+            pak_test_boot();
+            game_check();
+        }
     } else {
         printf("  the virtual slot: no cartridge\n");
         pak_test_boot();
