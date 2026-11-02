@@ -87,7 +87,7 @@ static int region(uint32_t wa)                               // C colour, Z dept
     if (b >= (reg_ti & 0x7FFFFFu) && b < (reg_ti & 0x7FFFFFu) + 0x40000u) return 2;
     return 3;
 }
-static bool bank_hash;                                       // TB_HASH=1: the SDRAM's bank is a[10:9] xor the row's pairs of bits
+static bool bank_hash, hid_remap; static uint32_t hid_x = 2;                                       // TB_HASH=1: the SDRAM's bank is a[10:9] xor the row's pairs of bits
 static struct {
     bool open[4]; uint32_t row[4]; int c_act[4], c_pre[4], c_wr[4]; int c_rd, c_wrany;
     int refi, wait, st;               // st 0 run, 1 precharge for a refresh, 2 refresh
@@ -101,6 +101,11 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     // the arbiter: the RDP and the other master in turn
     bool pick_cpu = sd.cpu_v && (!v || sd.turn);
     bool rv = pick_cpu ? true : v, rwe = pick_cpu ? sd.cpu_we : we; uint32_t ra = pick_cpu ? sd.cpu_a : a;
+    if (hid_remap && (ra >> 18) == 0x37u) {                    // TB_HREMAP=1: the hidden plane's words in the bank other than that of their image's rows
+        uint32_t h = ra & 0x3FFFFu;
+        uint32_t bk = (((h >> 6) & 3u) ^ hid_x), col = ((h >> 8) & 1u) << 8 | ((h >> 9) & 3u) << 6 | (h & 0x3Fu);
+        ra = (ra & ~0x3FFFFu) | (h & ~0x7FFu & 0x3FFFFu) | bk << 9 | col;
+    }
     int cmd = 0, ba = 0; uint32_t row = (ra >> 11) & 0x1FFF; int bank = ((ra >> 9) ^ (bank_hash ? (row ^ row >> 2 ^ row >> 4 ^ row >> 6 ^ row >> 8 ^ row >> 10 ^ row >> 12) : 0)) & 3;   // 1 ACT 2 PRE 3 RD 4 WR 5 PREALL 6 REF
     bool go = false;
     if (sd.wait == 0) {
@@ -139,8 +144,8 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     if (!sd.cpu_v && cpu_pct && rnd() % 100 < cpu_pct) { sd.cpu_v = true; sd.cpu_we = rnd() % 5 == 0; sd.cpu_a = (rnd() << 8 ^ rnd()) & 0x1FFFFF; }
     return go && !pick_cpu;
 }
-static uint64_t st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   // (and the memory commands taken in each state)
-static std::vector<uint64_t> take_cyc;                      // TB_CLS: the cycle each command word was taken
+static uint64_t pix_why2[2][8], st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   // (and the memory commands taken in each state)
+static std::vector<uint64_t> take_cyc, start_cyc;                // TB_CLS: the cycle each command word was taken, and each command started executing                      // TB_CLS: the cycle each command word was taken
 
 
 static void tick()
@@ -181,12 +186,20 @@ static void tick()
         if (top->m_cmd_valid && top->m_cmd_ready) (top->m_cmd_we ? st_wr : st_rd)[top->rootp->rdp_top__DOT__st & 31]++;
         if ((top->rootp->rdp_top__DOT__st & 31) == 6) {      // S_PIX: why the clock was spent
             auto *r = top->rootp;
-            int k = !r->rdp_top__DOT__row_wq ? 0 : r->rdp_top__DOT__pix_gh ? 1 : r->rdp_top__DOT__pix_go ? 2 : !r->rdp_top__DOT__pix_slot ? 3 : r->rdp_top__DOT__rq_pend ? 4 : 5;
+            int k = !r->rdp_top__DOT__row_wq ? 0 : r->rdp_top__DOT__pix_gh ? 1 : r->rdp_top__DOT__pix_go ? 2 : !r->rdp_top__DOT__pix_slot ? 3 : (r->rdp_top__DOT__rq_pend && r->rdp_top__DOT__rq_set == r->rdp_top__DOT__set_cur) ? 4 : 5;
             pix_why[k]++;
+            if (k == 0) pix_why2[1][6 + (r->rdp_top__DOT__wq_pend ? 0 : 1)]++;
+            if (k == 4 || k == 5) {         // the own row's read request still to be taken (k 4), or its words not in (k 5): why
+                int rqs = r->rdp_top__DOT__rq_set;
+                int c = !r->rdp_top__DOT__rq_pend ? 0 : r->rdp_top__DOT__mem__DOT__r_act ? 1 : r->rdp_top__DOT__old_hold[rqs] ? 2 : !r->rdp_top__DOT__hz_ok ? 3 : 4;
+                if (c == 3 && r->rdp_top__DOT__mem__DOT__w_act && r->rdp_top__DOT__mem__DOT__w_set == rqs) c = 5;
+                pix_why2[k - 4][c]++;
+            }
         }
     }
     top->clk = 1; top->eval();
     cycles++;
+    { static bool prev_go; bool go = top->rootp->rdp_top__DOT__exec_go; if (prev_go && !go) start_cyc.push_back(cycles); prev_go = go; }
     if (free_chk) {          // TB_FREE=1: the LFSR stepped on every clock
         const uint32_t cur = top->rootp->rdp_top__DOT__pix__DOT__lfsr;
         if (top->rst) free_have = false;
@@ -527,7 +540,7 @@ int main(int argc, char **argv)
     if (ai >= argc) { fprintf(stderr, "usage: tb_rdp [-o out_prefix] task.bin ... | -r SEED [N]\n"); return 2; }
     const bool step = getenv("TB_STEP") != nullptr;
     fast_mem = getenv("TB_FAST") != nullptr; prof = getenv("TB_PROF") != nullptr;
-    bank_hash = getenv("TB_HASH") != nullptr;
+    bank_hash = getenv("TB_HASH") != nullptr; hid_remap = getenv("TB_HREMAP") != nullptr; if (hid_remap) hid_x = (uint32_t)atoi(getenv("TB_HREMAP"));
     sdram = getenv("TB_SDRAM") != nullptr; if (getenv("TB_CPU")) cpu_pct = (unsigned)atoi(getenv("TB_CPU"));
     if (getenv("TB_LAT")) mem_lat = (unsigned)atoi(getenv("TB_LAT"));
     if (getenv("TB_STALL")) mem_stall = (unsigned)atoi(getenv("TB_STALL"));
@@ -582,7 +595,7 @@ int main(int argc, char **argv)
         std::vector<uint32_t> cur;
         struct CRec { uint32_t op, nw; uint32_t oh, ol, w0, w1; uint64_t px, w; };
         std::vector<CRec> crec; uint64_t cwords = 0;
-        take_cyc.clear();
+        take_cyc.clear(); start_cyc.clear();
         if (const char *dp = getenv("TB_DUMP")) {          // TB_DUMP=file: the command words, big-endian (to replay on the model alone)
             if (FILE *df = fopen(dp, "wb")) { for (uint32_t x : cmds) { uint8_t b4[4]; wbe32(b4, x); fwrite(b4, 1, 4, df); } fclose(df); }
         }
@@ -674,11 +687,11 @@ int main(int argc, char **argv)
             free_n = free_bad = 0;
         }
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
-        if (const char *cf = getenv("TB_CLS")) {     // TB_CLS=<file>: one line a command -- op, words, first word taken, last word taken, other modes (hi, lo), first two words, pixels drawn so far; then the end
+        if (const char *cf = getenv("TB_CLS")) {     // TB_CLS=<file>: one line a command -- op, words, the cycle it started to execute, last word taken, other modes (hi, lo), first two words, pixels drawn so far; then the end
             FILE *cfp = fopen(cf, "a");
             fprintf(cfp, "T %s\n", argv[ai]);
             for (size_t i = 0; i < crec.size(); i++) {
-                const CRec &c = crec[i]; uint64_t a = c.w < take_cyc.size() ? take_cyc[c.w] : cycles, b = c.w + c.nw - 1 < take_cyc.size() ? take_cyc[c.w + c.nw - 1] : cycles;
+                const CRec &c = crec[i]; uint64_t a = i < start_cyc.size() ? start_cyc[i] : cycles, b = c.w + c.nw - 1 < take_cyc.size() ? take_cyc[c.w + c.nw - 1] : cycles;
                 fprintf(cfp, "%02x %u %llu %llu %06x %08x %08x %08x %llu\n", c.op, c.nw, (unsigned long long)a, (unsigned long long)b, c.oh, c.ol, c.w0, c.w1, (unsigned long long)c.px);
             }
             fprintf(cfp, "E %llu\n", (unsigned long long)cycles);
@@ -700,6 +713,11 @@ int main(int argc, char **argv)
             for (int i = 0; i < 6; i++) if (pix_why[i]) printf("      S_PIX: %-38s %9llu\n", wn[i], (unsigned long long)pix_why[i]);
             for (int i = 0; i < 32; i++) st_cyc[i] = 0;
             for (int i = 0; i < 8; i++) pix_why[i] = 0;
+            static const char *cn[6] = { "request taken, words coming", "read engine busy", "old buffers still read", "hidden words wait for the write engine (idle)", "being taken", "hidden words wait for the write engine (same set)" };
+            printf("      S_PIX write-back request waits for: the write engine to take the row before's request %llu, the row's own read request %llu\n", (unsigned long long)pix_why2[1][6], (unsigned long long)pix_why2[1][7]);
+            pix_why2[1][6] = pix_why2[1][7] = 0;
+            for (int k = 0; k < 2; k++) for (int c = 0; c < 6; c++) if (pix_why2[k][c]) printf("        S_PIX %s: %-48s %9llu\n", k ? "words" : "request", cn[c], (unsigned long long)pix_why2[k][c]);
+            memset(pix_why2, 0, sizeof pix_why2);
         }
         if (getenv("TB_KINDS")) {
             printf("  textured primitives' kinds (cycle type, TLUT bits, format, size):");
