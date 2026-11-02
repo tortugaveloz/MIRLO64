@@ -46,6 +46,19 @@ module sdr_arb #(
     input  wire  [2:0]       rd_tag
 );
 
+// The RDP's hidden plane (the words 0xDC_0000 to 0xDF_FFFF) is placed in the banks so that the hidden words of a row of an
+// image are never in that row's own bank: an image's row at byte address A is in bank A[12:11], and its hidden word, number
+// A[22:5] of the plane, has A[12:11] as its bits [7:6]. Those two bits, taken to the bank (xor 2: two banks on), and the
+// plane's bits [10:9], which were the bank, put in their place. A bijection on the plane, so that all that reads or writes the
+// plane (the RDP, the scan-out, the CPU) goes on seeing the one linear plane; a span of a row's colour (or depth) words and
+// its hidden words, which the RDP reads and writes by turns, no longer close each other's row at every change. (Done on each
+// port's address, ahead of the choice of the port.)
+function automatic logic [23:0] hmap(input logic [23:0] a);
+    return (a[23:18] == 6'b110111) ? {a[23:11], a[7:6] ^ 2'b10, a[8], a[10:9], a[5:0]} : a;
+endfunction
+logic [N-1:0][23:0] p_phys;
+always_comb for (int i = 0; i < N; i++) p_phys[i] = hmap(p_addr[i]);
+
 localparam int IW = $clog2(N);
 logic [IW-1:0] cur;             // the port holding the grant
 logic          held;            // cur keeps it (it asked last cycle and got served)
@@ -85,7 +98,7 @@ always_comb begin
 end
 always_ff @(posedge clk) begin
     la_valid <= !rst && ro[IW];
-    la_addr  <= p_addr[ro[IW-1:0]];
+    la_addr  <= p_phys[ro[IW-1:0]];
 end
 
 // the register stage
@@ -99,7 +112,7 @@ always_ff @(posedge clk) begin
     else begin
         if (req_valid && req_ready) req_valid <= 0;
         if (load) begin
-            req_valid <= 1; req_we <= p_we[pick]; req_addr <= p_addr[pick];
+            req_valid <= 1; req_we <= p_we[pick]; req_addr <= p_phys[pick];
             req_wdata <= p_wdata[pick]; req_be <= p_be[pick]; req_tag <= 3'(pick);
             beats <= (held && pick == cur) ? beats + 5'd1 : 5'd1;
             cur <= pick; held <= 1;
