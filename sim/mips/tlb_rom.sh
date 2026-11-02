@@ -1,5 +1,5 @@
 #!/bin/bash
-# tlb_rom.sh OUT.z64 : builds sim/mips/tlb_rom.c as an N64 ROM for the lockstep bench (MIPS_CC / MIPS_BIN as lang/mips/mips.mk)
+# tlb_rom.sh OUT.z64 [SRC.c] : builds sim/mips/tlb_rom.c (or SRC.c: cpu_rom.c) as an N64 ROM for the lockstep bench (MIPS_CC / MIPS_BIN as lang/mips/mips.mk)
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CC="${MIPS_CC:-$HOME/local/mipsgcc/usr/bin/mips-linux-gnu-gcc-13}"; BIN="${MIPS_BIN:-$HOME/local/mips-bin/mips-linux-gnu-}"
@@ -16,7 +16,7 @@ SECTIONS {
 }
 LD
 "$CC" -B"$T/" -mabi=32 -mno-abicalls -fno-pic -G0 -ffreestanding -nostdlib -EB -march=vr4300 -msoft-float -O1 -fno-strict-aliasing \
-    -Wall -Wno-pointer-to-int-cast -c "$HERE/tlb_rom.c" -o "$T/rom.o"
+    -Wall -Wno-pointer-to-int-cast -c "${2:-$HERE/tlb_rom.c}" -o "$T/rom.o"
 "${BIN}ld" -EB -T "$T/rom.ld" -o "$T/rom.elf" "$T/rom.o"
 "${BIN}objcopy" -I elf32-tradbigmips -O binary "$T/rom.elf" "$T/rom.bin"
 "${BIN}nm" "$T/rom.elf" | sort > "${1%.z64}.syms"; cp "$T/rom.elf" "${1%.z64}.elf"

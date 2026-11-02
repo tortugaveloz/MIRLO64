@@ -667,7 +667,7 @@ logic [63:0] res_d;
 logic [31:0] ld_lo;
 always_comb res_d = f2d(res);
 always_comb begin
-    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000A00 : 32'd0);
     gpr_out_hi = xo;
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];

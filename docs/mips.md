@@ -198,6 +198,7 @@ integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 9, 9 | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
+| `JT` | 1 | The register jumps' guess (a stack of return addresses); 0: they are guessed not taken |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
 
@@ -208,9 +209,8 @@ exceptions) and W (write-back), with forwarding into E from M and W. With `FAST`
 
 - **F**: the I-cache's word enters D before its tag is compared. A word of another line is dropped in D a cycle later,
   the line is read and the instruction is fetched again. Instructions are decoded as they leave F.
-- **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a backward branch
-  taken, a forward one when it was taken the last time (below); a register jump to its register as D reads it, when nothing ahead of it in E or M is to write
-  that register -- every function's return, mostly -- and not taken otherwise), and a wrong guess costs two cycles. A delay slot costs nothing. The
+- **Branches** are decided at E on forwarded operands. The fetch follows a guess (a jump's target; a conditional branch by a 2-bit
+  counter of its address (below); a register jump to the return address on top of a stack (below)), and a wrong guess costs two cycles. A delay slot costs nothing. The
   branch's two ways (its target and the instruction after its delay slot) are registered as it leaves E, with whether
   it was taken, and the fetch chooses between them behind the registers.
 - **M**: a load takes the D-cache's word before its tag is compared. A load of the wrong line is not written back; the
@@ -224,6 +224,10 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 (32 and 64 steps, from the cycle after M completes the instruction: `div(u)` is done as it always was, `ddiv(u)` a little over two
 times that; the dividend's magnitude is what the multiplier's registers take from M). HI and LO keep the
 upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them; which words of HI and LO are 32-bit values is a flag set as they are written.
+
+A `COP0` instruction with the CO bit set and an undefined function, 0x20 - 0x3F (whatever its other fields), does nothing; the undefined
+functions below 0x20 are Reserved Instructions. (A conformance suite runs three of them, an emulator's detection and log calls, before it
+installs its exception handlers, and passes on a console; no manual was found that says so.)
 
 **Cycles of the integer side**, against the console's, from `sim/mips/fpu_cycles.py` (its blocks of `mult` ... `ddiv`, loads and branches) and the
 console model's figures (`sim/mips_soc/con_model.h`: `mult` 5, `dmult` 8, `div` 37, `ddiv` 69 cycles during which the pipeline waits; a load's use 1).
@@ -239,15 +243,37 @@ branch costs no more than a branch that is not.
 | `lw` and the `addu` that uses it | 1 + 1 + 1 | 3 |
 | `ld`, `sd` | 1 | 2 (two words) |
 | `ldl` and `ldr`, `sdl` and `sdr` | 1 each | about 14 each (a byte a cycle, `W64_UA`) |
-| a branch not taken, with its delay slot | 2 | 2 |
-| a forward branch taken, with its delay slot | 2 | 2 when it was taken the last time (the table above), else 4 (the fetch is put right two cycles later) |
-| a backward branch taken, with its delay slot | 2 | 2 |
-| `beql` not taken (slot annulled) | 2 | 2 |
+| a branch not taken, with its delay slot | 2 | 2 when its counter (below) says not taken, else 4 (the fetch is put right two cycles later) |
+| a branch taken, with its delay slot | 2 | 2 when its counter says taken, else 4 |
+| `beql` not taken (slot annulled) | 2 | as a branch not taken |
+| `jal` and `j`, with the delay slot | 2 | 2 |
+| `jr $ra` (a return), with the delay slot | 2 | 2 when the stack has the address (the calls that left D pushed it), else 4 |
+| `jr`, `jalr` through another register, with the delay slot | 2 | 4 |
 
-The fetch follows a guess that a branch is taken when it is a backward one, or a forward one that was taken the last time (a table of
-64 bits, by the low bits of the branch's address, written as the branch leaves E): a taken branch costs what the console's does when the
-guess is right, and two cycles when it is wrong. `int64_test` takes 2.0 % fewer cycles, `cpu_test` 0.1 %, and a title screen of the console
-model 1.3 % fewer (3.277 to 3.234 cycles an instruction).
+The fetch follows a guess that a branch is taken, by a 2-bit counter (0 to 3, up when the branch is taken, down when not) in a table of 64, by the
+low bits of the branch's address and for forward and backward branches alike: a forward branch is guessed taken when its counter is 2 or 3, a backward one
+(a loop's) unless it is 0. A branch costs what the console's does when the guess is right, and two cycles more when it is wrong. The counter F reads
+goes down the pipeline with the branch (it is what the branch's outcome moves), and is written from there as the branch leaves E, not in the path of
+the decision; a branch that comes round again before that has not seen the outcome of the one ahead of it. The table of 64 bits that guessed
+forward branches only (one bit: the last outcome) got 25.5 % of the branches of one game's attract mode wrong and 13.0 % of another's; the counters,
+18.1 % and 7.0 % (`sim/mips/branch_pred.py` on the branches the console model counted, 16.0 and 3.0 million; a table of 256 counters would get 18.0 % and 5.4 %).
+On the SoC, in 30 fields of two games' attract modes, cycles an instruction go from 1.5409 to 1.5238 and from 1.3336 to 1.2803 (1.1 % and 4.0 % fewer).
+
+A register jump (`jr`, `jalr`) was guessed not taken, so each one cost the two cycles of a wrong guess, every function's return among them. With `JT` it is
+guessed taken, to the top of a stack of 4 return addresses (`ras`: a call -- `jal`, `jalr`, a branch and link -- pushes the address after its delay
+slot as it leaves D, a `jr $ra` pops one as it leaves D; a stack that has nothing is no guess), which F reads as the jump is delivered to D (`d_jt`, a
+word address, from where the fetch goes). It is a function's return that this gets right; a `jr` through another register (a switch's, a function pointer's) and a
+`jalr` are guessed to the same place and are wrong, as they were. E compares the register with the target guessed -- by the comparator of
+`beq`: the guessed target is the jump's second operand, `e_rb`, and the forwarding into it is off for a jump -- and a different target puts the fetch right
+as a wrong guess of a branch is, two cycles late: a wrong guess costs what the missing one did. A call or return on a wrong path pushes or pops on the stack
+and spoils what follows (nothing is repaired); the check keeps the program right. The stack is a small RAM of logic (an MLAB). On the register jumps that four games'
+windows ran (`sim/mips/jump_pred.py`) a stack of 4 gets 99.3 %, 73.0 %, 78.2 % and 83.2 % right (99.7, 98.8, 92.3 and 94.4 % of the `jr $ra`; the rest are the
+jumps through other registers), a stack of 2 gets 98.7, 71.7, 72.0 and 77.1 %. In the same 30 fields of the two games' attract modes cycles an instruction go from
+1.5238 to 1.5133 and from 1.2803 to 1.2693 with the stack (0.7 % and 0.9 % fewer than with the counters alone; 1.8 % and 4.8 % fewer than before both).
+A table of 16 last targets by the jump's address for the jumps through other registers (a quarter of one game's) was tried with the stack: it takes 0.7 % more off that game's cycles
+and nothing off the others', costs 13 ALUTs and 5 registers more in the CPU's synthesis, and 0 of the 6 seeds closed timing with it (3 of 6 with the stack alone).
+`gen_rand_rom.py` with `jmp` adds loops with a computed jump into a slide of instructions (its target changes), calls and returns with the return address
+reloaded just before the jump, and `jalr`.
 
 ### Caches and memory
 
@@ -444,7 +470,7 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 | 22 | Read only: the physical address a page gave to the last device access through the TLB that the monitor level took; with the tables, the address of the last translation fault it took |
 | 8 (BadVAddr) | Writable by `mtc0` while ERL is set |
 | 23 | Read only, the capability word. With the TLB: `0x544C_42` (the ASCII `TLB`) in bits 31:8, bit 2 the fetch page registers (1 in the SoC), bit 1 the real TLB, bit 0 the monitor. With the tables: write stores a table entry for EntryHi's page pair and ASID (`[28:12]` the physical page, `[5]` cacheable, `[4]` which page of the pair, `[3]` the table (1: fetches), `[2]` global, `[1]` dirty, `[0]` valid); read `0x5442_0001`, with bit 3 set when the last TLB exception was a fetch's; 0 on a core with neither. `n64rt.sys` reads it at its start |
-| 0 (Index) | Bit 31 (P) is writable by `mtc0` while ERL is set |
+| 0 (Index) | Bit 31 (P) is writable by `mtc0`, as the VR4300's |
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
 
@@ -1315,8 +1341,16 @@ instruction's address, word and written register (64 bits), on every exception a
 SoC's levels, `div` is that with mostly divides, on the operands where a divider goes wrong, and `nodiv` has no
 `ddiv(u)`; the argument `tlb` adds four windows of mapped pages onto the scratch memory, loads and stores through them with
 `ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
-`tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
-set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
+`tlb_rom.sh <out.z64> [cpu_rom.c]` builds `tlb_rom.c`, a directed TLB program (or the source it is given): every page size, ASID and G, a refill and a fault in a delay slot and with EXL
+set, a fault of a fetch. `cpu_rom.c` is a directed program that knows the answers: the values a conformance suite found the VR4300 to give
+(one section for each group of behaviours: the FPU's FCR0, the writable bits of Index and Status, the undefined COP0 CO functions); it
+writes its verdict, and the id and the two values of each check that failed, where `tb -x rom.z64` reads them, beside the usual lockstep. It stands for the conformance suite `n64-systemtest` (lemmy-64): its tests *Index (masking)*, *Status (masking)* and *CFC1 / CTC1 (index 0)* are the sections for
+Index, Status and FCR0, and the suite's start, which runs three undefined COP0 CO words before it installs an exception handler, the last; the suite's cartridge byte and halfword reads (*cart_memory LH*, *LB*) are `cart_host.c`'s.
+What the suite finds and the core does not do, for the area it takes (a synthesis of the CPU alone, `tools/area2/ooc.sh`, on the core as it is here: 7,087 ALUTs,
+3,351 registers; the count moves by 25 to 50 ALUTs with a change of nothing but a constant, FCR0's value alone gave -25): `sra` and `srav` of an `rt` that is not a word's sign
+extension (the 64-bit shifter's low word: +38 ALUTs), ParityError holding eight bits (+24 ALUTs, 8 registers), and the 64-bit Context, XContext, EPC and ErrorEPC,
+BadVAddr's upper word, and the address error of a load or store whose base is not a sign-extended word (about +190 ALUTs and 72 registers; with the other two, +251 ALUTs and +80
+registers). `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 `gen_rand_fpu_rom.py SEED out.z64 N irq` (also with `w64`) turns the VI's interrupt on, one every 6,000 instructions or so, with a handler
 that acknowledges it: the interrupts come in the middle of FPU operations, which the core flushes (the model is told when the core takes
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
@@ -1338,6 +1372,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 |---|---|---|
 | `pad_test.py` | on the host (needs gcc) | `n64rt_pad_map()` against an independent table, over every combination of settings |
 | `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the shipped file, random bytes |
+| `cart_host.c` | on the host (the command is in its header) | the cartridge's byte and halfword reads (`n64rt_cart.h`) against the console's: a halfword of odd index reads the next one |
 | `tlb_insn_host.py` | on the host (needs gcc) | the runtime's TLB instructions against a model of the VR4300's registers, on random operations |
 | `rcp_bench.mk` | a ROM the released runtime runs in `sim/mips_soc` | the monitor's RCP emulation against the console's answers |
 | `tlb_bench.mk` | the same, with a runtime built with `TLBPROF=1` | the TLB instructions' results and their cost |
