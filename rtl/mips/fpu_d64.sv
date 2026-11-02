@@ -9,8 +9,9 @@
 //  - one 57-bit adder (`sum`): x + y + cin, x the accumulator `acc` (inverted for a subtraction, or zero for a load), y one of the
 //    operands' significands, the DSP's product or the rounding increment. The significands are 56 bits, {1, f, 000}: three
 //    bits below the double's 53 for the guard, round and sticky bits of a round to nearest even.
-//  - one shifter on `acc`: right by 8 or 1 with the shifted-out bits jammed into bit 0 (the alignment of the smaller
-//    operand, the carry of a sum) and left by 8 or 1 (the normalisation after a cancellation). A cycle per step.
+//  - one shifter on `acc` (`shv`, one select of four): right by 8 or 1 with the shifted-out bits jammed into bit 0 (the alignment
+//    of the smaller operand, the carry of a sum) and left by 8 or 1 (the normalisation after a cancellation). A cycle per step.
+//  - E has one adder for its steps (`Ef`): +1 for the carry of a sum, -8 and -1 for the normalisation, + the carry of the rounding.
 //  - one 26 x 26 multiplier (a 27 x 27 DSP block, with registers at its inputs and output): the 52-bit fractions' product in
 //    four pieces of 26 bits, the pieces accumulated in `acc` (the hidden bits' terms are two more additions):
 //    A * B = (2^52 + fa)(2^52 + fb) = 2^104 + 2^52 (fa + fb) + fa * fb.
@@ -121,9 +122,15 @@ function automatic logic [56:0] rj(input logic [56:0] v, input int n);
     return o;
 endfunction
 wire a_z8 = acc[55:48] == 8'd0;
+// the shifter's result: left (a normalisation: S_NRM without a carry) or right with the jam, by 8 or by 1 (S_ALN: by 8 while D >= 8)
+wire        shl = st == S_NRM && !acc[56];
+wire        shb = st == S_ALN ? D >= 6'd8 : a_z8 && !acc[56];
+wire [56:0] shv = shl ? (shb ? acc << 8 : acc << 1) : (shb ? rj(acc, 8) : rj(acc, 1));
 wire acc_z = acc == 57'd0;
 
-wire [12:0] Ef = E + {12'd0, acc[56]};                // (the carry of the rounding)
+// E's one step: +1 (the carry of a sum, or of the rounding), -8 and -1 (a normalisation by 8 and by 1)
+wire [12:0] Ek = st != S_NRM ? {12'd0, acc[56]} : acc[56] ? 13'd1 : a_z8 ? 13'h1FF8 : 13'h1FFF;
+wire [12:0] Ef = E + Ek;
 
 always_ff @(posedge clk) begin
     if (rst || !live) st <= S_IDLE;
@@ -136,14 +143,16 @@ always_ff @(posedge clk) begin
         st <= S_CLS;
     end
     S_CLS: begin
-        logic [11:0] dd, dm;
+        logic [11:0] dd, dm; logic [12:0] em;
         nx <= ea == 11'h7FF && ma[54:3] != 52'd0; ix <= ea == 11'h7FF && ma[54:3] == 52'd0; zx <= ea == 11'd0;
         ny <= eb == 11'h7FF && mb[54:3] != 52'd0; iy <= eb == 11'h7FF && mb[54:3] == 52'd0; zy <= eb == 11'd0;
         dd = {1'b0, ea} - {1'b0, eb};
+        em = {2'b00, ea} + {2'b00, eb} + 13'd1;        // (- 1023: + 1 on one carry chain, then - 1024)
+        em[12:10] = em[12:10] - 3'd1;
         sw <= dd[11] || f_ab; ee <= dd == 12'd0;      // (abs, neg: acc takes ea's significand like the add's smaller operand, from the same state)
-        dm = dd[11] ? -dd : dd;
+        dm = (dd ^ {12{dd[11]}}) + {11'd0, dd[11]};
         D <= dm >= 12'd60 ? 6'd60 : dm[5:0];
-        E <= f_mul ? 13'({2'b00, ea} + {2'b00, eb}) - 13'd1023 : (dd[11] && !f_ab) ? {2'b00, eb} : {2'b00, ea};
+        E <= f_mul ? em : (dd[11] && !f_ab) ? {2'b00, eb} : {2'b00, ea};
         seff <= !f_mul && (sa ^ sb ^ f_sub);
         rs <= f_ab ? fn[1] && !sa : f_mul ? sa ^ sb : dd[11] ? sb ^ f_sub : sa;
         g <= 0; stk <= 0;
@@ -172,19 +181,19 @@ always_ff @(posedge clk) begin
     end
     // alignment: the smaller operand, in acc, shifted right by the exponent difference
     S_ALN: begin
-        if (D >= 6'd8) begin D <= D - 6'd8; acc <= rj(acc, 8); end
-        else if (D != 6'd0) begin D <= D - 6'd1; acc <= rj(acc, 1); end
+        if (D >= 6'd8) begin D <= D - 6'd8; acc <= shv; end
+        else if (D != 6'd0) begin D <= D - 6'd1; acc <= shv; end
         else st <= S_SUM;
     end
     S_SUM: begin acc <= sum; st <= S_NRM; end
     S_NEG: begin acc <= sum; rs <= !rs; st <= S_NRM; end
     S_NRM:
         if (seff && acc[56]) st <= S_NEG;                          // a negative difference (the operands' exponents were equal)
-        else if (acc[56]) begin acc <= rj(acc, 1); E <= E + 13'd1; st <= S_RND; end
+        else if (acc[56]) begin acc <= shv; E <= Ef; st <= S_RND; end
         else if (acc_z) begin E <= 13'd0; rs <= !seff && rs; st <= S_DONE; end
         else if (!acc[55]) begin
-            if (a_z8) begin acc <= acc << 8; E <= E - 13'd8; end
-            else begin acc <= acc << 1; E <= E - 13'd1; end
+            if (a_z8) begin acc <= shv; E <= Ef; end
+            else begin acc <= shv; E <= Ef; end
         end else st <= S_RND;
     S_RND: begin acc <= sum; st <= S_PACK; end
     S_PACK: begin                                      // (an overflow is infinity, an underflow a zero: acc cleared, E all ones or 0)
