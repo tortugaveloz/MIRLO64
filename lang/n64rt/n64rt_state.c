@@ -23,7 +23,7 @@
  *     is for the same n64rt.sys (a sum of its code and constants says so) and the same ROM (its header);
  *   - the RDRAM, 8 MiB, and the RDP's hidden coverage bits of it (LAYOUT_HID);
  *   - the cartridge's save, a FlashRAM's page buffer and status words, the Controller Pak, and the RAM (and clock) of the
- *     virtual Transfer Paks' Game Boy cartridges: the memories the game reads as they were when the state was made (the Pocket's
+ *     Transfer Paks (SD)' Game Boy cartridges: the memories the game reads as they were when the state was made (the Pocket's
  *     files are written back when the core quits). A real Game Boy cartridge in the Pocket's slot is no memory of the core's: it is
  *     unplugged in the state (n64rt_pak.c);
  *   - the RCP's registers as the hardware has them, with what they hide: the VI's base and field (rcp_vi.sv's
@@ -393,7 +393,7 @@ static void save(void)
     d = put_region(h, RG_CPAK, d, (const void *)(uintptr_t)LAYOUT_CPAK, LAYOUT_PAK_BYTES);
     d = put_region(h, RG_HID, d, (const void *)(uintptr_t)LAYOUT_HID, 0x100000u);
     d = put_region(h, RG_RDRAM, d, (const void *)(uintptr_t)LAYOUT_RDRAM, 0x800000u);
-    d = put_region(h, RG_GB1, d, (const void *)(uintptr_t)LAYOUT_GBSAVE, w->gb_bytes[0]);       /* (the virtual Transfer Paks' cartridges' RAM: the ones that are in) */
+    d = put_region(h, RG_GB1, d, (const void *)(uintptr_t)LAYOUT_GBSAVE, w->gb_bytes[0]);       /* (the Transfer Paks (SD)' cartridges' RAM: the ones that are in) */
     d = put_region(h, RG_GB2, d, (const void *)(uintptr_t)LAYOUT_GBSAVE2, w->gb_bytes[1]);
     /* the header, and last the runtime's own memory: a load goes on from here (n64rt_state_resumed) */
     h->version = SS_VERSION; h->layout = LAYOUT_MARK;
@@ -573,7 +573,7 @@ void n64rt_state_event(void)
     s_in = 0;
 }
 /* whether the Pocket may ask: always. A Game Boy cartridge in the Pocket's slot (its RAM, mapper and clock are its own, which no state can
- * hold) is unplugged in the state; the virtual one's RAM and registers are in it (n64rt_pak.c, n64rt_gbvirt.c) */
+ * hold) is unplugged in the state; the SD one's RAM and registers are in it (n64rt_pak.c, n64rt_gbvirt.c) */
 void n64rt_state_poll(void)
 {
     const u32 ok = 1u;
