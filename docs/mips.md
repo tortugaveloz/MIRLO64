@@ -221,6 +221,30 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 times that; the dividend's magnitude is what the multiplier's registers take from M). HI and LO keep the
 upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them; which words of HI and LO are 32-bit values is a flag set as they are written.
 
+**Cycles of the integer side**, against the console's, from `sim/mips/fpu_cycles.py` (its blocks of `mult` ... `ddiv`, loads and branches) and the
+console model's figures (`sim/mips_soc/con_model.h`: `mult` 5, `dmult` 8, `div` 37, `ddiv` 69 cycles during which the pipeline waits; a load's use 1).
+The VR4300 User's Manual says of its branch (Chapter 2, "Branch Delay") that the pipeline has a delay of one cycle, the delay slot: a taken
+branch costs no more than a branch that is not.
+
+| Instruction | VR4300 | This core |
+|---|---|---|
+| `mult(u)` and the `mflo` after it | 5 + 1 | 6 (the multiply goes on behind seven independent instructions: they cost 1 each) |
+| `dmult(u)` and the `mflo` | 8 + 1 | 11 |
+| `div(u)` and the `mflo` | 37 + 1 | 37 |
+| `ddiv(u)` and the `mflo` | 69 + 1 | 71 |
+| `lw` and the `addu` that uses it | 1 + 1 + 1 | 3 |
+| `ld`, `sd` | 1 | 2 (two words) |
+| `ldl` and `ldr`, `sdl` and `sdr` | 1 each | about 14 each (a byte a cycle, `W64_UA`) |
+| a branch not taken, with its delay slot | 2 | 2 |
+| a forward branch taken, with its delay slot | 2 | 4 (the guess is not taken: the fetch is put right two cycles later) |
+| a backward branch taken, with its delay slot | 2 | 2 |
+| `beql` not taken (slot annulled) | 2 | 2 |
+
+The branch is the one place where this core is slower than the console on instructions that every program has: a forward branch that is
+taken pays the two cycles of its wrong guess. A table of the last outcome of 64 branches (the guess for a forward one following it) was
+tried: 1.3 % fewer cycles of the game CPU on a title screen of the console model (3.277 to 3.234 cycles an instruction), and, in two fits,
+no timing closure (-0.076 and -0.125 ns, 230 ALMs more than the same fits without it, against a closing +0.080 and +0.030); it was left out.
+
 ### Caches and memory
 
 Both caches are direct mapped with physical tags. The I-cache has 512 lines of 32 bytes (16 KiB); the
@@ -289,6 +313,50 @@ saturate. There are no FPU exceptions and no cause or flag bits in FCR31. The mo
 move a 64-bit register through a pair; `cvt.s.l` and `cvt.d.l` convert the pair's 64-bit integer exactly (a word's by
 `cvt.s.w`'s path, another shifted a bit a cycle); the conversions to `.l` are those to `.w`, the word sign-extended into
 the pair (beyond a word's range a value saturates as a word's).
+
+**Cycles.** The FPU's instructions stall the pipeline until they are done (the console's do too: its integer pipeline stalls for any
+multicycle floating-point instruction, whether the next one needs the result or not). What each takes in a stream of instructions of
+its kind, the cycles from one issue to the next, measured in the lockstep bench by `sim/mips/fpu_cycles.py` (a block of
+instructions repeated between two markers, the caches warm; `obj_dir/Vmips_core` built with the core's parameters), against the
+VR4300's. The VR4300's figures are those of `sim/mips_soc/con_model.h` (`f_add` ... `f_cvtds`, `mult` ... `ddiv`, `ld_use`: the console
+model that `CONMODEL` runs the game's code against, from the latencies of the VR4300's instructions; the table of the FPU's operations
+in the VR4300 User's Manual is not a text in the copy of it that was read, so the FPU's figures could not be checked against it here;
+the manual's text confirms that the integer pipeline stalls for a multicycle floating-point instruction, and a branch delay of one
+cycle, which is the delay slot). A double is a float here, so its operations are the single-precision ones with the conversion of
+its operands and result; where the figure depends on the operands it is for the ones of `fpu_cycles.py`.
+
+| Instruction | VR4300 | This core | Before |
+|---|---|---|---|
+| `add.s` | 3 | 7 | 11 |
+| `sub.s` | 3 | 8 (6 on a cancellation) | 11 (9) |
+| `mul.s` | 5 | 5 (4 with a zero operand) | 10 (6) |
+| `div.s`, `sqrt.s` | 29 | 35 | 37 |
+| `abs.s`, `neg.s` | 1 | 3 | 6 |
+| `mov.s`, `mov.d`, `mfc1`, `mtc1`, `dmfc1`, `dmtc1`, `cfc1`, `ctc1` | 1 | 1 | 1 |
+| `c.cond.s` (the sixteen) | 1 | 3 | 6 |
+| `cvt.w.s`, `trunc`, `round`, `ceil`, `floor` (`.w`, `.l`) of a single | 5 | 5 | 8 |
+| `cvt.s.w`, `cvt.d.w`, `cvt.s.l` / `cvt.d.l` of a word | 5 | 7 | 9 |
+| `cvt.s.l`, `cvt.d.l` of a 64-bit integer | 5 | 35 | 37 |
+| `cvt.d.s` | 1 | 3 | 6 |
+| `cvt.s.d` | 2 | 4 | 6 |
+| `cvt.w.d`, `trunc`, `round`, `ceil`, `floor` (`.w`, `.l`) of a double | 5 | 6 | 8 |
+| `add.d` / `sub.d` | 3 | 9 / 10 | 11 |
+| `mul.d` | 8 | 7 | 10 |
+| `div.d`, `sqrt.d` | 58 | 37, 36 | 37 |
+| `abs.d`, `neg.d`; `c.cond.d` | 1 | 4; 5 | 6 |
+| `lwc1`, `swc1` | 1 | 1 | 1 |
+| `ldc1`, `sdc1` | 1 | 2 (two words) | 2 |
+| `lwc1` and the `add.s` that uses it | 1 + 3 | 8 | 12 |
+| `c.lt.s` and `bc1t` with its delay slot, taken / not taken | 3 / 3 | 7 / 5 | 10 / 8 |
+
+What remains over the console's is the unit's pipeline, one datapath in several cycles (above): the operands are read and flushed
+(the first cycle), their kinds and order found (the second); then the operation, its normalisation and rounding, and a cycle in
+which the register is written. A single `mul.s` and `cvt.w.s` are as the console's, `add.s` / `sub.s` 4 or 5 cycles over, a
+comparison, `abs.s` and `neg.s` 2, `div.s` and `sqrt.s` 6 (28 iterations, a bit each). The doubles' division and square root are
+faster than the console's (they are floats). The cycles were cut by taking the second cycle's cases from the first where the
+operands are normal numbers (add, multiply, the conversions to an integer), by starting a comparison, `abs`, `neg` and the
+conversions between S and D there, by the sum of operands of the same sign and the product (one bit to normalise at most) needing no
+count of leading zeros, and by flushing the operands as they are read. Integer instruction cycles are unchanged.
 
 ### Address translation
 
@@ -1201,6 +1269,11 @@ SoC's levels, `div` is that with mostly divides, on the operands where a divider
 `ll`, `sc`, `ld`, `sd`, `ldl` and `sdl`, and random `tlbwi`, `tlbwr`, `tlbp`, `tlbr` and ASID changes) and `gen_rand_fpu_rom.py` random FPU programs.
 `tlb_rom.sh <out.z64>` builds `tlb_rom.c`, a directed TLB program: every page size, ASID and G, a refill and a fault in a delay slot and with EXL
 set, a fault of a fetch. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
+`gen_rand_fpu_rom.py SEED out.z64 N irq` (also with `w64`) turns the VI's interrupt on, one every 6,000 instructions or so, with a handler
+that acknowledges it: the interrupts come in the middle of FPU operations, which the core flushes (the model is told when the core takes
+each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
+obj_dir/Vmips_core]` runs a ROM of blocks between markers and prints what every COP1 instruction, and the multiplies, divides, loads,
+stores and branches, cost in cycles (the table in "The FPU").
 
 ### Single blocks
 
