@@ -63,7 +63,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 |---|---|---|
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
-| Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again |
+| Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again (Restart Game does it) |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak (cartridge), Transfer Pak (SD) | The accessory in controller 1. Transfer Pak (cartridge) is the Transfer Pak with a Game Boy cartridge in the Pocket's slot. **Transfer Pak (SD)** plays a Game Boy game from the SD card, and needs two steps before the N64 game starts: choose it here, and load the Game Boy game with "Load Transfer Pak 1" (one of the core's Load entries, with "Load Game": a `.gb` or `.gbc`), in either order. The core does not choose the pak for you: with None, Controller Pak or Transfer Pak (cartridge) a loaded Game Boy game is ignored. It uses that game's own save, `<Game Boy game>.sav` in the Saves folder of the game's platform (`Saves/gbc/common/` for a game in `Assets/gbc/common/`), the file a Game Boy core keeps too (see [Saves](#saves)). Sleep and Memories work with it (its RAM is in the state); the Transfer Pak with a cartridge in the Pocket's slot is unplugged in them, and the game finds it gone when it wakes |
 | Controller 2 pak | **None**, Transfer Pak (SD) | A second Transfer Pak (SD), in controller 2 (a pad that is there, with nothing pressed, when the dock has none), chosen and loaded in the same two steps: its Game Boy game is "Load Transfer Pak 2", and the same for its save; with no game loaded there the pak has no cartridge, as pak 1 has none with no game loaded. Set it before the game starts, as a game looks for its controllers then |
 | Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
@@ -75,6 +75,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | C buttons | **None**, L stick, R stick | A stick as the C buttons, besides the face buttons |
 | Start button | None, **Start**, Select+Start | The Pocket's button for Start; the Start key it leaves (alone with Select+Start, or with None) is C-up |
 | Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
+| Restart Game | (an action) | Starts the game over, as a console switched off and on, with everything the Pocket loaded as it is (the ROM, the saves, the Transfer Paks' Game Boy games). It is the last entry. For a game that looks at its Transfer Pak only when it starts: load the Game Boy game with Load Transfer Pak 1 (or 2) while the N64 game runs, then choose Restart Game. A game that looks at its pak again at its menus needs no restart. Nothing restarts by itself ([Restart Game](docs/mips.md#restart-game)) |
 
 ### Saves
 

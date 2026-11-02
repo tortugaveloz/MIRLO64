@@ -1511,6 +1511,7 @@ void n64rt_rcp_events(void)
         else if (!s_mi_hw) s_mi_sw |= MI_DP;          /* SYNC FULL */
     }
     if (pend & 4u) n64rt_state_poll();                /* (whether the Pocket may ask for a save state) */
+    if (pend & 4u) n64rt_restart_poll();              /* the core's "Restart Game" action (n64rt_restart.c): does not return when it was chosen */
     if (pend & 32u) n64rt_state_event();              /* the Pocket asks for a save state, or for its load (n64rt_state.c) */
 }
 static u32 vi_current(void)
