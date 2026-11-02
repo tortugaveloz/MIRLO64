@@ -436,6 +436,10 @@ void n64rt_gbv_field(void)
     for (int n = 0; n < 2; n++) poll(n, look);
 }
 
+/* The pak's setting is the SD one and a ROM is in the slot: its cartridge is made now, not at the next video field (n64rt_pak_init, as the game starts: a game
+ * that looks at its pak once, soon after it boots, finds a ROM that was loaded before it started; the pak's first look at the slot is this one) */
+void n64rt_gbv_make(int n) { poll(n, 1); }
+
 /* The game is about to start over (n64rt_restart.c, the "Restart Game" action), as if the console were switched off and on with the
  * cartridges left in the Transfer Paks. The ROM loaded last is looked at now (a cartridge not made yet is made, and its save read), the RAM the
  * game wrote is written to the file at once (the quiet moment is not waited for), and each cartridge is powered off and on, which resets its

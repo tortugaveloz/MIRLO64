@@ -228,6 +228,7 @@ void n64rt_pak_init(void)
     for (int ch = 0; ch < NPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);
+        if (k == N64RT_PAK_VIRTUAL) n64rt_gbv_make(ch);        /* (a ROM loaded before the game starts is a cartridge when the game first looks) */
         if (k == N64RT_PAK_TRANSFER || k == N64RT_PAK_VIRTUAL) { slot_look(k == N64RT_PAK_VIRTUAL); s_slot.pulled = 0; }   /* (any other setting: the port is left alone) */
     }
     s_ch = 0;
