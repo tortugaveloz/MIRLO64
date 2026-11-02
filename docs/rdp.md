@@ -771,7 +771,11 @@ for the table by kind of primitive), in clock cycles of the RDP alone:
 | the SDRAM controller's rules (`TB_SDRAM=1`), the hidden plane in the banks it was | 97,442,135 | 88,630,707 | -9.0 % |
 | the same with the hidden plane's banks (`TB_HREMAP=2`; `sdr_arb.sv`) | 93,694,655 | 84,514,421 | -13.3 % |
 
-(the hidden plane's banks alone take 3.8 % off the before). With every request taken at once, by kind of primitive:
+(the hidden plane's banks alone take 3.8 % off the before). A task takes 0.80 to 1.00 of its time before, 0.86 at the median (the
+SDRAM's rules with the banks), and 19 of the 138 tasks need more than a 60 Hz frame of the RDP's time, where 25 did. With another
+master asking the SDRAM at random for a fifth of the cycles (`TB_CPU=20`, an access that always changes a row) the time is 227.7
+million before and 214.1 million after (-6.0 %): what is taken by the other master the RDP does not get back. With every request
+taken at once, by kind of primitive:
 
 | | commands | before | after | clocks a pixel before, after |
 |---|---|---|---|---|
