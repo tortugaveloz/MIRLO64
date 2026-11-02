@@ -1254,7 +1254,7 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 
 | Variable | Effect |
 |---|---|
-| `SLOT<n>=<file>`, `SLOTS_FIRST=1` | a slot's file (1 the save, 2 the Controller Pak, 4 the database) |
+| `SLOT<n>=<file>`, `SLOTS_FIRST=1` | a slot's file (1 the save, 2 the Controller Pak, 4 the database, 8 and 9 the Transfer Paks' ROMs) |
 | `SLOTS_OUT=<dir>` | at the end, the nonvolatile slots are read back through the bridge, as when the core quits |
 | `BRIDGE_ALL=1`, `VERIFY=1` | everything through the bridge's port; memory compared with the files |
 | `INTERACT=<address>:<value>,...` | the core's settings |
@@ -1270,6 +1270,9 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
 | `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
+| `INTERACT_AT=<field>:<address>:<value>,...` | the Pocket writes a setting when that scan-out frame is over (`0x10000130:1` chooses Restart Game) |
+| `SLOT_AT=<field>:<slot>:<file>,...` | the Pocket loads a file into a slot (8, 9: the Transfer Paks' ROMs) while the game runs, through the bridge's port; `SLOT8=` and `SLOT9=` load one before the start |
+| `POCKET_FS=<dir>` | the Pocket's target commands for a file the program names by its path (`n64rt_gbvirt.c`): GETFILE gives the ROM's path (`SLOT8_PATH=`, else `/Assets/gbc/common/<name>`), OPENFILE opens `<dir><path>` into the slot (flag 1 makes it), READ and WRITE move it |
 
 ### Programs for the SoC: `lang/mips/test`
 
@@ -1336,6 +1339,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 | `tlb_bench.mk` | the same, with a runtime built with `TLBPROF=1` | the TLB instructions' results and their cost |
 | `tlbkeep_test.mk` | a ROM with a refill handler of its own | the entries kept when a `tlbwr` puts them out, and each rule that drops one |
 | `mem4_test.mk` | a ROM that sizes the memory itself | the "Expansion Pak" setting: 8 MiB with it, 4 MiB without (`INTERACT=0x10000138:1` in the simulator) |
+| `restart_test.mk` | a ROM that reads its Transfer Pak's status once, a moment after it starts, and leaves the RSP, the RDP and the AI busy | "Restart Game": `sim/mips_soc/restart_check.sh pak` loads the Game Boy ROM while the game runs and chooses the action twice, and checks that the first status the restarted game reads has the cartridge in, that the cartridge's RAM is written to its save file, and that the hardware's registers are the same at every start; `preload` checks a ROM loaded before the game starts; `game <rom>` compares a game's pictures at each start (`INTERACT_AT`, `SLOT_AT` and `POCKET_FS` are the bench's: above) |
 | `Makefile` (`pak_test`) | a program for `sim/mips_soc`, with `+gbcart=` | libultra's Controller Pak file system and Transfer Pak functions on `n64rt_pak.c` |
 | `si_test.mk` | a ROM and a runtime built for it | libultra's controller, EEPROM and pak code, and a pad that comes and goes |
 

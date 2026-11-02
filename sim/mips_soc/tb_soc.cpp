@@ -22,6 +22,13 @@
 //                    the others --
 //                    SLOTS_FIRST=1: before them
 //   INTERACT=<address>:<value>[,...]  the Pocket writes the core's settings (interact.json addresses, 0x10000108 is "Controller 1 pak")
+//   INTERACT_AT=<frame>:<address>:<value>[,...]  the same, one write each, when the scan-out's frame <frame> is over (a setting
+//                    changed while the game runs, or an action chosen: 0x10000130:1 is "Restart Game")
+//   POCKET_FS=<dir> the Pocket's target commands for files the program asks by path (the Transfer Pak (SD)'s Game Boy saves,
+//                    n64rt_gbvirt.c): GETFILE gives the path of the file in slots 8 and 9 (SLOT<n>_PATH=<path>, else /Assets/gbc/common/
+//                    <the file's name>), OPENFILE opens <dir><path> into the slot (created by flag 1), READ and WRITE move it
+//   SLOT_AT=<frame>:<slot>:<file>[,...]  a slot's file the Pocket loads while the game runs (the core menu's "Load Transfer Pak 1":
+//                    slot 8 or 9), when that scan-out frame is over, through the bridge's port
 //   SLOTS_OUT=<dir>  when the run ends the Pocket quits the core: each
 //                    nonvolatile slot is read back through the port, as many
 //                    bytes as the program left in the core's table for it,
@@ -463,7 +470,7 @@ static void cpu_stat_step(long sys)
 
 // ---- the Pocket's data slots (data.json) and its side of the bridge
 struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
-static Slot slots[8];
+static Slot slots[10];                              // (0-7 as data.json has them, 8 and 9 the Transfer Paks' ROMs; the program's state is read back from slot 7's place)
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
 static const uint32_t FILE_PSRAM_END = 31u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
 static const uint32_t FILE_ROM_END = 65u << 20;     // and LAYOUT_FILE_MAX)
@@ -495,7 +502,7 @@ static bool read_data_json(const std::string &path)
         std::string o = j.substr(lo, hi - lo);
         size_t a = o.find("\"address\"");
         unsigned id = (unsigned)strtoul(o.c_str() + o.find(':', o.find("\"id\"")) + 1, nullptr, 0);
-        if (a == std::string::npos || id >= 8) continue;
+        if (a == std::string::npos || id >= 10) continue;
         slots[id].addr = (uint32_t)strtoul(o.c_str() + o.find('"', o.find(':', a)) + 1, nullptr, 0);
         slots[id].nv = o.find("\"nonvolatile\": true") != std::string::npos;
         slots[id].there = true;
@@ -690,7 +697,7 @@ int main(int argc, char **argv)
         printf("ROM: %zu bytes at bridge 0x%08x\n", slots[0].data.size(), slots[0].addr);
     }
     if (!read_file(argv[1], slots[prog].data)) return 2;
-    for (int k = 1; k < 8; k++) {
+    for (int k = 1; k < 10; k++) {
         char name[16]; snprintf(name, sizeof name, "SLOT%d", k);
         const char *f = getenv(name);
         if (!f) continue;
@@ -707,7 +714,7 @@ int main(int argc, char **argv)
         for (uint32_t i = 0; i < (1u << 22); i++) psm[d][c][i] = (uint16_t)(i * 2654435761u >> 13 ^ (0xC3A5u << c));   // (never written: not zeros)
     }
     for (int pass = 0; pass < 2 && !noload; pass++)
-        for (int k = 0; k < 8; k++) {
+        for (int k = 0; k < 10; k++) {
             const std::vector<uint8_t> &d = slots[k].data;
             if (d.empty() || ((k == 0 || k == prog) != (pass == (slots_first ? 1 : 0)))) continue;
             slots[k].size = (uint32_t)d.size();
@@ -765,9 +772,33 @@ int main(int argc, char **argv)
     // once, 200 sys cycles after the core's reset ends
     std::vector<std::pair<int, uint32_t>> ia_list;
     if (const char *e = getenv("INTERACT")) for (const char *q = e; *q; ) { int a = (int)strtol(q, (char **)&q, 0); if (*q == ':') q++; uint32_t v = (uint32_t)strtoul(q, (char **)&q, 0); ia_list.push_back({a, v}); if (*q == ',') q++; }
+    // INTERACT_AT=<frame>:<address>:<value>[,...]: a write of the settings' bus when that frame is over (frames, below)
+    struct IaAt { long frame; int addr; uint32_t val; };
+    std::vector<IaAt> ia_at;
+    std::deque<std::pair<int, uint32_t>> ia_q;
+    struct SlotAt { long frame; int slot; std::string file; };
+    std::vector<SlotAt> slot_at;
+    if (const char *e = getenv("SLOT_AT")) for (const char *q = e; *q; ) {
+        long f = strtol(q, (char **)&q, 0); if (*q == ':') q++;
+        int k = (int)strtol(q, (char **)&q, 0); if (*q == ':') q++;
+        const char *c = strchr(q, ','); std::string file = c ? std::string(q, c - q) : std::string(q);
+        q += file.size(); if (*q == ',') q++;
+        slot_at.push_back({f, k, file});
+    }
+    if (const char *e = getenv("INTERACT_AT")) for (const char *q = e; *q; ) {
+        long f = strtol(q, (char **)&q, 0); if (*q == ':') q++;
+        int a = (int)strtol(q, (char **)&q, 0); if (*q == ':') q++;
+        uint32_t v = (uint32_t)strtoul(q, (char **)&q, 0); ia_at.push_back({f, a, v}); if (*q == ',') q++;
+    }
     t->file_size = slots[0].size; t->br_complete = 0;
     t->ss_save_t = 0; t->ss_load_t = 0;
     long br_done_at = -1;                           // the bridge's read completes then (sys cycles)
+    // POCKET_FS: the target commands the program gives a path to (GETFILE, OPENFILE) and the READ and WRITE of the file opened
+    const char *pocket_fs = getenv("POCKET_FS");
+    std::map<int, std::string> opened;              // slot -> the host file opened into it
+    t->br_result = 0; t->br_complete = 0;
+    auto path_at = [&](uint32_t a) { std::string p; for (uint32_t i = 0; i < 256; i++) { char c = (char)(rd_word(((a & 0x3FFFFFF) + i) >> 2) >> (24 - 8 * (i & 3))); if (!c) break; p += c; } return p; };
+    auto file_size_of = [&](const std::string &f) { struct stat st; return stat(f.c_str(), &st) == 0 ? (long)st.st_size : -1L; };
     t->reset = 1;
     t->wbm_cyc = 0; t->wbm_we = 0; t->wbm_adr = 0; t->wbm_dat_w = 0;
     bool quit = false;                              // the run is over: the Pocket reads the nonvolatile slots back
@@ -777,6 +808,7 @@ int main(int argc, char **argv)
     long sys = 0, frames = 0;
     static long rs_cnt[4][6]; static unsigned rs_type = 0;
     long max_sys = mcycles * 1000000;
+    auto cmd_done = [&](int result, uint32_t len) { t->br_result = result; t->br_complete = 0; br_done_at = sys + 200 + len * (double)TB_SYS_HZ / 40e6; };
     opts_load();
     time_t t0 = time(nullptr);
     int vid_phase = 0;                              // clk_vid: sys / 2.5 (25 MHz)
@@ -813,9 +845,13 @@ int main(int argc, char **argv)
         if (sys_edge) {
             t->clk_sys = 1;
             if (sys == 20) t->reset = 0;
-            t->file_size = slots[t->br_slot & 7].size;         // the core's table, by the slot the program selected
+            t->file_size = slots[t->br_slot < 10 ? t->br_slot : 7].size;         // the core's table, by the slot the program selected
             { const long k = (sys - 200) / 4; t->ia_wr = 0;                            // (the settings: one write each, from 200 cycles in)
-              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 15u; t->ia_data = ia_list[k].second; } }
+              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 15u; t->ia_data = ia_list[k].second; }
+              else if ((sys & 3) == 0 && k >= (long)ia_list.size() && !ia_q.empty()) {
+                  const auto w = ia_q.front(); ia_q.pop_front();
+                  t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 15u; t->ia_data = w.second;
+              } }
             // the bridge: an access (as apf_wishbone_master hands it on: the address's
             // bits 26-2, bit 28 set), its ack awaited; the reset's end after the load
             if (sys >= load_at && !br_jobs.empty()) {
@@ -1008,7 +1044,7 @@ int main(int argc, char **argv)
                 else { putchar(t->uart_byte); if (t->uart_byte == '\n') fflush(stdout); }
             }
             if (t->file_size_wr) {
-                slots[t->br_slot & 7].size = t->file_size_new;
+                slots[t->br_slot < 10 ? t->br_slot : 7].size = t->file_size_new;
                 printf("[bridge: slot %u's file size set to %u]\n", t->br_slot, t->file_size_new);
             }
             if (t->audio_wr) {
@@ -1060,9 +1096,59 @@ int main(int argc, char **argv)
                     for (uint32_t i = 0; i < len; i += 4)
                         wr_word(((a & 0x3FFFFFF) >> 2) + i / 4, (uint32_t)img[off + i] << 24 | img[off + i + 1] << 16 |
                                 img[off + i + 2] << 8 | (uint32_t)img[off + i + 3]);
+                else if (opened.count(t->br_slot)) {
+                    std::vector<uint8_t> d; { FILE *i = fopen(opened[t->br_slot].c_str(), "rb"); if (i) { uint8_t b[65536]; size_t n; while ((n = fread(b, 1, sizeof b, i)) > 0) d.insert(d.end(), b, b + n); fclose(i); } }
+                    for (uint32_t i = 0; i < len; i += 4) {
+                        uint32_t v = 0;
+                        for (uint32_t b = 0; b < 4; b++) v = v << 8 | (off + i + b < d.size() ? d[off + i + b] : 0u);
+                        wr_word(((a & 0x3FFFFFF) + i) >> 2, v);
+                    }
+                    printf("[pocket: READ slot %u %s: %u bytes at %u]\n", t->br_slot, opened[t->br_slot].c_str(), len, off); fflush(stdout);
+                }
                 else printf("[bridge: read slot %u off %u len %u -> %08x not modelled]\n", t->br_slot, off, len, a);
-                t->br_complete = 0;
+                t->br_result = 0; t->br_complete = 0;
                 br_done_at = sys + 200 + len * (double)TB_SYS_HZ / 40e6;
+            }
+            if (pocket_fs && t->br_req_getfile) {
+                const int k = t->br_slot;
+                const char *e = k == 8 ? getenv("SLOT8_PATH") : getenv("SLOT9_PATH");
+                std::string path = e ? e : "", f = k == 8 ? (getenv("SLOT8") ? getenv("SLOT8") : "") : (getenv("SLOT9") ? getenv("SLOT9") : "");
+                if (path.empty() && !f.empty()) path = "/Assets/gbc/common/" + f.substr(f.rfind('/') + 1);
+                if (path.empty() && !slot_at.empty()) for (const auto &w : slot_at) if (w.slot == k) path = "/Assets/gbc/common/" + w.file.substr(w.file.rfind('/') + 1);
+                for (uint32_t i = 0; i < 256; i += 4) {
+                    uint32_t v = 0;
+                    for (int b = 0; b < 4; b++) { const uint32_t j = i + (uint32_t)b; v = v << 8 | (j < path.size() && j < 255 ? (uint8_t)path[j] : 0u); }
+                    wr_word(((t->br_addr & 0x3FFFFFF) + i) >> 2, v);
+                }
+                printf("[pocket: GETFILE slot %d -> %s]\n", k, path.c_str()); fflush(stdout);
+                cmd_done(path.empty() ? 3 : 0, 0);
+            }
+            if (pocket_fs && t->br_req_openfile) {
+                const int k = t->br_slot;
+                const std::string path = path_at(t->br_addr);
+                const uint32_t flags = rd_word(((t->br_addr & 0x3FFFFFF) + 0x100) >> 2), size = rd_word(((t->br_addr & 0x3FFFFFF) + 0x104) >> 2);
+                const std::string f = std::string(pocket_fs) + path;
+                int r = 3;
+                long fs = file_size_of(f);
+                if (fs >= 0) { r = 0; }
+                else if (flags & 1) {
+                    std::string d = f.substr(0, f.rfind('/'));
+                    if (system(("mkdir -p '" + d + "'").c_str()) == 0) { std::vector<uint8_t> z((flags & 2) ? size : 0, 0); if (FILE *o = fopen(f.c_str(), "wb")) { fwrite(z.data(), 1, z.size(), o); fclose(o); r = 1; fs = (long)z.size(); } }
+                }
+                if (r <= 1) { opened[k] = f; slots[k].size = (uint32_t)fs; }
+                printf("[pocket: OPENFILE slot %d %s flags %u -> %d, %ld bytes]\n", k, path.c_str(), flags, r, r <= 1 ? fs : -1L); fflush(stdout);
+                cmd_done(r, 0);
+            }
+            if (pocket_fs && t->br_req_write && opened.count(t->br_slot)) {
+                const std::string &f = opened[t->br_slot];
+                uint32_t off = t->br_offset, len = t->br_length, a = t->br_addr;
+                std::vector<uint8_t> d; { FILE *i = fopen(f.c_str(), "rb"); if (i) { uint8_t b[65536]; size_t n; while ((n = fread(b, 1, sizeof b, i)) > 0) d.insert(d.end(), b, b + n); fclose(i); } }
+                if (d.size() < off + len) d.resize(off + len, 0);
+                for (uint32_t i = 0; i < len; i++) d[off + i] = (uint8_t)(rd_word(((a & 0x3FFFFFF) + i) >> 2) >> (24 - 8 * (i & 3)));
+                if (FILE *o = fopen(f.c_str(), "wb")) { fwrite(d.data(), 1, d.size(), o); fclose(o); }
+                slots[t->br_slot].size = (uint32_t)d.size();
+                printf("[pocket: WRITE slot %d %s: %u bytes at %u]\n", t->br_slot, f.c_str(), len, off); fflush(stdout);
+                cmd_done(0, len);
             }
             if (br_done_at >= 0 && sys >= br_done_at) { t->br_complete = 1; br_done_at = -1; }
             // AIDUMP=<file>: the buffers the game gives the AI (n64rt_rsp.c's marks, a port
@@ -1191,6 +1277,14 @@ int main(int argc, char **argv)
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
                 frames++;
+                for (const auto &w : ia_at) if (w.frame == frames) { ia_q.push_back({w.addr, w.val}); printf("[interact: 0x%08x <- 0x%x at field %ld, sys %ld]\n", w.addr, w.val, frames, sys); fflush(stdout); }
+                for (const auto &w : slot_at) if (w.frame == frames) {
+                    Slot &sl = slots[w.slot];
+                    if (!sl.there || !read_file(w.file.c_str(), sl.data)) { printf("[slot %d: cannot load %s]\n", w.slot, w.file.c_str()); continue; }
+                    sl.size = (uint32_t)sl.data.size();
+                    br_jobs.push_back({w.slot, true, sl.addr, 0, (sl.data.size() + 3) & ~(size_t)3});
+                    printf("[slot %d: %s, %u bytes loaded at field %ld]\n", w.slot, w.file.c_str(), sl.size, frames); fflush(stdout);
+                }
                 // SS_SAVE / SS_LOAD (the header): the Pocket's request, at its field -- a load once the state is in
                 {
                     if (frames == o_ss_save) {
