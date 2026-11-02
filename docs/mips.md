@@ -270,8 +270,8 @@ in D while a register it reads is on its way from a 64-bit result. E computes 32
 | `W64_UA` | yes | `ldl`, `ldr`, `sdl`, `sdr` (with `W64_SH`, `FAST`, `XWB`, `BIG`): an access to the doubleword the address is in, on the d-shifter's register, a byte a cycle. A store rotates `rt` by 8 - *n* (`sdl`) or 7 - *n* (`sdr`) bytes (*n* the address' low three bits) and writes its two words with the strobes of the bytes it covers; a load takes the doubleword through a byte at a time into `rt`'s place, 8 steps (each of the four takes about 20 CPU clocks on cached memory, back to back). Device, mapped and non-RDRAM addresses are the same address errors as `ld`'s and `sd`'s |
 
 The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. COP0 register 7 reads the levels in its
-bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA) (and bit 26 is the FPU's double precision, FPD64, which the shipped CPU does
-not have and the runtime does not ask for); the runtime checks at start-up that all five are set and, if one
+bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA) (and bit 26 is the FPU's double precision, FPD64, which the shipped CPU has
+and the runtime does not ask for); the runtime checks at start-up that all five are set and, if one
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
@@ -291,7 +291,7 @@ move a 64-bit register through a pair; `cvt.s.l` and `cvt.d.l` convert the pair'
 `cvt.s.w`'s path, another shifted a bit a cycle); the conversions to `.l` are those to `.w`, the word sign-extended into
 the pair (beyond a word's range a value saturates as a word's).
 
-**FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off by default; with `FAST`; COP0 register 7's bit 26):
+**FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off unless the macro is given; `projects/mirlo.qsf` gives it; with `FAST`; COP0 register 7's bit 26):
 `add.d`, `sub.d`, `mul.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
 are the single-precision path's: an input below the normals is a zero of its sign, arithmetic rounds to nearest even with an
 unbounded exponent (whatever FCR31's rounding mode is) and then a result below the normals is a zero and one above them
