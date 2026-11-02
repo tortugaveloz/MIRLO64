@@ -607,7 +607,7 @@ always_ff @(posedge clk) begin
         zst <= 0;
         if (FAST) begin
             if (sub_eff) st <= S_NORM;                            // (x - x: S_NORM's)
-            else begin nzc <= {5'd0, !za_s[31]}; st <= S_NORM2; end   // a sum has at most a bit to shift: the count is the carry's
+            else begin nzc <= {5'd0, !za_s[31]}; st <= za_s[31] ? S_ROUND : S_NORM2; end   // a sum has at most a bit to shift: the count is the carry's, none to shift: round
         end
         else if (za_s == 32'd0) st <= S_DONE;   // x - x: +0
         else st <= S_NORM;

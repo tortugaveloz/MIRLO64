@@ -327,7 +327,7 @@ its operands and result; where the figure depends on the operands it is for the 
 
 | Instruction | VR4300 | This core | Before |
 |---|---|---|---|
-| `add.s` | 3 | 7 | 11 |
+| `add.s` | 3 | 7 (6 when the sum of two of one sign has no bit to shift) | 11 |
 | `sub.s` | 3 | 8 (6 on a cancellation) | 11 (9) |
 | `mul.s` | 5 | 5 (4 with a zero operand) | 10 (6) |
 | `div.s`, `sqrt.s` | 29 | 35 | 37 |
