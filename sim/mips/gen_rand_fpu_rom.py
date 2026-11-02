@@ -10,11 +10,14 @@ their branches, the moves to and from the integer registers, FCR31's
 rounding mode, and loads and stores of both sizes through the cache and
 around it.
 
-    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64]
+    gen_rand_fpu_rom.py SEED OUT.z64 [N instructions, default 120000] [w64] [irq]
 
 "w64" adds the 64-bit side of COP1 (dmtc1 and dmfc1 through a 64-bit integer loaded from memory, cvt.s.l, cvt.d.l and the
 conversions to a 64-bit integer, on integers of every size class); a build whose model leaves 64-bit instructions to the
 runtime (TB_NO64) cannot run them.
+
+"irq" turns the VI's interrupt on, every line (some 6,000 instructions), so that it comes in the middle of an FPU operation (the
+model is told when the core takes it).
 """
 import random
 import struct
@@ -39,6 +42,7 @@ def main():
     seed, out = int(sys.argv[1]), sys.argv[2]
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 120000
     w64 = "w64" in sys.argv[4:]
+    irq = "irq" in sys.argv[4:]
     rnd = random.Random(seed)
     code = []
     emit = code.append
@@ -79,6 +83,12 @@ def main():
 
     li32(UNC, SCRATCH | 0x20000000)
     li32(CACHED, SCRATCH)
+    if irq:                                     # the VI's interrupt every line (some 6,000 instructions), a handler that acknowledges it
+        for i, w in enumerate([0x3C1AA440, 0xAF40_0010, 0x42000018, 0]):             # lui k0, 0xA440; sw zero, 0x10(k0); eret
+            li32(T0, w); li32(T1, 0xA0000180 + 4 * i); I(0x2B, T1, T0, 0)
+        for a_, v_ in [(0xA4400018, 1), (0xA440000C, 1), (0xA430000C, 0x80)]:       # VI_V_SYNC, VI_V_INTR, MI_MASK (set VI)
+            li32(T0, v_); li32(T1, a_); I(0x2B, T1, T0, 0)
+        li32(T0, 0x20000401); emit(0x40800000 | T0 << 16 | 12 << 11)               # mtc0 Status: CU1, IM2, IE
     for f in range(32): set_s(f)
 
     def arith():

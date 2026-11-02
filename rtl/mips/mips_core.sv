@@ -117,12 +117,13 @@
 //         another line is dropped there a cycle later (d_fmiss), the line is
 //         read and the fetch made again.
 //      D  a branch is not decided there. The fetch follows a guess -- a
-//         jump's target, a backward branch taken, a forward one not, a
-//         register jump not -- and the branch is decided at E on forwarded
-//         operands, as any other instruction's (it no longer waits in D for
-//         them). A wrong guess is put right in the cycle after (rd_res,
-//         rd_fix): what was fetched behind the delay slot is dropped, two
-//         cycles lost; a likely branch not taken drops its delay slot there.
+//         jump's target, a backward branch taken, a forward one as it was
+//         the last time (bh_t), a register jump not -- and the branch is
+//         decided at E on forwarded operands, as any other instruction's
+//         (it no longer waits in D for them). A wrong guess is put right in
+//         the cycle after (rd_res, rd_fix): what was fetched behind the
+//         delay slot is dropped, two cycles lost; a likely branch not taken
+//         drops its delay slot there.
 //      M  a load takes the D-cache's word before its tag is compared: one of
 //         another line is not written back, the line is read and the
 //         instruction run again from its fetch (rp_pend), which costs
@@ -775,6 +776,13 @@ logic        d_fmiss;                        // FAST: D's word is of another lin
 // that the fetch went elsewhere. rd_pend then keeps the two for a delay slot
 // that is still to come. e_bp: the fetch followed E's branch as taken
 logic        rd_res, rd_fix, e_bp;
+// FAST: what the last time a conditional branch (by the low bits of its address) did, kept for the guess: a forward branch that was
+// taken is guessed taken, as a backward one always is (the console's pipeline loses nothing on a taken branch: docs/mips.md)
+localparam int BH = 6;
+logic        bh_t [0:(1 << BH) - 1];
+initial for (int i = 0; i < (1 << BH); i++) bh_t[i] = 1'b0;
+logic [BH-1:0] rd_bi;                       // the address bits of the branch that left E (rd_res)
+logic        rd_bc;                         // it was a conditional one
 logic        d_k_cti, d_k_pred;              // FAST: D's instruction is a branch; guessed taken
 logic        rp_pend, rp_m;                  // FAST: a load took another line's word: again from its pc -- W's by now, or (rp_m) M's still
 logic [31:0] d_fill_pa;
@@ -1872,7 +1880,7 @@ wire m_fpu = FAST ? m_k_fpu : m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS;
 fpu_n64 #(.FAST(FAST)) fpu (
     .clk, .rst,
     .insn_next(m_adv ? e_insn : m_insn), .insn(m_insn), .insn_e(e_insn), .adv(m_adv),
-    .live(m_live && m_fpu), .valid(fpu_valid),
+    .live((FAST ? m_valid : m_live) && m_fpu), .valid(fpu_valid),      // (FAST: an instruction taken out by an exception is not in M the next cycle; the flush is not in the FPU's state)
     .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
     .gpr_out(fpu_gpr_out), .gpr_out_hi(fpu_gpr_out_hi), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
     .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
@@ -2192,7 +2200,9 @@ always_ff @(posedge clk) begin
         if (FAST && !flush && e_adv && e_valid && e_cti) begin
             rd_res <= 1'b1; rd_fix <= e_taken != e_bp;
             rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= e_pc + 32'd8;
+            rd_bi <= e_pc[BH+1:2]; rd_bc <= e_c.br != B_J && e_c.br != B_JR;
         end
+        if (rd_res && rd_bc) bh_t[rd_bi] <= rd_tk;
         if (flush) begin
             d_valid <= 0; ds_next <= 0; rd_pend <= 0;
         end else begin
@@ -2215,7 +2225,7 @@ always_ff @(posedge clk) begin
                     d_c_r <= fc;
                     d_k_cti <= fc.br != B_NONE;
                     // (JRP: a register jump whose register nothing in D or E -- in E and M when it is in D -- is to write)
-                    d_k_pred <= guess(fc, f_insn) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
+                    d_k_pred <= guess(fc, f_insn) || (fc.br != B_NONE && fc.br != B_J && fc.br != B_JR && bh_t[f_pc[BH+1:2]]) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
                                                       !(e_live && e_c.wr && e_c.rd == f_insn[25:21]));
                     // (a delay slot: dropped if its branch is known to annul it; one
                     // that enters before that is known is dropped where it is by then)

@@ -277,6 +277,8 @@ int main(int argc, char **argv)
             n64_advance(&B, 1);
             n64_advance(&A, 1);
             retired++;
+            static const bool retlog = getenv("TB_RETLOG") != nullptr;        // TB_RETLOG=1: every retired instruction: cycle, pc, word
+            if (retlog) fprintf(stderr, "RET %" PRIu64 " %08x %08x\n", cycles, tpc, tinsn);
             if (verbose && retired + 40 >= limit) fprintf(stderr, "%08x: %08x  %-28s %s%016" PRIx64 "\n", tpc, tinsn, sym(tpc), twr ? "-> " : "   ", twr ? tval : 0);
             if (getenv("TB_C0LOG") && (tinsn & 0xFC0007FF) == 0x40000000 && ((tinsn >> 21 & 31) == 0 || (tinsn >> 21 & 31) == 4) && ((tinsn >> 11) & 31) == (unsigned)atoi(getenv("TB_C0LOG")))
                 fprintf(stderr, "[%" PRIu64 "] %08x %s %08x  val %016" PRIx64 "\n", retired, tpc, sym(tpc), tinsn, (tinsn >> 21 & 31) == 4 ? B.cpu.r[(tinsn >> 16) & 31] : tval);
