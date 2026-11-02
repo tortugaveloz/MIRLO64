@@ -774,7 +774,9 @@ for the table by kind of primitive), in clock cycles of the RDP alone:
 (the hidden plane's banks alone take 3.8 % off the before). A task takes 0.80 to 1.00 of its time before, 0.86 at the median (the
 SDRAM's rules with the banks), and 19 of the 138 tasks need more than a 60 Hz frame of the RDP's time, where 25 did. With another
 master asking the SDRAM at random for a fifth of the cycles (`TB_CPU=20`, an access that always changes a row) the time is 227.7
-million before and 214.1 million after (-6.0 %): what is taken by the other master the RDP does not get back. With every request
+million before and 214.1 million after (-6.0 %): what is taken by the other master the RDP does not get back. On the whole SoC
+(`sim/mips_soc`, `RCPSTAT=60`, a game's logos, title and first scenes, 660 fields, the RSP's time the same in both) the time the RDP
+is busy in a window of 60 fields is 8 to 16 % shorter, 3,265 ms to 2,896 ms (-11.3 %) from the second window on. With every request
 taken at once, by kind of primitive:
 
 | | commands | before | after | clocks a pixel before, after |
