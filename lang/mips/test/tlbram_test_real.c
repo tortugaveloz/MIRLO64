@@ -331,7 +331,7 @@ int main(void)
         tlb_wi(4, 0, 0x1C000000u | 1u, LO(0x00400000, LV | LD | LG), LO(0x00401000, LV | LD | LG));
         check("tlbp: global, any ASID", tlb_probe(0x1C000000u | 200u), 4);
         MTC0(0, 0xFFFFFFFFu);
-        check("mtc0 Index: six bits (P is tlbp's)", MFC0(0), 0x3Fu);
+        check("mtc0 Index: six bits and P", MFC0(0), 0x8000003Fu);
         MTC0(0, 0x3Fu);
         check("mtc0 Index: six bits", MFC0(0), 0x3Fu);
         /* tlbwi with Index above 31 writes entry Index & 31 */

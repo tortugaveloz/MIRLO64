@@ -82,13 +82,12 @@ int main(void)
     check("tlbp: another ASID", tlb_probe(0x04002000u | 6u), 0x80000000u);
     check("tlbp: no entry", tlb_probe(0x04004000u), 0x80000000u);
 
-    /* Index: bits 5:0 are what an mtc0 writes (P, bit 31, is tlbp's alone -- and the monitor level's, which puts a state back) */
+    /* Index: bits 5:0 and P (bit 31) are what an mtc0 writes, as the VR4300's */
     {
-        uint32_t p = MFC0(0) & 0x80000000u;                   /* (the last tlbp missed: P stays as it is) */
         MTC0(0, 0xFFFFFFFFu);
-        check("mtc0 Index: six bits", MFC0(0), p | 0x3Fu);
+        check("mtc0 Index: six bits and P", MFC0(0), 0x8000003Fu);
         MTC0(0, 6u);
-        check("mtc0 Index", MFC0(0), p | 6u);
+        check("mtc0 Index", MFC0(0), 6u);
     }
     tlb_probe(0x04004000u);                           /* (a miss: P is set) */
     check("tlbp miss: P", MFC0(0) >> 31, 1);
