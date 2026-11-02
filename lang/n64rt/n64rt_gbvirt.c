@@ -1,7 +1,7 @@
-/* The virtual Transfer Pak's cartridges: a Game Boy cartridge made of two files the Pocket loads (data.json's slots
- * LAYOUT_GBROM_SLOT, the ROM, and LAYOUT_GBSAVE_SLOT, the cartridge's battery RAM), for the "Controller 1 pak" setting's
- * Virtual Transfer Pak (n64rt_pak.c); and a second, LAYOUT_GBROM2_SLOT and LAYOUT_GBSAVE2_SLOT, for the "Controller 2 pak" setting's.
- * The two are instances (n = 0, 1) of the same code, each with its own ROM, mapper, RAM and clock; one with no ROM in its slot is no cartridge
+/* The Transfer Pak (SD)'s cartridges: a Game Boy cartridge made of the ROM the Pocket loads (data.json's slots
+ * LAYOUT_GBROM_SLOT, for the "Controller 1 pak" setting's Transfer Pak (SD) (n64rt_pak.c), and LAYOUT_GBROM2_SLOT for the "Controller 2 pak"
+ * setting's) and a battery RAM that is the Game Boy game's own save file, read and written by its path. The two are instances (n = 0, 1)
+ * of the same code, each with its own ROM, mapper, RAM and clock; one with no ROM in its slot is no cartridge
  * (the same for both). What a cartridge's bus does is done here: the mapper's registers at 0x0000-0x7FFF,
  * the ROM at 0x0000-0x7FFF, the RAM (or the clock) at 0xA000. The game's own osGbpak* code runs on top of it exactly as on
  * a real one.
@@ -10,11 +10,16 @@
  * not a cartridge here (it is not there for the game). The ROM's banks are its size rounded up to a power of two; its bytes
  * beyond the file read as 0xFF. The RAM's size is the header's (0x149; MBC2's 512 half-bytes are its own).
  *
- * The save file is the cartridge's RAM as the emulators have it; with MBC3's clock, 48 bytes follow it: the clock as
+ * The save is the file <ROM's name>.sav which a Game Boy core also keeps: the Pocket tells the runtime the ROM's path, and the save is in the
+ * Saves folder of the same platform (/Assets/gbc/common/x.gb: /Saves/gbc/common/x.sav; where the ROM's path says neither, a .gbc: gbc, a .gb: gb,
+ * then gbc if the file is not in gb): the cartridge's RAM as the emulators have it; with MBC3's clock, 48 bytes follow it: the clock as
  * 10 little-endian words (seconds, minutes, hours, days, days' control, then the same latched) and a 64-bit time that is
  * left 0. The clock runs while the core does and is not kept for the time it is off (the core has no calendar).
- * A cartridge's RAM with no file is 0xFF. The slot takes a file size (what the Pocket writes back) when the game first
- * writes to the RAM or the clock, so a game that never saves leaves no file.
+ * The RAM lives in memory (LAYOUT_GBSAVE, LAYOUT_GBSAVE2) and is read from the file when a ROM is new to the pak (n64rt_gbv_field, a video field after
+ * the Pocket has loaded it: the cartridge is not there for the game before): with no file it is 0xFF and the file is made by the first write back. It is
+ * written back (flush) only if the game has written to it, when the game powers the cartridge off, when the ROM is replaced or gone, and a couple
+ * of seconds after its last write (a state carries the RAM, so a state loaded writes it). Every command to the Pocket is made from n64rt_gbv_field
+ * (the video field's context, where the GameShark's file is read too), never from the game's accesses to the pak.
  *
  * Powering the cartridge on (the Transfer Pak's 0xB000) resets the mapper's registers, as a real cartridge's reset does:
  * the RAM disabled, the first ROM banks, the RAM's bank 0. */
@@ -24,10 +29,12 @@
 #include <layout.h>
 #include <system.h>
 #include "n64rt.h"
+#include "n64rt_gbpath.h"
+
 
 #define ROM_MEM    ((const volatile u8 *)(uintptr_t)g.rom_base)
 #define RAM_MEM    ((volatile u8 *)(uintptr_t)(g.n ? LAYOUT_GBSAVE2 : LAYOUT_GBSAVE))
-#define SAVE_SLOT  (g.n ? LAYOUT_GBSAVE2_SLOT : LAYOUT_GBSAVE_SLOT)
+#define FILE_SLOT  (g.n ? LAYOUT_GBSAVE2_SLOT : LAYOUT_GBSAVE_SLOT)   /* the data slot the save file is opened into: no file of its own, writable */
 #define RTC_FOOT 48u
 #define LOGO_CRC 0x46195417u                    /* CRC-32 of the header's 48 logo bytes */
 
@@ -42,7 +49,12 @@ typedef struct {
     u32 rom_bytes, rom_banks;                   /* the file's size; the banks, a power of two */
     u32 ram_bytes, ram_banks;                   /* the RAM (MBC3's clock not in it) */
     u32 id;                                     /* the header's CRC */
-    u8  sized;                                  /* the save slot has its file size */
+    char sav[256];                              /* the save file's path ("" if it is not known) */
+    u8  have, req;                              /* the RAM (and sav, wr, dirty) are those of the ROM with `id`; a write back is asked for (the cartridge was powered off) */
+    u8  wr, dirty;                              /* the file may be written (it was read, or it is not there); the RAM changed since the file was written */
+    u8  fails, noans;                           /* write backs that failed (the Pocket's answer was an error; there was no answer) since the last one that did not */
+    u32 wcount, wseen;                          /* the writes to the RAM (and the clock), and how many of them the poll has seen */
+    u64 t_dirty;                                /* when the poll last saw the RAM change */
     /* the clock: its value at `t0` (uptime cycles) */
     u64 t0;
     u32 s, m, h, d;                             /* d: 9 bits */
@@ -63,13 +75,6 @@ static u32 crc32(const u8 *p, u32 n)
 }
 static u32 pow2_up(u32 n) { u32 p = 1; while (p < n) p <<= 1; return p; }
 
-static void need_file(void)
-{
-    if (g.sized) return;
-    g.sized = 1;
-    u32 want = g.ram_bytes + (g.timer ? RTC_FOOT : 0u);
-    if (n64rt_slot_size(SAVE_SLOT, 0) < want) n64rt_slot_size(SAVE_SLOT, want);
-}
 /* ---- the clock --------------------------------------------------------------- */
 static void rtc_tick(void)
 {
@@ -108,7 +113,6 @@ static void rtc_load(void)
 }
 static void rtc_latch(void)
 {
-    need_file();
     rtc_tick();
     g.l[0] = g.s; g.l[1] = g.m; g.l[2] = g.h; g.l[3] = g.d & 0xFFu; g.l[4] = rtc_ctl();
     rtc_store();
@@ -129,37 +133,212 @@ static void rtc_write(u32 reg, u8 v)
     rtc_store();
 }
 
-/* ---- the save slot -------------------------------------------------------------- */
-/* the RAM's memory from the slot: what the file has, the rest 0xFF (the clock's footer 0) */
+/* ---- the save file, by its path ---------------------------------------------------------------------------- */
+/* The Pocket names a nonvolatile slot's file after the N64 game, so a Game Boy game's own save (the file a Game Boy core keeps) cannot be a
+ * slot's file: the runtime reads and writes it by its path, with the bridge's target commands. It asks the Pocket for the path of the file in
+ * the ROM's slot (the one picked for it: APF_BRIDGE.REQUEST_GETFILE writes a 256-byte NUL-ended absolute path, with its extension, to the
+ * parameter struct), makes the .sav's path from its name, and has the Pocket open that path into FILE_SLOT (a slot of data.json with no file, not
+ * read-only: REQUEST_OPENFILE; the struct has the path, then 32-bit flags -- bit 0 creates a file that is not there -- and a size), then read it
+ * (REQUEST_READ) or write it (REQUEST_WRITE) at the offset 0. The folders are the ones the ROM's path decides (a .gbc: gbc; a
+ * .gb: gb, then gbc if the file is not in gb; any other extension: Assets/gbc or Assets/gb in its path, as the .gbc or the .gb), and the Pocket opens files only in the platform folders core.json lists.
+ * The parameter struct is LAYOUT_GS_PARAM, which the GameShark's codes use as well: the two are run by the same monitor, one after the other. */
+#define IMP_PARAM ((volatile u8 *)(uintptr_t)LAYOUT_GS_PARAM)
+#ifdef N64RT_GBTRACE
+void n64rt_trace_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define GBLOG(...) do { n64rt_log(__VA_ARGS__); n64rt_trace_log(__VA_ARGS__); } while (0)
+#else
+#define GBLOG(...) n64rt_log(__VA_ARGS__)
+#endif
+static void imp_settle(void) { for (volatile int i = 0; i < 256; i++) { } }
+static int imp_command(void (*issue)(u32), u32 ms)      /* a target command: 0 done, the result code (1 to 7) if the Pocket failed it, -1 no answer in ms */
+{
+    (void)apf_bridge_status_read();             /* (a read clears it) */
+    issue(1u);
+    const u64 end = now() + (u64)CONFIG_CLOCK_FREQUENCY / 1000u * ms;
+    while (!apf_bridge_status_read()) if (now() > end) return -1;
+    return (int)(apf_bridge_command_result_code_read() & 7u);
+}
+/* open `path` into FILE_SLOT (flags: bit 0 creates it if it is not there, bit 1 sets its size to `size`): the Pocket's result (0 opened, 1 created,
+ * 3 not found, 4 refused, 5 failed), -1 no answer */
+static int imp_open(const char *path, u32 flags, u32 size)
+{
+    for (u32 i = 0; i < 0x110u; i++) IMP_PARAM[i] = 0;
+    for (u32 i = 0; i < 255u && path[i]; i++) IMP_PARAM[i] = (u8)path[i];
+    *(volatile u32 *)(uintptr_t)(LAYOUT_GS_PARAM + 0x100u) = flags;      /* (the struct's words are the CPU's: big-endian) */
+    *(volatile u32 *)(uintptr_t)(LAYOUT_GS_PARAM + 0x104u) = size;
+    flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+    apf_bridge_slot_id_write(FILE_SLOT);
+    apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
+    imp_settle();
+    int r = imp_command(apf_bridge_request_openfile_write, 1000u);
+    imp_settle();
+    return r;
+}
+/* The ROM slot's file: the path of its save in g.sav ("" if the Pocket does not give the ROM's path or it says neither gb nor gbc); the result is
+ * 1 if the save is in the gb folder (and may be in gbc), 2 if in gbc, 0 if none */
+static int sav_path(void)
+{
+    char *out = g.sav, path[256];
+    out[0] = 0;
+    int r = -1;
+    for (int tries = 0; tries < 3 && r != 0; tries++) {         /* (the Pocket answers in 20 ms; a missing answer is tried again) */
+        for (u32 i = 0; i < 0x110u; i++) IMP_PARAM[i] = 0;
+        flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+        apf_bridge_slot_id_write(g.n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT);
+        apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
+        imp_settle();
+        r = imp_command(apf_bridge_request_getfile_write, 1000u);
+    }
+    if (r != 0) { GBLOG("n64rt: Game Boy save: the ROM's file name: %s (%d)\n", r < 0 ? "no answer" : "refused", r); return 0; }
+    imp_settle();
+    flush_cpu_dcache_range((const void *)IMP_PARAM, 0x110u);
+    u32 len = 0;
+    for (; len < 255u && IMP_PARAM[len]; len++) path[len] = (char)IMP_PARAM[len];
+    path[len] = 0;
+    GBLOG("n64rt: Game Boy save: the ROM is %s\n", path);
+    const int kind = gbpath_sav(path, out, 256u);
+    if (!kind) GBLOG("n64rt: Game Boy save: neither in a gb or gbc folder nor a .gb or .gbc, or no name\n");
+    return kind;
+}
+/* the gb folder's path in g.sav made the gbc folder's, and the other way round */
+static void sav_to_gbc(void)
+{
+    u32 n = 0;
+    while (g.sav[n]) n++;
+    for (u32 i = n + 1u; i > 17u; i--) g.sav[i] = g.sav[i - 1u];       /* ("/Saves/gb/common/" is 17 bytes, "/Saves/gbc/common/" 18) */
+    const char *d = "/Saves/gbc/common/";
+    for (u32 i = 0; i < 18u; i++) g.sav[i] = d[i];
+}
+static void sav_to_gb(void)
+{
+    u32 n = 0;
+    while (g.sav[n]) n++;
+    for (u32 i = 18u; i <= n; i++) g.sav[i - 1u] = g.sav[i];
+    const char *d = "/Saves/gb/common/";
+    for (u32 i = 0; i < 17u; i++) g.sav[i] = d[i];
+}
+
+/* The RAM (and the clock's footer) from the file: `total` bytes at RAM_MEM, g.wr set if the file may be written. The file there and as long as
+ * the RAM or longer: read (of a longer one, only the first `total` bytes), and written back later; not there: the RAM stays 0xFF and the first write back
+ * makes it; shorter than the RAM, or any other answer (the folder refused, no answer): left alone, the RAM is not kept. Each outcome is logged. */
+static void sav_read(u32 total)
+{
+    const u32 prev_slot = apf_bridge_slot_id_read(), prev_len = apf_bridge_transfer_length_read();
+    g.wr = 0; g.dirty = 0; g.fails = g.noans = 0; g.wcount = g.wseen = 0;
+    const int kind = sav_path();
+    if (g.sav[0]) {
+        int r = imp_open(g.sav, 0, 0);
+        if (r == 3 && kind == 1) {                  /* (a .gb's save may be in gbc too: where a Game Boy core that has both kinds keeps it) */
+            GBLOG("n64rt: Game Boy save: %s is not there\n", g.sav);
+            sav_to_gbc();
+            r = imp_open(g.sav, 0, 0);
+            if (r == 3) sav_to_gb();                /* (in neither: it is made where the ROM's platform says) */
+        }
+        if (r == 3) { g.wr = 1; GBLOG("n64rt: Game Boy save: %s is not there: it is made at the first write\n", g.sav); }
+        else if (r != 0) GBLOG("n64rt: Game Boy save: %s: %s (%d): not used\n", g.sav, r < 0 ? "no answer" : r == 4 ? "refused (is its platform in core.json?)" : "not opened", r);
+        else {
+            u32 size = apf_bridge_file_size_read();
+            if (size < g.ram_bytes) GBLOG("n64rt: Game Boy save: %s: %lu bytes, the cartridge's RAM is %lu: not used\n", g.sav, (unsigned long)size, (unsigned long)g.ram_bytes);
+            else {
+                u32 n = size < total ? size : total;
+                apf_bridge_data_offset_write(0);
+                apf_bridge_transfer_length_write(n);
+                apf_bridge_ram_data_address_write((u32)(uintptr_t)RAM_MEM);
+                imp_settle();
+                r = imp_command(apf_bridge_request_read_write, 2000u);
+                if (r != 0) GBLOG("n64rt: Game Boy save: %s: the read failed (%d): not used\n", g.sav, r);
+                else { g.wr = 1; GBLOG("n64rt: Game Boy save: %s: %lu bytes\n", g.sav, (unsigned long)n); }
+            }
+        }
+    }
+    apf_bridge_transfer_length_write(prev_len);
+    apf_bridge_slot_id_write(prev_slot);
+}
+/* The RAM to the file, if the game has written to it and the file may be written: `total` bytes from the offset 0 (a longer file keeps its end), the
+ * file made, at that size, if it is not there (a shorter one is made as long). A failure leaves the RAM dirty for another try, 5 s later (n64rt_gbv_field):
+ * the Pocket does not answer the target commands while it makes a save state, for some 15 s; three answers that are errors in a row end the write backs,
+ * so do 20 times with no answer (each costs the second of its wait). */
+static void flush(const char *why)
+{
+    if (!g.have || !g.dirty || !g.wr || !g.sav[0]) return;
+    const u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u);
+    const u32 prev_slot = apf_bridge_slot_id_read(), prev_len = apf_bridge_transfer_length_read();
+    if (g.timer) { rtc_tick(); rtc_store(); }
+    flush_cpu_dcache_range((const void *)RAM_MEM, total);
+    int r = imp_open(g.sav, 0, 0);
+    if (r == 3) r = imp_open(g.sav, 3, total);
+    else if (r == 0 && apf_bridge_file_size_read() < total) r = imp_open(g.sav, 3, total);
+    if (r == 0 || r == 1) {
+        apf_bridge_data_offset_write(0);
+        apf_bridge_transfer_length_write(total);
+        apf_bridge_ram_data_address_write((u32)(uintptr_t)RAM_MEM);
+        imp_settle();
+        r = imp_command(apf_bridge_request_write_write, 2000u);
+        if (r == 0) { g.dirty = 0; g.fails = g.noans = 0; GBLOG("n64rt: Game Boy save: %s written (%s)\n", g.sav, why); }
+        else GBLOG("n64rt: Game Boy save: %s: the write failed (%d) (%s)\n", g.sav, r, why);
+    } else GBLOG("n64rt: Game Boy save: %s: %s (%d) (%s)\n", g.sav, r < 0 ? "no answer" : "not opened", r, why);
+    if (g.dirty) {
+        g.t_dirty = now() + 3u * (u64)CONFIG_CLOCK_FREQUENCY;       /* (the quiet moment the poll waits for is 2 s: this is 5 s from now) */
+        g.wseen = g.wcount;
+        if (r < 0 ? ++g.noans >= 20u : ++g.fails >= 3u) { g.wr = 0; GBLOG("n64rt: Game Boy save: %s: no more write backs\n", g.sav); }
+    }
+    apf_bridge_transfer_length_write(prev_len);
+    apf_bridge_slot_id_write(prev_slot);
+}
+
+/* ---- the save's RAM ----------------------------------------------------------------------------------------- */
+/* the RAM's memory from the file: what it has, the rest 0xFF (the clock's footer 0) */
 static void ram_init(void)
 {
-    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u), have = n64rt_slot_size(SAVE_SLOT, 0);
-    if (have > LAYOUT_GBSAVE_MAX) have = LAYOUT_GBSAVE_MAX;
+    u32 total = g.ram_bytes + (g.timer ? RTC_FOOT : 0u);
+    for (u32 i = 0; i < total; i++) RAM_MEM[i] = i < g.ram_bytes ? 0xFFu : 0u;
+    g.wr = 0; g.sav[0] = 0;
+    if (g.ram_bytes) sav_read(total);
     flush_cpu_dcache_range((const void *)RAM_MEM, total);
-    for (u32 i = have < total ? have : total; i < total; i++) RAM_MEM[i] = i < g.ram_bytes ? 0xFFu : 0u;
-    g.sized = have >= total;
     g.l[0] = g.l[1] = g.l[2] = g.l[3] = g.l[4] = 0;
     g.s = g.m = g.h = g.d = 0; g.halt = g.carry = 0; g.t0 = now();
     if (g.timer) rtc_load();
 }
 
 /* ---- the header ------------------------------------------------------------------ */
+/* Is a ROM in the slot, a Game Boy one of a kind that is a cartridge here? Its header (0x100..0x14F) in h, the file's size, its header's CRC. */
+static int rom_probe(u8 *h, u32 *size, u32 *id)
+{
+    u32 sz = n64rt_slot_size(g.n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
+    if (sz > LAYOUT_GBROM_MAX) sz = LAYOUT_GBROM_MAX;
+    if (sz < 0x150u) return 0;
+    flush_cpu_dcache_range((const void *)(ROM_MEM + 0x100), 0x50);
+    for (u32 i = 0; i < 0x50u; i++) h[i] = ROM_MEM[0x100u + i];
+    u8 x = 0;
+    for (u32 i = 0x34; i <= 0x4C; i++) x = (u8)(x - h[i] - 1u);
+    if (x != h[0x4D] || crc32(h + 4, 48) != LOGO_CRC) return 0;
+    switch (h[0x47]) {
+    case 0x00: case 0x08: case 0x09: case 0x01: case 0x02: case 0x03: case 0x05: case 0x06: case 0x0F: case 0x10: case 0x11: case 0x12: case 0x13:
+    case 0x19: case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E: break;
+    default: return 0;                          /* another kind of cartridge: not one here */
+    }
+    *size = sz;
+    *id = crc32(h, 0x50);
+    return 1;
+}
+/* is the cartridge there for the game: the ROM in the slot is the one the cartridge was made of (n64rt_gbv_field makes it, a video field after the
+ * ROM is there, and reads its save) */
 int n64rt_gbv_look(int n)
 {
     u8 h[0x50];
+    u32 size, id;
     sel(n);
-    u32 size = n64rt_slot_size(n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
-    if (size > LAYOUT_GBROM_MAX) size = LAYOUT_GBROM_MAX;
-    if (size < 0x150u) { g.in = 0; return 0; }
     g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
-    flush_cpu_dcache_range((const void *)(ROM_MEM + 0x100), sizeof h);
-    for (u32 i = 0; i < sizeof h; i++) h[i] = ROM_MEM[0x100u + i];
-    u8 x = 0;
-    for (u32 i = 0x34; i <= 0x4C; i++) x = (u8)(x - h[i] - 1u);
-    if (x != h[0x4D] || crc32(h + 4, 48) != LOGO_CRC) { g.in = 0; return 0; }
-    u32 id = crc32(h, sizeof h);
-    if (g.in && id == g.id && size == g.rom_bytes) return 1;
-    /* (a cartridge new to the slot) */
+    if (!g.have || !rom_probe(h, &size, &id) || id != g.id || size != g.rom_bytes) { g.in = 0; return 0; }
+    g.in = 1;
+    return 1;
+}
+/* A ROM that is new to the slot (called from n64rt_gbv_field): the cartridge it was is written back to its own file, and the new one made, with its
+ * save read from the Game Boy game's own file. */
+static void rom_new(const u8 *h, u32 size, u32 id)
+{
+    flush("another ROM");
+    g.have = 0; g.in = 0;
     u8 t = h[0x47], timer = 0, k;
     switch (t) {
     case 0x00: case 0x08: case 0x09: k = K_ROM; break;
@@ -167,8 +346,7 @@ int n64rt_gbv_look(int n)
     case 0x05: case 0x06: k = K_MBC2; break;
     case 0x0F: case 0x10: timer = 1; k = K_MBC3; break;
     case 0x11: case 0x12: case 0x13: k = K_MBC3; break;
-    case 0x19: case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E: k = K_MBC5; break;
-    default: g.in = 0; return 0;                /* another kind of cartridge: not one here */
+    default: k = K_MBC5; break;
     }
     static const u32 ram_size[6] = { 0, 0x800, 0x2000, 0x8000, 0x20000, 0x10000 };
     flush_cpu_dcache();                         /* (the bridge wrote the ROM: no stale line of it) */
@@ -179,17 +357,16 @@ int n64rt_gbv_look(int n)
     g.ram_bytes = k == K_MBC2 ? 0x200u : h[0x49] < 6u ? ram_size[h[0x49]] : 0u;
     g.ram_banks = g.ram_bytes >= 0x2000u ? g.ram_bytes >> 13 : g.ram_bytes ? 1u : 0u;
     g.id = id;
-    g.in = 1;
     ram_init();
-#ifdef N64RT_DEBUG
-    n64rt_log("n64rt: virtual cartridge: type %02x, %lu ROM banks, %lu bytes of RAM%s\n", t, (unsigned long)g.rom_banks,
-              (unsigned long)g.ram_bytes, timer ? ", a clock" : "");
-#endif
-    return 1;
+    g.have = 1;
+    g.in = 1;
+    GBLOG("n64rt: SD cartridge %d: type %02x, %lu ROM banks, %lu bytes of RAM%s\n", g.n, t, (unsigned long)g.rom_banks,
+          (unsigned long)g.ram_bytes, timer ? ", a clock" : "");
 }
 u32 n64rt_gbv_id(int n) { sel(n); return g.id; }
 
-/* a save state: the RAM and the clock's footer, as many bytes as the cartridge has, rounded to the words the state's tokens are */
+/* a save state: the RAM and the clock's footer, as many bytes as the cartridge has, rounded to the words the state's tokens are. The file is not
+ * written now: the Pocket answers no target command while it makes the state (the RAM, dirty or not, is in the state), and it is written at the next quiet moment */
 u32 n64rt_gbv_state_bytes(int n)
 {
     sel(n);
@@ -203,6 +380,7 @@ void n64rt_gbv_resume(int n, u64 delta)
 {
     sel(n);
     if (!g.in) return;
+    g.dirty = 1; g.wcount++;                    /* (the state's RAM is not the file's: it is written at the next quiet moment) */
     g.t0 += delta;
     u32 size = n64rt_slot_size(n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
     if (size > LAYOUT_GBROM_MAX) size = LAYOUT_GBROM_MAX;
@@ -220,7 +398,40 @@ void n64rt_gbv_power(int n, int on)
     if (on) {
         g.ram_en = 0; g.mode = 0; g.hi2 = 0; g.ram_sel = 0; g.latch_arm = 0;
         g.rom_bank = 1;
-    } else if (g.in && g.timer) { rtc_tick(); rtc_store(); }
+    } else {
+        g.req = 1;                              /* (written back by n64rt_gbv_field: no command to the Pocket from the game's own access) */
+        if (g.in && g.timer) { rtc_tick(); rtc_store(); }
+    }
+}
+
+/* every video field (n64rt_io.c; the commands to the Pocket are made here only): the ROM in each slot is looked at, some times a second -- a ROM new to the
+ * slot makes its cartridge and reads its save, one that is gone writes it back --; and a cartridge whose RAM the game wrote and has not written for
+ * FLUSH_QUIET is written back, as a core that is quit leaves no word for the runtime (the Pocket tells the core nothing then) */
+#define FLUSH_QUIET (2u * CONFIG_CLOCK_FREQUENCY)
+void n64rt_gbv_field(void)
+{
+    static u32 s_f;
+    const int look = (s_f++ & 7u) == 0;
+    for (int n = 0; n < 2; n++) {
+        sel(n);
+        if (n64rt_pak_kind(n) != N64RT_PAK_VIRTUAL) {      /* (a ROM is loaded for a pak that is not the SD one: nothing is read or written for it) */
+            if (g.have) { flush("the pak is not the SD one"); g.have = 0; g.in = 0; }
+            continue;
+        }
+        if (look || !g.have) {
+            u8 h[0x50];
+            u32 size, id;
+            g.rom_base = n ? LAYOUT_GBROM2 : LAYOUT_GBROM;
+            if (!rom_probe(h, &size, &id)) {
+                if (g.have) { flush("the ROM is gone"); g.have = 0; g.in = 0; }
+            } else if (!g.have || id != g.id || size != g.rom_bytes) rom_new(h, size, id);
+        }
+        if (!g.have) continue;
+        if (g.req) { g.req = 0; flush("the cartridge's power off"); }
+        if (!g.dirty || !g.wr) continue;
+        if (g.wcount != g.wseen) { g.wseen = g.wcount; g.t_dirty = now(); continue; }
+        if (now() >= g.t_dirty && now() - g.t_dirty >= FLUSH_QUIET) flush("quiet");
+    }
 }
 
 /* ---- the bus ----------------------------------------------------------------------- */
@@ -296,12 +507,12 @@ void n64rt_gbv_write(int n, u32 a, u8 v)
     if (a < 0xA000u || a >= 0xC000u || !g.ram_en) return;
     u32 o = a & 0x1FFFu;
     if (g.kind == K_MBC3 && g.ram_sel >= 8u) {
-        if (g.timer && g.ram_sel <= 12u) { need_file(); rtc_write(g.ram_sel, v); }
+        if (g.timer && g.ram_sel <= 12u) { rtc_write(g.ram_sel, v); g.wcount++; g.dirty = 1; }
         return;
     }
     if (g.kind == K_MBC3 && g.ram_sel > 3u) return;
     u32 r = ram_off(o);
     if (r >= g.ram_bytes) return;
-    need_file();
+    g.wcount++; g.dirty = 1;
     RAM_MEM[r] = g.kind == K_MBC2 ? (u8)(v & 0xFu) : v;
 }
