@@ -991,6 +991,7 @@ The setting "Controller 2 pak" (None, or Transfer Pak (SD)) puts a second one in
 * **The mappers**: none, MBC1, MBC2, MBC3 (with its clock) and MBC5, as `0x147` says. A cartridge of another type (HuC, MMM01, the Camera) is not
   there for the game. The ROM's banks are its size rounded up to a power of two, and a read beyond the file is `0xFF`. Powering the cartridge on
   (`0xB000`) resets the mapper's registers: the RAM disabled, ROM bank 1, RAM bank 0.
+* **The cache.** The Pocket's bridge writes the ROM, and the RAM from the save's file, under the CPU's data cache (which writes through but does not watch the bridge): the cache's lines of a block are dropped before the pak reads it (`n64rt_gbv_block`), and every line at the cartridge's power-on, so that the game reads what the memory has.
 * **The clock** counts seconds while the core runs. The core has no calendar, so the time the Pocket is off is not counted.
 * **Save states** (Sleep, Memories): the SD cartridges are in them, with their RAM and clock; a real one in the Pocket's slot is unplugged ([Save states](#save-states)).
 
@@ -1109,7 +1110,7 @@ which the game cannot mask: the restart is made whatever the game is doing, a hu
 
 The Transfer Pak (SD) is therefore polled afresh, and its cartridge is in when the game first looks: the pak's own first look at the cartridge slot (`n64rt_pak_init`) finds it already made.
 In a `GBTRACE=1` build `Saves/gbc/common/mirlo_trace.txt` has the lines `restart: the game restarts` (with the RSP's, the RDP's and the AI's state when the entry was chosen), `restart: the saves written in x ms, the hardware at rest in y ms`, `restart: the game starts again (n)` and, for each start,
-`Transfer Pak n: the game reads the status XX (a cartridge / no cartridge)`, the first time the game reads it and whenever it changes. The trace goes on across the restart.
+`Transfer Pak n: the game reads the status XX (a cartridge / no cartridge)`, the first time the game reads it and whenever it changes. It also has the game's other accesses to each pak, the first 128 lines of each controller in each start (`pak1 R c140 b0 c0140 m5 rom1 ram0 en0 md0 in1: <the block's first 8 bytes> s<the sum of its 32>`: the pak's address, its bank register, the cartridge address that makes, the mapper (5: MBC5) and its registers; a run of blocks one after another is its first block and a line with their number and the sum of their bytes), and the CRC-32 of the cartridge's ROM and RAM as the CPU reads them and as the memory has them (`SD cartridge 0 (made | the game restarts | the game powers it on)`; `DIFFERENT` when the cache had a stale line). The trace goes on across the restart.
 
 **What a restart does not reset**: the SoC's uptime counter and the game CPU's Count, which go on (a console's Count at the game's start is whatever its boot took; no game depends on it); the SI's flag that the PIF RAM holds commands and
 the VI's "V_SYNC has been written" flag (the game's TV system stays until the game writes its own: the same game writes the same value), which only the SoC's reset clears; the RDP's modes, tiles and TMEM (a display list sets what it draws with);

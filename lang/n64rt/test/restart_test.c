@@ -11,7 +11,8 @@
  * The report is in the RDRAM at 0x8030_0000 (DUMP=0x43B00000,64 in the sim): word 0 the magic 0x600D600D when the status was read,
  * word 1 the status byte, word 2 Count when it was read, word 3 the number of loops of the wait before it, word 4 0xD0DE when done,
  * word 5 a word the game writes at its start (word 6 is 1 when it finds it there: the RDRAM was not cleared), words 8 and 9 the
- * cartridge RAM's byte before and after the game's write. The runtime's own log (a build with GBTRACE=1 or DEBUG=1) carries the status
+ * cartridge RAM's byte before and after the game's write, word 10 the header's destination code and word 11 the sum of a save's bytes as a game
+ * that checks one reads them (0xFF for a save with a right sum). The runtime's own log (a build with GBTRACE=1 or DEBUG=1) carries the status
  * the game reads, the first time and whenever it changes.
  *
  *   make -f restart_test.mk; sim/mips_soc/restart_check.sh pak (the scenario) */
@@ -102,6 +103,47 @@ static void rdp_kick(void)
     *K1(DPC_START) = (u32)list & 0x1FFFFFFFu;
     *K1(DPC_END) = ((u32)list & 0x1FFFFFFFu) + list_n;
 }
+/* a block read into `out`, a block written */
+static void pak_block(u32 a, u8 *out)
+{
+    pak(a, 0, 0);
+    volatile u8 *b = block();
+    for (u32 i = 0; i < 32u; i++) out[i] = b[5 + i];
+}
+static void pak_put(u32 a, const u8 *data)
+{
+    volatile u8 *b = block();
+    clear_block();
+    b[0] = 0x23u; b[1] = 0x01u; b[2] = 0x03u; b[3] = (u8)(a >> 8); b[4] = (u8)a;
+    for (u32 i = 0; i < 32u; i++) b[5 + i] = data[i];
+    b[38] = 0xFEu;
+    pif();
+}
+/* What a game that checks a Game Boy save's sum does, with the cartridge's own bytes: the header's destination code (byte 0x4A of the block
+ * at cartridge address 0x140), the MBC's banking mode (1s to 0x6000), the RAM on as a game writes it (a block of zeros whose last byte is
+ * 0x0A, to 0x0000), RAM bank 1 (1s to 0x4000), the 0xFC0 bytes at RAM 0x2580 (cartridge 0xA580) and their sum from RAM 0x2598 to 0x3523.
+ * The pak's bank (its register at 0xA000) is the cartridge address's bits 15:14, the block's address the low 14 bits plus 0xC000. */
+static u32 save_check(u32 *dest)
+{
+    u8 blk[32], on[32], ones[32];
+    static u8 ram[0xFC0];
+    for (u32 i = 0; i < 32u; i++) { ones[i] = 1; on[i] = 0; }
+    on[31] = 0x0Au;
+    pak(0xA000u, 1, 0u);
+    pak_block(0xC140u, blk);
+    *dest = blk[0x0A];
+    pak(0xA000u, 1, 1u);
+    pak_put(0xC000u + 0x2000u, ones);                   /* 0x6000 */
+    pak(0xA000u, 1, 0u);
+    pak_put(0xC000u, on);                               /* 0x0000 */
+    pak(0xA000u, 1, 1u);
+    pak_put(0xC000u, ones);                             /* 0x4000 */
+    pak(0xA000u, 1, 2u);
+    for (u32 o = 0; o < 0xFC0u; o += 32u) pak_block(0xC000u + 0x2580u + o, ram + o);
+    u32 sum = 0;
+    for (u32 i = 0x18; i <= 0xFA3u; i++) sum += ram[i];
+    return sum & 0xFFu;
+}
 void game_main(void)
 {
     REPORT[6] = REPORT[5] != 0;                         /* (a game started over finds the RDRAM as the boot left it: 0) */
@@ -119,6 +161,8 @@ void game_main(void)
         const u32 old = pak(0xE000u, 0, 0);             /* cartridge address 0xA000: the RAM's byte 0 */
         pak(0xE000u, 1, (u8)(old + 1u));
         REPORT[8] = old; REPORT[9] = pak(0xE000u, 0, 0);
+        u32 dest = 0;
+        REPORT[11] = save_check(&dest); REPORT[10] = dest;
     }
     REPORT[0] = 0x600D600Du;
     REPORT[4] = 0xD0DEu;

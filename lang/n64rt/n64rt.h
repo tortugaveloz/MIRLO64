@@ -316,6 +316,7 @@ u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the cor
 int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) and n64rt_gbv_field has made it */
 u32  n64rt_gbv_id(int n);                 /* its header's CRC */
 void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
+void n64rt_gbv_block(int n, u32 addr);     /* before the pak reads a block of 32 bytes at addr: the cache's lines of them are dropped, so that the game reads the memory's bytes */
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
 void n64rt_gbv_field(void);               /* every video field: a new ROM makes its cartridge and reads its save, the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file; the only place that talks to the Pocket */
