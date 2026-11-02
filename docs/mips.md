@@ -1323,7 +1323,12 @@ SoC's levels, `div` is that with mostly divides, on the operands where a divider
 set, a fault of a fetch. `cpu_rom.c` is a directed program that knows the answers: the values a conformance suite found the VR4300 to give
 (one section for each group of behaviours: the FPU's FCR0, the writable bits of Index and Status, the undefined COP0 CO functions); it
 writes its verdict, and the id and the two values of each check that failed, where `tb -x rom.z64` reads them, beside the usual lockstep. It stands for the conformance suite `n64-systemtest` (lemmy-64): its tests *Index (masking)*, *Status (masking)* and *CFC1 / CTC1 (index 0)* are the sections for
-Index, Status and FCR0, and the suite's start, which runs three undefined COP0 CO words before it installs an exception handler, the last; the suite's cartridge byte and halfword reads (*cart_memory LH*, *LB*) are `cart_host.c`'s. `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
+Index, Status and FCR0, and the suite's start, which runs three undefined COP0 CO words before it installs an exception handler, the last; the suite's cartridge byte and halfword reads (*cart_memory LH*, *LB*) are `cart_host.c`'s.
+What the suite finds and the core does not do, for the area it takes (a synthesis of the CPU alone, `tools/area2/ooc.sh`, on the core as it is here: 7,087 ALUTs,
+3,351 registers; the count moves by 25 to 50 ALUTs with a change of nothing but a constant, FCR0's value alone gave -25): `sra` and `srav` of an `rt` that is not a word's sign
+extension (the 64-bit shifter's low word: +38 ALUTs), ParityError holding eight bits (+24 ALUTs, 8 registers), and the 64-bit Context, XContext, EPC and ErrorEPC,
+BadVAddr's upper word, and the address error of a load or store whose base is not a sign-extended word (about +190 ALUTs and 72 registers; with the other two, +251 ALUTs and +80
+registers). `TB_TLBDUMP=1` prints both TLBs at a mismatch (the RTL's with `TBC=-DTB_RTL_TLB` and `GEN=--public-flat-rw`).
 `gen_rand_fpu_rom.py SEED out.z64 N irq` (also with `w64`) turns the VI's interrupt on, one every 6,000 instructions or so, with a handler
 that acknowledges it: the interrupts come in the middle of FPU operations, which the core flushes (the model is told when the core takes
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
