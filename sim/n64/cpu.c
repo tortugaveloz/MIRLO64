@@ -251,7 +251,7 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
         switch (fmt) {
         case 0x00: *gpr_out = SX(c->f[fs]); return 1;                               /* mfc1 */
         case 0x01: if (n64_no64 > 0) return -1; *gpr_out = (uint64_t)fl_get(c, fs); return 1;   /* dmfc1: the pair */
-        case 0x02: *gpr_out = SX(fs == 31 ? c->fcr31 : fs == 0 ? 0x00000B00u : 0); return 1;   /* cfc1 */
+        case 0x02: *gpr_out = SX(fs == 31 ? c->fcr31 : fs == 0 ? 0x00000A00u : 0); return 1;   /* cfc1 */
         case 0x04: c->f[fs] = rt32; break;                                          /* mtc1 */
         case 0x05: if (n64_no64 > 0) return -1; fl_set(c, fs, (int64_t)rt); break;  /* dmtc1 */
         case 0x06: if (fs == 31) c->fcr31 = rt32 & 0x0183FFFFu; break;              /* ctc1 */
@@ -528,9 +528,9 @@ void n64_cpu_step(n64_t *n)
                  * Context's BadVPN2, Config's fixed fields; BadVAddr, XContext,
                  * TagHi and the reserved registers take no write) */
                 static const uint32_t wm[32] = {
-                    [C0_INDEX] = 0x3F, [C0_ENTRYLO0] = 0x3FFFFFFF, [C0_ENTRYLO1] = 0x3FFFFFFF,
+                    [C0_INDEX] = 0x8000003F, [C0_ENTRYLO0] = 0x3FFFFFFF, [C0_ENTRYLO1] = 0x3FFFFFFF,
                     [C0_CONTEXT] = 0xFF800000, [C0_PAGEMASK] = 0x01FFE000, [C0_COUNT] = 0xFFFFFFFF,
-                    [C0_ENTRYHI] = 0xFFFFE0FF, [C0_STATUS] = 0xFFFFFFFF, [C0_EPC] = 0xFFFFFFFF,
+                    [C0_ENTRYHI] = 0xFFFFE0FF, [C0_STATUS] = 0xFFF7FFFF, [C0_EPC] = 0xFFFFFFFF,
                     [C0_CONFIG] = 0x0F00800F, [C0_LLADDR] = 0xFFFFFFFF, [C0_WATCHLO] = 0xFFFFFFFB,
                     [C0_WATCHHI] = 0x0000000F, [C0_TAGLO] = 0x0FFFFFC0, [C0_ERROREPC] = 0xFFFFFFFF };
                 c->cop0[rdi] = (c->cop0[rdi] & ~wm[rdi]) | (rt32 & wm[rdi]);
@@ -580,8 +580,13 @@ void n64_cpu_step(n64_t *n)
                 c->next_pc = c->pc + 4;
                 c->ll_bit = 0;
                 break;
-            default: N64_FATAL(n, "unimplemented COP0 %02x at %08x", insn & 63, pc);
+            default: if (insn & 0x20) break;                                        /* (functions 0x20 - 0x3F: no operation, below) */
+                exception(n, pc, dly, EXC_RI, 0);                                   /* the others that are not defined: Reserved Instruction */
+                break;
             }
+        } else if ((fmt & 0x10) && (insn & 0x20)) {
+            /* a CO instruction of an undefined function 0x20 - 0x3F does nothing (the other fields are not looked at): the conformance
+             * suite runs three of them, an emulator's detection and log calls, before it installs its exception handlers */
         } else {
             N64_FATAL(n, "unimplemented COP0 fmt %02x at %08x", fmt, pc);
         }

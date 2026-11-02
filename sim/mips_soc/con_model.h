@@ -70,6 +70,10 @@ struct ConModel {
     bool active = false;
     // totals over the run
     long t_ours[O_N] = {}; double t_con = 0; long t_fields = 0;
+    // the jumps and branches of the game's code: by kind, how many, and the gap (our cycles) before the instruction after the delay
+    // slot retired -- 1: no bubble, 3: the fetch was put right two cycles late -- counted with CONMODEL's lines (jstat below)
+    enum { J_J, J_JAL, J_JRRA, J_JR, J_JALR, J_BTB, J_BTF, J_BNTB, J_BNTF, J_N };
+    long jn[2][J_N] = {}, jg[2][J_N][4] = {}, jcyc[2][J_N] = {}, jins[2] = {};
     enum { C_BASE, C_LDUSE, C_MD, C_FPU, C_IMISS, C_DMISS, C_UNC, C_DEV, C_LIKELY, C_EXC, C_EMUL, C_N };
     const char *cname[C_N] = { "base", "load-use", "mult/div", "FPU", "I-miss", "D-miss", "uncached", "device", "likely", "exception", "emulated" };
 };
@@ -309,6 +313,13 @@ static void con_line()
     printf(" fpu");
     for (int k = 0; k < 13; k++) printf(" %ld", cm.fcnt[k]);
     printf(" mdwait %.0f]\n", cm.con[ConModel::C_MD]);
+    for (int c = 0; c < 2; c++) {
+        static const char *jn[ConModel::J_N] = { "j", "jal", "jr ra", "jr", "jalr", "branch taken backward", "branch taken forward", "branch not taken backward", "branch not taken forward" };
+        printf("[conjump %s, %ld fields: %ld cycles, %ld instructions;", c ? "runtime" : "game", cm.per, cm.ours[c], cm.jins[c]);
+        for (int k = 0; k < ConModel::J_N; k++)
+            printf(" %s %ld (cycles before the next instruction after the slot: 1 %ld, 2 %ld, 3 %ld, more %ld; %ld in all)%s", jn[k], cm.jn[c][k], cm.jg[c][k][0], cm.jg[c][k][1], cm.jg[c][k][2], cm.jg[c][k][3], cm.jcyc[c][k], k + 1 < ConModel::J_N ? "," : "]\n");
+        for (auto &x : cm.jn[c]) x = 0; for (auto &x : cm.jcyc[c]) x = 0; for (auto &r : cm.jg[c]) for (auto &x : r) x = 0; cm.jins[c] = 0;
+    }
     for (auto &x : cm.fcnt) x = 0; for (auto &x : cm.dcnt) x = 0; for (auto &x : cm.mdcnt) x = 0; cm.n_lduse = cm.n_likely = 0;
     fflush(stdout);
     for (int k = 0; k < ConModel::O_N; k++) { cm.t_ours[k] += cm.ours[k]; cm.ours[k] = 0; }
@@ -350,7 +361,38 @@ static void con_step()
     if (g && i == 0x1000FFFFu) idle_pc = pc;
     int cls = !g ? ConModel::O_RT : (pc == idle_pc || pc == idle_pc + 4) ? ConModel::O_IDLE : ConModel::O_GAME;
     if (!g && !rt) cls = ConModel::O_RT;
+    long gap_before = cm.pending;
     cm.ours[cls] += cm.pending; cm.pending = 0;
+    // the branch kinds, of the game's code (0) and the runtime's (1): the instruction after a delay slot is where the bubble of a wrong guess shows
+    if (cls != ConModel::O_IDLE) {
+        static int jst, jk, jc; static bool jlast_lk; static uint32_t jpc, jlast_pc, jlast_i, jlast_bi; static FILE *jbtr = getenv("JBTRACE") ? fopen(getenv("JBTRACE"), "wb") : nullptr; static long jbfrom = getenv("JBFROM") ? atol(getenv("JBFROM")) : 0; static FILE *jtr = getenv("JTRACE") ? fopen(getenv("JTRACE"), "w") : nullptr;
+        uint32_t lop = jlast_i >> 26;
+        bool jlikely = lop == 0x14 || lop == 0x15 || lop == 0x16 || lop == 0x17 || (lop == 0x01 && (((jlast_i >> 16) & 31) & 0x0A) == 0x02) ||
+                       (lop == 0x11 && ((jlast_i >> 21) & 31) == 8 && ((jlast_i >> 17) & 1));
+        if (jst == 2 || (jst == 1 && jlikely && pc == jpc + 8)) {
+            int k = jk;
+            if (k == ConModel::J_BTB) {
+                bool back = (int16_t)(jlast_bi & 0xFFFF) < 0, taken = pc != jpc + 8;
+                k = taken ? (back ? ConModel::J_BTB : ConModel::J_BTF) : (back ? ConModel::J_BNTB : ConModel::J_BNTF);
+                if (jbtr && cm.fields >= jbfrom) { uint8_t rec[5]; memcpy(rec, &jpc, 4); rec[4] = (taken ? 1 : 0) | (back ? 2 : 0) | (jlast_lk ? 4 : 0) | (jc ? 8 : 0); fwrite(rec, 1, 5, jbtr); }
+            }
+            long g = gap_before;
+            cm.jn[jc][k]++; cm.jg[jc][k][g <= 1 ? 0 : g == 2 ? 1 : g == 3 ? 2 : 3]++; cm.jcyc[jc][k] += g;
+            if (jtr && k < ConModel::J_BTB) fprintf(jtr, "%d %d %08x %08x\n", jc, k, jpc, pc);
+            jst = 0;
+        } else if (jst == 1) jst = 2;
+        if (jst == 0) {
+            uint32_t o = i >> 26, f = i & 63, rs_ = (i >> 21) & 31;
+            int k = -1;
+            if (o == 2) k = ConModel::J_J; else if (o == 3) k = ConModel::J_JAL;
+            else if (o == 0 && f == 8) k = rs_ == 31 ? ConModel::J_JRRA : ConModel::J_JR;
+            else if (o == 0 && f == 9) k = ConModel::J_JALR;
+            else if (o == 4 || o == 5 || o == 6 || o == 7 || o == 0x14 || o == 0x15 || o == 0x16 || o == 0x17 || o == 1 || (o == 0x11 && rs_ == 8)) k = ConModel::J_BTB;
+            if (k >= 0) { jst = 1; jk = k; jpc = pc; jlast_bi = i; jlast_lk = o == 0x14 || o == 0x15 || o == 0x16 || o == 0x17; jc = cls == ConModel::O_GAME ? 0 : 1; }
+        }
+        jlast_pc = pc; jlast_i = i; (void)jlast_pc;
+        cm.jins[cls == ConModel::O_GAME ? 0 : 1]++;
+    }
     if (cls == ConModel::O_GAME) {
         // a likely branch whose slot was annulled: the console fetched it
         static uint32_t last_pc, last_i;

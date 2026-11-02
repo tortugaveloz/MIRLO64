@@ -214,7 +214,9 @@ int main(void)
         check("store refill: the refill vector", REFILLS, 1);
         check("store refill: BadVAddr", h_badv, va + 0x1010);
         check("store refill: landed", *K1(0x00501010), 0x57A7E001u);
-        /* an invalid page (the entry is there): the general vector, TLBL for a load */
+        /* an invalid page (the entry is there): the general vector, TLBL for a load. (The refill above wrote its entry with tlbwr, at
+         * Random's index: an entry of a lower index for this page would win over the invalid one, so it goes first) */
+        tlb_unmap_all();
         tlb_wi(4, 0, va | 0x23u, LO(0x00500000, LD), LO(0x00501000, LV | LD));
         GENERALS = 0; REFILLS = 0;
         act(A_REPAIR, 0, va | 0x23u, LO(0x00500000, LV | LD), LO(0x00501000, LV | LD));
@@ -331,7 +333,7 @@ int main(void)
         tlb_wi(4, 0, 0x1C000000u | 1u, LO(0x00400000, LV | LD | LG), LO(0x00401000, LV | LD | LG));
         check("tlbp: global, any ASID", tlb_probe(0x1C000000u | 200u), 4);
         MTC0(0, 0xFFFFFFFFu);
-        check("mtc0 Index: six bits (P is tlbp's)", MFC0(0), 0x3Fu);
+        check("mtc0 Index: six bits and P", MFC0(0), 0x8000003Fu);
         MTC0(0, 0x3Fu);
         check("mtc0 Index: six bits", MFC0(0), 0x3Fu);
         /* tlbwi with Index above 31 writes entry Index & 31 */

@@ -9,7 +9,11 @@
 // checking that one was pending). Devices advance one CPU cycle per executed
 // instruction on both sides, so their state stays in step.
 //
-//   tb rom.z64 [-n instructions] [-s syms] [-l latency] [-v] [-p pad script]
+//   tb rom.z64 [-n instructions] [-s syms] [-l latency] [-v] [-p pad script] [-x]
+//
+// -x: the ROM checks itself (cpu_rom.c): it writes its verdict to 0x000F0F00 of the RTL's RDRAM -- 0x600DC0DE: all passed,
+// 0xBAD00000 + n: n checks failed -- and the run ends there; a failed check's id and its two values (the RTL's, the expected)
+// are the table at 0x000F0F08 (5 words each). The lockstep comparison goes on all the while.
 //
 // -p: controller 1, as n64sim's: "from-to:buttons[:x:y],..." in VI frames,
 // given to both machines as the model's VI frame count changes.
@@ -190,12 +194,13 @@ int main(int argc, char **argv)
     Verilated::commandArgs(argc, argv);
     if (argc < 2) { fprintf(stderr, "usage: tb rom.z64 [-n N] [-s syms] [-l latency] [-v]\n"); return 1; }
     uint64_t limit = 10000000;
-    int verbose = 0;
+    int verbose = 0, selfcheck = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "-n") && i + 1 < argc) limit = strtoull(argv[++i], 0, 0);
         else if (!strcmp(argv[i], "-s") && i + 1 < argc) load_syms(argv[++i]);
         else if (!strcmp(argv[i], "-l") && i + 1 < argc) lat = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-v")) verbose = 1;
+        else if (!strcmp(argv[i], "-x")) selfcheck = 1;
         else if (!strcmp(argv[i], "-p") && i + 1 < argc) parse_pad(argv[++i]);
     }
     for (n64_t *n : { &A, &B }) {
@@ -235,6 +240,7 @@ int main(int argc, char **argv)
 
     uint64_t last_progress = 0, last_frame = 0;
     int bad = 0;
+    uint32_t verdict = 0;
     while (retired < limit && !bad && !A.halted && !B.halted) {
         eval_comb();
         mem_before_edge();
@@ -335,6 +341,10 @@ int main(int argc, char **argv)
             }
             if (verbose) fprintf(stderr, "  exception %u (%s) at %08x\n", ecode, exc_int ? "interrupt" : "sync", epc);
         }
+        if (selfcheck && ret && (retired & 63) == 0) {
+            uint32_t vd = 0; n64_read_phys(&A, 0x000F0F00, 4, &vd);
+            if (vd) { verdict = vd; break; }
+        }
         if (B.vi_frames != last_frame) { last_frame = B.vi_frames; A.buttons = B.buttons = pad_at(last_frame); }
         if (retired - last_progress >= 10000000) {
             last_progress = retired;
@@ -346,6 +356,20 @@ int main(int argc, char **argv)
     if (const char *d = getenv("TB_DUMP")) {           // TB_DUMP=addr,words: the model's RDRAM at the end
         uint32_t a = strtoul(d, 0, 0) & 0x7FFFFFu, k = strchr(d, ',') ? strtoul(strchr(d, ',') + 1, 0, 0) : 16;
         for (uint32_t i = 0; i < k; i++) { uint32_t v = 0; n64_read_phys(&B, a + 4 * i, 4, &v); printf("%08x\n", v); }
+    }
+    if (selfcheck && !bad) {
+        uint32_t vd = verdict;
+        if (!vd) n64_read_phys(&A, 0x000F0F00, 4, &vd);
+        if (vd != 0x600DC0DEu) {
+            uint32_t n = vd & 0xFFFFF;
+            if ((vd >> 20) != 0xBAD) fprintf(stderr, "the ROM gave no verdict (word %08x)\n", vd), n = 0;
+            for (uint32_t i = 0; i < n && i < 32; i++) {
+                uint32_t w[5];
+                for (int k = 0; k < 5; k++) n64_read_phys(&A, 0x000F0F08 + 20 * i + 4 * k, 4, &w[k]);
+                fprintf(stderr, "check %u failed: got %08x%08x expected %08x%08x\n", w[0], w[1], w[2], w[3], w[4]);
+            }
+            bad = 1;
+        }
     }
     { extern uint64_t n64_tlb_hits; fprintf(stderr, "model: %" PRIu64 " mapped accesses\n", n64_tlb_hits); }
     fprintf(stderr, "%s: %" PRIu64 " instructions in %" PRIu64 " cycles (IPC %.3f)\n", bad ? "FAIL" : "PASS",

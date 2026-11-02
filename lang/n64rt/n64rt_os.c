@@ -18,6 +18,7 @@
 #include <generated/soc.h>
 #include <notice.h>
 #include "n64rt.h"
+#include "n64rt_cart.h"
 
 /* A thread's saved state (n64rt_exc.S). The registers are the VR4300's 64
  * bits, upper word first; register 0's place holds EPC and Status, k0's and
@@ -731,7 +732,7 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 }
 /* An access to the RCP's side of the bus is a 32-bit one, whatever the instruction. What the hardware does with the others
  * (n64-systemtest's spmem / pifram / cart_memory groups; the same for every RCP register):
- *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here)
+ *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here; the cartridge's: n64rt_cart.h)
  *   lwl lwr         the aligned word, merged into the register
  *   sb sh           the WHOLE word is written, the register shifted to the byte's or half's lane and zeros below it -- the other
  *                   lanes are not left alone: sb of 0x12345678 at offsets 0, 1, 2, 3 writes 0x78000000, 0x56780000, 0x34567800,
@@ -748,11 +749,13 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     u32 v;
     switch (op) {
     case 0x23: case 0x20: case 0x24: case 0x21: case 0x25: {            /* lw lb lbu lh lhu */
-        if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
-        if (op == 0x20) v = (u32)(s32)(s8)(v >> (24 - 8 * k));
-        else if (op == 0x24) v = (v >> (24 - 8 * k)) & 0xFFu;
-        else if (op == 0x21) v = (u32)(s32)(s16)(v >> (16 - 8 * (k & 2u)));
-        else if (op == 0x25) v = (v >> (16 - 8 * (k & 2u))) & 0xFFFFu;
+        /* (a cartridge's byte or half in an odd halfword is the next one's: n64rt_cart.h) */
+        const u32 ba = op == 0x23 ? badv : n64rt_cart_sub_addr(badv), ka = ba & 3u;
+        if (!n64rt_hw_read(ba & ~3u, &v)) return 0;
+        if (op == 0x20) v = (u32)(s32)(s8)(v >> (24 - 8 * ka));
+        else if (op == 0x24) v = (v >> (24 - 8 * ka)) & 0xFFu;
+        else if (op == 0x21) v = (u32)(s32)(s16)(v >> (16 - 8 * (ka & 2u)));
+        else if (op == 0x25) v = (v >> (16 - 8 * (ka & 2u))) & 0xFFFFu;
         if (rt) gset(x, rt, v);
         return 1;
     }
