@@ -7,6 +7,7 @@
 #   make -C lang/n64rt MIPS_CC=... MIPS_BIN=...
 #   -> lang/n64rt/build/n64rt.bin, which is released as n64rt.sys (cp build/n64rt.bin n64rt.sys)
 #
+#   GBTRACE=1: a test build that keeps the Game Boy save's messages (n64rt_trace.c) in Saves/gbc/common/mirlo_trace.txt.
 #   GAME_MEM=<bytes>: the RDRAM the game sees (8 MiB by default). DEBUG=1, PADLOG=1 ...: n64rt.mk's switches.
 MIRLO   ?= $(abspath ../..)
 RSP     := 1

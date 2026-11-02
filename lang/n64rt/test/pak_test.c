@@ -6,7 +6,7 @@
  *     tb_soc build/pak_test.bin -c 120 +gbcart=<rom.gb>
  * Without +gbcart, or on a SoC without the port, the slot's Transfer Pak
  * must be one with no cartridge in it.
- * The virtual Transfer Pak (n64rt_gbvirt.c) has the same battery, with the ROM
+ * The Transfer Pak (SD) (n64rt_gbvirt.c) has the same battery, with the ROM
  * and the save as the Pocket's slots 5 and 6:
  *     SLOT5=<rom.gb> [SLOT6=<save>] SLOTS_OUT=<dir> tb_soc build/pak_test.bin -c 150
  * With make_gb.py's ROM it runs the Transfer Pak's checks on it and the RAM it
@@ -224,7 +224,7 @@ int main(void)
         printf("  the slot: no cartridge (the port %s)\n", pak_test_slot_port() ? "is there" : "is not in this SoC");
         transfer_pak_empty();
     }
-    /* the virtual Transfer Pak: its cartridge is made of the Pocket's slots 5 and 6 */
+    /* the Transfer Pak (SD): its cartridge is made of the Pocket's slots 5 and 6 */
     pak_test_kind = VIRT;
     pak_test_boot();
     fill(&s_pfs, 0, sizeof s_pfs);

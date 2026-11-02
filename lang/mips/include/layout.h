@@ -30,13 +30,13 @@
                                              * runtime's (n64rt_io.c), what the PI's engine and the game's reads of domain 2 reach
                                              * (rtl/soc/rcp_mi.sv's PI2: its address is the RTL's, mirlo_mips.sv's io_adr) */
 #define LAYOUT_FREE         0x34161000      /* unused PSRAM up to the ROM at byte offset 0x00200000 */
-/* The virtual Transfer Paks' Game Boy cartridges (lang/n64rt/n64rt_gbvirt.c), one for each of controllers 1 and 2: a ROM and its battery RAM.
- * Each ROM is up to 3 MiB; each save is 128 KiB and a clock's 48 bytes, nonvolatile. The ROM slots come last in data.json (the Pocket lists
+/* The Transfer Paks (SD)' Game Boy cartridges (lang/n64rt/n64rt_gbvirt.c), one for each of controllers 1 and 2: a ROM and its battery RAM.
+ * Each ROM is up to 3 MiB; each save is 128 KiB and a clock's 48 bytes, in memory, and the Game Boy game's own file on the card (the slots 5 and 6 have no file: the file is opened into them by its path). The ROM slots come last in data.json (the Pocket lists
  * every Load entry together, "Load Game" and "Load Transfer Pak 1" and "2": no `#` in a name, which the Pocket takes for a comment). */
-#define LAYOUT_GBSAVE       0x42D00000      /* slot 5: cartridge 1's RAM (and its clock's 48 bytes), at the bridge's 0x06D0_0000; nonvolatile */
+#define LAYOUT_GBSAVE       0x42D00000      /* slot 5: cartridge 1's RAM (and its clock's 48 bytes), at the bridge's 0x06D0_0000; its slot opens the save file by path */
 #define LAYOUT_GBSAVE_SLOT  5
 #define LAYOUT_GBSAVE_MAX   0x00021000
-#define LAYOUT_GBSAVE2      0x42D50000      /* slot 6: cartridge 2's RAM, at the bridge's 0x06D5_0000; nonvolatile */
+#define LAYOUT_GBSAVE2      0x42D50000      /* slot 6: cartridge 2's RAM, at the bridge's 0x06D5_0000; likewise */
 #define LAYOUT_GBSAVE2_SLOT 6
 #define LAYOUT_GBROM        0x43400000      /* slot 8: cartridge 1's ROM, up to 3 MiB, at the bridge's 0x0740_0000. Below it the bridge's
                                              * 0x0730_0000 - 0x073F_FFFF are the PSRAM's, not the SDRAM's */
@@ -46,7 +46,8 @@
 #define LAYOUT_GBROM2_SLOT  9
 /* the GameShark codes of the game (lang/n64rt/n64rt_cheat.c): data.json's slot LAYOUT_GS_SLOT, a file the runtime asks the Pocket to open by
  * its path (Assets/n64/common/gameshark/<the cartridge's ID>.txt) and to read to LAYOUT_GS; LAYOUT_GS_PARAM holds the open command's
- * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. */
+ * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. The Transfer Pak (SD)'s
+ * import of a Game Boy game's own save (n64rt_gbvirt.c) uses the same three (the two never run at once: both are made from the video field's hook). */
 #define LAYOUT_GS_PARAM     0x42D30000
 #define LAYOUT_GS           0x42D40000
 #define LAYOUT_GS_SLOT      7

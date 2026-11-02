@@ -312,12 +312,13 @@ void n64rt_pak_state_resumed(u64 delta);  /* after a state is put back */
 void n64rt_cheat_init(void);
 void n64rt_cheat_field(void);
 u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
-/* the virtual Transfer Paks' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of two data.json slots (n64rt_gbvirt.c) */
-int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) */
+/* the Transfer Paks (SD)' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of a data.json ROM slot and the Game Boy game's own save file (n64rt_gbvirt.c) */
+int  n64rt_gbv_look(int n);               /* 1: a cartridge is in its slot (a ROM with a header checksum and logo right, of a mapper it has) and n64rt_gbv_field has made it */
 u32  n64rt_gbv_id(int n);                 /* its header's CRC */
 void n64rt_gbv_power(int n, int on);      /* the cartridge's power: on is its reset */
 u8   n64rt_gbv_read(int n, u32 addr);     /* its bus, 0x0000 - 0xBFFF */
 void n64rt_gbv_write(int n, u32 addr, u8 value);
+void n64rt_gbv_field(void);               /* every video field: a new ROM makes its cartridge and reads its save, the RAM the game wrote and left alone for 2 s is written to the Game Boy game's save file; the only place that talks to the Pocket */
 u32  n64rt_gbv_state_bytes(int n);        /* a save state: the bytes of the cartridge's RAM (and clock) to keep, 0 with none in; the clock's footer brought up to date */
 void n64rt_gbv_resume(int n, u64 delta);   /* after a state is put back: its clock moved on by delta (the SoC's clock), and is its ROM there again (else it is not in) */
 void *n64rt_rdram_alloc(u32 size);         /* zeroed RDRAM the game can reach (above its mem_size) */

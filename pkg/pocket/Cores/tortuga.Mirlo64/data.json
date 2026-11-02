@@ -56,26 +56,18 @@
         "address": "0x07100000"
       },
       {
-        "name": "Game Boy Save 1",
+        "name": "Game Boy save file 1",
         "id": 5,
         "required": false,
-        "parameters": "0x24",
-        "nonvolatile": true,
-        "extensions": [
-          "gbsav1"
-        ],
+        "parameters": "0x0",
         "size_maximum": "0x21000",
         "address": "0x06D00000"
       },
       {
-        "name": "Game Boy Save 2",
+        "name": "Game Boy save file 2",
         "id": 6,
         "required": false,
-        "parameters": "0x24",
-        "nonvolatile": true,
-        "extensions": [
-          "gbsav2"
-        ],
+        "parameters": "0x0",
         "size_maximum": "0x21000",
         "address": "0x06D50000"
       },
