@@ -72,6 +72,22 @@ static bool sdram;
 static const bool free_chk = getenv("TB_FREE") != nullptr;
 static uint32_t free_prev; static bool free_have; static uint64_t free_n, free_bad;
 static unsigned cpu_pct;
+static uint32_t reg_ci, reg_zi, reg_ti;                      // (TB_MISS: where the images are, as the last SET_*_IMAGE put them)
+static uint64_t miss_h[8][8]; static int last_reg[4];
+static int region(uint32_t wa)                               // C colour, Z depth, T texture, c / z hidden words of the colour / the depth image, o other
+{
+    if (wa >= 0xDC0000u && wa < 0xE00000u) {
+        uint32_t b = (wa - 0xDC0000u) * 32u;                 // (the image byte the plane's word is for)
+        if (b >= (reg_ci & 0x7FFFFFu) && b < (reg_ci & 0x7FFFFFu) + 0x40000u) return 4;
+        return 5;
+    }
+    uint32_t b = (wa - 0xE00000u) * 4u;
+    if (b >= (reg_ci & 0x7FFFFFu) && b < (reg_ci & 0x7FFFFFu) + 0x40000u) return 0;
+    if (b >= (reg_zi & 0x7FFFFFu) && b < (reg_zi & 0x7FFFFFu) + 0x40000u) return 1;
+    if (b >= (reg_ti & 0x7FFFFFu) && b < (reg_ti & 0x7FFFFFu) + 0x40000u) return 2;
+    return 3;
+}
+static bool bank_hash, hid_remap; static uint32_t hid_x = 2;                                       // TB_HASH=1: the SDRAM's bank is a[10:9] xor the row's pairs of bits
 static struct {
     bool open[4]; uint32_t row[4]; int c_act[4], c_pre[4], c_wr[4]; int c_rd, c_wrany;
     int refi, wait, st;               // st 0 run, 1 precharge for a refresh, 2 refresh
@@ -85,7 +101,12 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     // the arbiter: the RDP and the other master in turn
     bool pick_cpu = sd.cpu_v && (!v || sd.turn);
     bool rv = pick_cpu ? true : v, rwe = pick_cpu ? sd.cpu_we : we; uint32_t ra = pick_cpu ? sd.cpu_a : a;
-    int cmd = 0, ba = 0; uint32_t row = (ra >> 11) & 0x1FFF; int bank = (ra >> 9) & 3;   // 1 ACT 2 PRE 3 RD 4 WR 5 PREALL 6 REF
+    if (hid_remap && (ra >> 18) == 0x37u) {                    // TB_HREMAP=1: the hidden plane's words in the bank other than that of their image's rows
+        uint32_t h = ra & 0x3FFFFu;
+        uint32_t bk = (((h >> 6) & 3u) ^ hid_x), col = ((h >> 8) & 1u) << 8 | ((h >> 9) & 3u) << 6 | (h & 0x3Fu);
+        ra = (ra & ~0x3FFFFu) | (h & ~0x7FFu & 0x3FFFFu) | bk << 9 | col;
+    }
+    int cmd = 0, ba = 0; uint32_t row = (ra >> 11) & 0x1FFF; int bank = ((ra >> 9) ^ (bank_hash ? (row ^ row >> 2 ^ row >> 4 ^ row >> 6 ^ row >> 8 ^ row >> 10 ^ row >> 12) : 0)) & 3;   // 1 ACT 2 PRE 3 RD 4 WR 5 PREALL 6 REF
     bool go = false;
     if (sd.wait == 0) {
         if (sd.st == 1) {
@@ -99,7 +120,7 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
                 if (sd.c_act[bank] >= 2 && (rwe ? sd.c_rd >= 3 : sd.c_wrany >= 2)) { cmd = rwe ? 4 : 3; go = true; }
                 else if (sd.c_act[bank] >= 2) sd.n_turn++;
             } else if (sd.open[bank]) { if (sd.c_act[bank] >= 4 && sd.c_wr[bank] >= 2) cmd = 2; }
-            else if (sd.c_pre[bank] >= 2) { cmd = 1; sd.n_miss++; }
+            else if (sd.c_pre[bank] >= 2) { cmd = 1; sd.n_miss++; if (!pick_cpu) miss_h[region(ra)][last_reg[bank]]++; }
         }
     }
     sd.c_rd = cmd == 3 ? 1 : sat15(sd.c_rd);
@@ -110,6 +131,7 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
         sd.c_wr[b]  = (cmd == 4 && ba == b) ? 1 : sat15(sd.c_wr[b]);
     }
     if (cmd == 1) { sd.open[ba] = true; sd.row[ba] = row; }
+    if (go && !pick_cpu) { last_reg[ba] = region(ra); if (getenv("TB_MISS2")) { static uint32_t seen[8]; int rg = region(ra); if (seen[rg] != (ra >> 9)) { seen[rg] = ra >> 9; static int nn; if (nn++ < 60) fprintf(stderr, "region %d word %06x row %04x bank %d (hashed %d)\n", rg, ra, row, (ra >> 9) & 3, bank); } } }
     if (cmd == 2) sd.open[ba] = false;
     if (cmd == 5) for (int b = 0; b < 4; b++) sd.open[b] = false;
     if (++sd.refi >= 480) { sd.refi = 0; sd.ref_due = true; }
@@ -122,7 +144,8 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     if (!sd.cpu_v && cpu_pct && rnd() % 100 < cpu_pct) { sd.cpu_v = true; sd.cpu_we = rnd() % 5 == 0; sd.cpu_a = (rnd() << 8 ^ rnd()) & 0x1FFFFF; }
     return go && !pick_cpu;
 }
-static uint64_t st_cyc[32];
+static uint64_t pix_why2[2][8], st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   // (and the memory commands taken in each state)
+static std::vector<uint64_t> take_cyc, start_cyc;                // TB_CLS: the cycle each command word was taken, and each command started executing                      // TB_CLS: the cycle each command word was taken
 
 
 static void tick()
@@ -145,7 +168,8 @@ static void tick()
             static unsigned long nz[2]; nz[top->m_cmd_we ? 1 : 0]++;      // (how many they are, as it goes)
             if (((nz[0] + nz[1]) & 0x3FFF) == 0) fprintf(stderr, "\r  Z words: %lu read, %lu written", nz[0], nz[1]);
         } else
-        top->m_cmd_ready = sd_step(top->m_cmd_valid, top->m_cmd_we, 0xE00000u + ((top->m_cmd_addr >> 2) & 0x1FFFFFu), &mine);
+        top->m_cmd_ready = sd_step(top->m_cmd_valid, top->m_cmd_we, (top->m_cmd_addr & 0x800000u) ? 0xDC0000u + ((top->m_cmd_addr >> 2) & 0x3FFFFu)     // (the hidden plane, 1 MiB below the RDRAM: mirlo_mips.sv)
+                                                                                                              : 0xE00000u + ((top->m_cmd_addr >> 2) & 0x1FFFFFu), &mine);
         top->m_wdata_ready = !wr_addrs.empty();
     }
     bool rv = !reads.empty() && reads.front().due <= cycles;
@@ -157,9 +181,25 @@ static void tick()
     uint32_t maddr = top->m_cmd_addr; bool mwe = top->m_cmd_we;
     bool wd = top->m_wdata_valid && top->m_wdata_ready;
     uint32_t wdat = top->m_wdata, wwe = top->m_wdata_we;
-    if (prof) st_cyc[top->rootp->rdp_top__DOT__st & 31]++;
+    if (prof) {
+        st_cyc[top->rootp->rdp_top__DOT__st & 31]++;
+        if (top->m_cmd_valid && top->m_cmd_ready) (top->m_cmd_we ? st_wr : st_rd)[top->rootp->rdp_top__DOT__st & 31]++;
+        if ((top->rootp->rdp_top__DOT__st & 31) == 6) {      // S_PIX: why the clock was spent
+            auto *r = top->rootp;
+            int k = !r->rdp_top__DOT__row_wq ? 0 : r->rdp_top__DOT__pix_gh ? 1 : r->rdp_top__DOT__pix_go ? 2 : (r->rdp_top__DOT__lod_on && r->rdp_top__DOT__pix_valid) ? 3 : (r->rdp_top__DOT__rq_pend && r->rdp_top__DOT__rq_set == r->rdp_top__DOT__set_cur) ? 4 : 5;
+            pix_why[k]++;
+            if (k == 0) pix_why2[1][6 + (r->rdp_top__DOT__wq_pend ? 0 : 1)]++;
+            if (k == 4 || k == 5) {         // the own row's read request still to be taken (k 4), or its words not in (k 5): why
+                int rqs = r->rdp_top__DOT__rq_set;
+                int c = !r->rdp_top__DOT__rq_pend ? 0 : r->rdp_top__DOT__mem__DOT__r_act ? 1 : r->rdp_top__DOT__old_hold[rqs] ? 2 : !r->rdp_top__DOT__hz_ok ? 3 : 4;
+                if (c == 3 && r->rdp_top__DOT__mem__DOT__w_act && r->rdp_top__DOT__mem__DOT__w_set == rqs) c = 5;
+                pix_why2[k - 4][c]++;
+            }
+        }
+    }
     top->clk = 1; top->eval();
     cycles++;
+    { static bool prev_go; bool go = top->rootp->rdp_top__DOT__exec_go; if (prev_go && !go) start_cyc.push_back(cycles); prev_go = go; }
     if (free_chk) {          // TB_FREE=1: the LFSR stepped on every clock
         const uint32_t cur = top->rootp->rdp_top__DOT__pix__DOT__lfsr;
         if (top->rst) free_have = false;
@@ -173,6 +213,7 @@ static void tick()
         static FILE *ct = getenv("TB_CMDT") ? fopen(getenv("TB_CMDT"), "w") : nullptr;
         if (ct) fprintf(ct, "%llu\n", (unsigned long long)cycles);
         cmdq.pop_front();
+        take_cyc.push_back(cycles);
     }
     if (rv) reads.pop_front();
     if (mc) {
@@ -499,6 +540,7 @@ int main(int argc, char **argv)
     if (ai >= argc) { fprintf(stderr, "usage: tb_rdp [-o out_prefix] task.bin ... | -r SEED [N]\n"); return 2; }
     const bool step = getenv("TB_STEP") != nullptr;
     fast_mem = getenv("TB_FAST") != nullptr; prof = getenv("TB_PROF") != nullptr;
+    bank_hash = getenv("TB_HASH") != nullptr; hid_remap = getenv("TB_HREMAP") != nullptr; if (hid_remap) hid_x = (uint32_t)atoi(getenv("TB_HREMAP"));
     sdram = getenv("TB_SDRAM") != nullptr; if (getenv("TB_CPU")) cpu_pct = (unsigned)atoi(getenv("TB_CPU"));
     if (getenv("TB_LAT")) mem_lat = (unsigned)atoi(getenv("TB_LAT"));
     if (getenv("TB_STALL")) mem_stall = (unsigned)atoi(getenv("TB_STALL"));
@@ -551,6 +593,9 @@ int main(int argc, char **argv)
         uint64_t c0 = cycles, ncmd = 0;
         uint32_t cimg = 0, width = 320; unsigned csize = 2;
         std::vector<uint32_t> cur;
+        struct CRec { uint32_t op, nw; uint32_t oh, ol, w0, w1; uint64_t px, w; };
+        std::vector<CRec> crec; uint64_t cwords = 0;
+        take_cyc.clear(); start_cyc.clear();
         if (const char *dp = getenv("TB_DUMP")) {          // TB_DUMP=file: the command words, big-endian (to replay on the model alone)
             if (FILE *df = fopen(dp, "wb")) { for (uint32_t x : cmds) { uint8_t b4[4]; wbe32(b4, x); fwrite(b4, 1, 4, df); } fclose(df); }
         }
@@ -559,6 +604,9 @@ int main(int argc, char **argv)
             cur.push_back(x);
             if (mdl.ncmd != 0) continue;                    // command not complete yet
             ncmd++;
+            crec.push_back({ (cur[0] >> 24) & 63, (uint32_t)cur.size(), mdl.other_h, mdl.other_l, cur[0], cur.size() > 1 ? cur[1] : 0, mdl.pixels_drawn, cwords });
+            cwords += cur.size();
+            if (((cur[0] >> 24) & 63) == RDP_OP_SET_CIMG) reg_ci = mdl.cimg; if (((cur[0] >> 24) & 63) == 0x3E) reg_zi = mdl.zimg; if (((cur[0] >> 24) & 63) == 0x3D) reg_ti = mdl.timg;
             if (getenv("TB_MODES")) {          // TB_MODES=1: each primitive's command and the other modes it is drawn with
                 unsigned o = (cur[0] >> 24) & 63;
                 if ((o >= 0x08 && o <= 0x0F) || o == 0x24 || o == 0x25 || o == 0x36)
@@ -639,13 +687,37 @@ int main(int argc, char **argv)
             free_n = free_bad = 0;
         }
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
+        if (const char *cf = getenv("TB_CLS")) {     // TB_CLS=<file>: one line a command -- op, words, the cycle it started to execute, last word taken, other modes (hi, lo), first two words, pixels drawn so far; then the end
+            FILE *cfp = fopen(cf, "a");
+            fprintf(cfp, "T %s\n", argv[ai]);
+            for (size_t i = 0; i < crec.size(); i++) {
+                const CRec &c = crec[i]; uint64_t a = i < start_cyc.size() ? start_cyc[i] : cycles, b = c.w + c.nw - 1 < take_cyc.size() ? take_cyc[c.w + c.nw - 1] : cycles;
+                fprintf(cfp, "%02x %u %llu %llu %06x %08x %08x %08x %llu\n", c.op, c.nw, (unsigned long long)a, (unsigned long long)b, c.oh, c.ol, c.w0, c.w1, (unsigned long long)c.px);
+            }
+            fprintf(cfp, "E %llu\n", (unsigned long long)cycles);
+            fclose(cfp);
+        }
+        if (getenv("TB_MISS")) {
+            static const char *rn[6] = { "C", "Z", "T", "other", "c-hid", "z-hid" };
+            printf("\n");
+            for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) if (miss_h[i][j]) { printf("    MISS %s after %s: %llu\n", rn[i], rn[j], (unsigned long long)miss_h[i][j]); miss_h[i][j] = 0; }
+        }
         if (prof) {
-            static const char *nm[21] = { "idle (waiting for commands)", "triangle start", "row", "setup", "read the span's Z", "read the span's colour", "pixels", "drain the pipeline",
-                                          "write colour", "write Z", "next row", "wait for memory", "fill", "texture load", "sync", "rectangle start", "load start", "span", "attributes", "XL",
+            static const char *nm[21] = { "idle (waiting for commands)", "triangle start", "row", "setup", "AA init", "AA subscanlines", "pixels", "drain the pipeline",
+                                          "AA span", "triangle words", "next row", "wait for memory", "fill", "texture load", "sync", "rectangle start", "load start", "span", "attributes", "XL",
                                           "a span's second half" };
             printf("\n");
-            for (int i = 0; i < 21; i++) if (st_cyc[i]) printf("    %-28s %9llu cycles  %5.1f %%\n", nm[i], (unsigned long long)st_cyc[i], 100.0 * st_cyc[i] / cycles);
+            for (int i = 0; i < 21; i++) if (st_cyc[i]) printf("    %-28s %9llu cycles  %5.1f %%   (memory: %llu reads, %llu writes)\n", nm[i], (unsigned long long)st_cyc[i], 100.0 * st_cyc[i] / cycles, (unsigned long long)st_rd[i], (unsigned long long)st_wr[i]);
+            for (int i = 0; i < 32; i++) st_rd[i] = st_wr[i] = 0;
+            static const char *wn[6] = { "write-back request", "ghost", "pixel issued", "second slot (two-pass / LOD)", "waiting for the span's read to start", "waiting for the span's words" };
+            for (int i = 0; i < 6; i++) if (pix_why[i]) printf("      S_PIX: %-38s %9llu\n", wn[i], (unsigned long long)pix_why[i]);
             for (int i = 0; i < 32; i++) st_cyc[i] = 0;
+            for (int i = 0; i < 8; i++) pix_why[i] = 0;
+            static const char *cn[6] = { "request taken, words coming", "read engine busy", "old buffers still read", "hidden words wait for the write engine (idle)", "being taken", "hidden words wait for the write engine (same set)" };
+            printf("      S_PIX write-back request waits for: the write engine to take the row before's request %llu, the row's own read request %llu\n", (unsigned long long)pix_why2[1][6], (unsigned long long)pix_why2[1][7]);
+            pix_why2[1][6] = pix_why2[1][7] = 0;
+            for (int k = 0; k < 2; k++) for (int c = 0; c < 6; c++) if (pix_why2[k][c]) printf("        S_PIX %s: %-48s %9llu\n", k ? "words" : "request", cn[c], (unsigned long long)pix_why2[k][c]);
+            memset(pix_why2, 0, sizeof pix_why2);
         }
         if (getenv("TB_KINDS")) {
             printf("  textured primitives' kinds (cycle type, TLUT bits, format, size):");

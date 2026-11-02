@@ -119,6 +119,8 @@ static void new_req(int i)
     else {
         uint32_t base = (i * 0x2345 + (rng() % 5) * 0x800) & 0xfffff;   // a few rows, shared between ports
         p.addr = (base + rng() % 64) & 0xffffff;
+        if (getenv("TB_HID")) p.addr = 0xDC0000u + (p.addr & 0x3FFFFu);      // TB_HID=1: in the RDP's hidden plane (sdr_ctrl.sv remaps its banks); a wide range, bits 10:5 to 17 all vary
+        if (getenv("TB_HID")) p.addr = 0xDC0000u + ((p.addr * 2654435761u >> 7) & 0x3FFFFu);
         if (rng() % 4 == 0) { p.burst = 7; p.next = (p.addr + 1) & 0xffffff; }
     }
     p.we = rng() % 3 == 0;

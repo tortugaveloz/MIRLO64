@@ -48,7 +48,10 @@ and the RSP's DMA go first: each waits for the words it asks for (a cache line, 
 where the RDP and the scan-out ride out a wait in their buffers -- the scan-out goes first too, with them, while its FIFO
 is below a quarter full (at every frame's start, and when a long run of the CPU's or the RSP's requests has left it
 behind: else a frame's first lines found it empty and the picture came a few dozen lines lower). The Pocket's SRAM is
-not used: its pads are tied off in `core_top.sv`.
+not used: its pads are tied off in `core_top.sv`. The arbiter places the RDP's hidden plane (SDRAM `0x0370_0000`,
+1 MiB) in the SDRAM's banks differently from its address (`hmap` in `sdr_arb.sv`: a permutation of the plane's own
+words, which nothing sees) so that the hidden words of an image's row are in another bank than the row itself
+([rdp.md](rdp.md), "Where the hidden plane is in the SDRAM's banks").
 
 A game runs from its own ROM, unmodified, with its own libultra: its exception handler, threads, timers and interrupts
 are the game's. The CPU maps KSEG0 and KSEG1 onto the RDRAM, so the game's instructions, data and pointers are the

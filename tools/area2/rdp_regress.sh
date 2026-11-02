@@ -47,6 +47,14 @@ for s in 201 202 203 204 205 206; do TB_FREE=1 TB_NONOISE=1 run ./obj_free/tb_rd
 for s in 207 208; do TB_FREE=1 TB_NONOISE=1 TB_ZDZ=1 run ./obj_free/tb_rdp -r $s 200; done
 TB_FREE=1 TB_NONOISE=1 TB_SDRAM=1 TB_CPU=30 run ./obj_free/tb_rdp -r 209 150
 for s in 211 212 213 214 215 216; do TB_FREE=1 TB_NOISE=1 run ./obj_free/tb_rdp -r $s 200; done
+# the next command's words and a triangle's start under the drain of the primitive before, the row walker's reads one row ahead:
+# slow and uneven memory (long and variable latency, refused requests, another master asking often, the hidden plane's banks
+# placed as sdr_arb does), short runs of state commands between primitives (the streams' own), narrow images
+for s in 131 132 133 134; do TB_SDRAM=1 TB_CPU=70 TB_HREMAP=2 run ./obj_rdp/tb_rdp -r $s 250; done
+for s in 135 136 137; do TB_STALL=2 TB_LAT=14 run ./obj_rdp/tb_rdp -r $s 250; done
+for s in 138 139; do TB_STALL=2 TB_LAT=14 TB_C16=1 TB_CW=289 TB_ZDZ=1 run ./obj_rdp/tb_rdp -r $s 250; done
+for s in 140 141; do TB_SDRAM=1 TB_CPU=50 TB_C32=1 run ./obj_rdp/tb_rdp -r $s 250; done
+for s in 142 143; do TB_SDRAM=1 TB_CPU=50 TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rdp -r $s 250; done
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))

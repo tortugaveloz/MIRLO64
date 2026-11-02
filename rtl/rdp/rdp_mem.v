@@ -92,8 +92,8 @@ module rdp_mem (
     input  wire [1:0]  rd_lmode,
     input  wire [11:0] rd_ldxt,           // LOAD BLOCK: what a 64-bit word adds to its row count (u1.11)
     input  wire        rd_lodd,           // LOAD TILE: an odd row
-    output reg  [9:0]  z_have, c_have,
-    output reg         h_done,         // the span's hidden words are in
+    output reg  [9:0]  z_have0, z_have1, c_have0, c_have1,     // (by the request's set: the next row's request is taken while the pixels of this one still
+    output reg         h_done0, h_done1,                       // issue; h_done: the span's hidden words are in)
     output reg         hlbw_we,        // the raw hidden buffers' write port ({set, group mod 128})
     output reg         hlbw_z,         // ... the depth image's
     output reg  [7:0]  hlbw_addr,
@@ -365,9 +365,9 @@ module rdp_mem (
             wf_wr <= 0; wf_rd <= 0; wq_v <= 1'b0;
             p1 <= 1'b0; p2 <= 1'b0;
             rf_wr <= 0; rf_rd <= 0; h_ph <= 2'd0;
-            h_done <= 1'b0;
+            h_done0 <= 1'b0; h_done1 <= 1'b0;
             la_v <= 1'b0; l_out <= 1'b0;
-            z_have <= 10'd0; c_have <= 10'd0;
+            z_have0 <= 10'd0; c_have0 <= 10'd0; z_have1 <= 10'd0; c_have1 <= 10'd0;
         end else begin
             // write data out: refill the head from the RAM
             if (!wq_v || wf_pop) begin
@@ -405,12 +405,12 @@ module rdp_mem (
                     r_zb <= rd_zbase[31:2]; r_cb <= rd_cbase[31:2];
                     r_idx <= rd_f1; q_idx <= rd_f1; r_c32 <= rd_c32; r_x0 <= rd_x0; r_xl <= rd_xl[9:0];
                     r_tog <= 1'b0; q_tog <= 1'b0; r_all <= 1'b0;
-                    z_have <= 10'd0; c_have <= 10'd0;
+                    if (rd_set) begin z_have1 <= 10'd0; c_have1 <= 10'd0; end else begin z_have0 <= 10'd0; c_have0 <= 10'd0; end
                     r_h <= rd_h && !rd_load; r_hz <= rd_hz && !rd_load;
                     r_hall <= !((rd_h || rd_hz) && !rd_load); q_hin <= (rd_h || rd_hz) && !rd_load;
                     r_hzp <= 1'b0; q_hzp <= 1'b0;
                     r_hg <= rd_cw0[20:3]; q_hg <= rd_cw0[9:3]; r_hgl <= rd_cwl[9:3]; q_hgl <= rd_cwl[9:3];
-                    h_done <= !((rd_h || rd_hz) && !rd_load);
+                    if (rd_set) h_done1 <= !((rd_h || rd_hz) && !rd_load); else h_done0 <= !((rd_h || rd_hz) && !rd_load);
                     if (rd_load) begin
                         w_next <= rd_cbase[31:2];
                         l_ask <= ld_reads - 12'd1;
@@ -492,7 +492,7 @@ module rdp_mem (
                     if (q_hg == q_hgl) begin
                         if (r_hz && !q_hzp) begin q_hzp <= 1'b1; q_hg <= r_zw0[9:3]; q_hgl <= r_zwl[9:3]; end
                         else begin
-                            q_hin <= 1'b0; h_done <= 1'b1;
+                            q_hin <= 1'b0; if (r_set) h_done1 <= 1'b1; else h_done0 <= 1'b1;
                             if (!r_z && !r_c) r_act <= 1'b0;
                         end
                     end
@@ -509,8 +509,8 @@ module rdp_mem (
                 if (m_rdata_valid && !q_hin) begin
                     lbw_addr <= {r_set, q_idx[8:0]};
                     lbw_data <= m_rdata;
-                    if (q_kc) begin lbw_c_we <= 1'b1; c_have <= c_have + 10'd1; end
-                    else      begin lbw_z_we <= 1'b1; z_have <= z_have + 10'd1; end
+                    if (q_kc) begin lbw_c_we <= 1'b1; if (r_set) c_have1 <= c_have1 + 10'd1; else c_have0 <= c_have0 + 10'd1; end
+                    else      begin lbw_z_we <= 1'b1; if (r_set) z_have1 <= z_have1 + 10'd1; else z_have0 <= z_have0 + 10'd1; end
                     q_idx <= q_idx + 10'd1;
                     if (q_idx == q_last) begin
                         if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; end

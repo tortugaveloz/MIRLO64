@@ -248,8 +248,8 @@ new block RAM and no DSP block.
   (`w_fc`): a fill rectangle (straight from the sequencer, one word a pixel, up to 1,024 a row, not through the line
   buffers) and a triangle drawn in fill mode (through the pipeline, its pass bits as usual, the colour replaced at the
   write).
-- **Spans longer than 512 pixels: the split** (`rdp_top`, `spl`, `S_SPL`). Where a row's span is set up (`S_ROW` for a
-  rectangle, `S_AASPAN` for a triangle) a 32-bit image's span of more than 512 pixels ends at `xs + 512`; a triangle's
+- **Spans longer than 512 pixels: the split** (`rdp_top`, `spl`, `S_SPL`). Where a row's span is set up (`W_ROW` for a
+  rectangle, `W_SPAN` for a triangle) a 32-bit image's span of more than 512 pixels ends at `xs + 512`; a triangle's
   test is two compares side by side, `aa_max >= aa_min + 512` and `scissor > aa_min + 512`, so that it does not
   lengthen the span's path. The first half runs as a row. At its last pixel `S_SPL` makes the rest, up to the span's
   end (`xe2`: a rectangle's `xb`, a triangle's `aa_xe`, which still hold it), a row of its own on the other set of line

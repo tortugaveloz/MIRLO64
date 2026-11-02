@@ -208,7 +208,7 @@ keeps serving its depth compare and blender shifts until rule 8.
   that missed timing by up to 0.6 ns: sim/area_study.md, round 9). The depth word's dz code is the
   console's: the place of the top set bit of |DzDx| + |DzDy| of the integer halves, plus 1
   (`dzc_p`); the compare and the blender's shifts use it from rule 8 on.
-* The span's start (`RDP_X_SPAN`; `rdp_top.v` S_AASUB, S_VSET, S_SETUP): the walker's major edge
+* The span's start (`RDP_X_SPAN`; `rdp_top.v` W_SUB, S_VSET, S_SETUP): the walker's major edge
   `ax_h` is captured on the subscanline the attributes are taken on (`unscrx`, `xfrac`); `dif_ram` has an
   attribute's 3/4 of DaDe - DaDy (0 when the edge does not lean away from the walk), made as DaDy is
   read; a row's setup computes `((e & ~0x1FF) + dif - xfrac * ((DaDx >> 8) & ~1)) & ~0x3FF` in a
@@ -304,12 +304,12 @@ mode), `sc_field` and `sc_odd` in `rdp_t`.
   limits and the all-over / all-under flags: about 20 ALUTs; the field mode is done
   (the model's and the RTL's own, with the dither's row: `streams/`
   `scissor_field.rdps`).
-* (not done) `rdp_top.v` S_AASPAN and S_PIX: the span to `lx` included and, in fill and
+* (not done) `rdp_top.v` W_SPAN and S_PIX: the span to `lx` included and, in fill and
   copy mode, every pixel with a full mask (no cut at the scissor's last
   column): about 10 ALUTs. A rectangle in fill or copy mode already reaches
   the scissor's last column (the model's and the RTL's own: `streams/`
   `fill_scissor_edge.rdps`, `copy_scissor_edge.rdps`).
-* (not done) `rdp_top.v`, the rectangle path (S_ROW's fixed columns, S_SETUP's
+* (not done) `rdp_top.v`, the rectangle path (W_ROW's fixed columns, S_SETUP's
   `rect_setup`, S_FILL, `kind_fillmode`): rectangles go through the AA walker
   as triangles with vertical edges and their S, T as two attributes through
   rule 4's span setup; copy mode's group step (a 2- or 3-bit counter gating
@@ -500,10 +500,10 @@ the perspective divide with W = 0, as on the console; untested).
 | 2 rectangle next line | `rdp_top.v` `dy_s`, `dy_t` | done | 0 |
 | 3 1-cycle and copy LOD | `rdp_pix.v` L1 to L3, `rdp_top.v` next row's start | not done | doc: 100 to 160, 100 FFs |
 | 4 attributes: the pixel side, dz code | `rdp_pix.v` P0, `rdp_top.v` S_VSET | done | see docs/rdp.md "Resources" |
-| 4 attributes: the span's start | `rdp_top.v` S_AASUB, S_VSET, S_SETUP | done | |
+| 4 attributes: the span's start | `rdp_top.v` W_SUB, S_VSET, S_SETUP | done | |
 | 8 the depth image's own dz | `rdp_pix.v` P10 to P11b, `rdp_mem.v` hidden phase and depth pass, `rdp_top.v` `rq_hz`, `rzb` | done | ALMS |
 | 5 untextured PERSP | `rdp_pix.v` P4 | done | |
-| 6 edges, rows, spans | `rdp_top.v` AA walker, S_AASPAN, S_PIX | not done (field mode, the CVG_X_ALPHA write rule, fill and copy rectangles at the scissor's edge are) | about even |
+| 6 edges, rows, spans | `rdp_top.v` AA walker, W_SPAN, S_PIX | not done (field mode, the CVG_X_ALPHA write rule, fill and copy rectangles at the scissor's edge are) | about even |
 | 6 rectangles as primitives | `rdp_top.v` the rectangle path | not done | about even |
 | 6 copy mode | `rdp_pix.v` P5b, `rdp_top.v` `cp_m` | done (texture rectangles) | |
 | 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | not done | doc: 60 to 110, 80 to 120 FFs |
