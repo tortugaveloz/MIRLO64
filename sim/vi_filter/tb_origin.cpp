@@ -1,6 +1,6 @@
 // tb_origin: rcp_vi's scan-out base (`base`) for a serrated picture's origins, field by field.
 //
-// A serrated picture of the two pitches that are sent woven (WIDTH 640, WIDTH 1280: n64_video's wv_rq) has the base of its
+// A serrated picture of the pitches that are sent woven (WIDTH 640, 576, 1280: n64_video's wv_rq) has the base of its
 // first field whatever the game writes for the second (one row on): the woven frame is the rows of both. A serrated picture
 // of any other pitch (a 512-pixel picture a row of 512 on a pitch of 1024: the game renders the rows of the field not being
 // shown while the other is) is sent a field at a time: the base is the origin the game wrote for each field, so each field
@@ -39,6 +39,8 @@ int main(int argc, char **argv)
     t->thr = 0x1FFFF; t->tv_def = 0; t->tv_pal = 0; t->sc_line = 0; t->sc_latch = 0; t->wr_s = 0;
     // WIDTH 640, libultra's interlaced hi-res modes: the second field's origin a row (1280 bytes) on: one frame from the first's
     fields("WIDTH 640", 640, 0x100500, 0x100A00, 0x100500, 0x100500);
+    // WIDTH 576 (a 576-pixel picture, Y_SCALE 2.0: libultra's interlaced mode of that size): the second field's a row (1152 bytes) on
+    fields("WIDTH 576", 576, 0x100500, 0x100980, 0x100500, 0x100500);
     // WIDTH 1280 (a pitch of two 640-pixel rows): the second field's a row (1280 bytes) on
     fields("WIDTH 1280", 1280, 0x200000, 0x200500, 0x200000, 0x200000);
     // the buffer swapped each field (a flight game): each field's origin in a buffer of its own -- the base is the first row of each

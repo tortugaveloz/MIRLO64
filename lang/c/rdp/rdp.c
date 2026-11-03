@@ -418,9 +418,9 @@ static const rdp_rgba_t s_no_texel = { 0, 0, 0, 0 };   /* (texture_pass's prev f
 /* The texture filter's YUV -> RGB (SET_CONVERT's K0..K3, the N64's 2K + 1 in 1/256ths), from a texel (U, V, Y, Y) as
  * tmem_fetch gives it: R = Y + K0 V, G = Y + K1 U + K2 V, B = Y + K3 U, A = Y, U and V less 128. Each channel clamped
  * to a byte (the hardware keeps 9 bits; the combiner's (T - K4) * K5 + T, YUV's, clamps the same pixels the same way). */
-static rdp_rgba_t yuv_convert(const rdp_t *r, rdp_rgba_t c)
+static rdp_rgba_t yuv_convert(const rdp_t *r, rdp_rgba_t c, int bias)
 {
-    int u = c.r - 128, v = c.g - 128, y = c.b;
+    int u = c.r - bias, v = c.g - bias, y = c.b;
     int k0 = 2 * r->kc[0] + 1, k1 = 2 * r->kc[1] + 1, k2 = 2 * r->kc[2] + 1, k3 = 2 * r->kc[3] + 1;
     rdp_rgba_t o;
     o.r = (uint8_t)clamp8(y + ((k0 * v + 128) >> 8));
@@ -432,16 +432,16 @@ static rdp_rgba_t yuv_convert(const rdp_t *r, rdp_rgba_t c)
 static inline int tile_yuv(const rdp_tile_t *t) { return t->fmt == 1 && t->size == 2; }
 /* One pass of the texture unit: pass 0 the tile's sample (the first cycle's), pass 1 the next tile's (a 2-cycle pixel's
  * second, rtl/rdp rdp_pix.v's two_pass). A pass whose BI_LERP bit is off converts instead of filtering: the tile's
- * texel at (s0, t0), or with CONVERT_ONE (G_TC_FILTCONV) pass 1 converts pass 0's texel, prev. Only a YUV tile's texel
- * is converted (the bits are 0 -- G_TC_CONV -- in a mode a game never set; another format converted is not seen). */
+ * texel at (s0, t0), or with CONVERT_ONE (G_TC_FILTCONV) pass 1 converts pass 0's texel, prev. Whatever the tile's format:
+ * U and V of a YUV tile's are taken less 128, those of another's (an intensity texel, say: U = V = Y) are as they are, as the
+ * console does (the oracle's: sim/rdp_oracle/streams/convert_texel1.rdps). */
 static rdp_rgba_t texture_pass(const rdp_t *r, int tilei, int32_t s, int32_t t, int pass, rdp_rgba_t prev)
 {
     uint32_t h = r->other_h;
     int one = pass && (h & RDP_H_CONVERT_ONE);
-    int conv = ((h >> RDP_H_CYCLE_SHIFT) & 3) < 2 && !(h & (pass ? RDP_H_BILERP1 : RDP_H_BILERP0))
-               && tile_yuv(&r->tile[(one ? tilei - 1 : tilei) & 7]);
+    int conv = ((h >> RDP_H_CYCLE_SHIFT) & 3) < 2 && !(h & (pass ? RDP_H_BILERP1 : RDP_H_BILERP0));
     if (!conv) return texture_sample(r, tilei, s, t, 0);
-    return yuv_convert(r, one ? prev : texture_sample(r, tilei, s, t, 1));
+    return yuv_convert(r, one ? prev : texture_sample(r, tilei, s, t, 1), tile_yuv(&r->tile[(one ? tilei - 1 : tilei) & 7]) ? 128 : 0);
 }
 #else
 static rdp_rgba_t texture_pass(const rdp_t *r, int tilei, int32_t s, int32_t t, int pass, rdp_rgba_t prev)

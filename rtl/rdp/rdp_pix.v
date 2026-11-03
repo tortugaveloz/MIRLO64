@@ -419,11 +419,13 @@ module rdp_pix (
     reg [3:0]  c5_pal, c6_pal, c7_pal;
     reg [2:0]  c5_fmt, c6_fmt, c7_fmt, c8_fmt;
     reg        c5_yuv, u6_yuv;             // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
-    // the pass converts YUV instead of filtering (rdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
-    // tile's pass, 10 for the next tile's) off; the texel a YUV tile's -- the pass's own, or with CONVERT_ONE (other_h 9) the
-    // second pass converts the first's texel (texA9), and the tile checked is the one before the pass's (the first pass's
-    // without the LOD; with it, as the model, the tile before TEXEL1's whatever TEXEL0's is)
+    // the pass converts instead of filtering (rdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
+    // tile's pass, 10 for the next tile's) off; the texel the pass's own, or with CONVERT_ONE (other_h 9) the second pass
+    // converts the first's texel (texA9). Of a YUV tile's texel U and V are taken less 128 (cvy: the tile it comes from,
+    // the pass's own, or the one before it, the first pass's without the LOD; with it, as the model, the tile before
+    // TEXEL1's whatever TEXEL0's is); another format's are as they are
     reg        conv5, conv6, conv7, conv8, conv8t, conv8b;
+    reg        cvy5, cvy6, cvy7, cvy8, cvy8t, cvy8b;
     reg        u8_size0, u8_size1;
     reg [3:0]  u8_pal;
     reg [2:0]  u8t_fmt;
@@ -677,7 +679,8 @@ module rdp_pix (
         u5_masks <= t_masks; u5_maskt <= t_maskt;
         c5_tmem <= t_tmem; c5_line <= t_line; c5_size <= t_size; c5_pal <= t_pal; c5_fmt <= t_fmt;
         c5_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
-        conv5 <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
+        conv5 <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]);
+        cvy5 <= yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
         vs5r <= vs5; vt5r <= vt5;
         m5r <= m4r;
     end
@@ -733,7 +736,7 @@ module rdp_pix (
         v6 <= v5 & ~rst; ph6 <= ph5;
         // the TMEM addresses of P7
         u6_tmem <= c5_tmem; u6_line <= c5_line; u6_size <= c5_size; u6_yuv <= c5_yuv;
-        conv6 <= conv5; c6_pal <= c5_pal; c6_fmt <= c5_fmt;
+        conv6 <= conv5; cvy6 <= cvy5; c6_pal <= c5_pal; c6_fmt <= c5_fmt;
         s06 <= s0c; s16 <= s1c; t06 <= t0c; t16 <= t1c; fs6 <= fsc; ft6 <= ftc;
     end
 
@@ -767,7 +770,7 @@ module rdp_pix (
     reg [4:0]  fs7, ft7;
     reg        up7;
     always @(posedge clk) begin
-        v7 <= v6 & ~rst; ph7 <= ph6; conv7 <= conv6;
+        v7 <= v6 & ~rst; ph7 <= ph6; conv7 <= conv6; cvy7 <= cvy6;
         c7_pal <= c6_pal; c7_fmt <= c6_fmt; c7_size <= u6_size;
         tm_a0 <= selA6 ? taddr(row0, s06, t06[0]) : taddr(row1, s16, t16[0]);
         tm_a1 <= taddr(row0, s16, t06[0]);
@@ -785,7 +788,7 @@ module rdp_pix (
     reg [4:0]  fs8, ft8;
     reg        up8;
     always @(posedge clk) begin
-        v8 <= v7 & ~rst; ph8 <= ph7; conv8 <= conv7;
+        v8 <= v7 & ~rst; ph8 <= ph7; conv8 <= conv7; cvy8 <= cvy7;
         // the TLUT index
         u8_size0 <= c7_size[0]; u8_size1 <= c7_size[1]; u8_pal <= c7_pal; c8_fmt <= c7_fmt;
         sl0_8 <= sl0_7; sl1_8 <= sl1_7; sl2_8 <= sl2_7;
@@ -811,7 +814,7 @@ module rdp_pix (
     reg [4:0]  fs8t, ft8t;
     reg        up8t;
     always @(posedge clk) begin
-        v8t <= v8 & ~rst; ph8t <= ph8; conv8t <= conv8;
+        v8t <= v8 & ~rst; ph8t <= ph8; conv8t <= conv8; cvy8t <= cvy8;
         // the texel's decode
         u8t_fmt <= c8_fmt; u8t_size <= {u8_size1, u8_size0};
         q0t <= tm_q0; q1t <= tm_q1; q2t <= tm_q2; h0t <= tm_h0; h1t <= tm_h1; h2t <= tm_h2;
@@ -848,7 +851,7 @@ module rdp_pix (
     reg [39:0] e1v8b, e2v8b;                // the edges from the corner to texels 1 and 2, 10 bits a channel
     reg [5:0]  ws8b, wt8b;                  // the weights of those edges (an upper triangle: S fraction, T fraction; a lower one: 32 - T's, 32 - S's)
     always @(posedge clk) begin
-        v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
+        v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t; cvy8b <= cvy8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
         ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, ft8t};
         wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, fs8t};
@@ -891,12 +894,13 @@ module rdp_pix (
     endfunction
     function automatic [31:0] yuv_conv;
         input [31:0] t;
+        input        yuv;               // (a YUV texel's U and V are offset by 128)
         reg signed [8:0]  u, v;
         reg signed [9:0]  k0, k1, k2, k3;
         reg signed [19:0] pr, pg, pb;
         begin
-            u = $signed({1'b0, t[31:24]}) - 9'sd128;
-            v = $signed({1'b0, t[23:16]}) - 9'sd128;
+            u = $signed({1'b0, t[31:24]}) - (yuv ? 9'sd128 : 9'sd0);
+            v = $signed({1'b0, t[23:16]}) - (yuv ? 9'sd128 : 9'sd0);
             k0 = {cv_k03[35:27], 1'b1}; k1 = {cv_k03[26:18], 1'b1}; k2 = {cv_k03[17:9], 1'b1}; k3 = {cv_k03[8:0], 1'b1};
             pr = k0 * v + 20'sd128;
             pg = k1 * u + k2 * v + 20'sd128;
@@ -905,7 +909,7 @@ module rdp_pix (
         end
     endfunction
     reg  [31:0] texA9;
-    wire [31:0] conv9 = yuv_conv((ph8b && other_h[9]) ? texA9 : ta8b);
+    wire [31:0] conv9 = yuv_conv((ph8b && other_h[9]) ? texA9 : ta8b, cvy8b);
     // the texel the pass gives: filtered, or the corner's, or converted; a two_pass pixel's first pass is kept (texA9) for
     // its second, which gives TEXEL1 (tex19; TEXEL0 is tex9)
     wire [31:0] tex_cur = conv8b ? conv9 : point ? ta8b : filt9;
