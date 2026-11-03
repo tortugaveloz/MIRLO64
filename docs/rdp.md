@@ -333,12 +333,15 @@ pixel pipeline empty, so a port that reads while drawing is the loads' write
 port while one runs. The loads write both copies alike.
 
 A pass whose BI_LERP bit is off (BI_LERP_0 for the first cycle, BI_LERP_1 for
-the second) converts a YUV texel instead of filtering it: the texel at the
-coordinates, U and V less 128, with SET CONVERT's K0 to K3 (signed, as
-`2K + 1` 256ths): `R = Y + K0 V`, `G = Y + K1 U + K2 V`, `B = Y + K3 U`, and
-the alpha Y. With CONVERT_ONE the second cycle converts the first cycle's
-texel. Only a YUV tile's texels are converted, and each channel is clamped to
-a byte.
+the second) converts a texel instead of filtering it: the texel at the
+coordinates, with SET CONVERT's K0 to K3 (signed, as `2K + 1` 256ths):
+`R = Y + K0 V`, `G = Y + K1 U + K2 V`, `B = Y + K3 U`, and the alpha Y, with U,
+V and Y the texel's R, G and B. A YUV tile's U and V are taken less 128; the
+texel of any other format goes in as it is (an intensity texel is U = V = Y).
+With CONVERT_ONE the second cycle converts the first cycle's texel, whatever
+its tile's format: a game that reads TEXEL1 in the first combiner cycle with
+CONVERT_ONE set and BI_LERP_1 clear gets that conversion, not the next tile's
+texel. Each channel is clamped to a byte.
 
 ### TEXEL1 and LOD
 

@@ -15,7 +15,7 @@
 //            half-line's bit 0 is not compared: an interlaced mode's two fields both match). libultra's value 2 is the
 //            line 1: 17 lines (a millisecond) before the latch, for the game's retrace handler to write its ORIGIN.
 //   ORIGIN   the scan-out's base: the RDRAM's address, taken by it at its frame boundary. A hi-res picture of the two
-//            pitches sent woven (WIDTH 640 or 1280, `wid_wv`) the game gives as two fields' origins one row of the buffer
+//            pitches sent woven (WIDTH 640, 576 or 1280, `wid_wv`) the game gives as two fields' origins one row of the buffer
 //            apart (libultra: the second is the first + WIDTH * 2 bytes) is one frame of both, from the lower: the
 //            640 x 480 frame -- a write of the base + one row leaves the base as it is. A serrated picture is sent woven,
 //            its 480 rows in order from the base (rtl/soc/n64_video.sv). Any other pitch (WIDTH 1024 with 512 pixels a
@@ -93,11 +93,11 @@ logic        st_px32;                   // STATUS' TYPE 3: 32-bit pixels (a row 
 logic        vs_set, vs_pal;            // V_SYNC has been written; and it names 625 lines (576 or more)
 assign vi_pal = vs_set ? vs_pal : tv_def;
 // a hi-res picture's second field's origin: the base + one row of the 640-pixel picture (1280 bytes), which the base does not follow: with
-// WIDTH 640 (libultra's interlaced modes: Y_SCALE 2.0) that is WIDTH * 2 bytes; with WIDTH 1280 (Donkey Kong 64's: the
+// WIDTH 640 or 576 (libultra's interlaced modes: Y_SCALE 2.0) that is WIDTH * 2 bytes; with WIDTH 1280 (a game's hi-res mode: the
 // buffer's pitch is two rows, Y_SCALE 1.0, so a field is every other row) it is WIDTH bytes
 // (one subtracter: the written origin's distance from the base, mod 2^23, against the two row sizes and, below, against 0)
 wire  [22:0] org_d  = wd[22:0] - org_b;
-wire         wid_wv = wid[11:1] == 11'd320 || wid[11:1] == 11'd640;       // the two pitches of a picture sent woven (n64_video's wv_rq)
+wire         wid_wv = wid[11:1] == 11'd320 || wid[11:1] == 11'd288 || wid[11:1] == 11'd640;       // the pitches of a picture sent woven (n64_video's wv_rq)
 wire         row_up = wid_wv && (org_d == {10'd0, wid, 1'b0} || (|wid[11:10] && org_d == {11'd0, wid}));
 logic [8:0]  nl;
 logic [1:0]  hold;
