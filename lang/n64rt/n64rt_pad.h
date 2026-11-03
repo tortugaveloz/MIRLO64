@@ -12,7 +12,7 @@
  *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
  *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..3 each)
  *          [24:20]  n=6  free
- *          [29:25]  n=7  "R stick dead zone": codes 1..15, menu 0 %..70 % in 5 % steps, threshold 30 % larger; 0 (or above 15) defaults to 13 %
+ *          [29:25]  n=7  "R stick dead zone": codes 1..15, menu 0 %..70 % (the menu offers the odd codes: 10 % steps), threshold 30 % larger; 0 (or above 15) defaults to 13 %
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, and the C buttons' pairs:
  *                        13 C-left+C-right, 14 C-down+C-up, 15 C-down+C-left, 16 C-down+C-right, 17 C-up+C-left, 18 C-up+C-right

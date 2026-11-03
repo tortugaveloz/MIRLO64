@@ -163,6 +163,21 @@ static void slot_look(int virt)
 #endif
 }
 
+/* Who has the cartridge slot: a Game Boy cartridge (the Transfer Pak's) or the Analogizer (docs/analogizer.md). The runtime looks for a Game Boy
+ * cartridge's header once, when the core starts (nothing is driven but the address pins and /RD, for a fraction of a millisecond); there is none -> the
+ * adapter's (there is no setting for it). INTERACT2's bit 31 is the answer
+ * the video output reads; once the adapter owns the port it is not looked at again (a restart of the game does not disturb it), and a Transfer Pak
+ * cartridge is then no cartridge at all: the port is no longer ours. */
+#define AN_OWN        0x80000000u
+static void slot_owner(void)
+{
+    u32 w = apf_interact_interact2_read();
+    if (w & AN_OWN) { s_slot.hw = 0; return; }
+    slot_look(0);
+    if (!s_slot.in) w |= AN_OWN;
+    if (w & AN_OWN) { apf_interact_interact2_write(w); s_slot.hw = 0; s_slot.in = 0; }
+}
+
 static void settle(void) { for (volatile int i = 0; i < 256; i++) { } }
 /* a slot's file size in the core's table (0: no file); `want` sets it, so the
  * Pocket writes that many bytes back to a nonvolatile slot's file */
@@ -225,6 +240,7 @@ void n64rt_pak_init(void)
     s_ch = 0;
     s_slot.hw = gb_cart_id_read() == GBC_ID;
     if (s_slot.hw) gb_cart_ctrl_write(0);
+    if (s_slot.hw) slot_owner();
     for (int ch = 0; ch < NPAK; ch++) {
         s_ch = ch;
         int k = n64rt_pak_kind(ch);

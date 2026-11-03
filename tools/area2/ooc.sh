@@ -50,7 +50,7 @@ module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:
     input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, input wire [11:0] vi_ys, input wire [10:0] vi_nw,
     output wire m_valid, output wire [23:0] m_addr, output wire m_urgent, input wire m_ready, m_rvalid, input wire [31:0] m_rdata, output wire vi_line, vi_frame, vi_latch,
     output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip);
-    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .fps_en(1'b0), .osd_val('0), .*);
+    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .no_weave(1'b0), .fps_en(1'b0), .osd_val('0), .*);
 endmodule
 SV
 ;;
