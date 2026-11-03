@@ -847,7 +847,7 @@ int main(int argc, char **argv)
             if (sys == 20) t->reset = 0;
             t->file_size = slots[t->br_slot < 10 ? t->br_slot : 7].size;         // the core's table, by the slot the program selected
             { const long k = (sys - 200) / 4; t->ia_wr = 0;                            // (the settings: one write each, from 200 cycles in)
-              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 15u; t->ia_data = ia_list[k].second; }
+              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 31u; t->ia_data = ia_list[k].second; }
               else if ((sys & 3) == 0 && k >= (long)ia_list.size() && !ia_q.empty()) {
                   const auto w = ia_q.front(); ia_q.pop_front();
                   t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 15u; t->ia_data = w.second;

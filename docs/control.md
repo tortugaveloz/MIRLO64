@@ -104,8 +104,8 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 
 ## APF_INTERACT
 
-The core's settings: two words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 15) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+The core's settings: three words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
+is `0x1000_0100 + 4n` (n from 0 to 19) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -114,6 +114,7 @@ each setting has an address of its own and needs no mask.
 | `INTERACT_CHANGED0` | `0x04` | R | 1 when the Pocket has written the whole word 0 since the CPU last read `INTERACT0` |
 | `INTERACT1` | `0x08` | RW | Word 1 |
 | `INTERACT_CHANGED1` | `0x0C` | R | The same for word 1 |
+| `INTERACT2` | `0x10` | RW | Word 2: the Analogizer's settings (`docs/analogizer.md`); bit 31 is the runtime's |
 
 | n | `address` | Field | The setting (`pkg/pocket/Cores/tortuga.Mirlo64/interact.json`) |
 |---|---|---|---|
@@ -133,6 +134,7 @@ each setting has an address of its own and needs no mask.
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
+| 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
 
 ## APF_VIDEO
 

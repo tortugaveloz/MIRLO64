@@ -243,17 +243,35 @@ module core_top (
   wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
   wire [15:0] gb_a;
   wire [7:0]  gb_d_o;
-  assign cart_tran_bank3         = gb_a_oe ? gb_a[7:0] : 8'hzz;
-  assign cart_tran_bank3_dir     = gb_a_dir;
-  assign cart_tran_bank2         = gb_a_oe ? gb_a[15:8] : 8'hzz;
-  assign cart_tran_bank2_dir     = gb_a_dir;
-  assign cart_tran_bank1         = gb_d_oe ? gb_d_o : 8'hzz;
-  assign cart_tran_bank1_dir     = gb_d_dir;
+  //
+  // The Analogizer's adapter takes the port instead (docs/analogizer.md) when `an_own` says so (the runtime's decision, at the core's start: a
+  // Game Boy cartridge's header is there or it is not); banks 1-3 are then the video DAC's, driven by rtl/analogizer/an_out.sv, with the
+  // DAC's clock on bank 1's bit 5. Bank 0 and the pins 30 and 31 stay as they are (high, the SNAC port's idle).
+  wire        an_own;
+  wire [2:0]  an_mode;
+  wire [1:0]  an_scan;
+  wire [7:0]  an_bank3, an_bank2;
+  wire [4:0]  an_bank1_b;
+  wire        an_vid_woven_s;         // (the scan-out's, clk_vid)
+  logic       an_vid_woven;
+  always_ff @(posedge clk_vid) an_vid_woven <= an_vid_woven_s;
+  // the settings are the SoC's (clk_sys) and hardly ever change: two flip-flops into the video clock
+  logic [1:0] an_scan_s1, an_scan_s2;
+  always_ff @(posedge clk_vid) begin an_scan_s1 <= an_scan; an_scan_s2 <= an_scan_s1; end
+  logic [2:0] an_mode_s1, an_mode_s2;
+  always_ff @(posedge clk_vid) begin an_mode_s1 <= an_mode; an_mode_s2 <= an_mode_s1; end
+  wire        an_en = an_own && an_mode != 3'd0;      // (the adapter drives banks 1-3; sys-side level: it changes with the settings only)
+  assign cart_tran_bank3         = an_own ? (an_en ? an_bank3 : 8'hzz) : gb_a_oe ? gb_a[7:0] : 8'hzz;
+  assign cart_tran_bank3_dir     = an_own ? an_en : gb_a_dir;
+  assign cart_tran_bank2         = an_own ? (an_en ? an_bank2 : 8'hzz) : gb_a_oe ? gb_a[15:8] : 8'hzz;
+  assign cart_tran_bank2_dir     = an_own ? an_en : gb_a_dir;
+  assign cart_tran_bank1         = an_own ? (an_en ? {2'b00, clk_vid_90deg, an_bank1_b} : 8'hzz) : gb_d_oe ? gb_d_o : 8'hzz;
+  assign cart_tran_bank1_dir     = an_own ? an_en : gb_d_dir;
   assign cart_tran_bank0         = {gb_phi, gb_wr_n, gb_rd_n, gb_cs_n};
   assign cart_tran_bank0_dir     = 1'b1;
   assign cart_tran_pin30         = 1'b0;
   assign cart_tran_pin30_dir     = gb_on ? 1'b0 : 1'bz;   // (off: as the template leaves it)
-  assign cart_pin30_pwroff_reset = gb_on;
+  assign cart_pin30_pwroff_reset = an_own ? an_en : gb_on;
   assign cart_tran_pin31         = 1'bz;
   assign cart_tran_pin31_dir     = 1'b0;
 
@@ -1009,7 +1027,7 @@ module core_top (
       .apf_pad_wa(pad_wa),
       .apf_pad_wd(pad_wd),
 
-      .apf_interact_address(interact_addr),
+      .apf_interact_address(interact_addr[4:0]),
       .apf_interact_data(interact_data),
       .apf_interact_q(interact_q),
       .apf_interact_wr(interact_wr),
@@ -1050,6 +1068,8 @@ module core_top (
       .vga_vsync(vsync),
       .vga_de(de),
       .vga_skip(skip),
+      .vga_woven(an_vid_woven_s),
+      .an_mode(an_mode), .an_scan(an_scan), .an_own(an_own),
 
       .use_jtag(use_jtag_s),
 
@@ -1166,6 +1186,14 @@ module core_top (
   // Outside DE: the scan-out's word for the Pocket -- after a line's DE the scaler slot of the next frame on rgb[14:13]
   // (rtl/soc/n64_video.sv) -- else 0.
   assign video_rgb = de_delay ? rgb_delay : {9'd0, rgb_delay[14:13], 13'd0};
+
+  // The Analogizer's video (rtl/analogizer/an_out.sv): the scan-out's pads in the mode of the setting, on the cartridge port's banks 1-3
+  an_out an_video (
+      .clk(clk_vid), .rst(1'b0),
+      .mode(an_mode_s2), .scanlines(an_scan_s2), .woven(an_vid_woven),
+      .rgb(rgb_delay), .hs(hs_delay), .vs(vs_delay), .de(de_delay), .skip(skip_delay),
+      .bank3(an_bank3), .bank2(an_bank2), .bank1_b(an_bank1_b)
+  );
   // DE exactly where the (one-cycle-delayed) pixels are: 640 a line, the N64 VI's
   // own line (rtl/soc/n64_video.sv), on the 25 MHz pixel clock: a woven frame's pixel a clock, any other's two (the second skipped).
   assign video_de = de_delay;

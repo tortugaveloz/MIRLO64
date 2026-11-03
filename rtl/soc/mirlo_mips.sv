@@ -68,7 +68,7 @@ module mirlo_mips #(
     input  wire          apf_pad_we,
     input  wire    [3:0] apf_pad_wa,
     input  wire   [31:0] apf_pad_wd,
-    input  wire    [3:0] apf_interact_address,
+    input  wire    [4:0] apf_interact_address,
     input  wire   [31:0] apf_interact_data,
     output logic  [31:0] apf_interact_q,
     input  wire          apf_interact_wr,
@@ -109,6 +109,10 @@ module mirlo_mips #(
     output logic   [7:0] vga_b,
     output logic         vga_de,
     output logic         vga_skip,      // (the pixel is not this clock's: the Pocket's video_skip)
+    output logic         vga_woven,     // the frame being sent is a woven 480-line one (31 kHz, a pixel a clock)
+    output wire    [2:0] an_mode,       // the Analogizer's settings (docs/analogizer.md): the video, the scanlines
+    output wire    [1:0] an_scan,
+    output wire          an_own,        // the adapter owns the cartridge port
     output logic   [7:0] vga_g,
     output logic         vga_hsync,
     output logic   [7:0] vga_r,
@@ -425,6 +429,7 @@ mirlo_regs regs (.clk, .rst,
     .ss_save_t(apf_ss_save_t), .ss_load_t(apf_ss_load_t), .ss_done_t(apf_ss_done_t), .ss_err(apf_ss_err), .ss_sup(apf_ss_sup),
     .pad_clk(apf_pad_clk), .pad_we(apf_pad_we), .pad_wa(apf_pad_wa), .pad_wd(apf_pad_wd),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
+    .ia_an_mode(an_mode), .ia_an_scan(an_scan), .ia_an_own(an_own),
     .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
@@ -679,7 +684,7 @@ n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .c
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,
-    .vga_r, .vga_g, .vga_b, .vga_hsync, .vga_vsync, .vga_de, .vga_skip);
+    .vga_r, .vga_g, .vga_b, .vga_hsync, .vga_vsync, .vga_de, .vga_skip, .vga_woven, .no_weave(an_own && an_mode >= 3'd1 && an_mode <= 3'd5));
 assign p_we[0] = 0; assign p_wdata[0] = 0; assign p_be[0] = 4'hF;
 
 endmodule

@@ -59,6 +59,7 @@ BLOCKS = [
         ("INTERACT_CHANGED0", 0x04, R,  1, []),
         ("INTERACT1",         0x08, RW, 1, []),
         ("INTERACT_CHANGED1", 0x0C, R,  1, []),
+        ("INTERACT2",         0x10, RW, 1, []),     # the Analogizer's settings (docs/analogizer.md); [31] is the runtime's: the adapter owns the port
     ]),
     ("APF_VIDEO", 0x0400, [
         # a read clears VBLANK_TRIGGERED (status register: the read strobe clears the flag)

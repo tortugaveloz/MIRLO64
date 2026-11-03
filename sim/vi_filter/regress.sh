@@ -30,7 +30,8 @@ TB_SEQ=0,1,1,0,0 run $T 2 1 30 320
 # (PAL 626) each field, its slot word -- libultra's modes (WIDTH 640, Y_SCALE 2.0), a 1280 pitch (WIDTH 1280, Y_SCALE 1.0, 237 lines), a
 # window, the crop, PAL, the TV system changing; a serrated 240-row buffer (640ps), or another pitch (704s): not a pair of fields, as it is
 run $T 3 0 30 640s; run $T 4 1 30 1280s; run $T 5 0 30 640ps; run $T 6 0 30 704s
-TB_PX0=32 TB_PW=576 run $T 7 0 30 576s    # 576 wide (a 576-pixel window): a pair of fields too
+TB_PX0=32 TB_PW=576 run $T 7 0 30 576s
+TB_NOWEAVE=1 run $T 3 0 30 640s; TB_NOWEAVE=1 run $T 4 1 30 1280s; TB_NOWEAVE=1 run $T 7 0 30 576s    # no_weave: a serrated picture is never woven    # 576 wide (a 576-pixel window): a pair of fields too
 TB_ROWS=237 TB_Y0=1 run $T 2 0 30 1280s; TB_ROWS=237 TB_Y0=1 run $T 6 0 30 640s
 TB_PX0=100 TB_PW=400 TB_Y0=20 TB_ROWS=150 run $T 8 0 30 640s
 TB_CROPV=5 TB_CROPR=1 run $T 8 0 30 1280s
