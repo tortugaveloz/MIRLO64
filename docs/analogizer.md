@@ -115,4 +115,4 @@ RGBHV picture has). The Pocket's own picture stays on.
 
 The Pocket refuses an `interact.json` whose lists have more than about 75 options in all ("Load error in 'interact'", measured on a
 Pocket: 75 loads, 77 does not, 76 untried; the number of entries is not what counts: 15 load). The core's menu is at 75, so a
-new list or option needs another one to give some up (the two stick dead zones stop at 55 % for that).
+new list or option needs another one to give some up (the two stick dead zones go in steps of 10 %, 0 to 70 %, for that: 67 in all).
