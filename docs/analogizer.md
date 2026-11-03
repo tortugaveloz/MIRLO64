@@ -109,6 +109,10 @@ that is the only time it is looked at.
 
 ## Settings
 
-One entry in the core's menu (the Pocket shows 16 at most): "Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NTSC,
+One entry in the core's menu: "Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NTSC,
 Y/C PAL, RGBHV, and RGBHV with scanlines 25 %, 50 %, 75 % (the scanlines dim the odd lines, which only the doubled
 RGBHV picture has). The Pocket's own picture stays on.
+
+The Pocket refuses an `interact.json` whose lists have more than about 75 options in all ("Load error in 'interact'", measured on a
+Pocket: 75 loads, 77 does not, 76 untried; the number of entries is not what counts: 15 load). The core's menu is at 75, so a
+new list or option needs another one to give some up (the two stick dead zones stop at 55 % for that).
