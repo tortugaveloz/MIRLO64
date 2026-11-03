@@ -66,9 +66,9 @@ static int rowerr[480];
 // pixels it is on from the buffer's start -- a serrated picture's odd field's)
 // (a woven frame: its line 2 j + p is the field p's line j -- the row (j Y_SCALE) >> 10 of the field's pitch, WIDTH, from the
 // first field's origin, and one 640-pixel row on for the second: in rows of 640 pixels)
-static unsigned frow(int j) { return wov ? (((unsigned)(j >> 1) * YS) >> 10) * (WB / 640) + (unsigned)(j & 1) : ((unsigned)j * YS) >> 10; }
-static uint16_t pxv(int x, unsigned r) { size_t i = (size_t)r * (wov ? 640 : WB) + (size_t)x; return i < fbw.size() ? fbw[i] : 0; }
-static unsigned hidv(int x, unsigned r) { size_t i = (size_t)r * (wov ? 640 : WB) + (size_t)x; return i < hidw.size() ? hidw[i] : 0; }
+static unsigned frow(int j) { return wov ? (((unsigned)(j >> 1) * YS) >> 10) * (WB == 1280 ? 2 : 1) + (unsigned)(j & 1) : ((unsigned)j * YS) >> 10; }
+static uint16_t pxv(int x, unsigned r) { size_t i = (size_t)r * (wov ? (WB == 1280 ? 640 : WB) : WB) + (size_t)x; return i < fbw.size() ? fbw[i] : 0; }
+static unsigned hidv(int x, unsigned r) { size_t i = (size_t)r * (wov ? (WB == 1280 ? 640 : WB) : WB) + (size_t)x; return i < hidw.size() ? hidw[i] : 0; }
 // a tap of the filters: the pixel (x, line j) of the window's source, in the picture if x >= 0 and the line j is a line of the window
 static bool intap(int x, int j) { return x >= 0 && j >= 0 && j < (int)R; }
 static unsigned cvg(int x, int j) { return (pxv(x, frow(j)) & 1u) << 2 | hidv(x, frow(j)); }
@@ -173,9 +173,9 @@ int main(int argc, char **argv)
     if (WB >= 512) { XS = 0x400; YS = p640 ? 0x400 : 0x800; }
     if (ser && WB == 1280) YS = 0x400;
     ser = ser && WB >= 512;                          // (rcp_vi's il: SERRATE with a hi-res pitch)
-    // a woven frame: a serrated picture of a pair of fields' pitches (WIDTH 640 with Y_SCALE 2.0, or WIDTH 1280 with 1.0): its
-    // 640-pixel rows in order, the window twice the field's lines; any other serrated picture is shown as any picture is
-    wov = ser && ((WB == 640 && !p640) || WB == 1280);
+    // a woven frame: a serrated picture of a pair of fields' pitches (WIDTH 640 or 576 with Y_SCALE 2.0, or WIDTH 1280 with 1.0): its
+    // rows in order, the window twice the field's lines; any other serrated picture is shown as any picture is
+    wov = ser && (((WB == 640 || WB == 576) && !p640) || WB == 1280);
     nofilt = WB >= 512;
     auto env = [](const char *n, unsigned &v, int base) { if (const char *e = getenv(n)) v = (unsigned)strtoul(e, 0, base); };
     env("TB_XS", XS, 16); env("TB_YS", YS, 16); env("TB_PX0", PX0, 10); env("TB_PW", PW, 10); env("TB_Y0", Y0, 10); env("TB_ROWS", R, 10);
@@ -229,7 +229,7 @@ int main(int argc, char **argv)
     int phs = 0;
     // (a woven picture: the first frame is a progressive one, the second the change of timing -- one more)
     const bool blank = getenv("TB_BLANK") && atoi(getenv("TB_BLANK"));
-    const int nfr = (blank ? 2 : 0) + (seq.empty() ? (pal0 ? 5 : 4) : (int)seq.size() + 3) + (ser && ((WB == 640 && !strstr(argc > 4 ? argv[4] : "", "640p")) || WB == 1280) ? 1 : 0);
+    const int nfr = (blank ? 2 : 0) + (seq.empty() ? (pal0 ? 5 : 4) : (int)seq.size() + 3) + (ser && (((WB == 640 || WB == 576) && !strstr(argc > 4 ? argv[4] : "", "640p")) || WB == 1280) ? 1 : 0);
     // the lines of the two systems (sys clocks): NTSC 790 clk_vid x 5 = 3950, nine 788 x 5 = 3940; PAL 800 x 5 = 4000, fifty 792 x 5 = 3960
     // (a woven frame: lines half as long, twice as many, twice as many short: 1975 / 1970 and 2000 / 1980, 528 and 626, 18 and 100)
     const int WV = wov ? 2 : 1;
