@@ -65,10 +65,9 @@ module mirlo_regs (
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
-    output wire  [2:0]  ia_an_mode,         // interact: the Analogizer's video (field 16: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV),
-    output wire         ia_an_poff,         //   "Pocket screen off" (17), "Scanlines" (18: 0 off, 1..3 25, 50, 75 %), the cartridge slot's
-    output wire  [1:0]  ia_an_scan,         //   setting "Cart slot" (19) is the runtime's: INTERACT2's [19:15]; and bit 31, which it sets:
-    output wire         ia_an_own,          //   the adapter owns the port (docs/analogizer.md)
+    output wire  [2:0]  ia_an_mode,         // interact: the Analogizer's video (field 16: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV,
+    output wire  [1:0]  ia_an_scan,         //   7..9 RGBHV with the odd lines 25, 50, 75 % darker: mode 6, scan 1..3), and INTERACT2's bit 31, which the
+    output wire         ia_an_own,          //   runtime sets: the adapter owns the port (docs/analogizer.md)
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
     output wire  [1:0]  ia_crop_l,
@@ -230,9 +229,10 @@ logic        ia_ch0, ia_ch1;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
-assign ia_an_mode = ia2[2:0];
-assign ia_an_poff = ia2[5];
-assign ia_an_scan = ia2[11:10];
+wire [3:0] ia_an_video = ia2[3:0];
+wire       ia_an_dark  = ia_an_video >= 4'd7;
+assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video[2:0];
+assign ia_an_scan = ia_an_dark ? 2'(ia_an_video - 4'd6) : 2'd0;
 assign ia_an_own  = ia2[31];
 always_ff @(posedge clk) begin
     if (rst) begin ia0 <= 0; ia1 <= 0; ia2 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end

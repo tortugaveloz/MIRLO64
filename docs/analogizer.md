@@ -97,9 +97,8 @@ The modules are checked in simulation against the standards, not against an adap
 
 ## Who owns the port
 
-There is no pin that tells an Analogizer from a cartridge. The setting "Cart
-slot" is Auto (default), Analogizer or Game Boy cartridge. In Auto the runtime,
-at the core's start, brings the port up as a Game Boy cartridge's host and
+There is no pin that tells an Analogizer from a cartridge, and no setting for
+it: the runtime, at the core's start, brings the port up as a Game Boy cartridge's host and
 reads its header: the Nintendo logo and the header checksum, the test the Transfer Pak
 code already makes before it trusts a cartridge. If the header is a Game Boy's
 the port stays the cartridge's; if not (an Analogizer, or an empty slot) the
@@ -110,6 +109,6 @@ that is the only time it is looked at.
 
 ## Settings
 
-"Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NTSC, Y/C PAL, RGBHV; with
-"Pocket screen off" (a check: the Pocket's picture is blanked while the
-analog output is on); "Scanlines" (RGBHV only): Off, 25 %, 50 %, 75 %.
+One entry in the core's menu (the Pocket shows 16 at most): "Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NTSC,
+Y/C PAL, RGBHV, and RGBHV with scanlines 25 %, 50 %, 75 % (the scanlines dim the odd lines, which only the doubled
+RGBHV picture has). The Pocket's own picture stays on.

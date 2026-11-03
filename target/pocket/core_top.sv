@@ -247,7 +247,7 @@ module core_top (
   // The Analogizer's adapter takes the port instead (docs/analogizer.md) when `an_own` says so (the runtime's decision, at the core's start: a
   // Game Boy cartridge's header is there or it is not); banks 1-3 are then the video DAC's, driven by rtl/analogizer/an_out.sv, with the
   // DAC's clock on bank 1's bit 5. Bank 0 and the pins 30 and 31 stay as they are (high, the SNAC port's idle).
-  wire        an_own, an_poff;
+  wire        an_own;
   wire [2:0]  an_mode;
   wire [1:0]  an_scan;
   wire [7:0]  an_bank3, an_bank2;
@@ -256,8 +256,8 @@ module core_top (
   logic       an_vid_woven;
   always_ff @(posedge clk_vid) an_vid_woven <= an_vid_woven_s;
   // the settings are the SoC's (clk_sys) and hardly ever change: two flip-flops into the video clock
-  logic [5:0] an_cfg_s1, an_cfg_s2;
-  always_ff @(posedge clk_vid) begin an_cfg_s1 <= {an_own, an_poff, an_scan, 1'b0, 1'b0}; an_cfg_s2 <= an_cfg_s1; end
+  logic [1:0] an_scan_s1, an_scan_s2;
+  always_ff @(posedge clk_vid) begin an_scan_s1 <= an_scan; an_scan_s2 <= an_scan_s1; end
   logic [2:0] an_mode_s1, an_mode_s2;
   always_ff @(posedge clk_vid) begin an_mode_s1 <= an_mode; an_mode_s2 <= an_mode_s1; end
   wire        an_en = an_own && an_mode != 3'd0;      // (the adapter drives banks 1-3; sys-side level: it changes with the settings only)
@@ -1069,7 +1069,7 @@ module core_top (
       .vga_de(de),
       .vga_skip(skip),
       .vga_woven(an_vid_woven_s),
-      .an_mode(an_mode), .an_poff(an_poff), .an_scan(an_scan), .an_own(an_own),
+      .an_mode(an_mode), .an_scan(an_scan), .an_own(an_own),
 
       .use_jtag(use_jtag_s),
 
@@ -1185,12 +1185,12 @@ module core_top (
   assign video_rgb_clock_90 = clk_vid_90deg;
   // Outside DE: the scan-out's word for the Pocket -- after a line's DE the scaler slot of the next frame on rgb[14:13]
   // (rtl/soc/n64_video.sv) -- else 0.
-  assign video_rgb = de_delay ? (an_cfg_s2[4] && an_cfg_s2[5] && an_mode_s2 != 3'd0 ? 24'd0 : rgb_delay) : {9'd0, rgb_delay[14:13], 13'd0};
+  assign video_rgb = de_delay ? rgb_delay : {9'd0, rgb_delay[14:13], 13'd0};
 
   // The Analogizer's video (rtl/analogizer/an_out.sv): the scan-out's pads in the mode of the setting, on the cartridge port's banks 1-3
   an_out an_video (
       .clk(clk_vid), .rst(1'b0),
-      .mode(an_mode_s2), .scanlines(an_cfg_s2[3:2]), .woven(an_vid_woven),
+      .mode(an_mode_s2), .scanlines(an_scan_s2), .woven(an_vid_woven),
       .rgb(rgb_delay), .hs(hs_delay), .vs(vs_delay), .de(de_delay), .skip(skip_delay),
       .bank3(an_bank3), .bank2(an_bank2), .bank1_b(an_bank1_b)
   );

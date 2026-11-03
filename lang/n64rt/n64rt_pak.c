@@ -163,21 +163,18 @@ static void slot_look(int virt)
 #endif
 }
 
-/* Who has the cartridge slot: a Game Boy cartridge (the Transfer Pak's) or the Analogizer (docs/analogizer.md). The setting "Cart slot" (interact.json,
- * INTERACT2[19:15]) is 0 Auto, 1 Analogizer, 2 Game Boy cartridge. Auto looks for a Game Boy cartridge's header once, when the core starts
- * (nothing is driven but the address pins and /RD, for a fraction of a millisecond); there is none -> the adapter's. INTERACT2's bit 31 is the answer
+/* Who has the cartridge slot: a Game Boy cartridge (the Transfer Pak's) or the Analogizer (docs/analogizer.md). The runtime looks for a Game Boy
+ * cartridge's header once, when the core starts (nothing is driven but the address pins and /RD, for a fraction of a millisecond); there is none -> the
+ * adapter's (there is no setting for it). INTERACT2's bit 31 is the answer
  * the video output reads; once the adapter owns the port it is not looked at again (a restart of the game does not disturb it), and a Transfer Pak
  * cartridge is then no cartridge at all: the port is no longer ours. */
 #define AN_OWN        0x80000000u
 static void slot_owner(void)
 {
     u32 w = apf_interact_interact2_read();
-    u32 set = (w >> 15) & 31u;
     if (w & AN_OWN) { s_slot.hw = 0; return; }
-    if (set == 0u) {
-        slot_look(0);
-        if (!s_slot.in) w |= AN_OWN;
-    } else if (set == 1u) w |= AN_OWN;
+    slot_look(0);
+    if (!s_slot.in) w |= AN_OWN;
     if (w & AN_OWN) { apf_interact_interact2_write(w); s_slot.hw = 0; s_slot.in = 0; }
 }
 

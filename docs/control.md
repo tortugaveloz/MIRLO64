@@ -134,10 +134,7 @@ each setting has an address of its own and needs no mask.
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
-| 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV; the scan-out's pads read it) |
-| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Pocket screen off (1: the Pocket's picture is black while the Analogizer's video is on) |
-| 18 | `0x1000_0148` | `INTERACT2[14:10]` | Scanlines (RGBHV: 0 off, 1 25 %, 2 50 %, 3 75 %) |
-| 19 | `0x1000_014C` | `INTERACT2[19:15]` | Cart slot (0 Auto, 1 Analogizer, 2 Game Boy cartridge: the runtime reads it at the start) |
+| 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
 
 ## APF_VIDEO
 
