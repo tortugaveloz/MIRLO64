@@ -97,8 +97,8 @@ def spec(keys, joy, s0, s1):
     smode = (s1 >> 15) & 31
     sx = sy = 0
     if smode in (1, 2):
-        dl, dr = (s1 >> 5) & 31, (s0 >> 25) & 31          # "L stick dead zone" interact1[9:5], "R stick dead zone" interact0[29:25]
-        use = stick(lx, ly, dl) if smode == 1 else stick(rx, ry, dr)
+        dz = (s1 >> 5) & 31                               # "Stick dead zone" interact1[9:5], the same for both sticks
+        use = stick(lx, ly, dz) if smode == 1 else stick(rx, ry, dz)
         if not analog: use = (0, 0)
         if typ != 3 and use == (0, 0):
             sx, sy = dpad_stick()                 # no stick to speak of: the D-pad
@@ -173,8 +173,8 @@ def main():
         for mode in (1, 2):
             for offset in sorted({edge, min(edge + 2, 127), 127}):
                 joy = 0x80808080 | (offset << (0 if mode == 1 else 16))
-                s0 = (code << 25) if mode == 2 else 0
-                s1 = mode << 15 | ((code << 5) if mode == 1 else 0)
+                s0 = 0
+                s1 = mode << 15 | (code << 5)
                 boundary_cases.append((3 << 28, joy, s0, s1))
     cases.extend(boundary_cases)
     inp = ''.join('%x %x %x %x\n' % c for c in cases)
@@ -189,7 +189,7 @@ def main():
                 print('MISMATCH keys %08x joy %08x set0 %08x set1 %08x: C %s %s %s, spec %04x %d %d' % (*c, b, x, y, *want))
     for case, line in zip(boundary_cases, res[len(cases) - len(boundary_cases):]):
         _, x, y = line.split()
-        mode, code = (case[3] >> 15) & 31, ((case[3] >> 5) & 31) if (case[3] >> 15) & 31 == 1 else (case[2] >> 25) & 31
+        mode, code = (case[3] >> 15) & 31, (case[3] >> 5) & 31
         edge = {1: 0, 2: 8, 6: 41, 10: 74, 11: 83, 15: 116, 0: 16}[code]
         offset = ((case[1] >> (0 if mode == 1 else 16)) & 255) - 128
         assert int(y) == 0 and (int(x) == 0 if offset == edge else int(x) > 0)

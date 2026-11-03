@@ -12,12 +12,13 @@
  *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
  *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..3 each)
  *          [24:20]  n=6  free
- *          [29:25]  n=7  "R stick dead zone": codes 1..15, menu 0 %..70 % (the menu offers the odd codes: 10 % steps), threshold 30 % larger; 0 (or above 15) defaults to 13 %
+ *          [29:25]  n=7  free (was "R stick dead zone": the one "Stick dead zone", n=9, serves both sticks)
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, and the C buttons' pairs:
  *                        13 C-left+C-right, 14 C-down+C-up, 15 C-down+C-left, 16 C-down+C-right, 17 C-up+C-left, 18 C-up+C-right
  *                        (C-left Y, C-right X, C-down Select, C-up ZR); the key is the Start only
- *          [9:5]    n=9  "L stick dead zone": as the R stick's
+ *          [9:5]    n=9  "Stick dead zone", for the left and the right stick: codes 1..15, menu 0 %..70 % (the menu offers the odd codes: 10 % steps),
+ *                        threshold 30 % larger; 0 (or above 15) defaults to 13 %
  *          [14:10]  n=10 "C buttons": 0 none (the face buttons only), 1 also the right stick, 2 also the left stick, 3 also the
  *                        D-pad
  *          [19:15]  n=11 "Stick": 0 the D-pad (full deflection), 1 the left analog stick, 2 the right analog stick, 3 none
@@ -196,7 +197,7 @@ static inline void n64rt_pad_map(uint32_t k, uint32_t j, uint32_t set0, uint32_t
         int8_t x = 0, y = 0;
         if (analog) {
             const int sh = mode == 2u ? 16 : 0;
-            const uint32_t dzc = mode == 2u ? (set0 >> 25) & 31u : (set1 >> 5) & 31u;   /* (its stick's dead zone) */
+            const uint32_t dzc = (set1 >> 5) & 31u;                     /* (the dead zone, the same for both sticks) */
             n64rt_pad_stick(j >> sh, dzc, &x, &y);
         }
         sx = x; sy = y;
