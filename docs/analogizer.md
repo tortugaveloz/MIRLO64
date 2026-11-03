@@ -113,6 +113,8 @@ One entry in the core's menu: "Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NT
 Y/C PAL, RGBHV, and RGBHV with scanlines 25 %, 50 %, 75 % (the scanlines dim the odd lines, which only the doubled
 RGBHV picture has). The Pocket's own picture stays on.
 
-The Pocket refuses an `interact.json` whose lists have more than about 75 options in all ("Load error in 'interact'", measured on a
-Pocket: 75 loads, 77 does not, 76 untried; the number of entries is not what counts: 15 load). The core's menu is at 75, so a
-new list or option needs another one to give some up (the two stick dead zones go in steps of 10 %, 0 to 70 %, for that: 67 in all).
+The Pocket's menu has two limits, both measured on a Pocket: it shows only 14 of the core's entries (a 15th loads without
+an error and is silently left out, so "Restart Game" has to stay the 14th, the last), and it refuses an `interact.json`
+whose lists have more than about 75 options in all ("Load error in 'interact'": 75 loads, 77 does not, 76 untried). The
+core's menu has 14 entries and 59 options: the two sticks share one "Stick dead zone" (steps of 10 %, 0 to 70 %) to make
+room for the video entry.
