@@ -18,7 +18,7 @@ module soc_sim_top (
     output wire  [31:0] br_offset, br_length, br_addr,
     input  wire  [31:0] cont1_key, cont2_key, cont3_key, cont4_key,     // the dock's pads: KEY_TYPE in [31:28] (0: none)
     input  wire  [31:0] cont1_joy, cont2_joy, cont3_joy, cont4_joy,
-    input  wire   [3:0] ia_address,         // the Pocket's interact bus (the core's settings: interact.json), INTERACT=<address>:<value>
+    input  wire   [4:0] ia_address,         // the Pocket's interact bus (the core's settings: interact.json), INTERACT=<address>:<value>
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output wire  [12:0] sdram_a,
@@ -95,6 +95,13 @@ wire c0clk, c1clk;
 wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
 wire [15:0] gb_a;
 wire [7:0]  gb_d_o, gb_d_i;
+wire        an_own;
+wire  [2:0] an_mode;
+logic       an_own_d = 1'b0;
+always @(posedge clk_sys) begin     // (the runtime's decision about the cartridge slot: docs/analogizer.md)
+    an_own_d <= an_own;
+    if (an_own != an_own_d) $display("ANALOGIZER: the adapter %s the port (video mode %0d)", an_own ? "owns" : "released", an_mode);
+end
 gb_cart_model gbcart (.clk(clk_sys), .res_n(gb_on), .a_dir(gb_a_dir), .a_oe(gb_a_oe), .a(gb_a), .d_dir(gb_d_dir),
     .d_oe(gb_d_oe), .d_o(gb_d_o), .d_i(gb_d_i), .phi(gb_phi), .wr_n(gb_wr_n), .rd_n(gb_rd_n), .cs_n(gb_cs_n));
 // the APF audio FIFO (core_top's): its fill, flushed, drained at 48 kHz while playing
@@ -139,7 +146,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .cram0_oe_n(), .cram1_oe_n(), .cram0_we_n(), .cram1_we_n(), .cram0_ub_n(), .cram0_lb_n(), .cram1_ub_n(), .cram1_lb_n(),
     .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
     .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
-    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync,
+    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_poff(), .an_scan(), .an_own(an_own),
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),
     .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),
