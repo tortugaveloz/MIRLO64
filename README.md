@@ -4,7 +4,7 @@
 
 MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.7** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.8** and it is experimental: read [Status](#status) before expecting a particular game to work.
 
 ## What is in it
 
@@ -15,13 +15,14 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
 * **Sleep and Memories**: the Pocket's Sleep and its Memories (save states), with every accessory.
+* **Analogizer**: with an Analogizer in the Pocket's cartridge slot, the picture also goes out as RGBS, RGsB, YPbPr, Y/C (NTSC or PAL) or RGBHV, with optional scanlines; the core finds out by itself whether the slot holds the adapter or a Game Boy cartridge ([docs/analogizer.md](docs/analogizer.md)). It is checked in simulation against the video standards, not yet on an adapter.
 * **Accessories and saves**: Controller Pak, Transfer Pak cartridge compatible with physical GB cartridges in the Pocket GB slot, a Transfer Pak SD that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and plays the console's part around it: the PIF, the cartridge, the RCP registers that are not a block of the hardware, the video and audio events, the saves and the save states. It emulates no instruction of the CPU. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
 
 ## Status
 
-MIRLO 64 is experimental and not every game works. What is known of v0.7:
+MIRLO 64 is experimental and not every game works. What is known of v0.8:
 
 * ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
@@ -68,6 +69,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | Controller 2 pak | **None**, Transfer Pak SD | A second Transfer Pak SD, in controller 2 (a pad that is there, with nothing pressed, when the dock has none), chosen and loaded in the same two steps: its Game Boy game is "Load Transfer Pak 2", and the same for its save; with no game loaded there the pak has no cartridge, as pak 1 has none with no game loaded. Set it before the game starts, as a game looks for its controllers then |
 | Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
+| Stick dead zone | 0 %, **10 %**, 20 % ... 70 % | How far a stick has to move before the N64 sees it, for both sticks |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
 | Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
 | L button | **None**, L, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's L |
@@ -75,6 +77,7 @@ The core's own menu on the Pocket. The default of each is in bold.
 | C buttons | **None**, L stick, R stick | A stick as the C buttons, besides the face buttons |
 | Start button | None, **Start**, Select+Start | The Pocket's button for Start; the Start key it leaves (alone with Select+Start, or with None) is C-up |
 | Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
+| Analogizer video | **Off**, RGBS, RGsB, YPbPr, Y/C NTSC, Y/C PAL, RGBHV, RGBHV with scanlines 25 %, 50 %, 75 % | The analog picture on an Analogizer in the cartridge slot ([docs/analogizer.md](docs/analogizer.md)); the Pocket's own screen stays on |
 | Restart Game | (an action) | Starts the game over, as a console switched off and on, with everything the Pocket loaded as it is (the ROM, the saves, the Transfer Paks' Game Boy games). It is the last entry. For a game that looks at its Transfer Pak only when it starts: load the Game Boy game with Load Transfer Pak 1 (or 2) while the N64 game runs, then choose Restart Game. A game that looks at its pak again at its menus needs no restart. Nothing restarts by itself ([Restart Game](docs/mips.md#restart-game)) |
 
 ### Saves
@@ -114,7 +117,7 @@ python3 tools/mips_inits.py                                 # the images the bit
 python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
 
 make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.7.zip
+python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.8.zip
 ```
 
 **The fitter's seed matters.** The design fills about 97 % of the FPGA's logic (the ALMs of each recorded fit are in `projects/fits.json`) and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
