@@ -333,7 +333,9 @@ runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit opera
 ### The FPU
 
 `fpu_n64.sv` is the VR4300's COP1 in single precision: 32 registers of 32 bits, a double being an even / odd pair. A
-double operand is converted to a float and a double result is the float widened back. Results and inputs below the
+double operand is converted to a float and a double result is the float widened back, but for the compares (`c.cond.d`), which
+order the doubles' own 64 bits (a game's display-list optimiser may compare 64-bit commands as doubles to drop the ones that repeat; as
+floats, the `G_TEXTURE` commands that turn textures on and off, both out of a float's range, looked equal and the change was dropped). Results and inputs below the
 normals are 0 (as the VR4300 with FCR31's FS bit set), but for a single's compare, which orders them exactly as the
 VR4300 does (it neither flushes nor traps them there; software keeps pointers in float registers and tests them against
 0.0, and every KSEG0 address below 8 MiB is a denormal); a NaN result is `0x7FBFFFFF`, and the conversions to an integer
