@@ -1,6 +1,9 @@
 /* The FPU's 64-bit moves and conversions as mips_core / fpu_n64 do them without FP64: dmtc1 then dmfc1 (a 64-bit
  * register through an even/odd pair and back), cvt.d.l (a 64-bit integer to a double, through a float), trunc.l.s (a
- * float to a 64-bit integer, as to a word, sign-extended). Prints PASS or the failures on the UART, then a 0x04.
+ * float to a 64-bit integer, as to a word, sign-extended), and c.eq.d, c.lt.d, c.le.d, which compare the doubles' own 64
+ * bits (not their conversions to float: a game that compares 64-bit display-list commands as doubles to find the ones
+ * that repeat took d7000002ffffffff for d7000000ffffffff, both out of a float's range). Prints PASS or the failures on
+ * the UART, then a 0x04.
  * ROM=<any file> obj/tb_soc build/fpu64_test.bin -c 30. */
 #include <stdint.h>
 #include <generated/csr.h>
@@ -51,6 +54,32 @@ int main(void)
                 "move %0, $11; move %1, $10\n .set pop\n"
                 : "=r"(h), "=r"(l) : "r"(f[i]) : "$8", "$10", "$11");
             check("trunc.l.s", h, l, want[i][0], want[i][1]);
+        }
+    }
+    {                                                    /* c.eq.d, c.lt.d, c.le.d on doubles that a float cannot tell apart */
+        static const uint32_t dp[][4] __attribute__((aligned(8))) = {      /* a (hi, lo), b (hi, lo) */
+            {0xd7000000, 0xffffffff, 0xd7000002, 0xffffffff},   /* both below -2^128: a is above b */
+            {0x3ff00000, 0x00000000, 0x3ff00000, 0x00000001},   /* one unit in the last place */
+            {0x3ff00000, 0x10000000, 0x3ff00000, 0x10000001},
+            {0x00000000, 0x00000000, 0x80000000, 0x00000000},   /* +0 and -0 */
+            {0x7ff80000, 0x00000000, 0x3ff00000, 0x00000000},   /* a NaN */
+            {0x40090000, 0x00000000, 0x40090000, 0x00000000},   /* equal */
+            {0xc0090000, 0x00000000, 0x40090000, 0x00000000},   /* -3 and 3 */
+            {0x7ff00000, 0x00000000, 0x47f00000, 0x00000000},   /* +inf and 2^128 */
+        };
+        /* eq, lt, le of (a, b) */
+        static const unsigned char want[][3] = { {0,0,0}, {0,1,1}, {0,1,1}, {1,0,1}, {0,0,0}, {1,0,1}, {0,1,1}, {0,0,0} };
+        for (unsigned i = 0; i < 8; i++) {
+            uint32_t r[3];
+            __asm__ volatile(".set push; .set mips3; .set noreorder\n"
+                "ld $8, 0(%3)\n ld $9, 8(%3)\n .word 0x44A82000\n .word 0x44A93000\n nop\n nop\n"
+                ".word 0x46262032\n nop\n nop\n .word 0x444AF800\n nop\n srl %0, $10, 23\n"        /* c.eq.d f4, f6; cfc1 */
+                ".word 0x4626203C\n nop\n nop\n .word 0x444AF800\n nop\n srl %1, $10, 23\n"        /* c.lt.d */
+                ".word 0x4626203E\n nop\n nop\n .word 0x444AF800\n nop\n srl %2, $10, 23\n .set pop\n"   /* c.le.d */
+                : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]) : "r"(dp[i]) : "$8", "$9", "$10", "memory");
+            check("c.eq.d", 0, r[0] & 1, 0, want[i][0]);
+            check("c.lt.d", 0, r[1] & 1, 0, want[i][1]);
+            check("c.le.d", 0, r[2] & 1, 0, want[i][2]);
         }
     }
     puts_(fails ? "FAILED\n" : "PASS\n");

@@ -486,6 +486,17 @@ function automatic logic iszero(input fbits_t x); return {x.e, x.f} == 31'd0; en
 // (FAST) S_PRE's: the operands' magnitudes, ordered and equal
 wire pre_lt = {ax.e, ax.f} < {ay.e, ay.f}, pre_eq = {ax.e, ax.f} == {ay.e, ay.f};
 
+// c.cond.d compares the doubles' own 64 bits, not their conversions to float (two doubles that differ below a float's
+// precision, or above its range, would be equal: a game that compares 64-bit commands as doubles to find the ones that
+// repeat would take a changed one for a repeat). The pairs as S_IDLE read them:
+logic [31:0] rxl, rxh, ryl, ryh;
+wire         dc_nx = rxh[30:20] == 11'h7FF && {rxh[19:0], rxl} != 52'd0, dc_ny = ryh[30:20] == 11'h7FF && {ryh[19:0], ryl} != 52'd0;
+wire [62:0]  dc_mx = {rxh[30:0], rxl}, dc_my = {ryh[30:0], ryl};
+wire         dc_zx = dc_mx == 63'd0, dc_zy = dc_my == 63'd0;
+wire         dc_un = dc_nx || dc_ny;
+wire         dc_eq = !dc_un && ((dc_zx && dc_zy) || (dc_mx == dc_my && rxh[31] == ryh[31]));
+wire         dc_lt = !dc_un && !(dc_zx && dc_zy) && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? dc_mx > dc_my : dc_mx < dc_my);
+
 // ============================================================ the FSM
 always_ff @(posedge clk) begin
     if (rst) begin
@@ -494,6 +505,7 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
+        rxl <= xe; rxh <= xo; ryl <= ye; ryh <= yo;
         if (FAST) begin
             // a double's operands are unpacked (d2f) in S_UNPX and S_UNPY; the others' are only flushed (a compare's and an integer's
             // are not), as they are read
@@ -535,6 +547,7 @@ always_ff @(posedge clk) begin
             un = isnan(ax) || isnan(ay);
             eq = !un && ((iszero(ax) && iszero(ay)) || (pre_eq && ax.s == ay.s));
             lt = !un && !(iszero(ax) && iszero(ay)) && (ax.s != ay.s ? ax.s : (ax.s ? !pre_lt && !pre_eq : pre_lt));
+            if (sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
             st <= S_DONE;
         end
@@ -558,6 +571,7 @@ always_ff @(posedge clk) begin
             un = nx || ny;
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
+            if (sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
         end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
