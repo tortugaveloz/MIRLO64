@@ -4,7 +4,6 @@ An original system-on-chip written in SystemVerilog, with a VR4300-class MIPS CP
 
 Put the ROMs (.z64, big-endian) in Assets/n64/common/ and launch the core. Saves (EEPROM, SRAM, FlashRAM) and the Controller Pak are kept in Saves/n64/.
 
-The core also appears under GB and GBC so that the Transfer Pak works. For example, with Pokemon Stadium: start Pokemon Stadium, load the Game Boy game with Load Transfer Pak 1, select Transfer Pak SD in Controller 1 pak, and press Restart Game.
-
+The core also appears under GB and GBC so that the Transfer Pak works.
 Experimental: not every game works yet. Reports are welcome at:
 https://github.com/tortugaveloz/MIRLO64
