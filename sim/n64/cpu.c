@@ -292,9 +292,17 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
             case 0x25: fl_set(c, fd, f2l(fround(x, c->fcr31 & 3))); goto fpu_done;         /* cvt.l */
             default:
                 if (f >= 0x30) {                                                    /* c.cond */
-                    if (!dbl) { x = rx; y = ry; }
-                    int un = x != x || y != y;
-                    int cond = ((f & 1) && un) || ((f & 2) && !un && x == y) || ((f & 4) && !un && x < y);
+                    int un, eq, lt;
+                    if (dbl) {                                                      /* the doubles' own 64 bits */
+                        uint64_t xb = (uint64_t)c->f[(fs & ~1) + 1] << 32 | c->f[fs & ~1], yb = (uint64_t)c->f[(ft & ~1) + 1] << 32 | c->f[ft & ~1];
+                        double dx, dy;
+                        memcpy(&dx, &xb, 8); memcpy(&dy, &yb, 8);
+                        un = dx != dx || dy != dy; eq = dx == dy; lt = dx < dy;
+                    } else {
+                        x = rx; y = ry;
+                        un = x != x || y != y; eq = x == y; lt = x < y;
+                    }
+                    int cond = ((f & 1) && un) || ((f & 2) && !un && eq) || ((f & 4) && !un && lt);
                     c->fcr31 = cond ? (c->fcr31 | 0x00800000u) : (c->fcr31 & ~0x00800000u);
                     goto fpu_done;
                 }
