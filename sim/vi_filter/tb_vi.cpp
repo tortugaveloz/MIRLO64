@@ -219,13 +219,6 @@ int main(int argc, char **argv)
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
     for (int i = 0; i < 200; i++) tick();
     t->rst = 0; t->rst_vid = 0;
-    if (getenv("TB_NOWEAVE")) {     // no_weave (an analog 15 kHz output): a serrated picture goes out field by field, 240 lines, never woven
-        t->no_weave = 1;
-        long woven = 0, vs_edges = 0; int pv = 0;
-        for (long i = 0; i < 5 * 1042710L; i++) { tick(); woven += t->vga_woven; if (t->vga_vsync && !pv) vs_edges++; pv = t->vga_vsync; }
-        printf("no_weave: %s (%ld woven clocks, %ld vsyncs in 5 fields)\n", woven == 0 && vs_edges >= 4 ? "PASS" : "FAIL", woven, vs_edges);
-        return woven == 0 && vs_edges >= 4 ? 0 : 1;
-    }
     // frames off the pads
     std::vector<std::vector<int>> rows; std::vector<int> row;
     int pde = 0, pvs = 0, frames = 0, errs = 0, outside = 0;

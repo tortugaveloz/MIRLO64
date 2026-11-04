@@ -139,9 +139,6 @@
 #define CSR_APF_INTERACT_INTERACT_CHANGED1_OFS 0x30c
 #define CSR_APF_INTERACT_INTERACT_CHANGED1_ADDR (CSR_BASE + 0x30c)
 #define CSR_APF_INTERACT_INTERACT_CHANGED1_SIZE 1
-#define CSR_APF_INTERACT_INTERACT2_OFS 0x310
-#define CSR_APF_INTERACT_INTERACT2_ADDR (CSR_BASE + 0x310)
-#define CSR_APF_INTERACT_INTERACT2_SIZE 1
 
 /* APF_VIDEO */
 #define CSR_APF_VIDEO_BASE (CSR_BASE + 0x400)
@@ -460,8 +457,6 @@ static inline uint32_t apf_interact_interact_changed0_read(void) { return csr_re
 static inline uint32_t apf_interact_interact1_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT1_ADDR); }
 static inline void apf_interact_interact1_write(uint32_t v) { csr_write_simple(v, CSR_APF_INTERACT_INTERACT1_ADDR); }
 static inline uint32_t apf_interact_interact_changed1_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT_CHANGED1_ADDR); }
-static inline uint32_t apf_interact_interact2_read(void) { return csr_read_simple(CSR_APF_INTERACT_INTERACT2_ADDR); }
-static inline void apf_interact_interact2_write(uint32_t v) { csr_write_simple(v, CSR_APF_INTERACT_INTERACT2_ADDR); }
 
 /* APF_VIDEO */
 static inline uint32_t apf_video_video_read(void) { return csr_read_simple(CSR_APF_VIDEO_VIDEO_ADDR); }
