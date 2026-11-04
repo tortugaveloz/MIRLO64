@@ -15,7 +15,7 @@ It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and 
 * **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
 * **Controllers**: up to four through the Dock, controls are customizable.
 * **Sleep and Memories**: the Pocket's Sleep and its Memories (save states), with every accessory.
-* **Analogizer**: with an Analogizer in the Pocket's cartridge slot, the picture also goes out as RGBS, RGsB, YPbPr, Y/C (NTSC or PAL) or RGBHV, with optional scanlines; the core finds out by itself whether the slot holds the adapter or a Game Boy cartridge ([docs/analogizer.md](docs/analogizer.md)). It is checked in simulation against the video standards, not yet on an adapter.
+* **Analogizer**: with an Analogizer in the Pocket's cartridge slot, the picture also goes out as RGBS, RGsB, YPbPr, Y/C (NTSC or PAL) or RGBHV, with optional scanlines; the core finds out by itself whether the slot holds the adapter or a Game Boy cartridge ([docs/analogizer.md](docs/analogizer.md)).
 * **Accessories and saves**: Controller Pak, Transfer Pak cartridge compatible with physical GB cartridges in the Pocket GB slot, a Transfer Pak SD that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
 
 A small runtime, `n64rt.sys`, loads the game and plays the console's part around it: the PIF, the cartridge, the RCP registers that are not a block of the hardware, the video and audio events, the saves and the save states. It emulates no instruction of the CPU. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
