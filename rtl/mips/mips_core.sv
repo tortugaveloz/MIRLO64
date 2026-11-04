@@ -1410,6 +1410,12 @@ always_comb begin
 end
 
 wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
+// MON: the game's own access to CP0 -- an instruction of its code, in the game's view. The VR4300's unused registers (7, 21-25, 31) hold
+// nothing of their own: a write goes to a latch that any CP0 write loads, and a read gives the latch. Here register 7 (MCTL) and 22, 23
+// are the monitor's, and the game's code must not reach them.
+wire m_gacc = MON && mon_game && !c0_status[2] && n64code(m_pc, game_view);
+logic [31:0] c0_latch;
+wire c0_unused = m_insn[15:11] == 5'd7 || (m_insn[15:11] >= 5'd21 && m_insn[15:11] <= 5'd25) || m_insn[15:11] == 5'd31;
 logic [31:0] c0_rd;
 always_comb begin
     case (m_insn[15:11])
@@ -1431,6 +1437,7 @@ always_comb begin
     5'd28: c0_rd = c0_taglo;   5'd30: c0_rd = c0_errorepc;
     default: c0_rd = 32'd0;
     endcase
+    if (m_gacc && c0_unused) c0_rd = c0_latch;
 end
 
 // interrupts: taken before the instruction at M (not while a slow access is under way)
@@ -1938,7 +1945,7 @@ always_ff @(posedge clk) begin
         c0_watchhi <= 0; c0_taglo <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
-        hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
+        hilo_soft <= 0; c0_latch <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_STEP; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
         ms <= MS_IDLE; ms_cnt <= 0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
@@ -2040,6 +2047,7 @@ always_ff @(posedge clk) begin
             // back. Report an invalid tag to cache-walking writeback code.
             if (m_c.cache && m_insn[20:16] == 5'h05) c0_taglo <= 0;
             if (m_c.mtc0) begin
+                if (m_gacc) c0_latch <= m_st_lo;
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
                 5'd9:  begin c0_count <= m_st_lo; count_frac <= 1'b0; end   // (a write starts Count's half-rate phase again, as the VR4300's)
@@ -2058,7 +2066,7 @@ always_ff @(posedge clk) begin
                              if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
                 5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
                 5'd6:  begin c0_wired <= m_st_lo & 32'h3F; c0_random <= 5'd31; end
-                5'd7:  begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8];
+                5'd7:  if (!m_gacc) begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8];
                              if (MON && m_st_lo[11]) mon_mem4 <= m_st_lo[10];          // (bit 11: the write is of bit 10)
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)

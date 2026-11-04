@@ -476,6 +476,10 @@ Count runs at half the CPU's clock, 46.875 MHz, as the VR4300's. Cause.IP2 is th
 | 13 (Cause) | BD and ExcCode are writable by `mtc0` while ERL is set |
 | 4 (Context) | BadVPN2 is writable by `mtc0` while ERL is set |
 
+Registers 7, 22 and 23 are the monitor's: the game's own code (an instruction of the game's view, with GAME set and ERL clear) does not reach
+them. The VR4300's unused registers (7, 21 - 25, 31) hold nothing; a write to one, and a write by the game to any register, loads a latch,
+and a game's read of one gives the latch (the value of the last write, whichever register took it), as on the console.
+
 With the tables, while GAME is set, `tlbwi`, `tlbwr`, `tlbr` and `tlbp` are Reserved Instructions for the monitor level. The
 three `mtc0` enables let the monitor do what the VR4300 does itself for a `tlbp` that finds nothing and for a TLB exception it
 delivers to the game; with the TLB, Index's P bit and BadVAddr are written by the monitor level to put a save state back.
