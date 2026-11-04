@@ -1142,11 +1142,41 @@ u32 n64rt_osAiGetStatus(void);
 static int rcp_read(u32 pa, u32 *v);
 static int rcp_write(u32 pa, u32 v);
 #endif
+#ifdef N64RT_ISV
+/* A test build (ISV=1): the IS-Viewer 64's window in the cartridge space, whose text a conformance ROM prints; each flush is
+ * written to the UART between @ISV< and >ISV@ for the simulation to collect. Not in the released runtime. A test's failure
+ * messages beyond 6 a group are counted, not printed (the UART is the simulation's bottleneck). */
+static u32 s_isv[0x400];
+static u32 s_isv_fails, s_isv_dropped; static int s_isv_dropping;
+static void isv_flush_dropped(void)
+{
+    if (s_isv_dropped) printf("\n@ISV<[%lu more failure messages suppressed]\n>ISV@\n", (unsigned long)s_isv_dropped);
+    s_isv_dropped = 0;
+}
+static void isv_write(u32 pa, u32 v)
+{
+    s_isv[(pa & 0xFFFu) >> 2] = v;
+    if ((pa & 0xFFFu) != 0x14u) return;
+    char b8[8]; for (u32 i = 0; i < 8u; i++) b8[i] = (char)((s_isv[8 + (i >> 2)] >> (24 - 8 * (i & 3u))) & 0xFFu);
+    int is_run = v == 8u && !memcmp(b8, "Running ", 8), is_test = v >= 6u && !memcmp(b8, "Test '", 6);
+    if (b8[0] == 'n' && b8[1] == '6' && b8[2] == '4' && b8[3] == '-' && v > 16u) { isv_flush_dropped(); s_isv_dropping = 0; }
+    else if (is_run) { isv_flush_dropped(); s_isv_fails = 0; s_isv_dropping = 0; }
+    else if (is_test) { s_isv_fails++; s_isv_dropping = s_isv_fails > 6u; if (s_isv_dropping) s_isv_dropped++; }
+    if (!s_isv_dropping) {
+        printf("\n@ISV<");
+        for (u32 i = 0; i < v && i < 0x1000u - 0x20u; i++) putchar((s_isv[8 + (i >> 2)] >> (24 - 8 * (i & 3u))) & 0xFFu);
+        printf(">ISV@\n");
+    }
+}
+#endif
 int n64rt_hw_read(u32 addr, u32 *v)
 {
     u32 pa = addr & 0x1FFFFFFFu;
 #ifdef N64RT_OWN
     if (rcp_read(pa, v)) return 1;
+#endif
+#ifdef N64RT_ISV
+    if (pa >= 0x13FF0000u && pa < 0x13FF1000u) { *v = s_isv[(pa & 0xFFFu) >> 2]; return 1; }
 #endif
     if (pa >= 0x10000000u && pa < 0x1FC00000u) {                /* the cartridge: the ROM */
         u32 off = pa - 0x10000000u;
@@ -1197,6 +1227,9 @@ int n64rt_hw_write(u32 addr, u32 v)
     u32 pa = addr & 0x1FFFFFFFu;
 #ifdef N64RT_OWN
     if (rcp_write(pa, v)) return 1;
+#endif
+#ifdef N64RT_ISV
+    if (pa >= 0x13FF0000u && pa < 0x13FF1000u) { isv_write(pa, v); return 1; }
 #endif
     if (si_write(pa, v)) { si_note(); return 1; }
 #ifdef N64RT_RSP

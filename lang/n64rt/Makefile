@@ -8,6 +8,7 @@
 #   -> lang/n64rt/build/n64rt.bin, which is released as n64rt.sys (cp build/n64rt.bin n64rt.sys)
 #
 #   GBTRACE=1: a test build that keeps the Game Boy save's messages (n64rt_trace.c) in Saves/gbc/common/mirlo_trace.txt.
+#   ISV=1: a test build that takes the IS-Viewer 64's window (0x13FF0000) and prints its text on the UART, for conformance ROMs.
 #   GAME_MEM=<bytes>: the RDRAM the game sees (8 MiB by default). DEBUG=1, PADLOG=1 ...: n64rt.mk's switches.
 MIRLO   ?= $(abspath ../..)
 RSP     := 1
@@ -19,7 +20,7 @@ OBJECTS  = $(BUILD)/main.o $(N64RT_OBJECTS)
 .DEFAULT_GOAL := all
 include $(RT)/n64rt.mk
 include $(MIRLO)/lang/mips/program.mk
-CFLAGS  += -O2 -g -Wall -Wextra -Wno-unused-parameter -I$(RT) $(if $(GAME_MEM),-DGAME_MEM=$(GAME_MEM)u)
+CFLAGS  += -O2 -g -Wall -Wextra -Wno-unused-parameter -I$(RT) $(if $(GAME_MEM),-DGAME_MEM=$(GAME_MEM)u) $(if $(ISV),-DN64RT_ISV)
 # (the ROM is at 1 MiB: the program and its boot stack stay below it)
 MIPS_LDFLAGS += --defsym=_fstack=0x400FFFF0
 
