@@ -1,3 +1,9 @@
+// the console's RDP uses one combiner and one blender for both cycles of the 2-cycle mode (docs/rdp.md); RDP_NOSHARE: one of each per cycle
+`ifndef RDP_NOSHARE
+`ifndef RDP_SHARE
+`define RDP_SHARE
+`endif
+`endif
 // RDP pixel pipeline: lang/c/rdp/rdp.c draw_pixel() built with RDP_N64, one
 // pixel per clock, no stalls (every operand is on chip: TMEM and the span's
 // line buffers). Stage by stage the arithmetic is the model's; the model is
