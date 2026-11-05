@@ -193,6 +193,8 @@ module mips_core #(
     parameter int UNC_PAD = 0,
     // and an uncached load of the game's RDRAM answers no sooner than this many cycles after it asked (the console's median is 32 in all)
     parameter int UNC_MIN = 0,
+    // Random steps once for every instruction that retires (as the VR4300's does), not every cycle; a read sees the value after its own step
+    parameter bit RND_RETIRE = 0,
     // MI: and the VI's block (0x0440_0000..: rtl/soc/rcp_vi.sv) the same way
     parameter bit VIW = 0,
     // MI: and the AI's block (0x0450_0000..: rtl/soc/rcp_ai.sv)
@@ -596,7 +598,7 @@ logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wir
 logic        count_frac;
 logic [4:0]  c0_random;                     // decrements every step, from 31 down to Wired
 wire  [4:0]  rnd_dec = (c0_random <= c0_wired[4:0]) ? 5'd31 : c0_random - 5'd1;
-wire  [4:0]  rnd_now = SIM_COUNT_RETIRE ? rnd_dec : c0_random;   // (the model steps before executing)
+wire  [4:0]  rnd_now = (SIM_COUNT_RETIRE || RND_RETIRE) ? rnd_dec : c0_random;   // (the model steps before executing)
 logic        ll_bit;
 logic        fcc;
 
@@ -1988,11 +1990,12 @@ always_ff @(posedge clk) begin
         ras_t <= '0; ras_n <= '0;
     end else begin
         // ---------------------------------------------------- Count / Compare
+        if (RND_RETIRE && (m_commit || m_take_exc)) c0_random <= rnd_dec;
         begin
             logic step;
             step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
             if (step) begin
-                c0_random <= rnd_dec;
+                if (!RND_RETIRE) c0_random <= rnd_dec;
                 count_frac <= !count_frac;
                 if (count_frac) begin
                     c0_count <= c0_count + 32'd1;
