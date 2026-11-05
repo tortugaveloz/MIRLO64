@@ -1309,6 +1309,10 @@ logic [2:0]  ms_cnt;
 logic [7:0]  ms_age;                         // cycles since a load's miss began (DMISS_MIN)
 logic        ms_all;                         // the line's last word is in
 wire         unc_game = m_ld && !m_wide && m_addr[31:23] == 9'h140;
+// the cycles since the access began, with this one, have reached a floor (the sum in 9 bits: ms_age stops at 255, and 255 + 1 in 8 bits is 0)
+function automatic logic age_ok(input int floor_c);
+    return {1'b0, ms_age} + 9'd1 >= 9'(floor_c);
+endfunction
 wire         unc_hold = (UNC_PAD != 0) && ms == MS_SLOW_A && m_ld && m_addr[31:23] == 9'h140 && ms_age < 8'(UNC_PAD);
 
 wire [31:0] dc_qm = {sb_hit && sb_strb[3] ? sb_data[31:24] : dc_q[31:24],
@@ -2454,10 +2458,10 @@ always_ff @(posedge clk) begin
 `ifdef MIRLO_LAT_TRACE
                     $display("[lat] dmiss %0d", ms_age);
 `endif
-                    if (ms_age + 8'd1 >= 8'(DMISS_MIN)) ms <= MS_REREAD;
+                    if (age_ok(DMISS_MIN)) ms <= MS_REREAD;
                 end
             end
-            else if (ms_all && ms_age + 8'd1 >= 8'(DMISS_MIN)) ms <= MS_REREAD;
+            else if (ms_all && age_ok(DMISS_MIN)) ms <= MS_REREAD;
         end
         MS_REREAD: ms <= MS_IDLE;
         MS_SLOW_A: if (m_sw) begin                   // (XWB) a store: out by st_*
@@ -2469,9 +2473,9 @@ always_ff @(posedge clk) begin
         end
         else if (port == P_SLOW && slow_d_own && port_done) begin
             if (m_wide) begin if (BIG) ms_data[63:32] <= mem_rdata; else ms_data[31:0] <= mem_rdata; ms <= MS_SLOW_B; end
-            else begin ms_data[31:0] <= mem_rdata; ms <= (UNC_MIN != 0 && unc_game && ms_age + 8'd1 < 8'(UNC_MIN)) ? MS_UWAIT : MS_DONE; end
+            else begin ms_data[31:0] <= mem_rdata; ms <= (UNC_MIN != 0 && unc_game && !age_ok(UNC_MIN)) ? MS_UWAIT : MS_DONE; end
         end
-        MS_UWAIT: if (ms_age + 8'd1 >= 8'(UNC_MIN)) ms <= MS_DONE;
+        MS_UWAIT: if (age_ok(UNC_MIN)) ms <= MS_DONE;
         MS_SLOW_B: if (m_sw) begin if (m_sw_push) ms <= MS_DONE; end
         else if (port == P_SLOW && slow_d_own && port_done) begin
             if (BIG) ms_data[31:0] <= mem_rdata; else ms_data[63:32] <= mem_rdata; ms <= MS_DONE;
