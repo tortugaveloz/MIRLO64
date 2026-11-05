@@ -191,6 +191,8 @@ module mips_core #(
     parameter int DMISS_MIN = 0,
     // an uncached load of the game's RDRAM waits this many cycles before it asks (the console's answer comes 15 cycles later than the SDRAM's)
     parameter int UNC_PAD = 0,
+    // and an uncached load of the game's RDRAM answers no sooner than this many cycles after it asked (the console's median is 32 in all)
+    parameter int UNC_MIN = 0,
     // MI: and the VI's block (0x0440_0000..: rtl/soc/rcp_vi.sv) the same way
     parameter bit VIW = 0,
     // MI: and the AI's block (0x0450_0000..: rtl/soc/rcp_ai.sv)
@@ -1241,7 +1243,7 @@ wire m_ld = FAST ? m_k_ld : m_c.ld != M_NONE, m_st = FAST ? m_k_st : m_c.st != S
 // (FAST: what kind of address it is, registered with it)
 logic m_f_kseg, m_f_devk;
 wire m_kseg = FAST ? m_f_kseg : kseg01(m_addr, game_view);
-typedef enum logic [2:0] { MS_IDLE, MS_REFILL, MS_REREAD, MS_SLOW_A, MS_SLOW_B, MS_DONE, MS_XLAT, MS_WALK } ms_t;
+typedef enum logic [3:0] { MS_IDLE, MS_REFILL, MS_REREAD, MS_SLOW_A, MS_SLOW_B, MS_DONE, MS_XLAT, MS_WALK, MS_UWAIT } ms_t;
 ms_t ms;
 // a mapped access spends a cycle in MS_XLAT with its translation registered
 // (m_tlbq): from the micro-TLB, or after a search (MS_WALK)
@@ -1289,6 +1291,7 @@ logic [63:0] ms_data;                       // the slow path's read (high word =
 logic [2:0]  ms_cnt;
 logic [7:0]  ms_age;                         // cycles since a load's miss began (DMISS_MIN)
 logic        ms_all;                         // the line's last word is in
+wire         unc_game = m_ld && !m_wide && m_addr[31:23] == 9'h140;
 wire         unc_hold = (UNC_PAD != 0) && ms == MS_SLOW_A && m_ld && m_addr[31:23] == 9'h140 && ms_age < 8'(UNC_PAD);
 
 wire [31:0] dc_qm = {sb_hit && sb_strb[3] ? sb_data[31:24] : dc_q[31:24],
@@ -2369,7 +2372,7 @@ always_ff @(posedge clk) begin
         if (FAST && ict_we && !ict_wdata[ITW]) f_ok <= 0;
 
         // ---------------------------------------------------- M's slow path / refill
-        if (ms == MS_SLOW_A && ms_age != 8'hFF) ms_age <= ms_age + 8'd1;
+        if ((ms == MS_SLOW_A || ms == MS_UWAIT) && ms_age != 8'hFF) ms_age <= ms_age + 8'd1;
         case (ms)
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
@@ -2430,8 +2433,9 @@ always_ff @(posedge clk) begin
         end
         else if (port == P_SLOW && slow_d_own && port_done) begin
             if (m_wide) begin if (BIG) ms_data[63:32] <= mem_rdata; else ms_data[31:0] <= mem_rdata; ms <= MS_SLOW_B; end
-            else begin ms_data[31:0] <= mem_rdata; ms <= MS_DONE; end
+            else begin ms_data[31:0] <= mem_rdata; ms <= (UNC_MIN != 0 && unc_game && ms_age + 8'd1 < 8'(UNC_MIN)) ? MS_UWAIT : MS_DONE; end
         end
+        MS_UWAIT: if (ms_age + 8'd1 >= 8'(UNC_MIN)) ms <= MS_DONE;
         MS_SLOW_B: if (m_sw) begin if (m_sw_push) ms <= MS_DONE; end
         else if (port == P_SLOW && slow_d_own && port_done) begin
             if (BIG) ms_data[31:0] <= mem_rdata; else ms_data[63:32] <= mem_rdata; ms <= MS_DONE;
