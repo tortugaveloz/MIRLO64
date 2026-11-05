@@ -119,6 +119,34 @@ static void sec_cop0_co(void)
     check(0x0603, h_count, 1);
     check(0x0604, h_cause & 0x8000007C, 0x28);
 }
+/* ---- Integer Overflow: add, addi and sub raise it (Cause code 12, nothing written) when the signed 32-bit result does not fit; addu, addiu
+ * and subu never do */
+static void sec_overflow(void)
+{
+    u32 r, a = 0x7FFFFFFFu, b = 1, c = 0x80000000u;
+    h_count = 0; h_ret = 0; r = 0x1234;
+    __asm__ volatile("add %0, %1, %2" : "+r"(r) : "r"(a), "r"(b) : "memory");
+    check(0x0701, h_count, 1);
+    check(0x0702, h_cause & 0x8000007C, 12 << 2);
+    check(0x0703, r, 0x1234);                                          /* (the destination keeps its value) */
+    h_count = 0; r = 0x1234;
+    __asm__ volatile("sub %0, %1, %2" : "+r"(r) : "r"(c), "r"(b) : "memory");
+    check(0x0711, h_count, 1);
+    check(0x0712, r, 0x1234);
+    h_count = 0; r = 0x1234;
+    __asm__ volatile("addi %0, %1, 1" : "+r"(r) : "r"(a) : "memory");
+    check(0x0721, h_count, 1);
+    check(0x0722, r, 0x1234);
+    h_count = 0;
+    __asm__ volatile("addu %0, %1, %2" : "=r"(r) : "r"(a), "r"(b) : "memory");
+    check(0x0731, h_count, 0);
+    check(0x0732, r, 0xFFFFFFFF80000000ull & 0xFFFFFFFFu);
+    __asm__ volatile("subu %0, %1, %2" : "=r"(r) : "r"(c), "r"(b) : "memory");
+    check(0x0733, h_count, 0);
+    __asm__ volatile("add %0, %1, %2" : "=r"(r) : "r"(a), "r"(0u) : "memory");     /* no overflow: written */
+    check(0x0741, h_count, 0);
+    check(0x0742, r, 0x7FFFFFFF);
+}
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -131,6 +159,7 @@ int main(void)
     sec_fcr();
     sec_cop0_masks();
     sec_cop0_co();
+    sec_overflow();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;

@@ -240,7 +240,11 @@ def main():
         # (on 32-bit values: with any other the core has a Reserved Instruction)
         a, b = nreg(), nreg()
         R(0, a, a, 0, 0x00)                     # sll a, a, 0
-        if rnd.random() < 0.5:
+        if rnd.random() < float(os.environ.get("GEN_OV", "0.3")):                  # add, sub, addi: Integer Overflow when the 32-bit signed result does not fit
+            R(0, b, b, 0, 0x00)
+            if rnd.random() < 0.7: R(a, b, nreg(), 0, rnd.choice([0x20, 0x22]))
+            else: I(0x08, a, nreg(), rnd.choice([0x7FFF, 0x8000, 1, 0xFFFF, rnd.randrange(0x10000)]))
+        elif rnd.random() < 0.5:
             R(0, b, b, 0, 0x00)
             R(a, b, 0, 0, rnd.choice([0x30, 0x31, 0x32, 0x33, 0x34, 0x36]))
         else:

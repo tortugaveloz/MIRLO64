@@ -343,6 +343,7 @@ typedef struct packed {
     x_t          x64;
     logic        b_imm, imm_zero;
     logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
+    logic        ovf;                       // add, addi, sub: Integer Overflow on a 32-bit signed overflow
     logic        cop2;                      // a COP2 instruction: Coprocessor Unusable without Status.CU2, and nothing with it
     logic        use_rs, use_rt;
     load_t       ld;
@@ -408,8 +409,8 @@ function automatic ctl_t decode(input logic [31:0] i);
         6'h1D: begin c.wr = 0; c.md = MD_DMULTU; end
         6'h1E: begin c.wr = 0; c.md = MD_DDIV; end
         6'h1F: begin c.wr = 0; c.md = MD_DDIVU; end
-        6'h20, 6'h21: c.alu = A_ADD;
-        6'h22, 6'h23: c.alu = A_SUB;
+        6'h20, 6'h21: begin c.alu = A_ADD; c.ovf = !fn[0]; end
+        6'h22, 6'h23: begin c.alu = A_SUB; c.ovf = !fn[0]; end
         6'h24: begin c.alu = A_AND;  end
         6'h25: begin c.alu = A_OR;   end
         6'h26: begin c.alu = A_XOR;  end
@@ -450,7 +451,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h05, 6'h15: begin c.br = B_NE;  c.use_rs = 1; c.use_rt = 1; c.likely = op[4]; end
     6'h06, 6'h16: begin c.br = B_LEZ; c.use_rs = 1; c.likely = op[4]; end
     6'h07, 6'h17: begin c.br = B_GTZ; c.use_rs = 1; c.likely = op[4]; end
-    6'h08, 6'h09: begin c.alu = A_ADD;  c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
+    6'h08, 6'h09: begin c.alu = A_ADD;  c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; c.ovf = !op[0]; end
     6'h0A: begin c.alu = A_SLT;  c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
     6'h0B: begin c.alu = A_SLTU; c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
     6'h0C: begin c.alu = A_AND;  c.b_imm = 1; c.imm_zero = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
@@ -1025,6 +1026,8 @@ logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 wire        e_fsub = FAST ? e_k_sub : e_c.alu == A_SUB;
 assign      e_cs = {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
 wire [31:0] e_addsub = e_cs[31:0];
+// Integer Overflow (add, addi, sub): both operands of the sum (the subtrahend inverted) have a sign the sum's lacks
+wire        e_ovf = e_c.ovf && (e_a[31] == (e_bv[31] ^ e_fsub)) && (e_cs[31] != e_a[31]);
 logic [31:0] e_misc;
 always_comb begin
     case (e_k_op)
@@ -1175,7 +1178,7 @@ wire e_cpu1 = !c0_status[29] && e_isfp;
 wire e_cpu2 = !c0_status[30] && e_c.cop2;
 logic [4:0] e_exc_code; logic [31:0] e_badv;
 // (e_exc is one OR of the causes, not the end of the priority chain that picks the code)
-wire e_exc = e_fexc || e_cpu1 || e_cpu2 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
+wire e_exc = e_fexc || e_cpu1 || e_cpu2 || e_ovf || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
 always_comb begin
     e_badv = e_ea; e_exc_code = 5'd0;
     if (e_fexc) begin e_exc_code = e_fexc_code; e_badv = e_pc; end
@@ -1183,6 +1186,7 @@ always_comb begin
     else if (e_c.ri) e_exc_code = 5'd10;
     else if (e_c.sys) e_exc_code = 5'd8;
     else if (e_c.brk) e_exc_code = 5'd9;
+    else if (e_ovf) e_exc_code = 5'd12;
     else if (e_trap) e_exc_code = 5'd13;
     else if (e_misalign || e_n64dev) e_exc_code = e_c.st != S_NONE ? 5'd5 : 5'd4;
 end
