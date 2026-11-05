@@ -2033,6 +2033,7 @@ always_ff @(posedge clk) begin
             if (W64) begin
                 if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
+                else if (m_c.mfc0 && m_insn[21] && (m_insn[15:11] == 5'd17 || m_insn[15:11] == 5'd28)) w_hx <= {32{c0_rd[31]}};   // dmfc0 of LLAddr, TagLo: zero-extended
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
             end

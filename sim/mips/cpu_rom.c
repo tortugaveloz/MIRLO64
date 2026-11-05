@@ -147,6 +147,20 @@ static void sec_overflow(void)
     check(0x0741, h_count, 0);
     check(0x0742, r, 0x7FFFFFFF);
 }
+/* ---- dmfc0 of LLAddr and TagLo is zero-extended (32 bits); of Status, a sign-extended mfc0 */
+static void sec_dmfc0(void)
+{
+    u64 v;
+    MTC0(17, 0x89ABCDEFu);
+    __asm__ volatile("dmfc0 %0, $17\n\tnop\n\tnop" : "=r"(v));
+    check(0x0801, v, 0x89ABCDEFull);
+    MTC0(28, 0x89ABCDEFu);
+    __asm__ volatile("dmfc0 %0, $28\n\tnop\n\tnop" : "=r"(v));
+    check(0x0802, v, 0x89ABCDEFull);
+    u32 w;
+    __asm__ volatile("mfc0 %0, $28\n\tnop\n\tnop" : "=r"(w));
+    check(0x0803, w, 0x89ABCDEFu);                                     /* (mfc0: the word) */
+}
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -160,6 +174,7 @@ int main(void)
     sec_cop0_masks();
     sec_cop0_co();
     sec_overflow();
+    sec_dmfc0();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;

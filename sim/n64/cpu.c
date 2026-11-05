@@ -533,7 +533,8 @@ void n64_cpu_step(n64_t *n)
         if (fmt == 0x01 || fmt == 0x05) n64_op64_site(pc, insn);                    /* dmfc0, dmtc0 */
         if (fmt == 0x00 || fmt == 0x01) {                                           /* mfc0, dmfc0 */
             uint32_t x = c->cop0[rdi];
-            WR(rti, SX(x));
+            /* dmfc0 of LLAddr and TagLo: 32 bits, zero-extended (the rest of the registers: sign-extended as mfc0 is) */
+            WR(rti, (fmt == 0x01 && (rdi == C0_LLADDR || rdi == C0_TAGLO)) ? (uint64_t)x : SX(x));
         } else if (fmt == 0x04 || fmt == 0x05) {                                    /* mtc0, dmtc0 */
             switch (rdi) {
             case C0_CAUSE: c->cop0[C0_CAUSE] = (c->cop0[C0_CAUSE] & ~0x300u) | (rt32 & 0x300u); break;
