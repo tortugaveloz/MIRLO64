@@ -228,6 +228,9 @@ assign su_run = !st_halt;
 logic [7:0]  rd_cnt;
 logic [11:3] rd_len;
 logic        dma_any;                 // a transfer has run
+// DPC_CLOCK (COP0 register 12): the RDP's 24-bit clock counter, one tick per RCP clock (this clock, the console's 62.5 MHz), from reset
+logic [23:0] dpc_clk;
+always_ff @(posedge clk) dpc_clk <= rst ? 24'd0 : dpc_clk + 24'd1;
 function automatic logic [31:0] cop0_rd(input logic [3:0] r);
     unique case (r)
     4'd0:  return {19'd0, sp_addr, 3'd0};
@@ -241,6 +244,7 @@ function automatic logic [31:0] cop0_rd(input logic [3:0] r);
     4'd9:  return dpc_end;
     4'd10: return dpc_current;
     4'd11: return dpc_status;
+    4'd12: return {8'd0, dpc_clk};
     default: return 32'd0;
     endcase
 endfunction
