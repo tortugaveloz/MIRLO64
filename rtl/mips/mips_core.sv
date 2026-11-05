@@ -340,6 +340,7 @@ typedef struct packed {
     alu_t        alu;
     x_t          x64;
     logic        b_imm, imm_zero;
+    logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
     logic        use_rs, use_rt;
     load_t       ld;
     store_t      st;
@@ -489,6 +490,8 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h26: begin c.ld = M_LWR; c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end
     6'h27: if (W64) begin c.ld = M_LWU; c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
     6'h37: if (W64) begin c.ld = M_LD;  c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
+    6'h34: if (W64) begin c.ld = M_LD;  c.lld = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
+    6'h3C: if (W64) begin c.st = S_SD;  c.scd = 1; c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
     6'h1A, 6'h1B: if (XUA) begin c.ld = op[0] ? M_LDR : M_LDL; c.x64 = X_SLL; c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end else c.ri = 1;
     6'h2C, 6'h2D: if (XUA) begin c.st = op[0] ? S_SDR : S_SDL; c.x64 = X_SLL; c.use_rs = 1; c.use_rt = 1; end else c.ri = 1;
     6'h3F: if (W64) begin c.st = S_SD;  c.use_rs = 1; c.use_rt = 1; end else c.ri = 1;
@@ -1496,7 +1499,7 @@ wire m_to_game = MON && mon_game && (m_take_int || m_take_exc) && !m_to_mon && n
 wire m_live = m_valid && !m_take_int && !m_take_exc;
 
 logic m_k_sc;                                // (FAST: sc, registered with it)
-wire m_sc_fail = (FAST ? m_k_sc : m_c.st == S_SC) && !ll_bit;
+wire m_sc_fail = (FAST ? m_k_sc : (m_c.st == S_SC || m_c.scd)) && !ll_bit;
 // a store to a device (not RDRAM, not the cartridge) completes when the device
 // says so -- a DMA or a task it starts has finished by then, as in the model
 function automatic logic pa_dev(input logic [31:0] pa);
@@ -2012,7 +2015,7 @@ always_ff @(posedge clk) begin
             w_c <= m_c; w_pc <= m_pc; w_insn <= m_insn; w_serial <= m_serial;
             if (m_c.mfc0) w_res <= c0_rd;
             else if (m_c.cop1_gpr) w_res <= fpu_gpr_out[31:0];
-            else if (m_c.st == S_SC) w_res <= {31'd0, !m_sc_fail};
+            else if (m_c.st == S_SC || m_c.scd) w_res <= {31'd0, !m_sc_fail};
             else if (FAST ? m_ldw : m_ld) w_res <= m_ld_val;
             else if (XALU && m_xcmp) w_res <= {31'd0, m_xlt};
             else if (XALU && m_xshift) w_res <= sh_r[31:0];                 // (ldl, ldr: the doubleword as rotated and merged)
@@ -2073,8 +2076,8 @@ always_ff @(posedge clk) begin
                 sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
             end
             // (LLAddr: the N64's physical address >> 4, as the VR4300's -- with N64WIN the RDRAM's place in the SDRAM is not the game's)
-            if (m_c.ld == M_LL && !m_lmiss) begin ll_bit <= 1'b1; c0_lladdr <= (FLAT && N64WIN && m_pa[31:23] == N64_RDRAM[31:23]) ? {13'd0, m_pa[22:4]} : m_pa >> 4; end
-            if (m_c.st == S_SC) ll_bit <= 1'b0;
+            if ((m_c.ld == M_LL || m_c.lld) && !m_lmiss) begin ll_bit <= 1'b1; c0_lladdr <= (FLAT && N64WIN && m_pa[31:23] == N64_RDRAM[31:23]) ? {13'd0, m_pa[22:4]} : m_pa >> 4; end
+            if (m_c.st == S_SC || m_c.scd) ll_bit <= 1'b0;
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
             // mthi, mtlo: written in the next cycle, from md_ma (rs's lower word, which the multiplier's
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
@@ -2176,7 +2179,7 @@ always_ff @(posedge clk) begin
             m_addr <= e_ea;
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
-                m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_ldw <= e_c.ld != M_NONE && !e_ua; m_k_sc <= e_c.st == S_SC;
+                m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_ldw <= e_c.ld != M_NONE && !e_ua; m_k_sc <= e_c.st == S_SC || e_c.scd;
                 m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD)) || e_ua;
                 m_k_cach <= cacheable(e_ea, game_view); m_k_mapped <= e_mem && !kseg01(e_ea, game_view);
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;

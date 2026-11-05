@@ -186,7 +186,7 @@ back unchanged. The same notice, with its own text, refuses a core whose CPU lac
 `rtl/mips/mips_core.sv` executes the VR4300's instructions with 32-bit addresses: MIPS II, the 64-bit integers by
 levels (below), `eret`, `ll` / `sc`, the trap instructions, the cache instruction and COP1. `rtl/soc/mips_sys.sv`
 instantiates it with the boot ROM and these parameters. The CPU does the instructions a game uses, the 64-bit
-integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below); the runtime does none of them on its behalf.
+integer ones included (but the traps on a 64-bit operand, below); the runtime does none of them on its behalf.
 
 | Parameter | Value | Meaning |
 |---|---|---|
@@ -328,7 +328,7 @@ bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at sta
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
-runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand, `lld`, `scd`.
+runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand. `lld` and `scd` are the CPU's, with `ll` and `sc`'s link bit.
 
 ### The FPU
 

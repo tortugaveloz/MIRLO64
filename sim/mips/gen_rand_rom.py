@@ -226,15 +226,15 @@ def main():
                          0x28, 0x29, 0x2A, 0x2B, 0x2E, 0x3F, 0x3F, 0x2B])
         if ua and rnd.random() < 0.3:
             op = rnd.choice([0x1A, 0x1B, 0x2C, 0x2D])
-        if tlb and rnd.random() < 0.1: op = rnd.choice([0x30, 0x38])           # ll, sc
+        if tlb and rnd.random() < 0.1: op = rnd.choice([0x30, 0x38, 0x34, 0x3C])   # ll, sc, lld, scd
         off = rnd.randrange(512)
         if tlb and rnd.random() < 0.6:                                          # through a window, the even page or the odd one
             li32(MAPPED, rnd.choice(WINDOWS) + rnd.choice([0, 0, 0x1000, 0x4000, 0x10000]))
             base = MAPPED
-        if op in (0x37, 0x3F): off &= ~7
+        if op in (0x37, 0x3F, 0x34, 0x3C): off &= ~7
         elif op in (0x23, 0x27, 0x2B, 0x30, 0x38): off &= ~3
         elif op in (0x21, 0x25, 0x29): off &= ~1
-        I(op, base, (wreg() if op in (0x27, 0x37, 0x1A, 0x1B) else nreg()) if op < 0x28 or op == 0x37 or op == 0x30 else src(), off)
+        I(op, base, (wreg() if op in (0x27, 0x37, 0x34, 0x1A, 0x1B) else nreg()) if op < 0x28 or op in (0x37, 0x30, 0x34) else src(), off)
 
     def trap():
         # (on 32-bit values: with any other the core has a Reserved Instruction)
