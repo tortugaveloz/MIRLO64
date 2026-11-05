@@ -183,6 +183,8 @@ module mips_core #(
     // (0 on a CPU without the parameter).
     parameter bit MI = 0,
     parameter bit PIW = 0,
+    // the console's multiplies and divides hold the pipeline for their whole latency (5, 8, 37, 69 cycles)
+    parameter bit MD_HOLD = 0,
     // MI: and the VI's block (0x0440_0000..: rtl/soc/rcp_vi.sv) the same way
     parameter bit VIW = 0,
     // MI: and the AI's block (0x0450_0000..: rtl/soc/rcp_ai.sv)
@@ -876,6 +878,8 @@ wire haz_fcc = (d_c.br == B_C1F || d_c.br == B_C1T) && ((e_live && e_c.cop1_cond
 wire d_serial = d_c.mtc0 || d_c.eret || d_c.tlbwi || d_c.tlbwr || d_c.tlbr || d_c.tlbp || d_c.cache;
 wire haz_serial = (d_serial && (e_live || m_valid || w_valid)) || (e_live && e_serial) || (m_valid && m_serial) || (w_valid && w_serial);
 logic md_busy;
+logic [6:0] md_hold;                 // the console's multiplies and divides stall the pipeline for their whole latency: cycles still to wait
+logic md_hold_on;
 wire haz_md = (d_c.alu == A_MFHI || d_c.alu == A_MFLO || d_c.md != MD_NONE) &&
               (md_busy || (e_live && e_c.md != MD_NONE) || (m_valid && m_c.md != MD_NONE));
 // (W64) a register on its way from M's unit or a 64-bit load: its hx is read from the register file
@@ -1539,6 +1543,7 @@ always_comb begin
         if (m_c.tlbp || m_c.tlbr) m_done = ms == MS_DONE;           // a search / a read of the TLB RAM
         if ((FAST ? m_k_fpu : (m_c.cop1 || m_c.ld == M_FL || m_c.st == S_FS)) && fpu_busy) m_done = 1'b0;
         if (m_is_md && md_busy) m_done = 1'b0;
+        if (md_hold_on) m_done = 1'b0;                              // (the console's multiply or divide before: the pipeline is held)
         // (FAST: a line on its way in for a load that is on its way back)
         if (FAST && (ms == MS_REFILL || ms == MS_REREAD)) m_done = 1'b0;
         if (m_shwait) m_done = 1'b0;                                // (a d-shift: still shifting)
@@ -1550,7 +1555,21 @@ wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_
 assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? !wb_full : m_lhit);
 assign m_lmiss = FAST && m_live && m_ld && m_cached && !m_dly && ms == MS_IDLE && !m_ph && !m_dc_hit;
 wire m_commit_e = m_live && m_done;         // (M always advances when done)
-wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong line)
+wire m_commit = m_commit_e && !m_lmiss;
+// The VR4300 holds the pipeline for the whole of a multiply or divide (mult 5, dmult 8, div 37, ddiv 69 cycles, the instruction's own
+// included; nemu64-test, "Timing: Individual instructions"): the cycles after the one that retires it. The unit runs on behind, and
+// whoever reads HI and LO still waits for it (md_busy).
+logic [6:0] md_hold_n;
+always_comb begin
+    md_hold_n = md_hold != 7'd0 ? md_hold - 7'd1 : 7'd0;
+    if (MD_HOLD && m_commit_e && m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO)
+        md_hold_n = (m_c.md == MD_MULT || m_c.md == MD_MULTU) ? 7'd4 : (m_c.md == MD_DMULT || m_c.md == MD_DMULTU) ? 7'd7 :
+                    (m_c.md == MD_DIV || m_c.md == MD_DIVU) ? 7'd36 : 7'd68;
+end
+always_ff @(posedge clk) begin
+    if (rst) begin md_hold <= 7'd0; md_hold_on <= 1'b0; end
+    else begin md_hold <= md_hold_n; md_hold_on <= md_hold_n != 7'd0; end
+end     // (FAST: but a load of the wrong line)
 
 // =============================================================== pipeline advance
 wire m_adv = !m_stall;

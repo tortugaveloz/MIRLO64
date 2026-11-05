@@ -236,10 +236,10 @@ branch costs no more than a branch that is not.
 
 | Instruction | VR4300 | This core |
 |---|---|---|
-| `mult(u)` and the `mflo` after it | 5 + 1 | 6 (the multiply goes on behind seven independent instructions: they cost 1 each) |
-| `dmult(u)` and the `mflo` | 8 + 1 | 11 |
-| `div(u)` and the `mflo` | 37 + 1 | 37 |
-| `ddiv(u)` and the `mflo` | 69 + 1 | 71 |
+| `mult(u)` and the `mflo` after it | 5 + 1 | 6 (`MD_HOLD`: the pipeline is held for the multiply's whole latency, as the console's is -- nothing runs in its shadow) |
+| `dmult(u)` and the `mflo` | 8 + 1 | 11 (the unit needs 10 cycles) |
+| `div(u)` and the `mflo` | 37 + 1 | 38 |
+| `ddiv(u)` and the `mflo` | 69 + 1 | 71 (the unit needs 70) |
 | `lw` and the `addu` that uses it | 1 + 1 + 1 | 3 |
 | `ld`, `sd` | 1 | 2 (two words) |
 | `ldl` and `ldr`, `sdl` and `sdr` | 1 each | about 14 each (a byte a cycle, `W64_UA`) |
