@@ -1,3 +1,9 @@
+// the console's RDP uses one combiner and one blender for both cycles of the 2-cycle mode (docs/rdp.md); RDP_NOSHARE: one of each per cycle
+`ifndef RDP_NOSHARE
+`ifndef RDP_SHARE
+`define RDP_SHARE
+`endif
+`endif
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
