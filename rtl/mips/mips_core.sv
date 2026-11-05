@@ -185,6 +185,12 @@ module mips_core #(
     parameter bit PIW = 0,
     // the console's multiplies and divides hold the pipeline for their whole latency (5, 8, 37, 69 cycles)
     parameter bit MD_HOLD = 0,
+    // an mtc0 costs the console's two cycles (one bubble) instead of draining the pipeline
+    parameter bit CP0_LIGHT = 0,
+    // the console's RDRAM answers no sooner than this: the cycles a cached load's miss takes at the least (0: as the memory answers)
+    parameter int DMISS_MIN = 0,
+    // an uncached load of the game's RDRAM waits this many cycles before it asks (the console's answer comes 15 cycles later than the SDRAM's)
+    parameter int UNC_PAD = 0,
     // MI: and the VI's block (0x0440_0000..: rtl/soc/rcp_vi.sv) the same way
     parameter bit VIW = 0,
     // MI: and the AI's block (0x0450_0000..: rtl/soc/rcp_ai.sv)
@@ -875,8 +881,11 @@ wire d_reads_now = (d_c.br != B_NONE && d_c.br != B_J);
 wire haz_br = d_reads_now && ((d_needs_rs && (e_rs_hit || m_rs_late)) || (d_needs_rt && (e_rt_hit || m_rt_late)));
 wire haz_late = e_live && e_c.late && ((d_needs_rs && e_rs_hit) || (d_needs_rt && e_rt_hit));
 wire haz_fcc = (d_c.br == B_C1F || d_c.br == B_C1T) && ((e_live && e_c.cop1_cond) || (m_valid && m_c.cop1_cond));
-wire d_serial = d_c.mtc0 || d_c.eret || d_c.tlbwi || d_c.tlbwr || d_c.tlbr || d_c.tlbp || d_c.cache;
-wire haz_serial = (d_serial && (e_live || m_valid || w_valid)) || (e_live && e_serial) || (m_valid && m_serial) || (w_valid && w_serial);
+// CP0_LIGHT: an mtc0 costs the console's two cycles -- one bubble behind it -- instead of draining the pipeline on both sides. Its write is
+// in M's order, so what follows in M sees it; the hazards the VR4300 leaves to software (the TLB's, the interrupt mask's) are as the VR4300's.
+wire d_serial = (!CP0_LIGHT && d_c.mtc0) || d_c.eret || d_c.tlbwi || d_c.tlbwr || d_c.tlbr || d_c.tlbp || d_c.cache;
+wire haz_serial = (d_serial && (e_live || m_valid || w_valid)) || (e_live && e_serial) || (m_valid && m_serial) || (w_valid && w_serial) ||
+                  (CP0_LIGHT && e_live && e_c.mtc0);
 logic md_busy;
 logic [6:0] md_hold;                 // the console's multiplies and divides stall the pipeline for their whole latency: cycles still to wait
 logic md_hold_on;
@@ -1278,6 +1287,9 @@ wire m_w0;
 
 logic [63:0] ms_data;                       // the slow path's read (high word = the lower address)
 logic [2:0]  ms_cnt;
+logic [7:0]  ms_age;                         // cycles since a load's miss began (DMISS_MIN)
+logic        ms_all;                         // the line's last word is in
+wire         unc_hold = (UNC_PAD != 0) && ms == MS_SLOW_A && m_ld && m_addr[31:23] == 9'h140 && ms_age < 8'(UNC_PAD);
 
 wire [31:0] dc_qm = {sb_hit && sb_strb[3] ? sb_data[31:24] : dc_q[31:24],
                      sb_hit && sb_strb[2] ? sb_data[23:16] : dc_q[23:16],
@@ -1967,7 +1979,7 @@ always_ff @(posedge clk) begin
         hilo_soft <= 0; c0_latch <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_STEP; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
-        ms <= MS_IDLE; ms_cnt <= 0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
+        ms <= MS_IDLE; ms_cnt <= 0; ms_age <= 8'd0; ms_all <= 1'b0; m_xc1 <= 0; sb_valid <= 0; tk_valid <= 0; sw_wait <= 0;
         sc <= SC_IDLE; sc_k <= 0; utlb_f.valid <= 0; utlb_m.valid <= 0; m_wq <= 0; f_wq <= 0; sc_stale <= 0; f_xrefill <= 0;
         d_fmiss <= 0; rd_res <= 0; rd_fix <= 0; rp_pend <= 0; m_w1 <= 0;
         ras_t <= '0; ras_n <= '0;
@@ -2357,6 +2369,7 @@ always_ff @(posedge clk) begin
         if (FAST && ict_we && !ict_wdata[ITW]) f_ok <= 0;
 
         // ---------------------------------------------------- M's slow path / refill
+        if (ms == MS_SLOW_A && ms_age != 8'hFF) ms_age <= ms_age + 8'd1;
         case (ms)
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
@@ -2364,8 +2377,8 @@ always_ff @(posedge clk) begin
                 if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
-            else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
-            else if (m_needs_slow) ms <= MS_SLOW_A;
+            else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; ms_age <= 8'd0; ms_all <= 1'b0; end
+            else if (m_needs_slow) begin ms <= MS_SLOW_A; ms_age <= 8'd0; end
         end
         MS_WALK: begin                               // a search (a mapped access, tlbp) or tlbr's read
             if (sc_start && sc_req_m) m_wq <= 1;
@@ -2382,20 +2395,30 @@ always_ff @(posedge clk) begin
         MS_XLAT: begin                               // a fault, a store done, or on to the slow path
             m_xc1 <= 1'b0;
             if (!m_live || m_commit_e) ms <= MS_IDLE;
-            else if (m_needs_slow) ms <= MS_SLOW_A;
+            else if (m_needs_slow) begin ms <= MS_SLOW_A; ms_age <= 8'd0; end
             // (PGD) a mapped load through the D-cache: the word at the physical index in the second cycle, or its line read in
             else if (m_cl) begin
                 m_xc1 <= 1'b1;
                 if (m_xc1) begin
                     m_xc1 <= 1'b0;
                     if (m_dc_hit) begin ms_data[31:0] <= dc_qm; ms <= MS_DONE; end
-                    else begin ms <= MS_REFILL; ms_cnt <= 0; end
+                    else begin ms <= MS_REFILL; ms_cnt <= 0; ms_age <= 8'd0; ms_all <= 1'b0; end
                 end
             end
         end
-        MS_REFILL: if (port == P_DLINE && mem_rvalid) begin
-            ms_cnt <= ms_cnt + 3'd1;
-            if (ms_cnt == 3'd7) ms <= MS_REREAD;
+        MS_REFILL: begin
+            if (ms_age != 8'hFF) ms_age <= ms_age + 8'd1;
+            if (port == P_DLINE && mem_rvalid) begin
+                ms_cnt <= ms_cnt + 3'd1;
+                if (ms_cnt == 3'd7) begin
+                    ms_all <= 1'b1;
+`ifdef MIRLO_LAT_TRACE
+                    $display("[lat] dmiss %0d", ms_age);
+`endif
+                    if (ms_age + 8'd1 >= 8'(DMISS_MIN)) ms <= MS_REREAD;
+                end
+            end
+            else if (ms_all && ms_age + 8'd1 >= 8'(DMISS_MIN)) ms <= MS_REREAD;
         end
         MS_REREAD: ms <= MS_IDLE;
         MS_SLOW_A: if (m_sw) begin                   // (XWB) a store: out by st_*
@@ -2455,8 +2478,8 @@ always_ff @(posedge clk) begin
             if (!wb_empty) begin
                 if (wb_go || ms == MS_REFILL || ms == MS_SLOW_A || ms == MS_SLOW_B || fs == FS_REFILL || fs == FS_SLOW) port <= P_WB;
             end
-            else if (ms == MS_REFILL) port <= P_DLINE;
-            else if ((ms == MS_SLOW_A || ms == MS_SLOW_B) && !(XWB && m_st)) begin port <= P_SLOW; slow_d_own <= 1; end
+            else if (ms == MS_REFILL && !ms_all) port <= P_DLINE;
+            else if ((ms == MS_SLOW_A || ms == MS_SLOW_B) && !(XWB && m_st) && !unc_hold) begin port <= P_SLOW; slow_d_own <= 1; end
             else if (fs == FS_REFILL) port <= P_ILINE;
             else if (fs == FS_SLOW) begin port <= P_SLOW; slow_d_own <= 0; end
         end
