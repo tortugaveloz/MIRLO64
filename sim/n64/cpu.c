@@ -164,11 +164,18 @@ void n64_cpu_reset(n64_t *n)
     for (int i = 0; i < N64_TLB_ENTRIES; i++) c->tlb[i].hi = 0x80000000u;
 }
 
+/* an address error: BadVAddr, and Context's BadVPN2 with it (as for a TLB fault) */
+static void set_badv(n64_t *n, uint32_t a)
+{
+    n->cpu.cop0[C0_BADVADDR] = a;
+    n->cpu.cop0[C0_CONTEXT] = (n->cpu.cop0[C0_CONTEXT] & 0xFF800000u) | ((a >> 13) << 4);
+}
+
 /* ---- memory access ----------------------------------------------------- */
 static int load(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, uint64_t *v)
 {
     if (a & (size - 1)) {
-        n->cpu.cop0[C0_BADVADDR] = a;
+        set_badv(n, a);
         exception(n, pc, dly, EXC_ADEL, 0);
         return -1;
     }
@@ -184,7 +191,7 @@ static int load(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, uint64_t *
 static int store(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, uint64_t v)
 {
     if (a & (size - 1)) {
-        n->cpu.cop0[C0_BADVADDR] = a;
+        set_badv(n, a);
         exception(n, pc, dly, EXC_ADES, 0);
         return -1;
     }
@@ -207,7 +214,7 @@ static int partial(n64_t *n, uint32_t pc, int dly, uint32_t a, int size, int wri
 /* sc, scd with the link lost: nothing is stored, but the address is checked and translated as a store's (1: the exception was taken) */
 static int sc_fault(n64_t *n, uint32_t pc, int dly, uint32_t a, int size)
 {
-    if (a & (size - 1)) { n->cpu.cop0[C0_BADVADDR] = a; exception(n, pc, dly, EXC_ADES, 0); return 1; }
+    if (a & (size - 1)) { set_badv(n, a); exception(n, pc, dly, EXC_ADES, 0); return 1; }
     int t = n64_xlat_check(n, a, 1);
     if (t && t <= N64_TLB_MISS) { tlb_fault(n, pc, dly, a, t, 1); return 1; }
     return 0;
@@ -373,7 +380,7 @@ void n64_cpu_step(n64_t *n)
     uint32_t pc = c->pc, insn;
     int dly = c->in_delay;
     if (pc & 3) {
-        c->cop0[C0_BADVADDR] = pc;
+        set_badv(n, pc);
         exception(n, pc, dly, EXC_ADEL, 0);
         return;
     }

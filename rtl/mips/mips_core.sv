@@ -2058,6 +2058,8 @@ always_ff @(posedge clk) begin
                 // (TLB_RAM: a fetch's too -- its page's entry is the runtime's to fill; a device access of the
                 // game's, in the monitor, leaves BadVAddr alone: the runtime works the address out)
                 if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon) c0_badvaddr <= m_badv;
+                // an address error takes Context's BadVPN2 too, as a TLB fault does
+                if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5) && !(m_to_mon && m_dev) && !m_tr_mon) c0_context <= (c0_context & 32'hFF800000) | ((m_badv >> 13) << 4);
                 if (TLB_RAM && m_code >= 5'd1 && m_code <= 5'd3) tr_lastf <= m_exc_v;
                 if (TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
                 // (the monitor level's: the game's BadVAddr and EntryHi stay as they are)
