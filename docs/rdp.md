@@ -383,6 +383,15 @@ and depth tests, two blender cycles, the dither.
   the blender's first-cycle settings.
 * **2-cycle.** The two combiner cycles one after the other, then the two
   blender cycles; the first blender cycle always blends.
+  With `RDP_SHARE` (rtl/rdp/rdp_pix.v, rdp_top.v) the console's way: one combiner and one blender, each used twice by
+  a 2-cycle pixel, which takes two clocks (`rdp_top` issues it every second clock, always on the same parity of a free-running
+  count). Each unit is two stages (the operand selects, then the arithmetic). A 2-cycle pixel's first pass takes the operands
+  at P9 (early); its second, or a 1-cycle pixel's only one, takes the same pixel's operands three clocks later (late; the
+  first pass's result is held for it, and TEXEL0 and TEXEL1 change places in the late operands, as the console's second
+  cycle takes the first cycle's TEXEL1 as TEXEL0). The pass is three clocks after the first, an odd number, so that on one
+  parity the early passes and the late ones never meet in a stage; a pixel is at the unit in the same clock whatever its
+  mode, so everything after the combiner is one clock later than without it, and after the blender one more. The noise bits
+  the combiner's NOISE reads are the pixel's own in both passes.
 * **Copy.** The pixel is the texel. A 16-bit texel, and a TLUT entry, is
   copied as it is (an IA or I texel too: the console moves TMEM's words, it
   does not decode them); a 4-, 8- or 32-bit texel is decoded and written as
