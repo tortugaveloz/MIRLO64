@@ -38,6 +38,12 @@
 // read 9 clocks after it is written, or 9 + D: without the LOD every pixel
 // takes the clocks it took before, and only S, T at P4 choose between two
 // sources.
+`ifdef RDP_SHARE
+ `define RDP_SHARE_CC
+ `ifndef RDP_SHARE_NOBL
+  `define RDP_SHARE_BL
+ `endif
+`endif
 module rdp_pix (
     input  wire        clk,
     input  wire        rst,
@@ -935,12 +941,12 @@ module rdp_pix (
     end
     // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 6 clocks after its write (the
     // first pass at P5 to P9; lf holds for both passes)
-    reg  [8:0]  lf_q, lf9, lf10a, lf10;
+    reg  [8:0]  lf_q, lf9, lf10a, lf10, lf10b;
     (* ramstyle = "M10K, no_rw_check" *) reg [8:0] lf_ram [0:15];
     always @(posedge clk) begin
         lf_ram[rw_a] <= lf;
         lf_q <= lf_ram[rw_a - 4'd5];
-        lf9 <= lf_q; lf10a <= lf9; lf10 <= lf10a;
+        lf9 <= lf_q; lf10a <= lf9; lf10 <= lf10a; lf10b <= lf10;
     end
 
     // ======================================================================
@@ -1130,35 +1136,44 @@ module rdp_pix (
     // noise comes from a second copy of the LFSR, stepped here at P9 for the same pixels as the first at P11, so that a pixel's
     // value is the one the model takes for it (the state before its own step); the second cycle's a stage on.
     reg  [22:0] lfsr;
-    reg  [8:0]  nz10;
+    reg  [8:0]  nz10a, nz10, nz10b;
 `ifdef RDP_LFSR_PIXEL
     reg  [22:0] nlfsr;
     wire [8:0]  nz9 = {nlfsr[10:8], 6'h20};
     always @(posedge clk) begin
         if (rst) nlfsr <= 23'd0;
         else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
-        nz10 <= nz9;
     end
 `else
     wire [8:0]  nz9 = {lfsr[10:8], 6'h20};
+`endif
+`ifdef RDP_SHARE_CC
+    always @(posedge clk) begin nz10a <= nz9; nz10 <= nz10a; nz10b <= nz10; end     // (the pixel's own, for both passes)
+`else
     always @(posedge clk) nz10 <= nz9;
 `endif
+`ifndef RDP_SHARE_CC
     wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9, nz9);
+    reg [155:0] o10a;
+`endif
     reg         v10a;
     reg [9:0]   x10a;
-    reg [155:0] o10a;
     reg [31:0]  tex10a, tex1_10a;     // (tex1_*: the next tile's sample, the second cycle's TEXEL0)
     reg [35:0]  shade10a;
     reg [17:0]  depth10a;
     always @(posedge clk) begin
         v10a <= v9 & ~rst; x10a <= x9; hp10a <= hp9; bs10a <= bs9; hk10a <= hk9; hzk10a <= hzk9;
+`ifndef RDP_SHARE_CC
         o10a <= o0_w;
+`endif
         tex10a <= tex9; tex1_10a <= tex19; shade10a <= shade9; depth10a <= depth9;
     end
+`ifndef RDP_SHARE_CC
     wire [35:0] c0_w = cc_arith0(o10a);
+    reg [35:0] c010;                   // the first cycle's result: 9 raw bits a channel (cc_eval1)
+`endif
     reg        v10;
     reg [9:0]  x10;
-    reg [35:0] c010;                   // the first cycle's result: 9 raw bits a channel (cc_eval1)
     reg [31:0] tex10, tex1_10, mem10;
     reg [35:0] shade10;
     reg [17:0] depth10;
@@ -1190,7 +1205,9 @@ module rdp_pix (
     wire [2:0] bsb10   = !z_cmp ? ((dzenc < 4'd11) ? 3'd4 : ~dzenc[2:0]) : (dgb10[4] || dgb10[3:0] == 4'd0) ? 3'd0 : (dgb10[3:0] > 4'd4) ? 3'd4 : dgb10[2:0];
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; hp10 <= hp10a; bs10 <= bs10a;
+`ifndef RDP_SHARE_CC
         c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
+`endif
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1200,8 +1217,38 @@ module rdp_pix (
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
         hidz10 <= hz_rdata[{hzk10a, 1'b0} +: 2];
     end
+`ifdef RDP_SHARE_CC
+    // The one combiner. A 2-cycle pixel goes through it twice: its first cycle's operands are P9's (early), its second cycle's, or a
+    // 1-cycle pixel's only one, the same pixel's three clocks on (late: P10b), when the first cycle's result (cm) has come round.
+    // Pixels come every second clock on one parity (rdp_top), so a first pass (clock T) never meets a second (T + 3 of the pixel
+    // before). The late operands have TEXEL0 and TEXEL1 changed places (the N64's second cycle takes the first cycle's TEXEL1 as
+    // TEXEL0).
+    reg         v10b, bs10b, hp10b, memb10b;
+    reg [9:0]   x10b;
+    reg [31:0]  tex10b, tex1_10b, mem10b;
+    reg [35:0]  shade10b;
+    reg [17:0]  depth10b;
+    reg [15:0]  zold10b;
+    reg [1:0]   hid10b;
+    reg [3:0]   texp10b;
+    reg [2:0]   bsa10b, bsb10b;
+    always @(posedge clk) begin
+        v10b <= v10 & ~rst; x10b <= x10; hp10b <= hp10; bs10b <= bs10;
+        tex10b <= tex10; tex1_10b <= tex1_10; shade10b <= shade10; depth10b <= depth10;
+        mem10b <= mem10; zold10b <= zold10; memb10b <= memb10; hid10b <= hid10;
+        texp10b <= texp10; bsa10b <= bsa10; bsb10b <= bsb10;
+    end
+    wire         u_e = v9 && cyc == 2'd1;
+    reg  [35:0]  cm_r;                                  // the first cycle's result, 9 raw bits a channel (cc_eval1), held
+    wire [35:0]  cm10 = (cyc == 2'd1) ? cm_r : 36'd0;   // COMBINED for the second cycle (0 in the other modes)
+    wire [155:0] o1_w = cc_sel(!u_e, u_e ? tex9 : tex1_10b, u_e ? tex19 : tex10b, u_e ? shade9 : shade10b,
+                               u_e ? 36'd0 : cm10, u_e ? lf9 : lf10b, u_e ? nz9 : nz10b);
+    reg         ue11a;
+`else
+    wire         v10b = 1'b0;
     wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
     wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
+`endif
     reg         v11a;
     reg [9:0]   x11a;
     reg [155:0] o11a;
@@ -1215,14 +1262,26 @@ module rdp_pix (
     reg [7:0]   c0a11a, c0a11;       // 2-cycle: the first cycle's alpha (the alpha compare's)
     reg         c0f11a, c0f11;       // ... and whether it counts 256 (an alpha of 255 does: the coverage's multiply)
     always @(posedge clk) begin
+`ifdef RDP_SHARE_CC
+        v11a <= v10b & ~rst; x11a <= x10b; hp11a <= hp10b; bs11a <= bs10b; ue11a <= u_e;
+        o11a <= o1_w;
+        tex11a <= tex10b; shade11a <= shade10b; mem11a <= mem10b;
+        depth11a <= depth10b; zold11a <= z_dec(zold10b);
+        texp11a <= texp10b; bsa11a <= bsa10b; bsb11a <= bsb10b;
+        memb11a <= memb10b; c0a11a <= cc_clamp(cm_r[8:0]); c0f11a <= cc_a256(cm_r[8:0]); hid11a <= hid10b;
+`else
         v11a <= v10 & ~rst; x11a <= x10; hp11a <= hp10; bs11a <= bs10;
         o11a <= o1_w;
         tex11a <= tex10; shade11a <= shade10; mem11a <= mem10;
         depth11a <= depth10; zold11a <= z_dec(zold10);
         texp11a <= texp10; bsa11a <= bsa10; bsb11a <= bsb10;
         memb11a <= memb10; c0a11a <= cc_clamp(c010[8:0]); c0f11a <= cc_a256(c010[8:0]); hid11a <= hid10;
+`endif
     end
     wire [35:0] c1_w = cc_arith1(o11a);
+`ifdef RDP_SHARE_CC
+    always @(posedge clk) if (ue11a) cm_r <= c1_w;
+`endif
     reg        v11;
     reg [9:0]  x11;
     reg [31:0] comb11;
@@ -1249,12 +1308,21 @@ module rdp_pix (
     // The coverage and the row's low bits (a row's last pixels are still in
     // the pipe when the next row's y is issued), out of sb_ram at P8b, on to
     // P11 (the coverage, the alpha dither) and P13b (the RGB dither)
-    reg [3:0] cv9, cv10a, cv10, cv11a, cv11;
-    reg [1:0] y9, y10a, y10, y11a, y11, y11b, y12a, y12, y13a, y13b;
+    reg [3:0] cv9, cv10a, cv10, cv10b, cv11a, cv11;
+    reg [1:0] y9, y10a, y10, y10b, y11a, y11, y11b, y12a, y12, y12b, y13a, y13b;
     always @(posedge clk) begin
+`ifdef RDP_SHARE_CC
+        cv9 <= cvg8b; cv10a <= cv9; cv10 <= cv10a; cv10b <= cv10; cv11a <= cv10b; cv11 <= cv11a;
+        y9 <= y8b; y10a <= y9; y10 <= y10a; y10b <= y10; y11a <= y10b; y11 <= y11a;
+`else
         cv9 <= cvg8b; cv10a <= cv9; cv10 <= cv10a; cv11a <= cv10; cv11 <= cv11a;
         y9 <= y8b; y10a <= y9; y10 <= y10a; y11a <= y10; y11 <= y11a;
+`endif
+`ifdef RDP_SHARE_BL
+        y11b <= y11; y12a <= y11b; y12 <= y12a; y12b <= y12; y13a <= y12b; y13b <= y13a;
+`else
         y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
+`endif
     end
     wire [3:0] cvg11 = cv11;
     wire [1:0] dy11 = y11;
@@ -1460,10 +1528,12 @@ module rdp_pix (
     // ======================================================================
     wire        door11 = 1'b0;
     wire arej11 = (a_cmp && ca11b < athr11b) || door11;
+`ifndef RDP_SHARE_BL
     wire [63:0] bo0_w = bl_sel(1'b0, comb11b, mem11b, pa11b, sha11b, mcvg11b, bsa11b, bsb11b);
+    reg [63:0] bo12a;
+`endif
     reg        v12a;
     reg [9:0]  x12a;
-    reg [63:0] bo12a;
     reg [31:0] comb12a, mem12a;
     reg [7:0]  pa12a, sha12a;
     reg [2:0]  mcvg12a;
@@ -1472,16 +1542,20 @@ module rdp_pix (
     reg [2:0]  cv312a, cv312, cv313, cv313b;
     always @(posedge clk) begin
         v12a <= v11b & ~rst; x12a <= x11b; hp12a <= hp11b; bs12a <= bs11b;
+`ifndef RDP_SHARE_BL
         bo12a <= bo0_w;
+`endif
         comb12a <= comb11b; mem12a <= mem11b; pa12a <= pa11b; sha12a <= sha11b; mcvg12a <= mcvg11b; bsa12a <= bsa11b; bsb12a <= bsb11b;
         depth12a <= depth11b;
         pass12a <= (cyc == 2'd3) ? !k0_11b : (zpass11 && !arej11 && !kill11);
         ben12a <= blend_en; ovf12a <= ovf11b; cv312a <= cv311;
     end
+`ifndef RDP_SHARE_BL
     wire [41:0] s0_w = bl_sum(bo12a);
+    reg [23:0] b0rgb12;
+`endif
     reg        v12;
     reg [9:0]  x12;
-    reg [23:0] b0rgb12;
     reg [31:0] comb12, mem12;
     reg [7:0]  pa12, sha12;
     reg [2:0]  mcvg12;
@@ -1489,19 +1563,47 @@ module rdp_pix (
     reg        pass12, ben12, ovf12;
     always @(posedge clk) begin
         v12 <= v12a & ~rst; x12 <= x12a; hp12 <= hp12a; bs12 <= bs12a;
+`ifndef RDP_SHARE_BL
         b0rgb12 <= { s0_w[40:33], s0_w[26:19], s0_w[12:5] };
+`endif
         comb12 <= comb12a; mem12 <= mem12a; pa12 <= pa12a; sha12 <= sha12a; mcvg12 <= mcvg12a; bsa12 <= bsa12a; bsb12 <= bsb12a;
         depth12 <= depth12a; pass12 <= pass12a; ben12 <= ben12a; ovf12 <= ovf12a; cv312 <= cv312a;
     end
+`ifdef RDP_SHARE_BL
+    // The one blender, as the combiner (above): a 2-cycle pixel's first cycle takes the pixel as P11b has it (early), its second --
+    // or a 1-cycle pixel's only one -- the same pixel's three clocks on (late: P12b), with the first cycle's result (b0_r) in P's place.
+    reg        v12b, bs12b, hp12b, pass12b, ben12b, ovf12b;
+    reg [2:0]  bsa12b, bsb12b;
+    reg [9:0]  x12b;
+    reg [31:0] comb12b, mem12b;
+    reg [7:0]  pa12b, sha12b;
+    reg [2:0]  mcvg12b, cv312b;
+    reg [13:0] depth12b;
+    always @(posedge clk) begin
+        v12b <= v12 & ~rst; x12b <= x12; hp12b <= hp12; bs12b <= bs12;
+        comb12b <= comb12; mem12b <= mem12; pa12b <= pa12; sha12b <= sha12; mcvg12b <= mcvg12; bsa12b <= bsa12; bsb12b <= bsb12;
+        depth12b <= depth12; pass12b <= pass12; ben12b <= ben12; ovf12b <= ovf12; cv312b <= cv312;
+    end
+    wire       bu_e = v11b && cyc == 2'd1;
+    reg [23:0] b0_r;                         // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
+    wire [63:0] bo1_w = bl_sel(!bu_e && cyc == 2'd1, bu_e ? comb11b : (cyc == 2'd1) ? { b0_r, comb12b[7:0] } : comb12b,
+                               bu_e ? mem11b : mem12b, bu_e ? pa11b : pa12b, bu_e ? sha11b : sha12b, bu_e ? mcvg11b : mcvg12b,
+                               bu_e ? bsa11b : bsa12b, bu_e ? bsb11b : bsb12b);
+    reg        be13a;
+`else
+    wire        v12b = 1'b0;
     // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
     wire [31:0] b012 = { b0rgb12, comb12[7:0] };
+`endif
 
     // ======================================================================
     // P13a: the last blender cycle's operands -- 2-cycle's second on the
     // first's result, or 1-cycle's (cycle 0's settings) on the pixel; P13b:
     // its sums; out: the result
     // ======================================================================
+`ifndef RDP_SHARE_BL
     wire [63:0] bo1_w = bl_sel(cyc == 2'd1, (cyc == 2'd1) ? b012 : comb12, mem12, pa12, sha12, mcvg12, bsa12, bsb12);
+`endif
     reg        v13a;
     reg [9:0]  x13a;
     reg [63:0] bo13a;
@@ -1509,12 +1611,22 @@ module rdp_pix (
     reg [13:0] depth13;
     reg        pass13, ben13, ovf13;
     always @(posedge clk) begin
+`ifdef RDP_SHARE_BL
+        v13a <= v12b & ~rst; x13a <= x12b; hp13a <= hp12b; bs13a <= bs12b; be13a <= bu_e;
+        bo13a <= bo1_w;
+        comb13 <= comb12b;
+        depth13 <= depth12b; pass13 <= pass12b; ben13 <= ben12b; ovf13 <= ovf12b; cv313 <= cv312b;
+`else
         v13a <= v12 & ~rst; x13a <= x12; hp13a <= hp12; bs13a <= bs12;
         bo13a <= bo1_w;
         comb13 <= comb12;
         depth13 <= depth12; pass13 <= pass12; ben13 <= ben12; ovf13 <= ovf12; cv313 <= cv312;
+`endif
     end
     wire [41:0] s1_w = bl_sum(bo13a);
+`ifdef RDP_SHARE_BL
+    always @(posedge clk) if (be13a) b0_r <= { s1_w[40:33], s1_w[26:19], s1_w[12:5] };
+`endif
     reg        v13b;
     reg [9:0]  x13b;
     reg        bs13b;
@@ -1569,8 +1681,12 @@ module rdp_pix (
                          .y(dy13), .x(x13b[1:0] - {1'b0, hp13b}), .dt(dt13));
 `ifdef RDP_LFSR_PIXEL
     // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
-    reg [8:0] nz1, nz2, nz3, nz4, nz5;
+    reg [8:0] nz1, nz2, nz3, nz3b, nz4, nz5;
+`ifdef RDP_SHARE_BL
+    always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz3b <= nz3; nz4 <= nz3b; nz5 <= nz4; end
+`else
     always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz4 <= nz3; nz5 <= nz4; end
+`endif
 `else
     wire [8:0] nz5 = lfsr[8:0];
 `endif
@@ -1610,7 +1726,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v9 | v10a | v10 | v11a | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v9 | v10a | v10 | v10b | v11a | v11 | v11b | v12a | v12 | v12b | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no

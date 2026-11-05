@@ -117,6 +117,7 @@ esac
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
   for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
+  for m in ${OOC_DEFS:-}; do echo "set_global_assignment -name VERILOG_MACRO \"$m\""; done       # (OOC_DEFS="RDP_SHARE": more macros)
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
