@@ -550,7 +550,7 @@ void n64_cpu_step(n64_t *n)
                     [C0_CONTEXT] = 0xFF800000, [C0_PAGEMASK] = 0x01FFE000, [C0_COUNT] = 0xFFFFFFFF,
                     [C0_ENTRYHI] = 0xFFFFE0FF, [C0_STATUS] = 0xFFF7FFFF, [C0_EPC] = 0xFFFFFFFF,
                     [C0_CONFIG] = 0x0F00800F, [C0_LLADDR] = 0xFFFFFFFF, [C0_WATCHLO] = 0xFFFFFFFB,
-                    [C0_WATCHHI] = 0x0000000F, [C0_TAGLO] = 0x0FFFFFC0, [C0_ERROREPC] = 0xFFFFFFFF };
+                    [C0_WATCHHI] = 0x0000000F, [C0_TAGLO] = 0xFFFFFFFF, [C0_ERROREPC] = 0xFFFFFFFF };
                 c->cop0[rdi] = (c->cop0[rdi] & ~wm[rdi]) | (rt32 & wm[rdi]);
             }
             }

@@ -2126,7 +2126,8 @@ always_ff @(posedge clk) begin
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
                 5'd17: c0_lladdr <= m_st_lo;
                 5'd18: c0_watchlo <= m_st_lo & 32'hFFFFFFFB;  5'd19: c0_watchhi <= m_st_lo & 32'hF;
-                5'd28: c0_taglo <= m_st_lo & 32'h0FFFFFC0;    5'd30: c0_errorepc <= m_st_lo;
+                5'd28: c0_taglo <= m_st_lo;                          // (all 32 bits read back, as the console's)
+                5'd30: c0_errorepc <= m_st_lo;
                 default: ;
                 endcase
             end
