@@ -1292,7 +1292,7 @@ wire m_lhit = !FAST ? m_dc_hit : m_dly ? m_w1 && m_hit_r : 1'b1;
 // one cycle, its second in the next (m_ph). Both are in one line (it is
 // aligned), so the first's hit is the second's. A load's first word waits in
 // ms_data; a store's goes into the cache and the write buffer as it is done.
-wire m_cw = m_wide && m_cached;
+wire m_cw = m_wide && (m_cached || (m_st && !m_mapped));        // (a doubleword store to uncached RDRAM too: two words into the write buffer, as a cached one's, no slow path)
 wire m_w0;
 
 logic [63:0] ms_data;                       // the slow path's read (high word = the lower address)
@@ -1516,7 +1516,7 @@ wire m_devst = m_st && !m_wide && (FAST ? (m_kseg ? m_f_devk : pa_dev(tphys({m_t
 // buffer whatever the region
 // (PGD) a mapped load through the D-cache
 wire m_cl = PGD && FAST && TLB_RAM && m_mapped && m_ld && !m_wide && m_tlbc;
-wire m_needs_slow = m_mem && !m_sc_fail && ((m_wide && !m_cached) || (m_ld && !m_cached && !m_cl) || m_devst);
+wire m_needs_slow = m_mem && !m_sc_fail && ((m_wide && !m_cached && !(m_st && !m_mapped)) || (m_ld && !m_cached && !m_cl) || m_devst);
 // a store's word this cycle: of a 64-bit one to cached memory, the half by m_ph
 wire [31:0] m_cst_data = m_st_data;
 wire [3:0]  m_cst_strb = m_st_strb;
