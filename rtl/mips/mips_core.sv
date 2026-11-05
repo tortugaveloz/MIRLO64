@@ -341,6 +341,7 @@ typedef struct packed {
     x_t          x64;
     logic        b_imm, imm_zero;
     logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
+    logic        cop2;                      // a COP2 instruction: Coprocessor Unusable without Status.CU2, and nothing with it
     logic        use_rs, use_rt;
     load_t       ld;
     store_t      st;
@@ -502,6 +503,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h2E: begin c.st = S_SWR; c.use_rs = 1; c.use_rt = 1; end
     6'h2F: begin c.cache = 1; c.use_rs = 1; end
     6'h30: begin c.ld = M_LL;  c.use_rs = 1; c.wr = 1; c.rd = rt; c.late = 1; end
+    6'h12, 6'h32, 6'h36, 6'h3A, 6'h3E: c.cop2 = 1;
     6'h31, 6'h35: begin c.ld = M_FL; c.use_rs = 1; end
     6'h38: begin c.st = S_SC;  c.use_rs = 1; c.use_rt = 1; c.wr = 1; c.rd = rt; c.late = 1; end
     6'h39, 6'h3D: begin c.st = S_FS; c.use_rs = 1; end
@@ -1168,13 +1170,14 @@ wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22
 // Without it no thread ever was, and the sound thread's floats overwrote the
 // game's mid-calculation (2026-09-29; sim/n64/cpu.c the same).
 wire e_cpu1 = !c0_status[29] && e_isfp;
+wire e_cpu2 = !c0_status[30] && e_c.cop2;
 logic [4:0] e_exc_code; logic [31:0] e_badv;
 // (e_exc is one OR of the causes, not the end of the priority chain that picks the code)
-wire e_exc = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
+wire e_exc = e_fexc || e_cpu1 || e_cpu2 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
 always_comb begin
     e_badv = e_ea; e_exc_code = 5'd0;
     if (e_fexc) begin e_exc_code = e_fexc_code; e_badv = e_pc; end
-    else if (e_cpu1) e_exc_code = 5'd11;
+    else if (e_cpu1 || e_cpu2) e_exc_code = 5'd11;
     else if (e_c.ri) e_exc_code = 5'd10;
     else if (e_c.sys) e_exc_code = 5'd8;
     else if (e_c.brk) e_exc_code = 5'd9;
@@ -2042,7 +2045,7 @@ always_ff @(posedge clk) begin
                     c0_cause[31] <= m_dly;
                 end
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
-                c0_cause[29:28] <= (!m_take_int && m_exc_v && m_code == 5'd11) ? 2'd1 : 2'd0;   // CE: COP1
+                c0_cause[29:28] <= (!m_take_int && m_exc_v && m_code == 5'd11) ? (m_c.cop2 ? 2'd2 : 2'd1) : 2'd0;   // CE: the coprocessor
                 c0_status[1] <= 1'b1;
             end
             if (m_take_exc) begin
