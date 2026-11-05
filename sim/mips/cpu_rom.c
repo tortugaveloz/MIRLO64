@@ -189,6 +189,18 @@ static void sec_cp0_64(void)
     MTC0(4, c0);
     MTC0(12, st);
 }
+/* ---- CACHE with an address that is not a word's raises Address Error (AdEL); a word's does not */
+static void sec_cache_align(void)
+{
+    u32 a = 0x80100000u;
+    h_count = 0; h_ret = 0;
+    __asm__ volatile("cache 0x15, 4(%0)" :: "r"(a) : "memory");
+    check(0x0A01, h_count, 0);
+    __asm__ volatile("cache 0x15, 2(%0)" :: "r"(a) : "memory");
+    check(0x0A02, h_count, 1);
+    check(0x0A03, h_cause & 0x8000007C, 4 << 2);
+    check(0x0A04, h_badv, 0x80100002u);
+}
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -204,6 +216,7 @@ int main(void)
     sec_overflow();
     sec_dmfc0();
     sec_cp0_64();
+    sec_cache_align();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;

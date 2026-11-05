@@ -1136,6 +1136,7 @@ always_comb begin
     S_FS: begin d_al8 = d_insn[31:26] == 6'h3D; d_al4 = !d_al8; d_al2 = 1'b0; end
     default: ;
     endcase
+    if (d_c.cache) d_al4 = 1'b1;                      // (cache: the address of a word, else Address Error)
     d_mem   = d_c.ld != M_NONE || d_c.st != S_NONE;
     d_fwide = (d_c.ld == M_FL && d_insn[31:26] == 6'h35) || (d_c.st == S_FS && d_insn[31:26] == 6'h3D);
     d_isfp  = d_insn[31:26] == 6'h11 || d_c.ld == M_FL || d_c.st == S_FS;

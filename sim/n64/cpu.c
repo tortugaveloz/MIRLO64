@@ -699,7 +699,7 @@ void n64_cpu_step(n64_t *n)
         store(n, pc, dly, a & ~7u, 8, w);
         break;
     }
-    case 0x2F: break;                                                              /* cache */
+    case 0x2F: if (a & 3) { set_badv(n, a); exception(n, pc, dly, EXC_ADEL, 0); } break;      /* cache: the address must be a word's (AdEL) */
     case 0x30: if (!load(n, pc, dly, a, 4, &v)) { WR(rti, SX(v)); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;   /* ll */
     case 0x31: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (lwc1: CpU, see COP1) */
         if (!load(n, pc, dly, a, 4, &v)) c->f[rti] = (uint32_t)v; break;              /* lwc1 */
