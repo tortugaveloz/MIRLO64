@@ -147,19 +147,21 @@ static void sec_overflow(void)
     check(0x0741, h_count, 0);
     check(0x0742, r, 0x7FFFFFFF);
 }
-/* ---- dmfc0 of LLAddr and TagLo is zero-extended (32 bits); of Status, a sign-extended mfc0 */
+/* ---- dmfc0 of LLAddr and TagLo is zero-extended (32 bits); mfc0 gives the word */
+#define DMFC0(r, hi, lo) __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tdmfc0 $8, $" #r "\n\tnop\n\tnop\n\tdsra32 %0, $8, 0\n\tsll %1, $8, 0\n\t.set pop" : "=r"(hi), "=r"(lo) :: "$8")
 static void sec_dmfc0(void)
 {
-    u64 v;
+    u32 hi, lo;
     MTC0(17, 0x89ABCDEFu);
-    __asm__ volatile("dmfc0 %0, $17\n\tnop\n\tnop" : "=r"(v));
-    check(0x0801, v, 0x89ABCDEFull);
+    DMFC0(17, hi, lo);
+    check(0x0801, ((u64)hi << 32) | lo, 0x89ABCDEFull);
     MTC0(28, 0x89ABCDEFu);
-    __asm__ volatile("dmfc0 %0, $28\n\tnop\n\tnop" : "=r"(v));
-    check(0x0802, v, 0x89ABCDEFull);
+    DMFC0(28, hi, lo);
+    check(0x0802, ((u64)hi << 32) | lo, 0x89ABCDEFull);
     u32 w;
     __asm__ volatile("mfc0 %0, $28\n\tnop\n\tnop" : "=r"(w));
     check(0x0803, w, 0x89ABCDEFu);                                     /* (mfc0: the word) */
+    MTC0(12, MFC0(12));
 }
 int main(void)
 {

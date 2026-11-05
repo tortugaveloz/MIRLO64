@@ -343,6 +343,7 @@ typedef struct packed {
     x_t          x64;
     logic        b_imm, imm_zero;
     logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
+    logic        zx0;                       // dmfc0 of LLAddr or TagLo: a 32-bit value, zero-extended (a wide result)
     logic        ovf;                       // add, addi, sub: Integer Overflow on a 32-bit signed overflow
     logic        cop2;                      // a COP2 instruction: Coprocessor Unusable without Status.CU2, and nothing with it
     logic        use_rs, use_rt;
@@ -464,7 +465,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     end
     6'h10: begin
         // (dmfc0, dmtc0: the registers are 32 bits)
-        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; end
+        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd17 || i[15:11] == 5'd28); end
         else if (rs == 5'h04 || (W64 && rs == 5'h05)) begin c.mtc0 = 1; c.use_rt = 1; end
         else if (rs[4] && fn[5]) begin end           // a CO instruction of an undefined function 0x20 - 0x3F does nothing, whatever its other fields
         else if (rs == 5'h10) begin
@@ -870,7 +871,7 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 // hx: the register file's, or zero for a value still in the pipeline (what
 // can have one makes its readers wait: haz_wide)
 function automatic logic wideprod(input ctl_t c);
-    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64;   // (a compare's result is 0 or 1)
+    return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64 || c.zx0;   // (a compare's result is 0 or 1)
 endfunction
 wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
 wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
@@ -2033,7 +2034,7 @@ always_ff @(posedge clk) begin
             if (W64) begin
                 if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
-                else if (m_c.mfc0 && m_insn[21] && (m_insn[15:11] == 5'd17 || m_insn[15:11] == 5'd28)) w_hx <= {32{c0_rd[31]}};   // dmfc0 of LLAddr, TagLo: zero-extended
+                else if (m_c.zx0) w_hx <= {32{c0_rd[31]}};   // dmfc0 of LLAddr, TagLo: zero-extended
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
             end
