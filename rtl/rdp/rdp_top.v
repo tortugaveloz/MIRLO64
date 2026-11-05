@@ -499,7 +499,7 @@ module rdp_top (
     wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
 `ifdef RDP_PXGAP
     always @(posedge clk)
-        if (st == S_PIX && row_wq && pix_go && (z_cmp || z_upd || need_mem)) pxg <= 4'(`RDP_PXGAP);
+        if (st == S_PIX && row_wq && pix_go && (z_cmp || z_upd || need_mem)) pxg <= `RDP_PXGAP;
         else if (pxg != 4'd0) pxg <= pxg - 4'd1;
     initial pxg = 4'd0;
 `endif
