@@ -239,9 +239,12 @@ endfunction
 
 // the align shifter: add (the smaller significand, below the larger's at
 // [30:7]) or to-int ({1.f, 10'b0} >> (158 - e): the integer, a guard, a sticky)
-wire [7:0]  sh_n = (!FAST && st == S_F2W) ? 8'(8'd158 - ax.e) : ad;
+// (FAST: S_PRE aligns an add's operands in the same cycle it finds their order: the difference and the order straight from ax and ay)
+wire [7:0]  pre_ad = ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;
+wire        pre_add = FAST && st == S_PRE && fn[5:1] == 5'd0 && ax.e != 8'hFF && ay.e != 8'hFF && ax.e != 8'd0 && ay.e != 8'd0;
+wire [7:0]  sh_n = (!FAST && st == S_F2W) ? 8'(8'd158 - ax.e) : (st == S_PRE) ? pre_ad : ad;
 wire [22:0] add_lf = (FAST && fmlt) ? ay.f : ax.f;        // add: the larger's fraction, the smaller's
-wire [22:0] add_sf = (FAST && fmlt) ? ax.f : ay.f;
+wire [22:0] add_sf = (FAST && ((st == S_PRE) ? pre_lt : fmlt)) ? ax.f : ay.f;
 wire [7:0]  add_le = (FAST && fmlt) ? ay.e : ax.e;
 wire [33:0] sh_v = st == S_F2W ? {1'b1, ax.f, 10'd0} : {1'b0, 1'b1, add_sf, 9'd0};
 wire [34:0] sh_o = rshift(sh_v, sh_n);
@@ -308,6 +311,7 @@ always_comb begin
               else if (zmag == 32'd0) z_ax = 1;
               else if (zmag == {32{ax[31]}}) z_za = 1;
     S_ADDA:   z_sh = 1;
+    S_PRE:    z_sh = pre_add;
     S_ADD2:   z_za = 1;
     S_ITER:   z_zsh = 1;
     S_NORM:   if (FAST) z_mp = kind == K_MUL; else z_nf = 1;
@@ -320,7 +324,7 @@ always_comb begin
 end
 wire [31:0] zm_nf = (kind == K_MUL ? mprod[47:16] : zmag);
 wire [31:0] zmag_d = ({32{z_xo}} & xo) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
-                   | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | (st == S_ADDA && (sh_o[2] | sh_o[1] | sh_o[0]))})
+                   | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | ((st == S_ADDA || st == S_PRE) && (sh_o[2] | sh_o[1] | sh_o[0]))})
                    | ({32{z_zsh}} & zsh) | ({32{z_mp}} & (mprod[47] ? mprod[47:16] : {mprod[46:16], 1'b0})) | ({32{z_ir}} & ir) | ({32{z_nf}} & (zm_nf << lzc32(zm_nf)));
 always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mp || z_ir || z_nf || z_clr) zmag <= zmag_d;
 
@@ -532,7 +536,8 @@ always_ff @(posedge clk) begin
                 kind <= K_ADD;
                 ad <= ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;
                 sub_eff <= ax.s != (ay.s ^ fn[0]);
-                st <= S_ADDA;
+                zs <= pre_lt ? ay.s ^ fn[0] : ax.s;                // (the larger's sign, as S_ADDA took it)
+                st <= S_ADD2;
             end else if (fn == 6'h02) begin
                 kind <= K_MUL; zs <= ax.s ^ ay.s;
                 st <= S_NORM;
