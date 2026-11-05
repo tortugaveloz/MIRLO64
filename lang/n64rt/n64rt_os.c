@@ -1487,6 +1487,12 @@ n64rt_ctx_t n64rt_mon_ctx __attribute__((aligned(4096)));
  * domain registers, the RI's (the runtime's own tables) -- done in the entry itself with $k0 and $k1 only, nothing
  * else saved; everything else comes to n64rt_mon_exception as before. Only with the MI in hardware: without it the
  * line (n64rt_rcp_line) has to be worked out after every register write. */
+/* The game's Count: what it had on the way into the monitor (the monitor's time is not the game's: it is put back on the way out,
+ * n64rt_exc.S). DPC_CLOCK counts the game's time. */
+u32 n64rt_game_count(void)
+{
+    return n64rt_mon_ctx.count_in;
+}
 void n64rt_mon_fast_enable(void)
 {
 #if !defined(N64RT_NO_FASTMON) && !defined(N64RT_STATS)

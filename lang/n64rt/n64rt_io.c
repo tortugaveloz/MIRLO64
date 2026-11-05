@@ -1450,15 +1450,16 @@ static inline u32 rsp_rd(u32 off) { return *(volatile u32 *)(uintptr_t)(0x200000
  * need the clock counter ticking up and others, like Ocarina of Time, depend on it being either zero or very accurate): Ocarina of Time and
  * the other 6105 games read 0, as before. The hardware has no such counter (the RSP's own MFC0 of it reads 0); this is the CPU's
  * view of it, from the SoC's uptime counter. */
-static u32 s_dpc_clk0;
+u32 n64rt_game_count(void);
+static u32 s_dpc_c0;                     /* Count (the game's) at the last CLR_CLOCK_CTR */
 static u32 s_pi_wr_len;                 /* PI_WR_LEN as a read gives it (pi_advance, below) */
-/* (n64rt_state.c) a save state put back: the SoC's clock is that much further on than the state's runtime had it */
-void n64rt_io_rebase(u32 cycles) { s_dpc_clk0 += cycles; }
+/* (n64rt_state.c) a save state put back: the clock goes on from the game's Count as it is */
+void n64rt_io_rebase(u32 cycles) { (void)cycles; }
 static u32 dpc_clock(void)
 {
     if (n64rt_game && n64rt_game->cic == 6105u) return 0u;
-    timer0_uptime_latch_write(1);
-    return ((u32)timer0_uptime_cycles_read() - s_dpc_clk0) & 0x00FFFFFFu;
+    /* the console's RDP clock runs at 4/3 of Count (nemu64-test: 133,333 ticks in 100,000 of the CPU's, as Count counts them) */
+    return (u32)((u64)(n64rt_game_count() - s_dpc_c0) * 4u / 3u) & 0x00FFFFFFu;
 }
 #ifdef N64RT_RSPDUMP
 /* (sim/mips_soc RSPDUMP=<dir>: the RDRAM, and the OSTask the game DMAs into DMEM 0xFC0, at the
@@ -1814,7 +1815,7 @@ static int rcp_write_(u32 pa, u32 v)
         return 1;
     case 0x041:                                                       /* DPC: START, END, STATUS (CURRENT and the CLOCK are read-only) */
         if (o == 0x00u || o == 0x04u || o == 0x0Cu) {
-            if (o == 0x0Cu && (v & 0x200u)) { timer0_uptime_latch_write(1); s_dpc_clk0 = (u32)timer0_uptime_cycles_read(); }   /* CLR_CLOCK_CTR */
+            if (o == 0x0Cu && (v & 0x200u)) s_dpc_c0 = n64rt_game_count();   /* CLR_CLOCK_CTR */
             /* The RDP's registers are the hardware's own, at 0x2000_0040 + the offset (a read comes from there). A CPU's write is
              * forwarded to them: START (ignored while a start is pending), END and STATUS are the RDP's, the status bits as the
              * console shows them (rcp_dpc_view.sv). A core without the CPU's DPC write path drops the write (the host port gates
