@@ -187,6 +187,8 @@ module mips_core #(
     parameter bit MD_HOLD = 0,
     // an mtc0 costs the console's two cycles (one bubble) instead of draining the pipeline
     parameter bit CP0_LIGHT = 0,
+    // tlbwi and tlbwr cost one bubble too, not a drain of the pipeline on both sides
+    parameter bit TLBW_LIGHT = 0,
     // the console's RDRAM answers no sooner than this: the cycles a cached load's miss takes at the least (0: as the memory answers)
     parameter int DMISS_MIN = 0,
     // an uncached load of the game's RDRAM waits this many cycles before it asks (the console's answer comes 15 cycles later than the SDRAM's)
@@ -892,9 +894,9 @@ wire haz_late = e_live && e_c.late && ((d_needs_rs && e_rs_hit) || (d_needs_rt &
 wire haz_fcc = (d_c.br == B_C1F || d_c.br == B_C1T) && ((e_live && e_c.cop1_cond) || (m_valid && m_c.cop1_cond));
 // CP0_LIGHT: an mtc0 costs the console's two cycles -- one bubble behind it -- instead of draining the pipeline on both sides. Its write is
 // in M's order, so what follows in M sees it; the hazards the VR4300 leaves to software (the TLB's, the interrupt mask's) are as the VR4300's.
-wire d_serial = (!CP0_LIGHT && d_c.mtc0) || d_c.eret || d_c.tlbwi || d_c.tlbwr || d_c.tlbr || d_c.tlbp || d_c.cache;
+wire d_serial = (!CP0_LIGHT && d_c.mtc0) || d_c.eret || (!TLBW_LIGHT && (d_c.tlbwi || d_c.tlbwr)) || d_c.tlbr || d_c.tlbp || d_c.cache;
 wire haz_serial = (d_serial && (e_live || m_valid || w_valid)) || (e_live && e_serial) || (m_valid && m_serial) || (w_valid && w_serial) ||
-                  (CP0_LIGHT && e_live && e_c.mtc0);
+                  (CP0_LIGHT && e_live && e_c.mtc0) || (TLBW_LIGHT && e_live && (e_c.tlbwi || e_c.tlbwr));
 logic md_busy;
 logic [6:0] md_hold;                 // the console's multiplies and divides stall the pipeline for their whole latency: cycles still to wait
 logic md_hold_on;
