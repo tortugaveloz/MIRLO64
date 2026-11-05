@@ -465,7 +465,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     end
     6'h10: begin
         // (dmfc0, dmtc0: the registers are 32 bits)
-        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd17 || i[15:11] == 5'd28); end
+        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd4 || i[15:11] == 5'd14 || i[15:11] == 5'd17 || i[15:11] == 5'd20 || i[15:11] == 5'd28 || i[15:11] == 5'd30); end
         else if (rs == 5'h04 || (W64 && rs == 5'h05)) begin c.mtc0 = 1; c.use_rt = 1; end
         else if (rs[4] && fn[5]) begin end           // a CO instruction of an undefined function 0x20 - 0x3F does nothing, whatever its other fields
         else if (rs == 5'h10) begin
@@ -601,6 +601,7 @@ wire         game_view = MAP_HI && mon_klo && mon_game && !c0_status[2] && !c0_s
 function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {32{v[31]}}; endfunction
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
 
+logic [31:0] c0_h_ctx, c0_h_epc, c0_h_eepc, c0_h_xc;   // the upper words of Context (PTEBase), EPC, ErrorEPC and XContext (PTEBase): 64-bit registers
 logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wired, c0_badvaddr,
              c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_lladdr,
              c0_watchlo, c0_watchhi, c0_taglo, c0_errorepc;
@@ -1450,6 +1451,16 @@ wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
 wire m_gacc = MON && mon_game && !c0_status[2] && n64code(m_pc, game_view);
 logic [31:0] c0_latch;
 wire c0_unused = m_insn[15:11] == 5'd7 || (m_insn[15:11] >= 5'd21 && m_insn[15:11] <= 5'd25) || m_insn[15:11] == 5'd31;
+// dmfc0's upper word of the 64-bit registers (the others: zero for LLAddr and TagLo, else the word's sign)
+wire  [31:0] m_epc_v = m_dly ? m_pc - 32'd4 : m_pc;      // (the address an exception returns to: EPC's upper word is its sign extension)
+logic [31:0] c0_rd_hi;
+always_comb case (m_insn[15:11])
+    5'd4:  c0_rd_hi = c0_h_ctx;
+    5'd14: c0_rd_hi = c0_h_epc;
+    5'd20: c0_rd_hi = {c0_h_xc[31:1], c0_context[22]};
+    5'd30: c0_rd_hi = c0_h_eepc;
+    default: c0_rd_hi = 32'd0;
+endcase
 logic [31:0] c0_rd;
 always_comb begin
     case (m_insn[15:11])
@@ -1469,6 +1480,7 @@ always_comb begin
     5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd17: c0_rd = c0_lladdr;
     5'd18: c0_rd = c0_watchlo; 5'd19: c0_rd = c0_watchhi;
     5'd28: c0_rd = c0_taglo;   5'd30: c0_rd = c0_errorepc;
+    5'd20: c0_rd = {c0_context[22], {8{c0_context[22]}}, c0_context[22:4], 4'd0};   // XContext: R, BadVPN2 = VA[39:13] of the last bad address (sign-extended)
     default: c0_rd = 32'd0;
     endcase
     if (m_gacc && c0_unused) c0_rd = c0_latch;
@@ -1990,7 +2002,7 @@ always_ff @(posedge clk) begin
         d_valid <= 0; e_valid <= 0; m_valid <= 0; w_valid <= 0;
         c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0; c0_count <= 0; c0_compare <= 0;
         c0_wired <= 0; c0_index <= 0; c0_entryhi <= 0; c0_entrylo0 <= 0; c0_entrylo1 <= 0; c0_pagemask <= 0;
-        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
+        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_h_ctx <= 0; c0_h_epc <= 0; c0_h_eepc <= 0; c0_h_xc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
         c0_watchhi <= 0; c0_taglo <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
@@ -2034,7 +2046,7 @@ always_ff @(posedge clk) begin
             if (W64) begin
                 if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
-                else if (m_c.zx0) w_hx <= {32{c0_rd[31]}};   // dmfc0 of LLAddr, TagLo: zero-extended
+                else if (m_c.zx0) w_hx <= c0_rd_hi ^ {32{c0_rd[31]}};   // dmfc0 of LLAddr, TagLo: zero-extended
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
             end
@@ -2045,11 +2057,13 @@ always_ff @(posedge clk) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
                 c0_errorepc <= m_dly ? m_pc - 32'd4 : m_pc;
+                c0_h_eepc <= {32{m_epc_v[31]}};
                 c0_status[2] <= 1'b1;
                 mon_bd <= m_dly; mon_code <= m_take_int ? 5'd31 : m_code;
             end else begin
                 if (!c0_status[1]) begin
                     c0_epc <= m_dly ? m_pc - 32'd4 : m_pc;
+                    c0_h_epc <= {32{m_epc_v[31]}};
                     c0_cause[31] <= m_dly;
                 end
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
@@ -2114,7 +2128,7 @@ always_ff @(posedge clk) begin
                 5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0]; c0_index[31] <= m_st_lo[31]; end   // (P is writable, as the VR4300's)
                 5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
-                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23];
+                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23]; c0_h_ctx <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}};
                              // (likewise its BadVPN2: the tables' faults do not set it)
                              if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
                 5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
@@ -2124,12 +2138,13 @@ always_ff @(posedge clk) begin
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)
                 5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
-                5'd14: c0_epc <= m_st_lo;
+                5'd14: begin c0_epc <= m_st_lo; c0_h_epc <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}; end
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
                 5'd17: c0_lladdr <= m_st_lo;
                 5'd18: c0_watchlo <= m_st_lo & 32'hFFFFFFFB;  5'd19: c0_watchhi <= m_st_lo & 32'hF;
                 5'd28: c0_taglo <= m_st_lo;                          // (all 32 bits read back, as the console's)
-                5'd30: c0_errorepc <= m_st_lo;
+                5'd30: begin c0_errorepc <= m_st_lo; c0_h_eepc <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}; end
+                5'd20: c0_h_xc <= (m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}) & 32'hFFFFFFFE;   // XContext: PTEBase (R and BadVPN2 are the hardware's)
                 default: ;
                 endcase
             end

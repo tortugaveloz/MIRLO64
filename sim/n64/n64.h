@@ -90,6 +90,7 @@ typedef struct {
     uint32_t f[32];                       /* FPU: 32 32-bit registers (FR=0 pairs) */
     uint32_t fcr31;
     uint32_t cop0[32];
+    uint32_t cop0h[32];      /* the upper words of the 64-bit registers that keep one: Context (PTEBase), EPC, XContext (PTEBase), ErrorEPC */
     uint64_t cycles;                      /* instructions retired (1 CPU cycle each) */
     uint32_t count_frac;                  /* Count advances every 2 cycles */
     int      ll_bit;

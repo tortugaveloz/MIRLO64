@@ -123,6 +123,7 @@ static void exception_vec(n64_t *n, uint32_t pc, int in_delay, int code, int ce,
     int exl = (*sr & SR_EXL) != 0;
     if (!exl) {
         c->cop0[C0_EPC] = in_delay ? pc - 4 : pc;
+        c->cop0h[C0_EPC] = (c->cop0[C0_EPC] & 0x80000000u) ? 0xFFFFFFFFu : 0u;
         *cause = in_delay ? (*cause | CAUSE_BD) : (*cause & ~CAUSE_BD);
     }
     *cause = (*cause & ~0x3000007Cu) | ((uint32_t)code << 2) | ((uint32_t)ce << 28);
@@ -533,8 +534,14 @@ void n64_cpu_step(n64_t *n)
         if (fmt == 0x01 || fmt == 0x05) n64_op64_site(pc, insn);                    /* dmfc0, dmtc0 */
         if (fmt == 0x00 || fmt == 0x01) {                                           /* mfc0, dmfc0 */
             uint32_t x = c->cop0[rdi];
-            /* dmfc0 of LLAddr and TagLo: 32 bits, zero-extended (the rest of the registers: sign-extended as mfc0 is) */
-            WR(rti, (fmt == 0x01 && (rdi == C0_LLADDR || rdi == C0_TAGLO)) ? (uint64_t)x : SX(x));
+            uint32_t b31 = (c->cop0[C0_CONTEXT] >> 22) & 1u;                          /* the last bad address's bit 31, from Context's BadVPN2 */
+            if (rdi == C0_XCONTEXT) x = (b31 << 31) | (b31 ? 0x7F800000u : 0u) | (c->cop0[C0_CONTEXT] & 0x007FFFF0u);   /* XContext: R, BadVPN2 (VA[39:13]) */
+            if (fmt == 0x01) {                                                       /* dmfc0: the 64-bit registers whole, LLAddr and TagLo zero-extended, the rest sign-extended */
+                uint32_t hi = (rdi == C0_CONTEXT || rdi == C0_EPC || rdi == C0_ERROREPC) ? c->cop0h[rdi]
+                            : rdi == C0_XCONTEXT ? ((c->cop0h[C0_XCONTEXT] & 0xFFFFFFFEu) | b31)
+                            : (rdi == C0_LLADDR || rdi == C0_TAGLO) ? 0u : (x & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+                WR(rti, ((uint64_t)hi << 32) | x);
+            } else WR(rti, SX(x));
         } else if (fmt == 0x04 || fmt == 0x05) {                                    /* mtc0, dmtc0 */
             switch (rdi) {
             case C0_CAUSE: c->cop0[C0_CAUSE] = (c->cop0[C0_CAUSE] & ~0x300u) | (rt32 & 0x300u); break;
@@ -553,6 +560,11 @@ void n64_cpu_step(n64_t *n)
                     [C0_CONFIG] = 0x0F00800F, [C0_LLADDR] = 0xFFFFFFFF, [C0_WATCHLO] = 0xFFFFFFFB,
                     [C0_WATCHHI] = 0x0000000F, [C0_TAGLO] = 0xFFFFFFFF, [C0_ERROREPC] = 0xFFFFFFFF };
                 c->cop0[rdi] = (c->cop0[rdi] & ~wm[rdi]) | (rt32 & wm[rdi]);
+                /* the upper words: a dmtc0 gives them, an mtc0 the sign extension of the word */
+                if (rdi == C0_CONTEXT || rdi == C0_EPC || rdi == C0_ERROREPC || rdi == C0_XCONTEXT) {
+                    uint32_t hi = fmt == 0x05 ? (uint32_t)(rt >> 32) : (rt32 & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+                    c->cop0h[rdi] = rdi == C0_XCONTEXT ? (hi & 0xFFFFFFFEu) : hi;
+                }
             }
             }
         } else if (fmt == 0x10) {                                                   /* CO */

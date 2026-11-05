@@ -163,6 +163,32 @@ static void sec_dmfc0(void)
     check(0x0803, w, 0x89ABCDEFu);                                     /* (mfc0: the word) */
     MTC0(12, MFC0(12));
 }
+/* ---- the 64-bit registers: EPC, ErrorEPC and Context keep all 64 bits of a dmtc0 (Context's low word has its mask); an mtc0 writes the sign extension */
+#define DMTC0(r, v) do { u32 vh_ = (u32)((u64)(v) >> 32), vl_ = (u32)(v); \
+    __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tdsll32 $8, %0, 0\n\tdsll32 $9, %1, 0\n\tdsrl32 $9, $9, 0\n\tor $8, $8, $9\n\t" \
+                     "dmtc0 $8, $" #r "\n\tnop\n\tnop\n\t.set pop" :: "r"(vh_), "r"(vl_) : "$8", "$9", "memory"); } while (0)
+static void sec_cp0_64(void)
+{
+    u32 hi, lo;
+    u32 st = MFC0(12);
+    MTC0(12, st & ~0x2u);                                              /* (EXL clear: EPC is the game's to write) */
+    DMTC0(14, 0xF765432189ABCDEFull);
+    DMFC0(14, hi, lo);
+    check(0x0901, ((u64)hi << 32) | lo, 0xF765432189ABCDEFull);
+    MTC0(14, 0x89ABCDEFu);                                             /* mtc0: the word, sign-extended */
+    DMFC0(14, hi, lo);
+    check(0x0902, ((u64)hi << 32) | lo, 0xFFFFFFFF89ABCDEFull);
+    DMTC0(30, 0xF765432189ABCDEFull);
+    DMFC0(30, hi, lo);
+    check(0x0911, ((u64)hi << 32) | lo, 0xF765432189ABCDEFull);
+    u32 c0 = MFC0(4);
+    DMTC0(4, 0xF765432189ABCDEFull);
+    DMFC0(4, hi, lo);
+    check(0x0921, hi, 0xF7654321u);                                    /* (PTEBase's upper word) */
+    check(0x0922, lo & 0xFF800000u, 0x89800000u);
+    MTC0(4, c0);
+    MTC0(12, st);
+}
 int main(void)
 {
     for (u32 v = 0; v < 0x200; v += 0x180) {
@@ -177,6 +203,7 @@ int main(void)
     sec_cop0_co();
     sec_overflow();
     sec_dmfc0();
+    sec_cp0_64();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
     for (;;) ;
