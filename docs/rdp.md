@@ -377,6 +377,15 @@ the primitives that take it), the tile's coordinate arithmetic, the TMEM read,
 the TLUT read and decode, the filter, two combiner cycles, the alpha, coverage
 and depth tests, two blender cycles, the dither.
 
+### The RDRAM's pace
+
+The console's RDP draws a pixel that reads or writes the depth or colour image at the pace of the RDRAM, not the pipeline's
+one clock. With `RDP_PXGAP` (default 4, in `rtl/rdp/rdp_top.v`; `RDP_NOPXGAP` leaves it out) `rdp_top` issues nothing for that
+many clocks after such a pixel (with the LOD the slots are ghosts, so the neighbour's perspective divide stays on time). The
+figure is measured, not derived: in a game's scene that the console draws in 2.94 video fields a frame the RTL took 2.49;
+with a gap of 4 clocks it takes the console's figure (20 frames in 60 fields; a gap of 1 or 2 changes almost nothing, one of 8
+gives 15).
+
 ### Cycle types
 
 * **1-cycle.** The combiner's second-cycle settings with COMBINED at 0, and

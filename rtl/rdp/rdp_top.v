@@ -4,6 +4,15 @@
 `define RDP_SHARE
 `endif
 `endif
+// the console's RDRAM, not the RDP, sets the pace of a pixel that reads or writes the depth or colour image: RDP_PXGAP clocks (default 4)
+// of nothing after each such pixel; RDP_NOPXGAP: none
+`ifndef RDP_NOPXGAP
+`ifndef RDP_NOSHARE
+`ifndef RDP_PXGAP
+`define RDP_PXGAP 4
+`endif
+`endif
+`endif
 // RDP -- Mirlo's rasterizer for the N64's own command stream, as a game's
 // microcode on the RSP (rtl/rsp) gives it. The contract is the C model,
 // lang/c/rdp/rdp.c built with RDP_N64: for the same command stream the RTL
@@ -458,7 +467,15 @@ module rdp_top (
     // memory is in the old buffers
     wire [9:0] pix_wi = ({9'd0, xsp[0]} + px_cnt) >> 1;
     // (a 32-bit image's colour span: a word a pixel)
-    wire       pix_ok = !rq_cur && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
+`ifdef RDP_PXGAP
+    // (RDP_PXGAP clocks of nothing after each pixel that reads or writes the depth or colour image: the RDRAM's pace)
+    reg  [3:0] pxg;
+    wire       pxg_ok = pxg == 4'd0;
+`else
+    wire       pxg_ok = 1'b1;
+`endif
+    // (the gap is in pix_ok, not pix_slot: with the LOD a pixel not ready in time is a ghost, which keeps the neighbour's perspective divide on time)
+    wire       pix_ok = pxg_ok && !rq_cur && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
     // clock: pix_valid is still up the clock after an issue
 `ifdef RDP_SHARE
@@ -480,6 +497,12 @@ module rdp_top (
     wire       pix_end = pix_pos == xe;
     wire       pix_gh = lod_on && pix_slot && (pix_g0 || (pix_fol && (pix_end || !pix_ok)));
     wire       pix_go = pix_ok && pix_slot && !pix_gh && !(lod_on && pix_end);
+`ifdef RDP_PXGAP
+    always @(posedge clk)
+        if (st == S_PIX && row_wq && pix_go && (z_cmp || z_upd || need_mem)) pxg <= 4'(`RDP_PXGAP);
+        else if (pxg != 4'd0) pxg <= pxg - 4'd1;
+    initial pxg = 4'd0;
+`endif
     // nothing of the primitive is under way any more
     wire       all_quiet = !pix_busy && !pix_valid && !px_valid && !msk_we
                          && !rq_pend && !rd_busy && !wq_pend && !wr_busy;
