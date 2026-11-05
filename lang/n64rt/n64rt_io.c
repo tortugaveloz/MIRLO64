@@ -1198,6 +1198,12 @@ int n64rt_hw_read(u32 addr, u32 *v)
         return 1;
     }
     if (si_read(pa, v)) { si_note(); return 1; }               /* the SI, PIF RAM */
+    if (pa >= 0x03F00000u && pa < 0x04000000u) {                /* the RDRAM's registers: what the console has after its boot, 16 words repeated (n64-systemtest: the same with and without the Expansion Pak) */
+        static const u32 rdram_reg[16] = { 0xB4190010u, 0, 0x2B3B1A0Bu, 0, 0, 0, 0x101C0A04u, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        *v = rdram_reg[(pa >> 2) & 15u];
+        hw_note("reads the RDRAM's registers at", addr & ~0xFFFFu);
+        return 1;
+    }
     switch (pa) {
     case 0x04300008u: *v = s_si_irq ? 0x02u : 0u; break;          /* MI_INTR: the SI's, where the game polls it */
     case 0x04600010u: *v = 0; break;                              /* PI_STATUS: idle */
@@ -1232,6 +1238,7 @@ int n64rt_hw_write(u32 addr, u32 v)
     if (pa >= 0x13FF0000u && pa < 0x13FF1000u) { isv_write(pa, v); return 1; }
 #endif
     if (si_write(pa, v)) { si_note(); return 1; }
+    if (pa >= 0x03F00000u && pa < 0x04000000u) { hw_note("writes (ignored)", addr); return 1; }      /* (the RDRAM's registers: the console's boot set them) */
 #ifdef N64RT_RSP
     if (pa >= 0x04000000u && pa < 0x04040000u) {
         extern int n64rt_sp_mem(u32 off, u32 *v, int write);
