@@ -1,24 +1,24 @@
 {
   "quartus": "25.1std.0 Build 1129 10/21/2025 SC Lite Edition",
-  "sources": "385a48be474b99c1c58cb643434cc6b6777e5da4a9f8c6fe2c5745bb9d86f458",
+  "sources": "002bd7d04fd059de9fafff76984b3f84112420defcf65f9e2fb0400024169d9d",
   "fits": [
     {
-      "seed": 5,
-      "worst_slack_ns": 0.049,
-      "alms": 17702,
-      "date": "2026-11-04"
-    },
-    {
-      "seed": 3,
-      "worst_slack_ns": 0.02,
-      "alms": 17710,
-      "date": "2026-11-04"
-    },
-    {
       "seed": 7,
-      "worst_slack_ns": 0.019,
-      "alms": 17690,
-      "date": "2026-11-04"
+      "worst_slack_ns": 0.068,
+      "alms": 17953,
+      "date": "2026-11-06"
+    },
+    {
+      "seed": 1,
+      "worst_slack_ns": 0.011,
+      "alms": 18114,
+      "date": "2026-11-06"
+    },
+    {
+      "seed": 11,
+      "worst_slack_ns": 0.007,
+      "alms": 18131,
+      "date": "2026-11-06"
     }
   ]
 }
