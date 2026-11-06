@@ -1,18 +1,21 @@
 /* snac_game: a game that talks to the PIF the way libultra does -- the SI's DMA of a 64-byte block of joybus commands with the run flag, then the
  * block read back with the replies -- and checks what the Analogizer's SNAC port and the virtual channels answer (n64rt_io.c, pif_run;
  * n64rt_snac.c). A program linked for 0x8000_0400 that runs under the loader (OWN) on the SoC in sim/mips_soc, with the Joybus device models of
- * sim/analogizer/snac/jb_dev.sv on the four wires (sim/mips_soc/snac_check.sh gives them the +snac<n> options for the run, and builds this with
- * -DSNAC_RUN= to match).
+ * sim/analogizer/snac/jb_dev.sv on the four wires (sim/mips_soc/snac_check.sh gives them the +snac<n> options and the menu's value for the run, and
+ * builds this with -DSNAC_RUN= to match). The menu is the core's "Analogizer" (0 Off, 1..9 a video mode, 10 N64 SNAC): anything but Off turns the
+ * Joybus on.
  *
- *   A  nothing on the wires: controller 1 is the Pocket's pad with a virtual Controller Pak, the others do not answer
- *   B  devices on ports 1 (pad + pak), 2 (pad), 4 (pad + pak); none on port 3: the channels with a device are the real ones
- *   C  a device on port 2 only: controller 1 stays the Pocket's pad and the virtual Controller Pak, controller 2 is the real one
- *   D  as B, with a Game Boy cartridge in the slot: the SNAC port is the cartridge's, no device is seen: as A
+ *   A  the menu is Off, devices on the wires: controller 1 is the Pocket's pad with a virtual Controller Pak, the others do not answer
+ *   B  the menu is N64 SNAC, devices on ports 1 (pad + pak), 2 (pad), 4 (pad + pak); none on port 3: the channels with a device are the real ones
+ *   C  the menu is RGBS (a video mode), a device on port 2 only: controller 1 stays the Pocket's pad and the virtual Controller Pak, controller 2 is real
+ *   D  as B, with a Game Boy cartridge in the slot: the pins are the cartridge's whatever the menu says, no device is seen: as A
+ *   E  the menu is Off at the start (as A) and is changed to N64 SNAC while the game runs: the game polls until controller 2 answers, then as B
  * In every run the cartridge's EEPROM (channel 4) is the runtime's.
  *
  * The report, in the RDRAM at 0x8030_0000 (DUMP=0x43B00000,64 in the sim): word 0 the magic 0x600D600D when done, 1 the number of failed checks, 2 the
  * checks made, 3 the Count ticks (46.875 MHz) from the start of the SI's write of a block of four buttons commands to the end of its read
- * back, 4 the same for a block of four status commands, 5 the same for the write of a pak block (or, with no real pak, 0), 8..15 the first failed checks' numbers, 16..31 the status replies (bytes of four channels, 3 each), 32..47
+ * back, 4 the same for a block of four status commands, 5 the same for the write of a pak block (or, with no real pak, 0), 7 (E) the polls it took
+ * for controller 2 to answer, 8..15 the first failed checks' numbers, 16..31 the status replies (bytes of four channels, 3 each), 32..47
  * the buttons replies (4 each). */
 typedef unsigned int u32;
 typedef unsigned char u8;
@@ -71,16 +74,9 @@ static u8 pmem(u32 a) { return (u8)(a * 37u + 11u); }          /* the pak model'
 #define SNAC_RUN 'B'
 #endif
 /* which channels a real device answers (the others: the Pocket's pad on 1 if nothing is there, nothing on 2 to 4) */
-#if SNAC_RUN == 'B'
-#define REAL(ch)  ((ch) == 0 || (ch) == 1 || (ch) == 3)
-#define REALPAK(ch) ((ch) == 0 || (ch) == 3)
-#elif SNAC_RUN == 'C'
-#define REAL(ch)  ((ch) == 1)
-#define REALPAK(ch) 0
-#else
-#define REAL(ch)  0
-#define REALPAK(ch) 0
-#endif
+static u32 s_real, s_pak;
+#define REAL(ch)  ((s_real >> (ch)) & 1u)
+#define REALPAK(ch) ((s_pak >> (ch)) & 1u)
 #define THERE(ch) ((ch) == 0 || REAL(ch))
 static const u32 btn[4] = { 0xA5C3, 0x0001, 0, 0x0F0F };
 static const u32 stk[4] = { 0x1020, 0xF008, 0, 0x7F81 };
@@ -165,7 +161,7 @@ static void paks(void)
             check(220u + ch, fl == 0 && ok);
         }
     }
-    if (SNAC_RUN == 'B') {                                                   /* a pad with no pak: nobody answers a read of memory */
+    if (REAL(1) && !REALPAK(1)) {                                            /* a pad with no pak: nobody answers a read of memory */
         pak_cmd(1, 0, 0x0100, 0, &fl);
         check(230u, fl == 0x80);
     }
@@ -204,11 +200,28 @@ static void eeprom(void)
     for (int i = 0; i < 8; i++) ok &= b[8 + i] == e[i];
     check(252u, (b[5] & 0xC0) == 0 && ok);
 }
+static void wait_ticks(u32 n) { u32 t0 = count(); while (count() - t0 < n) ; }
 void game_main(void)
 {
     for (u32 i = 0; i < 64u; i++) REPORT[i] = 0;
     /* a moment for the hardware's first scan to have found the devices (the runtime waits for it before the game starts, too) */
     for (volatile u32 i = 0; i < 20000u; i++) ;
+    if (SNAC_RUN == 'B') { s_real = 0xB; s_pak = 0x9; }
+    if (SNAC_RUN == 'C') { s_real = 0x2; s_pak = 0; }
+    if (SNAC_RUN == 'E') {
+        status_block(0, 900u);                     /* the menu is Off: virtual only */
+        wait_ticks(8000000u);
+        u32 polls = 0;
+        for (;;) {                                 /* until the menu (the bench changes it) brings controller 2 */
+            four(1, 3, 0, 0);
+            polls++;
+            if ((block()[6 + 1] & 0xC0) == 0 || polls > 400u) break;
+            wait_ticks(200000u);
+        }
+        REPORT[7] = polls;
+        check(950u, polls <= 400u);
+        s_real = 0xB; s_pak = 0x9;
+    }
     status_block(0, 100u);
     REPORT[4] = s_write_ticks + s_read_ticks;
     status_block(1, 400u);                         /* libultra's block starts with a pad byte */

@@ -135,7 +135,7 @@ each setting has an address of its own and needs no mask.
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Gameshark codes (1: on; a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
-| 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer (video: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it; the SNAC controllers have no field: they are on whenever the adapter owns the port, `INTERACT2` bit 31) |
+| 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer (video: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker, 10 N64 SNAC: no picture; the scan-out's pads read it; the runtime turns the SNAC controllers on for any value but 0, `SNAC.CTRL`) |
 | 17 | `0x1000_0144` | `INTERACT2[9:5]` | Video settings (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
 | 20 | `0x1000_0150` | `INTERACT1[25:24]` | Expansion Pak/Gameshark: one list writing fields 14 and 15 together (bit 0 is the Expansion Pak, 1 = out; bit 1 the Gameshark codes, 1 = on) |
 
@@ -235,14 +235,14 @@ and a scan of who is plugged in. One transaction at a time.
 | Register | Offset | Dir | What |
 |---|---|---|---|
 | `ID` | `0x00` | R | `0x534E_0001` |
-| `CTRL` | `0x04` | RW | Bit 0 `ON`: the Joybus has the pins (the runtime sets it when the adapter owns the port, `INTERACT2` bit 31; the pins are the Joybus's only while that holds). Bit 1 `SCAN`: the background scan of the four ports, one every 2 ms. Bits 15:8 `TFIRST`: the microseconds to wait for a reply's first edge (reset 64) |
+| `CTRL` | `0x04` | RW | Bit 0 `ON`: the Joybus is wanted (the runtime sets it while the menu's "Analogizer", `INTERACT2[3:0]`, is not 0). The pins are the Joybus's only while the adapter also owns the port (`INTERACT2` bit 31); with a Game Boy cartridge in the slot they stay the cartridge's, nothing is driven and nothing is scanned. Bit 1 `SCAN`: the background scan of the four ports, one every 2 ms. Bits 15:8 `TFIRST`: the microseconds to wait for a reply's first edge (reset 64) |
 | `STAT` | `0x08` | RW | Bits 3:0 `PRESENT`: the port's device answered the scan twice in a row and has not missed it three times since. Bits 7:4 `CHANGED`: it came or went since (a write of 1s clears) |
 | `XFER` | `0x0C` | RW | Write: start a transaction: bits 5:0 the bytes to send (the buffer's first), bits 13:8 the bytes to receive, bits 17:16 the port (0 to 3). Read: bit 31 `BUSY` (from the write until the reply is in), bit 30 `TIMEOUT` (nothing answered), bit 29 `SHORT` (fewer bytes than asked, or the wire did not go quiet), bits 5:0 the bytes received (the runtime times the wire itself, with `TIMER0`) |
 | `PTR` | `0x10` | RW | The buffer's pointer (bits 6:0) |
 | `DATA` | `0x14` | RW | The byte at `PTR`; each access moves `PTR` on by one |
 
 The buffer: bytes 0 to 62 are the transaction (the bytes sent, which the bytes received then replace); `64 + 4 n` is
-port n's scan: the number of bytes the status command was answered with (3: a device is there), then the three bytes.
+port n's scan: the three bytes the status command was answered with, then at `64 + 4 n + 3` the number of bytes that came (3: a device is there).
 
 ## MONITOR
 
