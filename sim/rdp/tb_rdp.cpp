@@ -12,6 +12,10 @@
 // cycle type): what real tasks do not reach.
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
+//   TB_WORDS=1  the files are RDP command words (big-endian, as TB_DUMP writes them), drawn on a zeroed memory
+//   TB_SYNCT=1  the cycle each SYNC FULL completes, and the cycles since the one before (TB_SYNCGAP=1: a list's
+//               commands wait for the RDP to be idle after the SYNC FULL before them, as for a program that waits for
+//               the DP interrupt; the cycles from the list's first word taken, then)
 //   The noise LFSR (rdp_pix.v): the lockstep comparison needs it to step once for each pixel with coverage, as the model's does (RDP_LFSR_PIXEL,
 //   which build_rtl.sh sets); the RTL's default is a free-running one (VDEFS= builds it), which is checked by
 //   TB_FREE=1   every clock of the RDP's: the LFSR steps (23 bits, the console's taps), counted and reported per stream
@@ -148,6 +152,7 @@ static uint64_t pix_why2[2][8], st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   
 static std::vector<uint64_t> take_cyc, start_cyc;                // TB_CLS: the cycle each command word was taken, and each command started executing                      // TB_CLS: the cycle each command word was taken
 
 
+static uint64_t list_start; static bool list_idle = true;   // (TB_SYNCGAP: the cycle a list's first word is taken)
 static void tick()
 {
     top->cmd_valid = !cmdq.empty();
@@ -199,6 +204,16 @@ static void tick()
     }
     top->clk = 1; top->eval();
     cycles++;
+    if (cmd_take && list_idle) { list_start = cycles - 1; list_idle = false; }
+    if (top->sync_ev) list_idle = true;
+    if (top->sync_ev) {
+        static const bool synct = getenv("TB_SYNCT") != nullptr;
+        static const bool sgap = getenv("TB_SYNCGAP") != nullptr;
+        static uint64_t last_sync;
+        if (sgap) last_sync = list_start;
+        if (synct) printf("SYNC at %llu: %llu cycles since the last\n", (unsigned long long)cycles, (unsigned long long)(cycles - last_sync));
+        last_sync = cycles;
+    }
     { static bool prev_go; bool go = top->rootp->rdp_top__DOT__exec_go; if (prev_go && !go) start_cyc.push_back(cycles); prev_go = go; }
     if (free_chk) {          // TB_FREE=1: the LFSR stepped on every clock
         const uint32_t cur = top->rootp->rdp_top__DOT__pix__DOT__lfsr;
@@ -557,6 +572,15 @@ int main(int argc, char **argv)
             rand_stream(seed, ai + 2 < argc ? atoi(argv[ai + 2]) : 400);
             snprintf(rname, sizeof rname, "random %u", seed);
             argv[ai] = rname;
+        } else if (getenv("TB_WORDS")) {
+            // TB_WORDS=1: the file is RDP command words, big-endian (as TB_DUMP writes them), drawn on a zeroed memory
+            FILE *f = fopen(argv[ai], "rb");
+            if (!f) { fprintf(stderr, "%s: cannot open\n", argv[ai]); return 2; }
+            memset(rsp_mem, 0, SIZE);
+            cmds.clear();
+            uint8_t b4[4];
+            while (fread(b4, 1, 4, f) == 4) cmds.push_back(be32(b4));
+            fclose(f);
         } else {
         FILE *f = fopen(argv[ai], "rb");
         uint8_t hdr[16];
