@@ -1524,6 +1524,14 @@ int main(int argc, char **argv)
             fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
         }
     }
+    // SHDUMP=<file>: the RDP's shadow plane (docs/video_options.md; SDRAM 0x0320_0000, 2 MiB) as the run ends, its words as they are
+    if (const char *f = getenv("SHDUMP")) {
+        if (FILE *pf = fopen(f, "wb")) {
+            std::vector<uint8_t> pl(2u << 20);
+            for (uint32_t a = 0; a < (2u << 20); a += 4) { uint32_t w = rd_word((0x03200000u + a) >> 2); pl[a] = w >> 24; pl[a + 1] = w >> 16; pl[a + 2] = w >> 8; pl[a + 3] = w; }
+            fwrite(pl.data(), 1, pl.size(), pf); fclose(pf);
+        }
+    }
     if (const char *f = getenv("GPCPROF")) {
         FILE *pf = fopen(f, "w");
         if (pf) { fprintf(pf, "idle %u\n", gpc_idle); for (auto &kv : gpc_hist) fprintf(pf, "%08x %u\n", kv.first, kv.second); fclose(pf); }

@@ -295,6 +295,7 @@ logic        vi_aa, vi_dv, vi_dd;
 wire  [4:0]  vid_crop_v;           // the core's video options (interact.json): crop lines at the top and bottom,
 wire  [1:0]  vid_crop_r;           // and pixels at the right (n64_video.sv)
 wire  [1:0]  vid_crop_l;           // and at the left
+wire         vid_deblur, vid_out32;     // the core's "Picture" option (interact.json): Deblur, 32-bit (docs/video_options.md)
 logic [25:0] vi_base;
 logic        vi_il;
 logic [31:0] vi_rd, ai_rd;
@@ -430,7 +431,7 @@ mirlo_regs regs (.clk, .rst,
     .pad_clk(apf_pad_clk), .pad_we(apf_pad_we), .pad_wa(apf_pad_wa), .pad_wd(apf_pad_wd),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
     .ia_an_mode(an_mode), .ia_an_scan(an_scan), .ia_an_own(an_own),
-    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l),
+    .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l), .ia_deblur(vid_deblur), .ia_out32(vid_out32),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
@@ -555,7 +556,7 @@ logic [3:0]  m_wdata_we;
 // the RDP for the N64's command stream (rtl/rdp): its addresses are the
 // N64's, in the 8 MiB of RDRAM at SDRAM 0x4380_0000
 logic [31:0] rdp_addr;
-rdp_top rdp (.clk, .rst,
+rdp_top rdp (.clk, .rst, .dither_off(vid_out32), .shadow_en(vid_out32),
     .cmd_valid, .cmd_ready, .cmd_data,
     .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
     .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
@@ -563,7 +564,11 @@ rdp_top rdp (.clk, .rst,
     .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
     .tmem_busy(rdp_tmem_busy));
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
-assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
+// (bit 24: the shadow plane of a 16-bit colour image, 2 MiB at SDRAM 0x0320_0000 -- the image's address folded into it, its bank
+// the other of the colour word's, so that a pixel's two words (the scan-out reads both) are in two banks: n64_video.sv has the same fold)
+wire [18:0] sh_x = rdp_addr[20:2] ^ {rdp_addr[22:21], 17'd0};
+wire [18:0] sh_w = {sh_x[18:11], sh_x[10:9] ^ 2'b01, sh_x[8:0]};
+assign m_cmd_addr = {6'd0, rdp_addr[24] ? 24'hC8_0000 + {5'd0, sh_w} : rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
@@ -680,7 +685,7 @@ wire        vi_gam  = mon_vi ? vi_gm : fb_gamma;
 localparam bit VIDEO_N64FB = 1'b1;  // the framebuffer is the game's: RGBA5551, the left pixel in the high half
 n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(VIDEO_N64FB)) video (.clk, .rst, .clk_vid, .rst_vid,
     .enable(fb_en), .vi_origin(fb_base[25:0]), .vi_il(mon_vi && vi_il), .vblank,
-    .vi_width(fb_width), .vi_px32(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .crop_l(vid_crop_l), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
+    .vi_width(fb_width), .vi_px32(fb_tall), .vi_black(1'b0), .vi_pal(mon_vi ? vi_pal_rq : fb_pal), .tv_pal, .gamma(vi_gam), .vi_aa(mon_vi && vi_aa), .vi_divot(mon_vi && vi_dv), .vi_dedither(mon_vi && vi_dd), .vi_deblur(vid_deblur), .vi_out32(vid_out32), .crop_v(vid_crop_v), .crop_r(vid_crop_r), .crop_l(vid_crop_l), .vi_lines(9'd240), .vi_px0(fb_px0), .vi_pw(fb_pw), .vi_y0(fb_y0), .vi_rows(fb_rows), .vi_xs(fb_xs), .vi_ys(fb_ys), .vi_nw(fb_nw), .osd_en(1'b0), .fps_en(1'b0), .osd_val('0),
     .m_valid(p_valid[0]), .m_addr(p_addr[0]), .m_urgent(p_urgent[0]), .m_ready(p_ready[0]),
     .m_rvalid(p_rvalid[0]), .m_rdata(p_rdata),
     .vi_line(vi_line), .vi_frame(mon_field), .vi_latch,

@@ -161,6 +161,12 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  * touches, {a, a} by its colour's bit 0. With RDP_X_MEMDZ the depth image has its own two hidden bits a pixel (the
  * low two of the dz code), in the same plane at the depth image's addresses. */
 #define RDP_HID_BASE 0x00800000u
+/* The shadow plane (the core's "Picture: 32-bit" setting, docs/video_options.md), a halfword for each halfword of a 16-bit colour
+ * image, at RDP_SH_BASE + the pixel's byte address (the SoC: SDRAM 0x0320_0000, 2 MiB, the address folded; rtl/soc/mirlo_mips.sv maps
+ * the RDP's address bit 24 there): {the low three bits of the pixel's R, G and B as the blender made them, 9 bits; a 7-bit check of the
+ * pixel's 5551 word (sh_crc)}. The scan-out and the blender take the low bits only where the check is the word's now; a halfword the
+ * RDP did not write (the CPU, a copy) fails it. A fill and a copy write the pixel's own top bits repeated. */
+#define RDP_SH_BASE  0x01000000u
 
 /* RDP_N64: the N64's own command stream, as a game's microcode gives it
  * (the RSP, rtl/rsp) -- not the geometry core's:
@@ -254,6 +260,9 @@ typedef struct {
     uint32_t load_count;                   /* LOAD TILEs executed */
     uint32_t unknown_ops;
     uint64_t pixels_drawn;
+    int      shadow;         /* the shadow plane: bit 0 written, bit 1 read by the blender too (implies rgb_dither_off) */
+    int      rgb_dither_off; /* the core's "Picture: 32-bit" option (docs/video_options.md): the RGB dither is off, RGB_DITHER_SEL as it is
+                              * (the alpha dither's matrix still follows it); 0 by default. rtl/rdp: dither_off */
     uint32_t lfsr;          /* the RDP's noise: rtl/rdp/rdp_pix.v's 23-bit LFSR, a step per pixel with coverage */
     unsigned grow;                         /* this TRI_R's crack-grow edges (rdp_grow_mask), else 0 */
 

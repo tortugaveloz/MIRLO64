@@ -64,10 +64,10 @@ The core's own menu on the Pocket. The default of each is in bold.
 |---|---|---|
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Right | None, **1 column** | Blanks the picture's last column |
-| Expansion Pak | **On**, off | With it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again (Restart Game does it) |
+| Video settings | **Default**, 32-bit color, Deblur, 32-bit color + Deblur | **32-bit color**: no dither (the RDP's, and the VI's dither filter) and 8 bits a channel: a game that draws into a 32-bit image shows all of them, and a 16-bit one shows the low bits the RDP kept in a shadow plane beside its image (where nothing else has changed the pixel; it is costlier: the RDP takes about a third more time, and a 640 x 480 interlaced picture is shown without it). **Deblur**: the VI's anti-alias and divot filters are bypassed, for a sharp picture with jagged edges. Both take effect at once ([docs/video_options.md](docs/video_options.md)) |
+| Expansion Pak/Gameshark | Exp Pak and GameShark, **Exp Pak**, GameShark, None | The Expansion Pak: with it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again (Restart Game does it). The Gameshark codes: runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | **None**, Controller Pak, Transfer Pak cartridge, Transfer Pak SD | The accessory in controller 1. Transfer Pak cartridge is the Transfer Pak with a Game Boy cartridge in the Pocket's slot. **Transfer Pak SD** plays a Game Boy game from the SD card, and needs two steps before the N64 game starts: choose it here, and load the Game Boy game with "Load Transfer Pak 1" (one of the core's Load entries, with "Load Game": a `.gb` or `.gbc`), in either order. The core does not choose the pak for you: with None, Controller Pak or Transfer Pak cartridge a loaded Game Boy game is ignored. It uses that game's own save, `<Game Boy game>.sav` in the Saves folder of the game's platform (`Saves/gbc/common/` for a game in `Assets/gbc/common/`), the file a Game Boy core keeps too (see [Saves](#saves)). Sleep and Memories work with it (its RAM is in the state); the Transfer Pak with a cartridge in the Pocket's slot is unplugged in them, and the game finds it gone when it wakes |
 | Controller 2 pak | **None**, Transfer Pak SD | A second Transfer Pak SD, in controller 2 (a pad that is there, with nothing pressed, when the dock has none), chosen and loaded in the same two steps: its Game Boy game is "Load Transfer Pak 2", and the same for its save; with no game loaded there the pak has no cartridge, as pak 1 has none with no game loaded. Set it before the game starts, as a game looks for its controllers then |
-| Enable Gameshark codes | **Off**, on | Runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
 | Stick dead zone | 0 %, **10 %**, 20 % ... 70 % | How far a stick has to move before the N64 sees it, for both sticks |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
@@ -93,7 +93,7 @@ The Transfer Pak SD's save is the Game Boy game's own: the file `<Game Boy game>
 
 ### GameShark codes
 
-With "Enable Gameshark codes" on, the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
+With the codes on in "Expansion Pak/Gameshark", the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
 is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
 field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
 choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the

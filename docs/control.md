@@ -105,7 +105,7 @@ How the runtime maps these to the N64's controller is in [mips.md](mips.md) (Con
 ## APF_INTERACT
 
 The core's settings: three words that the Pocket writes from `interact.json`. An entry of `interact.json` whose `address`
-is `0x1000_0100 + 4n` (n from 0 to 19) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
+is `0x1000_0100 + 4n` (n from 0 to 20) reaches the SoC: n = 0 and 1 write a whole word, the others a field of one, so
 each setting has an address of its own and needs no mask.
 
 | Register | Offset | Dir | What |
@@ -133,8 +133,10 @@ each setting has an address of its own and needs no mask.
 | 12 | `0x1000_0130` | `INTERACT1[21:20]` | Restart Game: an action (`interact.json` type `action`) that writes 1 here whenever it is chosen; the runtime clears the field when it has seen it, so that the next choice is a change again (the Pocket writes the same value every time) |
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
-| 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
+| 15 | `0x1000_013C` | `INTERACT1[25]` | Gameshark codes (1: on; a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
 | 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
+| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Video settings (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
+| 20 | `0x1000_0150` | `INTERACT1[25:24]` | Expansion Pak/Gameshark: one list writing fields 14 and 15 together (bit 0 is the Expansion Pak, 1 = out; bit 1 the Gameshark codes, 1 = on) |
 
 ## APF_VIDEO
 
