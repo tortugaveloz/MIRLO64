@@ -9,7 +9,8 @@
 // A transaction (`start`, one cycle, not while `busy`; txlen, rxlen, imm, rx_base and t_first stay as they are until `done`):
 //   tx   the bytes come from the buffer (`rd_addr` 0.. / `rd_data`, one clock behind) or, with `imm`, the single byte 0x00
 //   rx   a falling edge is waited for (`t_first` us for the first, 16 us between the bits of a reply), its bit is taken 2 us later
-//        (a 1 is high by then, a 0 still low), a byte at a time goes to the buffer (`wr_*`, at rx_base + index). After the last
+//        (a 1 is high by then, a 0 still low), a byte at a time goes to the buffer (`wr_*`, at rx_base | index: rx_base's bits below
+//        the index's width are 0). After the last
 //        byte the master waits for the wire to be quiet (high for 12 us) so the device's stop bit and the next command do not meet.
 //   end  `done` pulses and `busy` falls. Results, valid until the next start:
 //          rx_cnt   whole bytes received         timeout  nothing answered (rx_cnt 0 with rxlen > 0): the device is absent
@@ -63,19 +64,18 @@ logic        alt = 1'b0;
 assign tk = ph == 7'(ALT && alt ? P0 : P0 - 1);
 
 logic [5:0]  n;                         // the tx byte being sent, then the rx bytes received
-logic [7:0]  cur;
+logic [7:0]  cur;                       // the tx byte being shifted out, then the rx byte being shifted in
 logic [2:0]  bitn;                      // the tx bit (7 down to 0)
 logic [1:0]  cp;                        // us since the cell's start
 logic        stop;
 logic [7:0]  tm;                        // us waited
 logic [3:0]  q;                         // us of a quiet wire so far
-logic [7:0]  sh;
 logic [2:0]  nb;                        // bits of the rx byte so far
 logic        stuck;
 assign rx_cnt = n;
 assign rd_addr = (st == S_IDLE || st == S_GO) ? 6'd0 : n + 6'd1;
-assign wr_addr = rx_base + {1'b0, n};
-assign wr_data = sh;
+assign wr_addr = rx_base | {1'b0, n};   // (rx_base's low bits are 0 where n is not)
+assign wr_data = cur;
 
 task automatic finish(input logic stk);
     busy <= 1'b0; done <= 1'b1; st <= S_IDLE;
@@ -92,7 +92,7 @@ always_ff @(posedge clk) begin
     done <= 1'b0; wr_en <= 1'b0;
     if (tk) begin ph <= 7'd0; alt <= ~alt; end else ph <= ph + 7'd1;
     if (rst) begin
-        st <= S_IDLE; busy <= 1'b0; low <= 1'b0; timeout <= 1'b0; short_ <= 1'b0; stuck <= 1'b0; n <= '0; nb <= '0;
+        st <= S_IDLE; busy <= 1'b0; low <= 1'b0;
     end else begin
         if (wr_en) n <= n + 6'd1;
         case (st)
@@ -137,7 +137,7 @@ always_ff @(posedge clk) begin
         S_S: if (tk) begin
             tm <= tm + 8'd1;
             if (tm == 8'd1) begin                                                   // 2 ticks after the edge
-                sh <= {sh[6:0], dq2}; nb <= nb + 3'd1; tm <= 8'd0;
+                cur <= {cur[6:0], dq2}; nb <= nb + 3'd1; tm <= 8'd0;
                 if (nb == 3'd7) begin
                     wr_en <= 1'b1;
                     if (n + 6'd1 == rxlen) begin st <= S_G; q <= 4'd0; end else st <= S_H;

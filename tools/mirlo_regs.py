@@ -182,7 +182,7 @@ BLOCKS = [
         # [5:0] the bytes received (they replace the sent ones in the buffer)
         ("XFER",  0x0C, RW, 1, [("RXCNT", 0, 6), ("US", 16, 12), ("SHORT", 29, 1), ("TIMEOUT", 30, 1), ("BUSY", 31, 1)]),
         ("PTR",   0x10, RW, 1, []),                # the buffer's pointer (0..127)
-        ("DATA",  0x14, RW, 1, []),                # the byte at PTR; each access moves PTR on. 64 + 4 n: port n's scan (count, 3 bytes)
+        ("DATA",  0x14, RW, 1, []),                # the byte at PTR; each access moves PTR on. 64 + 4 n: port n's scan (3 bytes, then at +3 their count)
     ]),
 ]
 # (GB_CART: only with the Verilog macro MIRLO_GB_CART -- without it all three read 0)

@@ -8,6 +8,7 @@
 //        5 controller that talks on: two extra bytes after every reply
 //        6 as 2, with a 300 ns glitch on the wire 6 us after each of its replies (a noisy line)
 //        7 a controller that answers every other command only (a flaky contact)
+//        8 a free-running 1 us square wave on the wire, answering nothing (a cartridge's PHI clock)
 `default_nettype none
 module jb_dev (
     input  wire         clk,
@@ -68,7 +69,8 @@ wire        fall = line_d && !line, rise = !line_d && line;
 wire        pak = kind == 4'd2 || kind == 4'd6;
 always @(posedge clk) begin
     line_d <= line; t <= t + 32'd16;
-    case (st)
+    if (kind == 4'd8) low <= t[9];
+    else case (st)
     M_RX: if (kind != 4'd0) begin
         if (fall) begin tfall <= t; tlast <= t; if (kind == 4'd4) begin low <= 1; tmark <= t; st <= M_HOLD; end end
         if (rise) begin
