@@ -761,7 +761,7 @@ static inline unsigned dither_d(const rdp_t *r, int x, int y, int noise)
 static inline rdp_rgba_t dither_n64(const rdp_t *r, rdp_rgba_t c, int x, int y, uint32_t rnd, int noise)
 {
     unsigned sel = (r->other_h >> 6) & 3;
-    if (sel == 3) return c;
+    if (sel == 3 || r->rgb_dither_off) return c;
     unsigned d = dither_d(r, x, y, noise);
     uint8_t *ch[3] = { &c.r, &c.g, &c.b };
     for (int k = 0; k < 3; k++) {

@@ -22,6 +22,7 @@
 module rdp_top (
     input  wire        clk,
     input  wire        rst,
+    input  wire        dither_off,      // the core's "Picture: 32-bit" option: the pixel pipeline's RGB dither is off (docs/video_options.md)
 
     // command words (the wrapper's FIFO)
     input  wire        cmd_valid,
@@ -348,7 +349,7 @@ module rdp_top (
     wire [26:0] px_c27;                 // a 32-bit image's pixel: {R8 G8 B8 cvg3}
     wire [1:0]  px_hid;
     rdp_pix pix (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .dither_off(dither_off),
         .other_h(other_h), .other_l(other_l), .cc_hi(cc_hi), .cc_lo(cc_lo),
         .prim(prim), .env(env), .fog(fog), .blend(blend),
         .prim_lod_frac(prim_lod_frac), .k4(k4), .k5(k5), .cv_k03(cv_k03), .prim_z(prim_z), .fill(fill),

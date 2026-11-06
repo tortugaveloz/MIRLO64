@@ -20,6 +20,10 @@
 //   TB_PX32=1: a 32-bit picture (VI_STATUS type 3, vi_px32): RGBA8888, a pixel a word, the coverage in the alpha byte's
 //   top three bits, a row twice the words. The scan-out shows it as the 16-bit picture of each channel's top five bits
 //   and that coverage (rtl/soc/n64_video.sv): the model is the 16-bit one on that picture, made from the 32-bit buffer.
+//   TB_DEBLUR=1: the core's "Deblur" (vi_deblur): the anti-alias and divot filters are bypassed (every pixel is taken as complete);
+//   the dedither stays as the game asked. TB_OUT32=1: the core's "32-bit" output (vi_out32): no dedither; a 16-bit picture's channels
+//   taken to the full range (v + (v >> 5), white 255); a 32-bit picture (TB_PX32) keeps the low three bits of each channel, in the
+//   anti-alias filter's centre too. Both default 0 (the console's output: the pad hash is the same as before the options).
 //   TB_BLANK=1: the VI blanked after the first frame checked (`enable` low: H_START 0, an origin out of the RDRAM): one
 //   frame more, not checked (the boundary that takes it), then one that must be black all over -- not the last row read
 //   on every line.
@@ -48,6 +52,7 @@ static unsigned LOAD = 0, RDY = 75;               // the SDRAM's load: TB_LOAD, 
 static std::vector<uint16_t> fbw;                 // the buffer
 static std::vector<uint8_t> hidw;                 // each pixel's hidden two coverage bits (the RDP's plane)
 static bool px32;                                 // TB_PX32: a 32-bit picture
+static bool deblur, out32;                        // TB_DEBLUR, TB_OUT32
 static std::vector<uint32_t> fb32;                // its buffer: RGBA8888, R the top byte (the word as the SDRAM gives it); fbw / hidw its 16-bit view
 static long hid_reads;                            // reads of the hidden plane (none for a 32-bit picture)
 static unsigned rng = 1;
@@ -72,7 +77,15 @@ static unsigned hidv(int x, unsigned r) { size_t i = (size_t)r * (wov ? (WB == 1
 // a tap of the filters: the pixel (x, line j) of the window's source, in the picture if x >= 0 and the line j is a line of the window
 static bool intap(int x, int j) { return x >= 0 && j >= 0 && j < (int)R; }
 static unsigned cvg(int x, int j) { return (pxv(x, frow(j)) & 1u) << 2 | hidv(x, frow(j)); }
-static bool complete(int x, int j) { return cvg(x, j) == 7u; }
+static bool complete(int x, int j) { return deblur || cvg(x, j) == 7u; }   // (Deblur: the filters see every pixel complete)
+// a 32-bit picture's low three bits of a channel of the pixel (x, r), with the 32-bit output option (else 0)
+static int lowv(int x, unsigned r, int k)
+{
+    if (!(px32 && out32)) return 0;
+    size_t i = (size_t)r * (wov ? (WB == 1280 ? 640 : WB) : WB) + (size_t)x;
+    uint32_t w = i < fb32.size() ? fb32[i] : 0;
+    return (int)(k == 0 ? (w >> 24) & 7 : k == 1 ? (w >> 16) & 7 : (w >> 8) & 7);
+}
 static int dedither;                                // the VI's dither filter (argument 5)
 static P6 aa_px(int x, int j)
 {
@@ -81,8 +94,8 @@ static P6 aa_px(int x, int j)
     int *po[3] = { &o.r, &o.g, &o.b };
     if (complete(x, j)) {                            // complete: as it is (8 bits: c << 3, the N64's), or dedithered
         for (int k = 0; k < 3; k++) {
-            int cc = ch(c, k), v = cc << 3;
-            if (dedither) {
+            int cc = ch(c, k), v = (cc << 3) | lowv(x, frow(j), k);
+            if (dedither && !out32) {
                 int add = 0;
                 for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
                     if ((!dx && !dy) || !intap(x + dx, j + dy)) continue;
@@ -107,25 +120,33 @@ static P6 aa_px(int x, int j)
         for (int i = 0; i < 6; i++) for (int jj = i + 1; jj < 6; jj++) if (s[jj] < s[i]) { int q = s[i]; s[i] = s[jj]; s[jj] = q; }
         int mn = s[1] < cc ? s[1] : cc, mx = s[4] > cc ? s[4] : cc;
         // the N64's, on 8-bit channels (c << 3): c8 + ((mn8 + mx8 - 2 c8) * (7 - cvg) + 4) >> 3; its top six bits
-        int c8 = cc << 3, w = 7 - (int)cvg(x, j);
-        int o8 = c8 + (int)floor(((double)(((mn << 3) + (mx << 3) - 2 * c8) * w) + 4.0) / 8.0);
+        int c8 = (cc << 3) | lowv(x, frow(j), k), w = 7 - (int)cvg(x, j);
+        int o8 = c8 + (int)floor(((double)(((mn << 3) + (mx << 3) - 2 * (cc << 3)) * w) + 4.0) / 8.0);
         *po[k] = o8;
     }
     return o;
 }
 static int med3(int a, int b, int c) { int s[3] = { a, b, c }; for (int i = 0; i < 3; i++) for (int j = i + 1; j < 3; j++) if (s[j] < s[i]) { int q = s[i]; s[i] = s[j]; s[j] = q; } return s[1]; }
 // the pixel the pads show: window pixel i of line j (the source pixel (i X_SCALE) >> 10)
-static P6 model(int sx, int j, bool divot)
+static int fullrange(int v) { v += v >> 5; return v > 255 ? 255 : v; }
+static P6 model0(int sx, int j, bool divot)
 {
-    if (nofilt) { uint16_t c = pxv(sx, frow(j)); return P6{ ch(c, 0) << 3, ch(c, 1) << 3, ch(c, 2) << 3 }; }
+    if (nofilt) { uint16_t c = pxv(sx, frow(j)); return P6{ (ch(c, 0) << 3) | lowv(sx, frow(j), 0), (ch(c, 1) << 3) | lowv(sx, frow(j), 1), (ch(c, 2) << 3) | lowv(sx, frow(j), 2) }; }
     P6 e = aa_px(sx, j);
-    if (divot) {
+    if (divot && !deblur) {
         bool part = !complete(sx, j) || (sx > 0 && !complete(sx - 1, j)) || !complete(sx + 1, j);
         if (part) {
             P6 l = sx > 0 ? aa_px(sx - 1, j) : e, r = aa_px(sx + 1, j);
             e.r = med3(l.r, e.r, r.r); e.g = med3(l.g, e.g, r.g); e.b = med3(l.b, e.b, r.b);
         }
     }
+    return e;
+}
+
+static P6 model(int sx, int j, bool divot)
+{
+    P6 e = model0(sx, j, divot);
+    if (out32 && !px32) { e.r = fullrange(e.r); e.g = fullrange(e.g); e.b = fullrange(e.b); }
     return e;
 }
 
@@ -184,6 +205,8 @@ int main(int argc, char **argv)
     if (const char *e = getenv("TB_LOAD")) LOAD = (unsigned)atoi(e);
     if (const char *e = getenv("TB_RDY")) RDY = (unsigned)atoi(e);
     px32 = getenv("TB_PX32") && atoi(getenv("TB_PX32"));
+    deblur = getenv("TB_DEBLUR") && atoi(getenv("TB_DEBLUR"));
+    out32 = getenv("TB_OUT32") && atoi(getenv("TB_OUT32"));
     rng = seed * 2654435761u + 7;
     pal0 = getenv("TB_PAL") ? atoi(getenv("TB_PAL")) : 0;
     if (const char *q = getenv("TB_SEQ")) for (; *q; q++) if (*q == '0' || *q == '1') seq.push_back(*q - '0');
@@ -214,7 +237,7 @@ int main(int argc, char **argv)
     }
     t = new Vn64_video;
     t->rst = 1; t->rst_vid = 1; t->enable = 1; t->vi_origin = 0; t->vi_il = ser; t->vi_width = WB; t->vi_black = 0; t->vi_px32 = px32;
-    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->crop_v = CV; t->crop_r = CR; t->crop_l = CL; t->vi_lines = 240;
+    t->gamma = 0; t->vi_aa = 1; t->vi_divot = divot; t->vi_dedither = dedither; t->vi_deblur = deblur; t->vi_out32 = out32; t->crop_v = CV; t->crop_r = CR; t->crop_l = CL; t->vi_lines = 240;
     t->vi_px0 = PX0; t->vi_pw = PW; t->vi_y0 = Y0; t->vi_rows = R == 240 ? 0 : R; t->vi_xs = XS; t->vi_ys = YS; t->vi_nw = NW;
     t->osd_en = 0; t->fps_en = 0; t->vi_pal = seq.empty() ? pal0 : 0;
     for (int i = 0; i < 200; i++) tick();
@@ -330,7 +353,7 @@ int main(int argc, char **argv)
     else printf("field timing: %u intervals as predicted\n", fields_ok);
     if (fields_ok < (unsigned)(seq.empty() ? (pal0 ? 3 : nfr - 1 - (wov ? 1 : 0)) : seq.size())) { printf("field timing: not seen\n"); errs++; }
     printf("pad hash %016llx\n", (unsigned long long)pad_hash);
-    printf("seed %u divot %d dedither %d partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
-           seed, divot, dedither, pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
+    printf("seed %u divot %d dedither %d%s%s partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
+           seed, divot, dedither, deblur ? " deblur" : "", out32 ? " out32" : "", pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
     return errs != 0;
 }

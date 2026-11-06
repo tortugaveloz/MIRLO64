@@ -10,6 +10,7 @@
 // A random command stream instead (random state, loads of every kind from a
 // random texture image at any alignment, triangles and rectangles in every
 // cycle type): what real tasks do not reach.
+//   TB_DITHEROFF=1  the core's "Picture: 32-bit" option: the RTL's dither_off is up and the model's rgb_dither_off is set (the games' RGB_DITHER_SEL as it is)
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
 //   The noise LFSR (rdp_pix.v): the lockstep comparison needs it to step once for each pixel with coverage, as the model's does (RDP_LFSR_PIXEL,
@@ -584,8 +585,10 @@ int main(int argc, char **argv)
         memset(mdl_mem + SIZE, 0xFF, MSIZE - SIZE);
 
         rdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
+        mdl.rgb_dither_off = getenv("TB_DITHEROFF") && strcmp(getenv("TB_DITHEROFF"), "rtl");      // (the RTL's dither_off, below; TB_DITHEROFF=rtl: the RTL alone, which must then differ)
         if (top) delete top;
         top = new Vrdp_top;
+        top->dither_off = getenv("TB_DITHEROFF") != nullptr;
         cmdq.clear(); reads.clear(); wr_addrs.clear();
         top->rst = 1;
         for (int i = 0; i < 8; i++) tick();

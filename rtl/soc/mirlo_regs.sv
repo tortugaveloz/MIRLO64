@@ -71,6 +71,8 @@ module mirlo_regs (
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
     output wire  [1:0]  ia_crop_l,
+    output wire         ia_out32,           // interact: "Picture" (field 17, INTERACT2[9:5]): bit 0 the 32-bit output, bit 1 Deblur (docs/video_options.md)
+    output wire         ia_deblur,
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
     output logic [31:0] fb_base,
@@ -229,6 +231,8 @@ logic        ia_ch0, ia_ch1;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
+assign ia_out32  = ia2[5];
+assign ia_deblur = ia2[6];
 wire [3:0] ia_an_video = ia2[3:0];
 wire       ia_an_dark  = ia_an_video >= 4'd7;
 assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video[2:0];

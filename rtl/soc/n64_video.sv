@@ -73,6 +73,8 @@ module n64_video #(
     input  wire         vi_aa,          // sys: the VI's anti-alias filter (VI_CTRL's AA_MODE 0 or 1; MIRLO_VI_AA)
     input  wire         vi_divot,       // sys: and its divot filter (VI_CTRL bit 4)
     input  wire         vi_dedither,    // sys: and its dither filter (VI_CTRL bit 16)
+    input  wire         vi_deblur,      // sys: the core's "Picture" option "Deblur": the anti-alias and divot filters are bypassed (docs/video_options.md)
+    input  wire         vi_out32,       // sys: the core's "Picture" option "32-bit": no dedither, 8 bits a channel (full range, and a 32-bit picture's own low bits)
     input  wire  [4:0]  crop_v,         // sys: the core's "Crop Vertical": lines of the picture blanked at its top and its
                                         //      bottom
     input  wire  [1:0]  crop_l,         // sys: and its pixels blanked at the picture's left edge
@@ -427,6 +429,7 @@ wire         pop_ev  = adv && !flush && nv && (wpos || px32_v) && hd_ok;   // (a
 always_comb f_rd = ce && (stale || rs_drop || pop_ev);
 logic [15:0] pix;
 logic [1:0]  phid;                 // its hidden coverage bits (MIRLO_VI_AA)
+logic [8:0]  plo;                  // a 32-bit picture's low three bits of R, G, B (with the 32-bit output option; else 0)
 logic        pv;                   // pix is the picture's (else black)
 logic        lwe;                  // pix is to be written to the line buffers
 always_ff @(posedge clk_vid) if (ce) begin
@@ -441,29 +444,39 @@ end
 // the hidden two
 wire [15:0] p32_hi = {f_q[15:11], f_q[7:3], f_q[31:27], f_q[23]};
 wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : px32_v ? p32_hi : wpos ? f_q[31:16] : f_q[15:0];
+// (the core's 32-bit output option, vid side: a 32-bit picture keeps the low three bits of each channel; the others are filled out below)
+logic [1:0] dbl_s, o32_s;
+always_ff @(posedge clk_vid) begin dbl_s <= {dbl_s[0], vi_deblur}; o32_s <= {o32_s[0], vi_out32}; end
+wire [8:0]  nx_lo  = !(nv && hd_ok) || flush || !px32_v || !o32_s[1] ? 9'd0 : {f_q[10:8], f_q[2:0], f_q[26:24]};
 wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : px32_v ? f_q[22:21] : wpos ? f_q[35:34] : f_q[33:32];
 wire        nx_pv  = nv && hd_ok && !flush;
 
 // the filters' line buffers and windows (the column of the slot, and its two rows above)
 logic       aa_on, dd_on, dv_on;
-(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb1 [0:1023];
+// lb1 (the row the filters centre on) keeps a 32-bit picture's three low bits of each channel with the pixel (the core's 32-bit
+// output option; else they are 0): {R, G, B low bits, the 19-bit pixel}
+(* ramstyle = "M10K, no_rw_check" *) logic [27:0] lb1 [0:1023];
 (* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb2 [0:1023];
-logic [18:0] lq1r, lq2r;           // the line buffers' reads
+logic [27:0] lq1r;
+logic [18:0] lq2r;                 // the line buffers' reads
 logic        lq_c, lq_a;           // ... that were of rows in the window
-wire  [18:0] lq1 = lq_c ? lq1r : 19'd0, lq2 = lq_a ? lq2r : 19'd0;
+wire  [27:0] lq1 = lq_c ? lq1r : 28'd0;
+wire  [18:0] lq2 = lq_a ? lq2r : 19'd0;
 logic [9:0]  lwa;
 // the window: {valid, hidden 2, RGBA5551} (the coverage: {bit 0, hidden})
 logic [18:0] wa [0:3], wc [0:4], wb [0:3];
+logic [8:0]  wl [0:2];             // the centre's (wc[2]) low bits, along the same steps
 integer wi;
 always_ff @(posedge clk_vid) if (ce && adv) begin
     // the pixel this step loads
-    pix <= nx_pix; phid <= nx_hid; pv <= nx_pv; lwe <= nx_pv;
+    pix <= nx_pix; phid <= nx_hid; pv <= nx_pv; lwe <= nx_pv; plo <= nx_lo;
     lq1r <= lb1[sx]; lq2r <= lb2[sx];
     lq_c <= !flush && cv; lq_a <= !flush && av;
     lwa <= sx;
     // the column the last step loaded: written to the line buffers and into the windows
-    if (lwe) begin lb1[lwa] <= {pv, phid, pix}; lb2[lwa] <= lq1; end
-    wa[0] <= lq2; wc[0] <= lq1; wb[0] <= {pv, phid, pix};
+    if (lwe) begin lb1[lwa] <= {plo, pv, phid, pix}; lb2[lwa] <= lq1[18:0]; end
+    wa[0] <= lq2; wc[0] <= lq1[18:0]; wb[0] <= {pv, phid, pix};
+    wl[0] <= lq1[27:19]; wl[1] <= wl[0]; wl[2] <= wl[1];
     for (wi = 1; wi < 4; wi = wi + 1) begin wa[wi] <= wa[wi - 1]; wb[wi] <= wb[wi - 1]; end
     for (wi = 1; wi < 5; wi = wi + 1) wc[wi] <= wc[wi - 1];
 end
@@ -491,8 +504,8 @@ end
 logic [1:0]  aa_s, dv_s, dd_s;
 always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], vi_divot}; dd_s <= {dd_s[0], vi_dedither}; end
 // (a hi-res picture: the filters are off; its pixels go through the line buffers all the same -- 1024 slots: a 640-pixel line and the priming's)
-assign aa_on = aa_s[1] && N64FB && !nofilt_v;
-assign dd_on = dd_s[1] && N64FB && !nofilt_v;
+assign aa_on = aa_s[1] && N64FB && !nofilt_v && !dbl_s[1];     // (Deblur: no anti-alias, no divot -- dv_on follows aa_on)
+assign dd_on = dd_s[1] && N64FB && !nofilt_v && !o32_s[1];     // (32-bit: no dedither)
 assign dv_on = dv_s[1] && aa_on;
 function automatic logic one6(input logic [5:0] x);               // exactly one of six
     return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
@@ -521,14 +534,14 @@ function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
     end
     return {lo, hi};
 endfunction
-function automatic logic [7:0] pen(input logic [4:0] c, input logic [9:0] m, input logic [2:0] w);
+function automatic logic [7:0] pen(input logic [4:0] c, input logic [2:0] lo, input logic [9:0] m, input logic [2:0] w);
     logic [4:0] mn, mx;
     logic signed [6:0] d;
     logic signed [10:0] o;
     mn = m[9:5] < c ? m[9:5] : c;
     mx = m[4:0] > c ? m[4:0] : c;
     d = $signed({2'b0, mn}) + $signed({2'b0, mx}) - $signed({1'b0, c, 1'b0});
-    o = $signed({3'b0, c, 3'b0}) + d * $signed({1'b0, w});
+    o = $signed({3'b0, c, lo}) + d * $signed({1'b0, w});
     return o[7:0];
 endfunction
 function automatic logic complete(input logic [18:0] t);   // coverage 7
@@ -539,6 +552,7 @@ function automatic logic [14:0] tap(input logic [18:0] t, input logic [18:0] ctr
     return (t[18] && complete(t)) ? t[15:1] : ctr[15:1];
 endfunction
 wire [18:0] ctr = wc[2];
+wire [8:0]  clo = wl[2];
 wire [2:0]  cw  = ~{ctr[0], ctr[17:16]};        // 7 - the coverage
 wire [14:0] n0 = tap(wa[1], ctr), n1 = tap(wa[3], ctr), n2 = tap(wc[0], ctr),
             n3 = tap(wc[4], ctr), n4 = tap(wb[1], ctr), n5 = tap(wb[3], ctr);
@@ -552,8 +566,8 @@ wire        aa_px = aa_on && ctr[18] && !complete(ctr);
 // must match its dedithered and anti-aliased neighbours (with the top bits
 // again below, a partial pixel among complete ones came out c >> 2 brighter).
 // A 565 picture (not the N64's): the top bits again below.
-function automatic logic [23:0] rgb8(input logic [15:0] p);
-    if (N64FB) return {p[15:11], 3'd0, p[10:6], 3'd0, p[5:1], 3'd0};
+function automatic logic [23:0] rgb8(input logic [15:0] p, input logic [8:0] lo);
+    if (N64FB) return {p[15:11], lo[8:6], p[10:6], lo[5:3], p[5:1], lo[2:0]};
     else       return {p[15:11], p[15:13], p[10:5], p[10:9], p[4:0], p[4:2]};
 endfunction
 // the dedither of one channel (bits [hi:hi-4] of the 5551 word): a ring tap
@@ -577,8 +591,8 @@ wire [23:0] dd8 = {ddch(ctr[15:11], `DDN(15), rv), ddch(ctr[10:6], `DDN(10), rv)
 logic [23:0] fa0, fa1, fa2;
 logic [2:0]  fe, fv;                   // [0] the newest
 always_ff @(posedge clk_vid) if (ce && adv) begin
-    fa0 <= !ctr[18] ? 24'd0 : aa_px ? {pen(ctr[15:11], mr, cw), pen(ctr[10:6], mg, cw), pen(ctr[5:1], mb, cw)}
-         : dd_on ? dd8 : rgb8(ctr[15:0]);
+    fa0 <= !ctr[18] ? 24'd0 : aa_px ? {pen(ctr[15:11], clo[8:6], mr, cw), pen(ctr[10:6], clo[5:3], mg, cw), pen(ctr[5:1], clo[2:0], mb, cw)}
+         : dd_on ? dd8 : rgb8(ctr[15:0], clo);
     fe[0] <= aa_px; fv[0] <= ctr[18];
     fa1 <= fa0; fa2 <= fa1; fe[2:1] <= fe[1:0]; fv[2:1] <= fv[1:0];
 end
@@ -593,6 +607,16 @@ wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);
 logic [23:0] pq;
 always_ff @(posedge clk_vid) if (ce && adv)
     pq <= dv_px ? {med3(dl[23:16], fa1[23:16], dr[23:16]), med3(dl[15:8], fa1[15:8], dr[15:8]), med3(dl[7:0], fa1[7:0], dr[7:0])} : fa1;
+// The 32-bit output option, for a 16-bit picture: its channels are the 5551 ones on eight bits (c << 3, white 248, as the console's VI
+// has them) plus the filters' fraction; taken to the full range -- v + (v >> 5), which is {c, c[4:2]} for a plain pixel (white 255) --
+// before the gamma table. A 32-bit picture's channels already are eight bits (their own low three bits).
+function automatic logic [7:0] fullrange(input logic [7:0] v);
+    logic [8:0] x;
+    x = {1'b0, v} + {6'd0, v[7:5]};
+    return x[8] ? 8'hFF : x[7:0];
+endfunction
+wire        xp_on = o32_s[1] && N64FB && !px32_v;
+wire [23:0] pqx   = xp_on ? {fullrange(pq[23:16]), fullrange(pq[15:8]), fullrange(pq[7:0])} : pq;
 
 // ---- the output's window and crop
 // the VI's window (slow-changing, from sys): black while H_START is 0 --
@@ -651,8 +675,8 @@ wire  [7:0]  o_b = gam_s[1] ? gq_b : pix_d[7:0];
 always_ff @(posedge clk_vid) begin
     if (ce) begin
         de_d <= de; hs_d <= hsync; vs_d <= vsync; cr_d <= crop;
-        pix_d <= pq;
-        gq_r <= gtab[pq[23:16]]; gq_g <= gtab[pq[15:8]]; gq_b <= gtab[pq[7:0]];
+        pix_d <= pqx;
+        gq_r <= gtab[pqx[23:16]]; gq_g <= gtab[pqx[15:8]]; gq_b <= gtab[pqx[7:0]];
         vga_de <= de_d; vga_hsync <= hs_d; vga_vsync <= vs_d;
         vga_r <= !de_d || cr_d ? 8'd0 : o_r;
         vga_g <= !de_d ? (vs_d ? 8'd0 : {1'b0, slot_v, 5'd0}) : cr_d ? 8'd0 : o_g;

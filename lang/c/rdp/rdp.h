@@ -254,6 +254,8 @@ typedef struct {
     uint32_t load_count;                   /* LOAD TILEs executed */
     uint32_t unknown_ops;
     uint64_t pixels_drawn;
+    int      rgb_dither_off; /* the core's "Picture: 32-bit" option (docs/video_options.md): the RGB dither is off, RGB_DITHER_SEL as it is
+                              * (the alpha dither's matrix still follows it); 0 by default. rtl/rdp: dither_off */
     uint32_t lfsr;          /* the RDP's noise: rtl/rdp/rdp_pix.v's 23-bit LFSR, a step per pixel with coverage */
     unsigned grow;                         /* this TRI_R's crack-grow edges (rdp_grow_mask), else 0 */
 

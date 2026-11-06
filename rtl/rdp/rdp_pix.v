@@ -55,6 +55,7 @@ module rdp_pix (
     input  wire [15:0] prim_dz,     // SET_PRIM_DEPTH's delta
     input  wire        need_mem,    // the colour span is read (rdp_top): the memory's coverage is there
     input  wire        c8,          // the colour image is an 8-bit one (rdp_top cimg8): no depth, memory reads 0
+    input  wire        dither_off,  // the core's "Picture: 32-bit" option: the RGB dither is off whatever RGB_DITHER_SEL says (a quasi-static level)
     input  wire        c32,         // ... a 32-bit one (rdp_top cimg32): a pixel a word of the old colour buffer
     input  wire        p_aa,        // a triangle: Z moves to the first covered sample
     input  wire [31:0] z_dx, z_dy,  // its DzDx, DzDy
@@ -1565,7 +1566,7 @@ module rdp_pix (
     // bits and the thresholds go on to the output (out_color is their sum, a
     // 5-bit step and a compare behind the registers: not on the blender's path).
     wire [2:0] dt13;
-    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1]), .bayer(other_h[6]),
+    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1] || dither_off), .bayer(other_h[6]),
                          .y(dy13), .x(x13b[1:0] - {1'b0, hp13b}), .dt(dt13));
 `ifdef RDP_LFSR_PIXEL
     // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
@@ -1574,7 +1575,7 @@ module rdp_pix (
 `else
     wire [8:0] nz5 = lfsr[8:0];
 `endif
-    wire dnoise = other_h[7:6] == 2'd2 && !cyc[1];
+    wire dnoise = other_h[7:6] == 2'd2 && !cyc[1] && !dither_off;
     reg [14:0] col_t;                           // R5 G5 B5, truncated
     reg [8:0]  col_lo;                          // the low three bits of R, G, B
     reg [2:0]  col_dt, col_dg, col_db;

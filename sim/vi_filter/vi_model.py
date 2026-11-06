@@ -5,9 +5,11 @@ pixels' hidden two coverage bits (image.hid, a byte a pixel: rdp_task
 RDP_RAW=1). The same rules as tb_vi.cpp's model, which the RTL matches pixel
 for pixel.
 
-  vi_model.py image.raw width out.png [--divot] [--dedither] [--off]
+  vi_model.py image.raw width out.png [--divot] [--dedither] [--off] [--deblur] [--out32]
 
 --off: the picture as the scan-out shows it without the filters.
+--deblur, --out32: the core's "Picture" options (docs/video_options.md): the anti-alias and divot filters bypassed; the
+dither filter bypassed and the 16-bit picture's channels taken to the full range (v + (v >> 5)).
 """
 import sys
 import numpy as np
@@ -23,11 +25,22 @@ def channels(fb):
     return [(fb >> 11) & 31, (fb >> 6) & 31, (fb >> 1) & 31]
 
 
-def filt(fb, divot, hid=None, dedither=False):
+def fullrange(v):
+    """the 32-bit output of a 16-bit picture: v + (v >> 5), saturated"""
+    return np.minimum(v + (v >> 5), 255)
+
+
+def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False):
     """R8 G8 B8 per pixel, as the pads take them"""
     h, w = fb.shape
     if hid is None:
         hid = np.full(fb.shape, 3)
+    if deblur:                                        # no anti-alias, no divot: every pixel is complete
+        divot = False
+        hid = np.full(fb.shape, 3)
+        fb = fb | 1
+    if out32:
+        dedither = False
     cvg = ((fb & 1) << 2) | hid
     comp = cvg == 7
     ch = channels(fb)
@@ -71,6 +84,8 @@ def filt(fb, divot, hid=None, dedither=False):
             med = np.median(np.stack([l, o, r]), axis=0).astype(np.int32)
             res.append(np.where(anyp, med, o))
         out = res
+    if out32:
+        out = [fullrange(o) for o in out]
     return out
 
 
@@ -88,7 +103,7 @@ def main():
         c = channels(fb)
         r8, g8, b8 = [x << 3 for x in c]
     else:
-        r8, g8, b8 = filt(fb, '--divot' in sys.argv, hid, '--dedither' in sys.argv)
+        r8, g8, b8 = filt(fb, '--divot' in sys.argv, hid, '--dedither' in sys.argv, '--deblur' in sys.argv, '--out32' in sys.argv)
     Image.fromarray(to_rgb(r8, g8, b8)).save(outp)
 
 

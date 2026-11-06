@@ -51,7 +51,8 @@ The picture is the VI's, by the game's own registers:
 
 Outside the window the frame is black. The pixel and the row are the nearest ones, not interpolated; the VI's filters
 (anti-alias, divot, dither filter, gamma) work on the frame buffer's own pixels before the scale, as the VI's do. So
-one path shows every size: a 320-wide buffer with a scale of 0.5 (each pixel two clocks), a wider one with its own
+one path shows every size (the core's "Picture" setting, [video_options.md](video_options.md), can bypass the filters; nothing in
+the scan-out interpolates): a 320-wide buffer with a scale of 0.5 (each pixel two clocks), a wider one with its own
 scale, and a 640-wide one with a scale of 1.
 
 Three cases are not the plain rule:

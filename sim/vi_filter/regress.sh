@@ -1,7 +1,7 @@
 #!/bin/bash
 # The scan-out against its model (tb_vi.cpp): the filters at 320 (doubled to 640), the VI's scales (440 x 330, 384 in a
 # 597-clock window, other pitches and steps), the hi-res pictures (filters off), the crop options, PAL, and the TV system
-# changing between fields; and 32-bit pictures.
+# changing between fields; 32-bit pictures; and the Picture options (Deblur, 32-bit).
 #   ./regress.sh      (builds obj_vi first)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
@@ -55,6 +55,16 @@ TB_SEQ=0,1,1,0,0 TB_Y0=0 TB_ROWS=240 TB_YS=3FD run $T 6 0 30 320       # (NTSC <
 TB_PX32=1 run $T 1 0 30 320; TB_PX32=1 run $T 2 1 40 320; TB_PX32=1 run $T 5 1 30 320 1; TB_PX32=1 run $T 3 1 30 440 1
 TB_PX32=1 run $T 3 0 30 640p; TB_PX32=1 run $T 4 0 30 640s; TB_PX32=1 TB_CROPV=3 TB_CROPR=2 TB_PAL=1 run $T 8 1 30 320
 TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_PX32=1 TB_LOAD=5 run $T 7 0 30 640p; TB_PX32=1 TB_LOAD=2 run $T 4 0 30 640s
+# the core's "Picture" options (docs/video_options.md). Deblur: the anti-alias and divot filters are bypassed (the dedither stays as the game
+# asked); 32-bit: no dedither, a 16-bit picture to the full range, a 32-bit picture with its own low three bits (the anti-alias centre's too);
+# both: scaled, windowed, hi-res, woven, PAL, cropped, the SDRAM loaded
+TB_DEBLUR=1 run $T 1 0 30 320; TB_DEBLUR=1 run $T 2 1 40 320 1; TB_DEBLUR=1 run $T 3 1 30 440 1; TB_DEBLUR=1 run $T 7 1 30 384; TB_DEBLUR=1 run $T 3 1 30 640p
+TB_DEBLUR=1 run $T 4 1 30 640s; TB_DEBLUR=1 TB_PAL=1 TB_CROPV=3 TB_CROPR=2 run $T 5 1 30 320 1; TB_DEBLUR=1 TB_PX32=1 run $T 3 1 30 440 1
+TB_OUT32=1 run $T 1 0 30 320; TB_OUT32=1 run $T 2 1 40 320 1; TB_OUT32=1 run $T 3 1 30 440 1; TB_OUT32=1 run $T 7 1 30 384; TB_OUT32=1 run $T 3 0 30 640p
+TB_OUT32=1 run $T 4 1 30 640s; TB_OUT32=1 TB_PAL=1 TB_CROPV=3 TB_CROPR=2 run $T 5 1 30 320 1; TB_OUT32=1 TB_LOAD=5 run $T 6 1 30 320 1
+TB_OUT32=1 TB_PX32=1 run $T 1 0 30 320; TB_OUT32=1 TB_PX32=1 run $T 2 1 40 320 1; TB_OUT32=1 TB_PX32=1 run $T 3 1 30 440 1; TB_OUT32=1 TB_PX32=1 run $T 3 0 30 640p
+TB_OUT32=1 TB_PX32=1 run $T 4 0 30 640s; TB_OUT32=1 TB_PX32=1 TB_PAL=1 TB_CROPV=3 run $T 8 1 30 320 1; TB_OUT32=1 TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1
+TB_OUT32=1 TB_DEBLUR=1 run $T 2 1 30 320 1; TB_OUT32=1 TB_DEBLUR=1 TB_PX32=1 run $T 3 1 30 440 1; TB_OUT32=1 TB_DEBLUR=1 run $T 4 1 30 640s
 # the VI blanked (H_START 0, an origin out of the RDRAM: the DMA reads nothing) after a picture: black, not the last row read on every line
 TB_BLANK=1 run $T 1 0 30 320; TB_BLANK=1 run $T 3 0 30 640p; TB_BLANK=1 run $T 3 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
