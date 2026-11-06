@@ -88,7 +88,7 @@ test_cimg32: 31 checks, 0 failed
 
 ### What is approximated
 
-- **The picture is shown at five bits a channel** (with the core's "Picture: 32-bit" setting, eight: the centre row's line
+- **The picture is shown at five bits a channel** (with the core's "Video settings: 32-bit" setting, eight: the centre row's line
   buffer then keeps the three low bits of each channel, [video_options.md](video_options.md); the rest of this paragraph is
   the default). The VI's own 32-bit path works on eight bits; the line buffers
   (1024 x 19 bits, two M10K each) have no room for the three low bits of each channel, and the device has no block to

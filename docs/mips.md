@@ -116,7 +116,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42DD_0000` | 8 KiB | The runtime's `.data` as it was when the program started, which [Restart Game](#restart-game) puts back |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
-| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Picture: 32-bit" setting: the low three bits of each channel of a 16-bit colour image's pixels, and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
+| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: the low three bits of each channel of a 16-bit colour image's pixels, and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -1163,7 +1163,7 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
-| Picture | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit (1), Deblur (2), 32-bit + Deblur (3): [video_options.md](video_options.md) |
+| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit (1), Deblur (2), 32-bit + Deblur (3): [video_options.md](video_options.md) |
 | Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | **Pak in, codes off** (0), Pak in, codes on (2), Pak out, codes off (1), Pak out, codes on (3). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3) |
 | Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Transfer Pak SD (3) |
