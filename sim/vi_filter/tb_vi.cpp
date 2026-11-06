@@ -24,6 +24,10 @@
 //   the dedither stays as the game asked. TB_OUT32=1: the core's "32-bit" output (vi_out32): no dedither; a 16-bit picture's channels
 //   taken to the full range (v + (v >> 5), white 255); a 32-bit picture (TB_PX32) keeps the low three bits of each channel, in the
 //   anti-alias filter's centre too. Both default 0 (the console's output: the pad hash is the same as before the options).
+//   TB_OUT32=1 with a 16-bit picture reads the RDP's shadow plane (docs/video_options.md; not for a woven frame); TB_SHADOW=1 fills it: it is in memory beside the colour image, a halfword
+//   a pixel -- the low three bits of its channels and the CRC-7 of its 5551 word; for a share of the pixels a halfword that is the pixel's
+//   (random low bits), for the rest noise (which passes the check now and then, as it will). The scan-out reads a pixel's low bits from it
+//   where the check is the word's, and takes the top three bits of each channel again where it is not.
 //   TB_BLANK=1: the VI blanked after the first frame checked (`enable` low: H_START 0, an origin out of the RDRAM): one
 //   frame more, not checked (the boundary that takes it), then one that must be black all over -- not the last row read
 //   on every line.
@@ -53,6 +57,12 @@ static std::vector<uint16_t> fbw;                 // the buffer
 static std::vector<uint8_t> hidw;                 // each pixel's hidden two coverage bits (the RDP's plane)
 static bool px32;                                 // TB_PX32: a 32-bit picture
 static bool deblur, out32;                        // TB_DEBLUR, TB_OUT32
+static bool shadow;                               // TB_SHADOW
+static std::vector<uint16_t> shw;                 // each pixel's shadow halfword
+static std::vector<uint32_t> shm;                 // the shadow plane as the SDRAM has it (2 MiB, the image's address folded: n64_video.sv)
+static long sh_reads;
+static unsigned sh_crc(uint16_t w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; }
+static uint32_t sh_fold(uint32_t k) { uint32_t x = (k & 0x7FFFFu) ^ (((k >> 19) & 3u) << 17); return (x & ~0x600u) | (((x >> 9) & 3u) ^ 1u) << 9; }
 static std::vector<uint32_t> fb32;                // its buffer: RGBA8888, R the top byte (the word as the SDRAM gives it); fbw / hidw its 16-bit view
 static long hid_reads;                            // reads of the hidden plane (none for a 32-bit picture)
 static unsigned rng = 1;
@@ -81,8 +91,13 @@ static bool complete(int x, int j) { return deblur || cvg(x, j) == 7u; }   // (D
 // a 32-bit picture's low three bits of a channel of the pixel (x, r), with the 32-bit output option (else 0)
 static int lowv(int x, unsigned r, int k)
 {
-    if (!(px32 && out32)) return 0;
     size_t i = (size_t)r * (wov ? (WB == 1280 ? 640 : WB) : WB) + (size_t)x;
+    if (shadow && !px32) {         // the shadow halfword where its check is the pixel's word's, else the channel's top three bits again
+        const uint16_t c = i < fbw.size() ? fbw[i] : 0, sw = i < shw.size() ? shw[i] : 0;
+        const int top = k == 0 ? (c >> 13) & 7 : k == 1 ? (c >> 8) & 7 : (c >> 3) & 7;
+        return (sw & 0x7Fu) == sh_crc(c) ? (int)(sw >> (13 - 3 * k)) & 7 : top;
+    }
+    if (!(px32 && out32)) return 0;
     uint32_t w = i < fb32.size() ? fb32[i] : 0;
     return (int)(k == 0 ? (w >> 24) & 7 : k == 1 ? (w >> 16) & 7 : (w >> 8) & 7);
 }
@@ -146,7 +161,7 @@ static P6 model0(int sx, int j, bool divot)
 static P6 model(int sx, int j, bool divot)
 {
     P6 e = model0(sx, j, divot);
-    if (out32 && !px32) { e.r = fullrange(e.r); e.g = fullrange(e.g); e.b = fullrange(e.b); }
+    if (out32 && !px32 && !shadow) { e.r = fullrange(e.r); e.g = fullrange(e.g); e.b = fullrange(e.b); }
     return e;
 }
 
@@ -165,7 +180,8 @@ static void tick()
     if (t->m_valid && t->m_ready) {
         uint32_t a = t->m_addr;                     // word address
         uint32_t i = a * 2, w = 0;
-        if (a >= 0xDC0000u && a < 0xE00000u) {      // the hidden plane (SDRAM 0x0370_0000): pixels 16 (a - base) on
+        if (a >= 0xC80000u && a < 0xD00000u) { w = a - 0xC80000u < shm.size() ? shm[a - 0xC80000u] : 0; sh_reads++; }
+        else if (a >= 0xDC0000u && a < 0xE00000u) {      // the hidden plane (SDRAM 0x0370_0000): pixels 16 (a - base) on
             uint32_t p0 = (a - 0xDC0000u) * 16u;
             for (uint32_t k = 0; k < 16; k++) if (p0 + k < hidw.size()) w |= (uint32_t)hidw[p0 + k] << (2 * k);
             hid_reads++;
@@ -207,6 +223,8 @@ int main(int argc, char **argv)
     px32 = getenv("TB_PX32") && atoi(getenv("TB_PX32"));
     deblur = getenv("TB_DEBLUR") && atoi(getenv("TB_DEBLUR"));
     out32 = getenv("TB_OUT32") && atoi(getenv("TB_OUT32"));
+    shadow = out32 && !px32 && !wov;           // (the scan-out reads the shadow plane for every such picture; TB_SHADOW fills it)
+    const bool shfill = getenv("TB_SHADOW") && atoi(getenv("TB_SHADOW"));
     rng = seed * 2654435761u + 7;
     pal0 = getenv("TB_PAL") ? atoi(getenv("TB_PAL")) : 0;
     if (const char *q = getenv("TB_SEQ")) for (; *q; q++) if (*q == '0' || *q == '1') seq.push_back(*q - '0');
@@ -222,6 +240,11 @@ int main(int argc, char **argv)
         unsigned c = (int)(rnd() % 100) >= pct ? 7u : rnd() % 7u;      // complete, or a partial coverage 0..6
         fbw[i] = v | (uint16_t)(c >> 2);
         hidw[i] = (uint8_t)(c & 3u);
+    }
+    if (shadow) {
+        shw.assign(fbw.size(), 0); shm.assign(1u << 19, 0);       // (not filled: a plane of zeros, which passes the check now and then)
+        if (shfill) for (size_t i = 0; i < fbw.size(); i++) shw[i] = (rnd() % 100) < 70 ? (uint16_t)((rnd() & 0x1FFu) << 7 | sh_crc(fbw[i])) : (uint16_t)(rnd() ^ rnd() << 7);
+        if (shfill) for (size_t k = 0; 2 * k + 1 < fbw.size(); k++) shm[sh_fold((uint32_t)k)] = (uint32_t)shw[2 * k] << 16 | shw[2 * k + 1];
     }
     if (px32) {   // a 32-bit buffer: patches of 8-bit colour (their low bits as random as the rest), the coverage in alpha[7:5], alpha[4:0] noise
         fb32.resize(fbw.size());
@@ -348,12 +371,13 @@ int main(int argc, char **argv)
         pvs = t->vga_vsync;
     }
     errs += outside + (int)tim_errs;
+    if (shadow != (sh_reads > 0)) { printf("shadow reads: %ld (the picture %s)\n", sh_reads, shadow ? "has the plane" : "has none"); errs++; }
     if (px32 && hid_reads) { printf("a 32-bit picture read the hidden plane %ld times\n", hid_reads); errs++; }
     if (seq.empty()) printf("field timing: %u fields of %ld sys clocks (%s at 62.5 MHz), %d lines each, %d of them shorter\n", fields_ok, FLD[pal0], pal0 ? "50.000 Hz, PAL" : "59.940 Hz", NLN[pal0], NSH[pal0]);
     else printf("field timing: %u intervals as predicted\n", fields_ok);
     if (fields_ok < (unsigned)(seq.empty() ? (pal0 ? 3 : nfr - 1 - (wov ? 1 : 0)) : seq.size())) { printf("field timing: not seen\n"); errs++; }
     printf("pad hash %016llx\n", (unsigned long long)pad_hash);
-    printf("seed %u divot %d dedither %d%s%s partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
-           seed, divot, dedither, deblur ? " deblur" : "", out32 ? " out32" : "", pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
+    printf("seed %u divot %d dedither %d%s%s%s partial %d%% width %u%s%s X_SCALE %03x Y_SCALE %03x window %u+%u x %u+%u: %s (%d mismatches; %ld pixels changed by the filters)\n",
+           seed, divot, dedither, deblur ? " deblur" : "", out32 ? " out32" : "", shadow ? " shadow" : "", pct, WB, px32 ? " 32-bit" : "", wov ? " serrated: woven, 640 x 480" : ser ? " serrated, not a pair of fields" : "", XS, YS, PX0, PW, Y0, R, errs ? "FAIL" : "PASS", errs, changed);
     return errs != 0;
 }

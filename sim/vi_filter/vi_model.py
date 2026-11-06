@@ -9,7 +9,8 @@ for pixel.
 
 --off: the picture as the scan-out shows it without the filters.
 --deblur, --out32: the core's "Picture" options (docs/video_options.md): the anti-alias and divot filters bypassed; the
-dither filter bypassed and the 16-bit picture's channels taken to the full range (v + (v >> 5)).
+dither filter bypassed and the 16-bit picture's channels with their low three bits from the shadow plane (here a plane of zeros, which
+passes the check for the words whose CRC-7 is 0), else the top three bits again.
 """
 import sys
 import numpy as np
@@ -25,16 +26,36 @@ def channels(fb):
     return [(fb >> 11) & 31, (fb >> 6) & 31, (fb >> 1) & 31]
 
 
-def fullrange(v):
-    """the 32-bit output of a 16-bit picture: v + (v >> 5), saturated"""
-    return np.minimum(v + (v >> 5), 255)
+def crc7(w):
+    """the shadow plane's check of a 16-bit word: CRC-7 (x^7 + x^3 + 1), the top bit first (lang/c/rdp/rdp.c sh_crc), of an array"""
+    w = np.asarray(w, dtype=np.int64)
+    c = np.zeros_like(w)
+    for i in range(15, -1, -1):
+        fb = ((c >> 6) & 1) ^ ((w >> i) & 1)
+        c = (c << 1) & 0x7F
+        c = np.where(fb == 1, c ^ 0x09, c)
+    return c
 
 
-def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False):
+def sh_lows(fb, sh=None):
+    """the 32-bit output's low three bits of each channel of a 16-bit picture: the shadow halfword's where its check is the word's
+    (sh: the plane's halfwords, default a plane of zeros, as the simulator's SDRAM), else the channel's top three bits again"""
+    if sh is None:
+        sh = np.zeros_like(fb)
+    ok = (sh & 0x7F) == crc7(fb)
+    lows = []
+    for k, (rs, ss) in enumerate(((11, 13), (6, 10), (1, 7))):
+        top = (fb >> (rs + 2)) & 7
+        lows.append(np.where(ok, (sh >> ss) & 7, top))
+    return lows
+
+
+def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False, sh=None):
     """R8 G8 B8 per pixel, as the pads take them"""
     h, w = fb.shape
     if hid is None:
         hid = np.full(fb.shape, 3)
+    fb0 = fb                                          # (the picture as the plane's check sees it)
     if deblur:                                        # no anti-alias, no divot: every pixel is complete
         divot = False
         hid = np.full(fb.shape, 3)
@@ -47,8 +68,9 @@ def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False):
     out = []
     taps = [(-1, -1), (1, -1), (-2, 0), (2, 0), (-1, 1), (1, 1)]
     cp_ok = np.pad(comp, 2, constant_values=False)          # off the picture: not a tap
-    for c in ch:
-        o = c << 3                                     # unfiltered: the N64's 5 bits << 3
+    lows = sh_lows(fb0, sh) if out32 else [0, 0, 0]       # (the 32-bit output: the shadow plane's low bits, in the centre of the anti-alias filter too)
+    for ci, c in enumerate(ch):
+        o = (c << 3) | lows[ci]                        # unfiltered: the N64's 5 bits << 3
         if dedither:                                  # the ring's signs, added to the eight bits
             add = np.zeros_like(c)
             okp = np.pad(np.ones_like(comp), 1, constant_values=False)
@@ -70,7 +92,7 @@ def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False):
         s = np.sort(np.stack(vals), axis=0)
         mn = np.minimum(s[1], c)
         mx = np.maximum(s[4], c)
-        o8 = (c << 3) + (mn + mx - 2 * c) * (7 - cvg)       # the N64's ((.. + 4) >> 3 on 8 bits): exact
+        o8 = ((c << 3) | lows[ci]) + (mn + mx - 2 * c) * (7 - cvg)       # the N64's ((.. + 4) >> 3 on 8 bits): exact
         out.append(np.where(comp, o, o8))
     if divot:
         part = ~comp
@@ -84,8 +106,6 @@ def filt(fb, divot, hid=None, dedither=False, deblur=False, out32=False):
             med = np.median(np.stack([l, o, r]), axis=0).astype(np.int32)
             res.append(np.where(anyp, med, o))
         out = res
-    if out32:
-        out = [fullrange(o) for o in out]
     return out
 
 

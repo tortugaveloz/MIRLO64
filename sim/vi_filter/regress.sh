@@ -65,6 +65,15 @@ TB_OUT32=1 run $T 4 1 30 640s; TB_OUT32=1 TB_PAL=1 TB_CROPV=3 TB_CROPR=2 run $T 
 TB_OUT32=1 TB_PX32=1 run $T 1 0 30 320; TB_OUT32=1 TB_PX32=1 run $T 2 1 40 320 1; TB_OUT32=1 TB_PX32=1 run $T 3 1 30 440 1; TB_OUT32=1 TB_PX32=1 run $T 3 0 30 640p
 TB_OUT32=1 TB_PX32=1 run $T 4 0 30 640s; TB_OUT32=1 TB_PX32=1 TB_PAL=1 TB_CROPV=3 run $T 8 1 30 320 1; TB_OUT32=1 TB_PX32=1 TB_LOAD=5 run $T 6 1 30 320 1
 TB_OUT32=1 TB_DEBLUR=1 run $T 2 1 30 320 1; TB_OUT32=1 TB_DEBLUR=1 TB_PX32=1 run $T 3 1 30 440 1; TB_OUT32=1 TB_DEBLUR=1 run $T 4 1 30 640s
+# the shadow plane of a 16-bit picture (the RDP writes it with the 32-bit setting: docs/video_options.md): each colour word read after its
+# shadow word, a pixel's low bits taken from it where its check is the pixel's, else the top bits again; scaled, windowed, hi-res, under
+# the SDRAM's load. (A woven frame is shown without it: the run checks that it reads none.)
+TB_OUT32=1 TB_SHADOW=1 run $T 1 0 30 320; TB_OUT32=1 TB_SHADOW=1 run $T 2 1 40 320 1; TB_OUT32=1 TB_SHADOW=1 run $T 3 1 30 440 1; TB_OUT32=1 TB_SHADOW=1 run $T 7 1 30 384
+TB_OUT32=1 TB_SHADOW=1 run $T 3 0 30 640p; TB_OUT32=1 TB_SHADOW=1 run $T 4 1 30 640s; TB_OUT32=1 TB_SHADOW=1 run $T 5 0 30 1280s
+TB_OUT32=1 TB_SHADOW=1 TB_PAL=1 TB_CROPV=3 TB_CROPR=2 run $T 5 1 30 320 1; TB_OUT32=1 TB_SHADOW=1 TB_DEBLUR=1 run $T 2 1 30 320 1
+TB_OUT32=1 TB_SHADOW=1 TB_LOAD=5 run $T 6 1 30 320 1; TB_OUT32=1 TB_SHADOW=1 TB_LOAD=5 run $T 7 0 30 640p; TB_OUT32=1 TB_SHADOW=1 TB_LOAD=5 run $T 4 0 30 640s
+TB_OUT32=1 TB_SHADOW=1 TB_RDY=25 run $T 6 1 30 320 1; TB_OUT32=1 TB_SHADOW=1 TB_RDY=25 run $T 3 0 30 640p
+TB_OUT32=1 TB_SHADOW=1 TB_SEQ=0,1,1,0,0 run $T 2 1 30 320
 # the VI blanked (H_START 0, an origin out of the RDRAM: the DMA reads nothing) after a picture: black, not the last row read on every line
 TB_BLANK=1 run $T 1 0 30 320; TB_BLANK=1 run $T 3 0 30 640p; TB_BLANK=1 run $T 3 0 30 640s
 # the runtime's fit of a window taller than the field (host test of lang/n64rt/n64rt_vifit.h)
