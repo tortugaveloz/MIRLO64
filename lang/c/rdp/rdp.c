@@ -761,7 +761,7 @@ static inline unsigned dither_d(const rdp_t *r, int x, int y, int noise)
 static inline rdp_rgba_t dither_n64(const rdp_t *r, rdp_rgba_t c, int x, int y, uint32_t rnd, int noise)
 {
     unsigned sel = (r->other_h >> 6) & 3;
-    if (sel == 3) return c;
+    if (sel == 3 || r->rgb_dither_off || r->shadow) return c;
     unsigned d = dither_d(r, x, y, noise);
     uint8_t *ch[3] = { &c.r, &c.g, &c.b };
     for (int k = 0; k < 3; k++) {
@@ -1132,6 +1132,24 @@ static inline void hid_set(rdp_t *r, uint32_t a, unsigned v)
     r->wr16(r->ctx, ha, h);
 }
 
+/* The shadow plane (rdp.h, RDP_SH_BASE) */
+static inline unsigned sh_crc(uint16_t w)          /* CRC-7 (x^7 + x^3 + 1) of the 16 bits, the top first */
+{
+    unsigned c = 0;
+    for (int i = 15; i >= 0; i--) {
+        const unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u);
+        c = (c << 1) & 0x7Fu;
+        if (fb) c ^= 0x09u;
+    }
+    return c;
+}
+static inline uint32_t sh_addr(uint32_t a) { return RDP_SH_BASE + (a & 0x7FFFFEu); }
+static inline unsigned sh_rep(uint16_t w) { return ((w >> 13) & 7u) << 6 | ((w >> 8) & 7u) << 3 | ((w >> 3) & 7u); }   /* each channel's top three bits */
+static inline void sh_put(rdp_t *r, uint32_t caddr, uint16_t w, unsigned lo9)
+{
+    r->wr16(r->ctx, sh_addr(caddr), (uint16_t)(lo9 << 7 | sh_crc(w)));
+}
+
 /* The colour image's word for the pixel: RGBA5551, bit 0 the coverage's top
  * bit */
 static inline uint16_t rgb5551(rdp_rgba_t c, int complete)
@@ -1475,6 +1493,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         {
             uint16_t mw = r->rd16(r->ctx, caddr);
             mem = unrgb565(mw);
+            if (r->shadow & 2) {        /* the low bits of the colour the blender made, where the shadow word is the pixel's */
+                const uint16_t sw = r->rd16(r->ctx, sh_addr(caddr));
+                if ((sw & 0x7Fu) == sh_crc(mw)) { mem.r |= (sw >> 13) & 7u; mem.g |= (sw >> 10) & 7u; mem.b |= (sw >> 7) & 7u; }
+            }
             if (l & RDP_L_IM_RD) memcvg = (mw & 1u) << 2 | hid_get(r, caddr);                   /* bit 0 and the hidden two */
         }
     }
@@ -1592,6 +1614,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
     }
     if (cyc != 2) out = dither_n64(r, out, x, dyr, rnd, 1);
     r->wr16(r->ctx, caddr, rgb5551(out, complete));
+    if (r->shadow) sh_put(r, caddr, rgb5551(out, complete), cyc == 2 ? sh_rep(rgb5551(out, complete)) : ((out.r & 7u) << 6 | (out.g & 7u) << 3 | (out.b & 7u)));
     hid_set(r, caddr, cvg_out);
     if ((l & RDP_L_Z_UPD) && !copy) { r->wr16(r->ctx, zaddr, (uint16_t)(z_enc(depth) | dzst >> 2)); ZHID_SET }
     r->pixels_drawn++;
@@ -1625,6 +1648,7 @@ static void draw_pixel(rdp_t *r, const prim_t *pr, int x, int y, const int32_t *
          * of an odd width starts on the odd halfword) */
         const unsigned lo = (caddr >> 1) & 1u;
         r->wr16(r->ctx, caddr, lo ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16));
+        if (r->shadow) { const uint16_t fw = lo ? (uint16_t)r->fill : (uint16_t)(r->fill >> 16); sh_put(r, caddr, fw, sh_rep(fw)); }
 #ifdef RDP_CVG
         /* the hidden bits: each pixel's {a, a}, a its colour's bit 0 -- a fill
          * rectangle's for every 4-pixel quad it touches (as the N64 writes its

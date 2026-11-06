@@ -1,4 +1,4 @@
-/* GameShark codes: the setting "Enable Gameshark codes" (interact.json: INTERACT1[25]). With it on the
+/* GameShark codes: the codes of the setting "Expansion Pak/Gameshark" (interact.json: INTERACT1[25]). With it on the
  * runtime looks, once, for the game's codes in a text file on the SD card -- Assets/n64/common/gameshark/<ID>.<version>.txt, else
  * <ID>.txt, where <ID> is the cartridge's four characters (ROM 0x3B..0x3E: "NSME": the game's code and its region) and <version> the
  * header's version byte, in decimal -- and runs every code in it in every video field (n64rt_gs.h has the format and the code types), as a

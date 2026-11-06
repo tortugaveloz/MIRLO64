@@ -10,6 +10,11 @@
 // A random command stream instead (random state, loads of every kind from a
 // random texture image at any alignment, triangles and rectangles in every
 // cycle type): what real tasks do not reach.
+//   TB_DITHEROFF=1  the core's "Picture: 32-bit" option: the RTL's dither_off is up and the model's rgb_dither_off is set (the games' RGB_DITHER_SEL as it is)
+//   TB_SHADOW=1 (2: with the blender reading it too) the shadow plane (docs/video_options.md): the RTL's dither_off and shadow_en up, the model's shadow set (TB_SHADOW=model: the model alone,
+//               which must then differ)
+//   TB_FOREIGN=1  (with TB_SHADOW=2 TB_C16=1) others write the colour image between draws: random pixels and a frame copy (the colour plane alone);
+//               RTL == model on every plane, and the shadow words the RDP wrote must pass their check where nothing else wrote and fail where it did
 //   TB_STEP=1   compare after every command, stop at the first that differs
 //   TB_C32=1    random streams into a 32-bit colour image (docs/cimg32.md)
 //   The noise LFSR (rdp_pix.v): the lockstep comparison needs it to step once for each pixel with coverage, as the model's does (RDP_LFSR_PIXEL,
@@ -37,7 +42,7 @@ extern "C" {
 #include "rdp.h"   // rdp.c is built as C++ here too
 
 static const uint32_t SIZE = 8u << 20;                     // the RDRAM (the RSP's)
-static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (rdp.h)
+static const uint32_t MSIZE = 32u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB, the shadow plane at 16 MiB (rdp.h)
 static uint8_t *rsp_mem, *rtl_mem, *mdl_mem;
 static uint16_t mdl_rd(void *, uint32_t a) { a &= MSIZE - 2; return (uint16_t)(mdl_mem[a] << 8 | mdl_mem[a + 1]); }
 static void mdl_wr(void *, uint32_t a, uint16_t v) { a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v; }
@@ -229,6 +234,11 @@ static void tick()
 static bool rtl_idle() { return cmdq.empty() && top->idle && reads.empty() && wr_addrs.empty(); }
 
 static std::vector<uint32_t> cmds;
+static std::set<uint32_t> foreign_px;                 // TB_FOREIGN: the colour halfwords something else wrote
+static uint32_t f_cimg, f_w;
+static std::set<uint32_t> frand;
+static uint64_t fn_n, fn_ok;
+static unsigned sh_crc7(unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; }
 static std::set<unsigned> kinds;
 static void on_rdp(void *, const uint32_t *w, int n) { for (int i = 0; i < 2 * n; i++) cmds.push_back(w[i]); }
 
@@ -578,14 +588,22 @@ int main(int argc, char **argv)
         memcpy(s.imem, rsp_mem + boot, bs > 4096 ? 4096 : bs);
         if (rsp_run(&s, 200000000ull)) { fprintf(stderr, "%s: the task did not end\n", argv[ai]); return 2; }
         }
+        if (const char *cf = getenv("TB_CMDFILE")) {      // TB_CMDFILE=<file>: the commands of a text file of hex words instead (TB_ZEROMEM=1: from zeros), e.g. lang/mips/test/vishadow_cmds.h
+            FILE *fc = fopen(cf, "r"); cmds.clear();
+            if (fc) { char tok[64]; while (fscanf(fc, "%63s", tok) == 1) if (tok[0] == '0' && tok[1] == 'x') cmds.push_back((uint32_t)strtoul(tok, 0, 16)); fclose(fc); }
+            if (getenv("TB_ZEROMEM")) memset(rsp_mem, 0, SIZE);
+        }
         memcpy(rtl_mem, rsp_mem, SIZE);
         memcpy(mdl_mem, rsp_mem, SIZE);
         memset(rtl_mem + SIZE, 0xFF, MSIZE - SIZE);         // (the hidden plane: all ones, as the runtime sets it)
         memset(mdl_mem + SIZE, 0xFF, MSIZE - SIZE);
 
         rdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
+        mdl.shadow = getenv("TB_SHADOW") ? (atoi(getenv("TB_SHADOW")) == 2 ? 3 : 1) : 0;
+        mdl.rgb_dither_off = (getenv("TB_DITHEROFF") && strcmp(getenv("TB_DITHEROFF"), "rtl")) || mdl.shadow;      // (the RTL's dither_off, below; TB_DITHEROFF=rtl: the RTL alone, which must then differ)
         if (top) delete top;
         top = new Vrdp_top;
+        top->dither_off = getenv("TB_DITHEROFF") != nullptr || getenv("TB_SHADOW") != nullptr; top->shadow_en = getenv("TB_SHADOW") != nullptr && strcmp(getenv("TB_SHADOW"), "model");
         cmdq.clear(); reads.clear(); wr_addrs.clear();
         top->rst = 1;
         for (int i = 0; i < 8; i++) tick();
@@ -656,6 +674,30 @@ int main(int argc, char **argv)
                     return 1;
                 }
             }
+            // TB_FOREIGN=1 (with TB_SHADOW, 16-bit images: TB_C16=1): every 25 commands, with the RTL caught up, something else writes the colour image
+            // -- 48 pixels of random values, and a copy of 96 halfwords from one place of the image to another (a frame copy: the colour
+            // plane alone) -- into the RTL's memory and the model's alike. The shadow plane is stale there; the two must still agree
+            // (RTL == model on every plane), and the shadow words the RDP wrote and nothing touched must all pass their check, those it did not
+            // nearly none (below).
+            if (getenv("TB_FOREIGN") && csize == 2 && ncmd % 25 == 0) {
+                while (!rtl_idle()) tick();
+                for (int i = 0; i < 16; i++) tick();
+                const uint32_t span = width * 100u;
+                for (int i = 0; i < 48; i++) {
+                    const uint32_t a = (cimg + 2 * gr(span)) & (SIZE - 2); const unsigned v = gr(65536);
+                    rtl_mem[a] = mdl_mem[a] = (uint8_t)(v >> 8); rtl_mem[a + 1] = mdl_mem[a + 1] = (uint8_t)v; foreign_px.insert(a); frand.insert(a);
+                }
+                const uint32_t src = (cimg + 2 * gr(width * 50u)) & (SIZE - 2), dst = (cimg + 2 * (width * 100u + gr(width * 50u))) & (SIZE - 2);
+                for (int i = 0; i < 192; i++) { rtl_mem[dst + i] = mdl_mem[dst + i] = mdl_mem[src + i]; if (!(i & 1)) foreign_px.insert(dst + i); }
+                f_cimg = cimg; f_w = width;
+                // (at once: the pixels the others wrote whose shadow word the RDP had written -- the check must fail on nearly all)
+                for (uint32_t a : frand) {
+                    const unsigned sw = mdl_mem[0x01000000u + a] << 8 | mdl_mem[0x01000000u + a + 1], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
+                    if (sw == 0xFFFFu) continue;
+                    fn_n++; fn_ok += (sw & 0x7Fu) == sh_crc7(cw);
+                }
+                frand.clear();
+            }
             cur.clear();
             while (cmdq.size() > 64) tick();              // keep the RTL fed, not flooded
         }
@@ -679,6 +721,24 @@ int main(int argc, char **argv)
                argv[ai], (unsigned long long)ncmd, (unsigned long long)(cycles - c0), (unsigned long long)n_rd, (unsigned long long)n_wr,
                top->sync_count, mdl.sync_count, top->load_count, mdl.load_count, top->unknown_ops, mdl.unknown_ops,
                (unsigned long long)mdl.pixels_drawn, diff ? "MISMATCH" : "RTL == model\n");
+        if (getenv("TB_FOREIGN") && f_w) {
+            // the colour image's pixels with a shadow halfword the RDP wrote: its check against the colour word, for the pixels others wrote and the rest
+            auto crc7 = [](unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; };
+            uint64_t u_n = 0, u_ok = 0;
+            for (uint32_t a = f_cimg & (SIZE - 2), e = a + f_w * 200u * 2u; a < e && a + 2 <= SIZE; a += 2) {
+                const uint32_t sa = 0x01000000u + a;
+                const unsigned sw = mdl_mem[sa] << 8 | mdl_mem[sa + 1], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
+                if (sw == 0xFFFFu) continue;                                  // (never written by the RDP: the initial plane)
+                const bool ok = (sw & 0x7Fu) == crc7(cw);
+                if (!foreign_px.count(a)) { u_n++; u_ok += ok; }
+            }
+            printf("    TB_FOREIGN: shadow words of pixels nothing else wrote: %llu of %llu pass the check; of the random pixels others wrote (with a shadow word the RDP had written), right after: %llu of %llu pass\n",
+                   (unsigned long long)u_ok, (unsigned long long)u_n, (unsigned long long)fn_ok, (unsigned long long)fn_n);
+            if (u_ok != u_n) bad = 1;
+            if (fn_n > 100 && fn_ok * 20 > fn_n) bad = 1;
+            if (u_ok != u_n || (fn_n > 100 && fn_ok * 20 > fn_n)) printf("    TB_FOREIGN: BAD\n");
+            f_w = 0; foreign_px.clear(); fn_n = fn_ok = 0;
+        }
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
         if (noise_mode) printf("    TB_NOISE: %llu colour words differ by a step of a 5-bit channel (the noise dither's), the rest equal\n", (unsigned long long)dither_steps);
         if (free_chk) {
