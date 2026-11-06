@@ -304,6 +304,12 @@ enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTU
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
+/* the SNAC port's real controllers (n64rt_snac.c): where a device answers on a port it is that channel of the PIF */
+int  n64rt_snac_hw(void);                  /* the SoC has the block */
+void n64rt_snac_sync(void);                /* follow the setting, read who is there */
+int  n64rt_snac_present(int ch);
+int  n64rt_snac_xfer(int ch, const u8 *tx, u32 txlen, u8 *rx, u32 rxlen, u32 *got);
+u32  n64rt_snac_wait_take(void);           /* the SoC clocks spent on the wire since the last call */
 u8   n64rt_pak_crc(const u8 *block);
 void n64rt_pak_state_begin(void);         /* around the copy of the runtime's memory in a save state: a real Transfer Pak is unplugged in it */
 void n64rt_pak_state_end(void);
