@@ -263,25 +263,29 @@ int main(int argc, char **argv)
     // ---- the scan
     for (int p = 0; p < 4; p++) set_dev(p, p == 2 ? 0 : (p & 1) ? 2 : 1);
     reg_wr(R_STAT, 0xF0);
+    set_dev(2, 0);
     unsigned sc0[4]; for (int p = 0; p < 4; p++) sc0[p] = ncmds(p);
     reg_wr(R_CTRL, 3 | (64 << 8));
-    idle_us(10000);
+    set_dev(2, 7);                                  // a flaky contact on port 3: answers every other time
+    idle_us(7000);
+    CHECK((reg_rd(R_STAT) & 15) == 0, "after one answer per port nothing is present yet (two in a row are needed)");
+    idle_us(17000);
     {
         uint32_t s = reg_rd(R_STAT);
-        CHECK((s & 15) == 0b1011, "scan: present %x", s & 15);
+        CHECK((s & 15) == 0b1011, "scan: present %x (port 3 answers every other time: not there)", s & 15);
         CHECK(((s >> 4) & 15) == 0b1011, "scan: changed %x", (s >> 4) & 15);
         reg_wr(R_STAT, 0xF0);
         CHECK(((reg_rd(R_STAT) >> 4) & 15) == 0, "changed cleared by writing 1s");
         for (int p = 0; p < 4; p++) {
             reg_wr(R_PTR, 64 + 4 * p);
             uint8_t n = (uint8_t)reg_rd(R_DATA), b0 = (uint8_t)reg_rd(R_DATA), b1 = (uint8_t)reg_rd(R_DATA), b2 = (uint8_t)reg_rd(R_DATA);
-            if (p == 2) CHECK(n == 0, "scan table port 3: %u", n);
+            if (p == 2) { }
             else CHECK(n == 3 && b0 == 5 && b1 == 0 && b2 == ((p & 1) ? 1 : 2), "scan table port %d: %u %02x %02x %02x", p + 1, n, b0, b1, b2);
         }
         for (int p = 0; p < 4; p++) {
             unsigned got = ncmds(p) - sc0[p];
             if (p == 2) continue;
-            CHECK(got >= 1 && got <= 2, "scanned port %d %u times in 10 ms (one in 8 ms)", p + 1, got);
+            CHECK(got >= 2 && got <= 4, "scanned port %d %u times in 24 ms (one in 8 ms)", p + 1, got);
         }
     }
     // a transaction asked for at any moment of the scan
@@ -301,7 +305,9 @@ int main(int argc, char **argv)
     // a device goes, another comes
     set_dev(1, 0);
     set_dev(2, 1, 4000, 3, 0x1111, 0x2222);
-    idle_us(10000);
+    idle_us(12000);
+    CHECK((reg_rd(R_STAT) & 2), "a device that has gone is still there after a miss or two (three are needed)");
+    idle_us(30000);
     {
         uint32_t s = reg_rd(R_STAT);
         CHECK((s & 15) == 0b1101, "scan after the change: present %x", s & 15);

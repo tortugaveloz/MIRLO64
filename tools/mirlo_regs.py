@@ -169,6 +169,21 @@ BLOCKS = [
         # write: an access starts (not while BUSY); read: its state and the byte read
         ("ACCESS", 0x08, RW, 1, [("DATA", 0, 8), ("ADDR", 8, 16), ("WE", 24, 1), ("BUSY", 31, 1)]),
     ]),
+    # the SNAC port as the console's PIF (rtl/analogizer/an_snac_pif.sv): four Joybus ports behind one master, a 128-byte buffer
+    ("SNAC", 0x0E00, [
+        ("ID",    0x00, R,  1, []),                # 0x534E0001
+        # [0] the pins are the Joybus's (the adapter must own the port), [1] the background scan of the four ports,
+        # [15:8] us to wait for a reply's first edge (reset 64)
+        ("CTRL",  0x04, RW, 1, [("ON", 0, 1), ("SCAN", 1, 1), ("TFIRST", 8, 8)]),
+        # read: [3:0] a device answered the last scan of the port, [7:4] it came or went since (write 1s to clear)
+        ("STAT",  0x08, RW, 1, [("PRESENT", 0, 4), ("CHANGED", 4, 4)]),
+        # write: start {[17:16] port, [13:8] bytes to receive, [5:0] bytes to send (the buffer's first)}; read: [31] busy,
+        # [30] nothing answered, [29] fewer bytes than expected or the wire never went quiet, [27:16] the line time in us,
+        # [5:0] the bytes received (they replace the sent ones in the buffer)
+        ("XFER",  0x0C, RW, 1, [("RXCNT", 0, 6), ("US", 16, 12), ("SHORT", 29, 1), ("TIMEOUT", 30, 1), ("BUSY", 31, 1)]),
+        ("PTR",   0x10, RW, 1, []),                # the buffer's pointer (0..127)
+        ("DATA",  0x14, RW, 1, []),                # the byte at PTR; each access moves PTR on. 64 + 4 n: port n's scan (count, 3 bytes)
+    ]),
 ]
 # (GB_CART: only with the Verilog macro MIRLO_GB_CART -- without it all three read 0)
 RDP_CMD_FIFO_DEPTH = 2048      # CMD_STATUS.LEVEL is its width + 1 bits: 12
