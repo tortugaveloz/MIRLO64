@@ -35,7 +35,8 @@ and `VS pin` are the sync outputs; what each mode puts on them:
 
 `/BLANK` is active low; in the RGB modes the colour is also forced to 0 in the
 blanking. Bank 0 (bits 7:4) and pins 30 and 31 belong to the SNAC controller
-port and are not used by the video; bank 0 is driven high.
+port and are not used by the video; bank 0 is driven high, unless the SNAC port's Joybus is on
+([below](#the-snac-port-as-the-consoles-pif)).
 
 ## What the scan-out sends
 
@@ -102,14 +103,14 @@ it: the runtime, at the core's start, brings the port up as a Game Boy cartridge
 reads its header: the Nintendo logo and the header checksum, the test the Transfer Pak
 code already makes before it trusts a cartridge. If the header is a Game Boy's
 the port stays the cartridge's; if not (an Analogizer, or an empty slot) the
-Analogizer takes the port and shows the video mode of "Analogizer video". The
+Analogizer takes the port and shows the video mode of "Analogizer". The
 probe puts addresses and /RD on the pins the adapter reads as video for a few
 milliseconds, once, at the core's start; the slot is not hot-pluggable, so
 that is the only time it is looked at.
 
 ## Settings
 
-One entry in the core's menu: "Analogizer video": Off, RGBS, RGsB, YPbPr, Y/C NTSC,
+One entry in the core's menu: "Analogizer" (it was "Analogizer video"; its values are the same, so a saved setting stays): Off, RGBS, RGsB, YPbPr, Y/C NTSC,
 Y/C PAL, RGBHV, and RGBHV with scanlines 25 %, 50 %, 75 % (the scanlines dim the odd lines, which only the doubled
 RGBHV picture has). The Pocket's own picture stays on.
 
@@ -118,4 +119,143 @@ an error and is silently left out, so "Restart Game" has to stay the 14th, the l
 whose lists have more than about 75 options in all ("Load error in 'interact'": 75 loads, 77 does not, 76 untried). The
 core's menu has 14 entries and 67 options: the two sticks share one "Stick dead zone" (steps of 10 %, 0 to 70 %) to make
 room for the video entry, and the Expansion Pak and the Gameshark codes share one list ("Expansion Pak/Gameshark") to make
-room for "Video settings" ([video_options.md](video_options.md)).
+room for "Video settings" ([video_options.md](video_options.md)). The SNAC controllers have no entry: they are found by themselves
+([below](#the-snac-port-as-the-consoles-pif)).
+
+## The SNAC port as the console's PIF
+
+The adapter's USB 3 connector is the N64 SNAC board's: four Joybus data lines, one for each controller port of a console. With
+an Analogizer in the slot the core talks Joybus to whatever is plugged into them, as a console's PIF does, and gives the game the
+devices' own answers. Nothing about a device is special-cased: the game's command bytes go out on the wire and the reply bytes
+(with the device's CRC) come back, so a controller, a Controller Pak, a Rumble Pak, a Transfer Pak with a real Game Boy
+cartridge, a mouse, a keyboard or a VRU work as far as the game's own code does.
+
+### Where it sits
+
+`rtl/soc/rcp_si.sv` is the SI and the PIF RAM; the PIF's command interpreter is the runtime's (`pif_run`, `lang/n64rt/n64rt_io.c`).
+Each channel of the game's 64-byte block is one of three kinds:
+
+| Channel | Kind | When |
+|---|---|---|
+| 0 to 3 | a real device | the SNAC scan has seen a device answer on that controller's port |
+| 0 to 3 | virtual | else: the Pocket's pad (or the dock's) and the virtual Controller Pak or Transfer Pak, as before |
+| 4 | the cartridge's EEPROM | always the runtime's |
+
+**Policy.** A physical device on a port takes that channel; otherwise it is the virtual one. So with a pad on port 1 and the
+Pocket's own pad, the game reads the physical pad and the Pocket's buttons do nothing; with nothing on port 1 the Pocket is
+controller 1. A port is "present" when the status command (`0x00`) has been answered twice in a row by the scan (every port is polled every 8 ms
+by the hardware) and not missed three times since, so a device plugged in or out while a game runs is followed: a controller that goes away between two commands
+gets the no-response bit, and the next scan hands its channel back to the virtual one.
+
+For a real channel, `pif_run` copies the game's command (its `tx` bytes) into the SNAC buffer, starts a transaction on the
+port, waits for it, and writes the bytes received into the block's reply bytes unchanged. The rx-length byte's bit 7 (no response)
+is the wire's timeout: no edge within `TFIRST` (64 us) after the console's stop bit. Bit 6 (the device's reply was short) is set
+when fewer bytes than the game asked for came, or the wire never went quiet. A device that sends more than the game asked for
+is not noticed (the extra bytes are waited out, not reported).
+
+**Timing.** The game is held no longer than the wire: `pif_run` busy-waits for each transaction (a controller read is about
+0.2 ms, a pak block write 36 bytes x 32 us = 1.3 ms). The console's time for the commands, which `MONITOR.SIDONE` hands the SI so that the
+game's read of the block ends when it would on a console, is for each real command the figure of a virtual one (`pif_run`'s, fitted to the console) or,
+if the device is slower than that, 10,500 RCP cycles plus the wire's own time (the clocks the runtime waited), and from the total the
+time the runtime has waited already is taken off, since the game was held for it. A block of four controller reads ends about when the console's does (1.5 ms), and a slow
+device holds it as long as it holds the wire.
+
+### The hardware
+
+`an_joybus_m` is one Joybus master on one open-drain wire. A bit is a 4 us cell that starts low: a 1 is 1 us low and 3 us high, a 0
+is 3 us low and 1 us high, most significant bit first; the command ends with the console's stop bit (1 us low). The reply is
+read the way a console does: after the falling edge that starts a bit, the wire is sampled 2.05 us on (a 1 is high by then, a 0
+still low). The master never drives a 1: its only output is `low`. After the reply it waits for 12 us of a quiet wire so that
+the device's stop bit and the next command do not meet (255 us at most: a wire held low is given up, flagged `SHORT`). A microsecond is 62 or
+63 clocks of the 62.5 MHz clock, alternately.
+
+`an_snac_pif` puts four ports behind it: a 128-byte buffer (one M10K block), the registers of [control.md](control.md#snac) and
+the scan. One transaction runs at a time; the selected port's wire is the master's and the other three are released. The scan
+(`CTRL.SCAN`) polls each port in turn, one every 2 ms, with the status command, into the scan table in the buffer
+(`64 + 4 n`); a transaction the runtime asks for meanwhile waits for the scan's one that is under way (170 us at most).
+
+### The pins and the electrical rules
+
+| Port | Pin | Direction | Notes |
+|---|---|---|---|
+| 1 | `cart_tran_pin30` | its own `cart_tran_pin30_dir` | also `/RES` of a cartridge: the clamp that holds it low (`cart_pin30_pwroff_reset`) is released while the Joybus is on |
+| 2 | `cart_tran_pin31` | its own `cart_tran_pin31_dir` | |
+| 3 | `cart_tran_bank0[4]` | `cart_tran_bank0_dir`, shared | |
+| 4 | `cart_tran_bank0[7]` | `cart_tran_bank0_dir`, shared | |
+
+Every wire has an external 1 kOhm pull-up to 3.3 V on the harness, and every pin goes through a level translator whose direction is
+the bank's `_dir`. A wire is **pulled low** by setting the pin's data to 0 and turning the translator and the FPGA's driver on,
+and **released** by turning both off, so that the translator is an input and the pull-up raises the wire. Ports 1 and 2 have
+a direction each, and that is all there is to it. Nothing is driven high on them, ever.
+
+Ports 3 and 4 share bank 0, which has one direction for its four bits (7:4; bits 6 and 5 are the cartridge's /WR and /RD; they are
+not part of the N64 harness as far as is known, which is a fact to confirm). So whenever one of them is pulled low the bank is an output, and the other
+three bits must have some value: they are driven **1**, which is the level the pull-up gives them anyway. That happens only
+during the low pulse of the other port (1 to 3 us of a bit cell, of a transaction on that other port), and only matters if a
+device on the driven line pulls it low at that moment, which a Joybus device does only when it is spoken to, and the master speaks to
+one device at a time. In the rest of the cell, and while any device answers, the bank is an input and everything is released. The
+simulation checks that, in every run, the master never drives a 1 on a bank 0 bit against a device pulling that wire low. If a
+harness puts something else on bank 0's bits 5 or 6, those are driven 1 during the same pulses.
+
+The translator's direction leads the FPGA's driver by one clock (16 ns) when a wire is pulled low and trails it when it is
+released (`gb_cart.sv`'s rule), so the two never drive against each other. The price is one clock at each edge with the translator
+outward and the FPGA's pin let go; whether that shows on a real harness as a runt pulse is not measured (none has been tried
+with this): the first thing to look at with a scope if a device misbehaves.
+
+The pins are the same that the Game Boy cartridge and the video DAC arbitrate for (`an_own`, decided at the core's start, see
+"Who owns the port" above): the Joybus has bank 0 and pins 30 and 31 only when the adapter owns the port **and** the runtime has
+turned it on (`SNAC.CTRL.ON`, set by the runtime). `core_top.sv`'s existing assignments for those pins gain one more case, `sn_en`;
+there is still a single writer for each pin.
+
+### No switch: when the pins are the Joybus's
+
+There is no setting. The Joybus is on, and its scan runs, whenever the runtime has found that the adapter owns the cartridge port (the
+header test of "Who owns the port" above, made once at the core's start); a Game Boy cartridge in the slot keeps the port, the pins stay
+the cartridge's, `SNAC.CTRL.ON` is never set and the hardware also gates every pin with `an_own`. The menu's "Analogizer" entry only
+chooses the picture ("Off" included): the controllers work with any choice.
+
+How safe that is, point by point:
+
+1. **Ownership.** The header test (Nintendo logo CRC and header checksum, read with only the address pins and /RD driven) is
+   decisive for a Game Boy cartridge. Anything else answers as "no cartridge": the Analogizer, an empty slot, or a cartridge of
+   another kind (which is also treated as the adapter's today, for the video). So the Joybus is also on with nothing in the slot, and
+   with a foreign cartridge, if one were left there.
+2. **Nothing connected, or an adapter without a SNAC board.** The scan is the hardware's; the runtime only reads `STAT` (a register
+   read) in each run of the PIF's commands, never waits for the wire except for a transaction on a port that is present, and the PIF's
+   timing does not change. A wire with nothing on it either floats high (the pull-up) and times out after 64 us, or reads low and the
+   master gives up after 255 us: either way no port becomes present, because a device needs **two answers in a row** of three
+   whole bytes (and goes after three misses), so noise does not make a channel real. The virtual channels are then exactly as
+   before. The cost is the scan's pulses on the pins (below), and 26 ms at the core's start while the first sweeps run.
+3. **What the pins see.** Only low pulses (never a 1: ports 1 and 2 are open drain; on ports 3 and 4 the shared bank 0 drives the
+   other lines 1, the level the pull-ups give, for the pulse). A scan is one status command (`0x00`): 8 cells of 3 us low in 4 us and a stop
+   bit, about 36 us of the wire (about 150 us with a device's 3-byte reply), one port every 2 ms, so each port every 8 ms and the wire
+   busy at most 7 % of the time. Nothing is sent while the pins are the cartridge's.
+4. **Cold start.** The runtime turns the Joybus on in `n64rt_io_init`, after the cartridge slot's owner is known and before the game
+   runs, and waits 26 ms once so that the first sweeps have told who is there. It also follows a change of owner (there is none while a
+   game runs).
+
+The risk this does not remove: a SNAC harness for another kind of pad (NES, SNES, DB15, plugged into the same connector for another
+core) has push-pull outputs on some of these lines, and a low pulse against one of them is a short of a few microseconds every 8 ms
+through the translator's output. That harness is not usable with this core, so nobody should have it on; if that matters, the
+minimal alternative is one more value of the "Analogizer" entry that keeps the Joybus off (the menu's option limit has room for
+it: 67 options, 75 allowed), which this implementation does not add.
+
+### What it takes and what it does not
+
+Taken: any device that speaks the 1-wire Joybus at the console's cell timing, with commands of up to 63 bytes each way, on
+four ports (one transaction at a time on the wire, as a console's PIF does). Limits: the commands of the game's block run one
+after the other and the runtime waits for each, so the game is held for the wire's time (on a console the CPU goes on while the PIF
+works; the SIDONE time above keeps the SI's side right); the extra bytes of an overlong reply are not reported (bit 6 reports short
+ones only); the GameCube controller's timing and a Joybus device on the Pocket side are not part of this. The pins are 3.3 V CMOS;
+the harness must provide the controllers' supply and the pull-ups.
+
+### Tests
+
+`sim/analogizer/snac/run_tests.sh` (Verilator): the master and the mux against behavioural devices (`jb_dev.sv`): cell widths and periods
+of every command on every port, replies, pak reads and writes with CRC, an absent device, bit cells from -20 % to +50 %, a late
+reply, a short reply, a device that talks on, a noisy line, a wire held low, a flaky contact that never becomes present, the scan with a
+device coming and going, and the pins' rules (never a 1 against a device, the driver and translator order).
+`sim/mips_soc/snac_check.sh` (the whole SoC with the runtime): `lang/n64rt/test/snac_game.c` drives the PIF with the SI's DMA as libultra does
+(status, buttons, pak blocks with their CRC, the EEPROM) against the same device models on the four wires, in four runs: nothing on the wires,
+devices on ports 1, 2 and 4, a device on port 2 only (the Pocket's pad on controller 1 with a virtual Controller Pak), and a Game Boy cartridge
+in the slot (the Joybus never comes on).
