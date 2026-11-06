@@ -56,7 +56,8 @@ static Res xfer(int port, const std::vector<uint8_t> &tx, int rxlen, int max_clk
     while (((s = reg_rd(R_XFER)) >> 31) && n < max_clks / 8) n++;
     r.ok = !(s >> 31);
     r.clocks = clks - c0;
-    r.timeout = (s >> 30) & 1; r.shrt = (s >> 29) & 1; r.us = (s >> 16) & 0xFFF; r.cnt = s & 63;
+    r.timeout = (s >> 30) & 1; r.shrt = (s >> 29) & 1; r.cnt = s & 63;
+    r.us = (unsigned)(r.clocks / 62.5);             // (the line time: from the write of XFER to the poll that finds it done)
     reg_wr(R_PTR, 0);
     for (unsigned i = 0; i < r.cnt; i++) r.rx.push_back((uint8_t)reg_rd(R_DATA));
     return r;
