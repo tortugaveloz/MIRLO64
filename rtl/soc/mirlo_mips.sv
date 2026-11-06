@@ -556,7 +556,7 @@ logic [3:0]  m_wdata_we;
 // the RDP for the N64's command stream (rtl/rdp): its addresses are the
 // N64's, in the 8 MiB of RDRAM at SDRAM 0x4380_0000
 logic [31:0] rdp_addr;
-rdp_top rdp (.clk, .rst, .dither_off(vid_out32),
+rdp_top rdp (.clk, .rst, .dither_off(vid_out32), .shadow_en(vid_out32),
     .cmd_valid, .cmd_ready, .cmd_data,
     .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
     .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
@@ -564,7 +564,11 @@ rdp_top rdp (.clk, .rst, .dither_off(vid_out32),
     .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
     .tmem_busy(rdp_tmem_busy));
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
-assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
+// (bit 24: the shadow plane of a 16-bit colour image, 2 MiB at SDRAM 0x0320_0000 -- the image's address folded into it, its bank
+// the other of the colour word's, so that a pixel's two words (the scan-out reads both) are in two banks: n64_video.sv has the same fold)
+wire [18:0] sh_x = rdp_addr[20:2] ^ {rdp_addr[22:21], 17'd0};
+wire [18:0] sh_w = {sh_x[18:11], sh_x[10:9] ^ 2'b01, sh_x[8:0]};
+assign m_cmd_addr = {6'd0, rdp_addr[24] ? 24'hC8_0000 + {5'd0, sh_w} : rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
