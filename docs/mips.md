@@ -1163,8 +1163,8 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
-| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit (1), Deblur (2), 32-bit + Deblur (3): [video_options.md](video_options.md) |
-| Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | **Pak in, codes off** (0), Pak in, codes on (2), Pak out, codes off (1), Pak out, codes on (3). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
+| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit color (1), Deblur (2), 32-bit color + Deblur (3): [video_options.md](video_options.md) |
+| Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | Expansion Pak and GameShark (2), **Expansion Pak** (0, the default), GameShark (3), None (1). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3) |
 | Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Transfer Pak SD (3) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |

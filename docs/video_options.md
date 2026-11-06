@@ -1,6 +1,6 @@
 # The video settings: 32-bit and Deblur
 
-One entry of the core's menu, "Video settings", with four choices: **Default**, **32-bit**, **Deblur** and **32-bit + Deblur**.
+One entry of the core's menu, "Video settings", with four choices: **Default**, **32-bit color**, **Deblur** and **32-bit color + Deblur**.
 The default is the console's picture, bit for bit what the core showed before the entry existed. The entry is
 `interact.json` field 17 (`0x1000_0144`, `INTERACT2[9:5]`): bit 0 is the 32-bit output, bit 1 Deblur. A change takes
 effect at once, no restart.
@@ -118,7 +118,7 @@ the scan-out that mixes a pixel with its neighbours across the picture's edges; 
 What it does not do:
 
 * The dither filter stays as the game set it: it moves a channel by a few levels of 255 to undo the dither and does
-  not soften an edge (use "32-bit" to bypass it; the two combine as "32-bit + Deblur").
+  not soften an edge (use "32-bit color" to bypass it; the two combine as "32-bit color + Deblur").
 * An edge is jagged where the game relied on the anti-alias filter instead of drawing the edge itself: that is the
   point of the option.
 * The Pocket's own scaler (the 640 x 240 slot to its screen) is not the core's; its softness is not touched.
