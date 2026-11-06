@@ -7,7 +7,7 @@
 //   STAT  08 R   [3:0] PRESENT: a device on that port answered the scan twice in a row (and has not missed it three times since); [7:4] CHANGED: it came or went since (write 1s clear)
 //   XFER  0C     write: start a transaction {[17:16] port, [13:8] rx bytes expected, [5:0] tx bytes (the buffer's first)};
 //                read: [31] BUSY (from the write until the reply is in), [30] TIMEOUT (nothing answered), [29] SHORT (fewer bytes than
-//                expected, or the wire never went quiet), [27:16] the line time in us, [5:0] the bytes received
+//                expected, or the wire never went quiet), [5:0] the bytes received
 //   PTR   10 RW  [6:0] the buffer's pointer
 //   DATA  14 RW  the byte at PTR; each access moves PTR on by one
 //
@@ -53,10 +53,9 @@ logic [1:0]  hits [0:3];                    // each port's run of answers to the
 logic [6:0]  ptr;
 logic        pend;                          // a transaction of the runtime's is asked for or under way
 logic [1:0]  x_port;
-logic [5:0]  x_tx, x_rx;
+logic [5:0]  x_tx, x_rx;                    // (held by the master's inputs until the transaction is done)
 logic        x_to, x_sh;
 logic [5:0]  x_cnt;
-logic [11:0] x_us;
 
 // ---------------------------------------------------------------- the buffer: port A the runtime's, port B the master's
 (* ramstyle = "M10K, no_rw_check" *) reg [7:0] mem [0:127];
@@ -83,17 +82,19 @@ always @(posedge clk) begin
 end
 
 // ---------------------------------------------------------------- the master and the sequencer
-logic        m_start, m_imm;
-logic [5:0]  m_txlen, m_rxlen;
-logic [6:0]  m_base;
-logic [1:0]  sel;                           // the port the wire is for
+// The master's transaction is the runtime's (x_*) or the scan's: a status command (1 byte, 0x00) with 3 bytes expected into the scan table.
+logic        scan_run;                      // the master is doing the scan's transaction
+logic [1:0]  scan_p;
+logic [11:0] scan_t;                        // us since the last scan transaction
+logic        m_start;
+wire  [1:0]  sel = scan_run ? scan_p : x_port;           // the port the wire is for
 wire         m_busy, m_done, m_timeout, m_short, m_low, m_tk;
 wire  [5:0]  m_cnt;
-wire  [11:0] m_us;
 logic        wire_in;
 an_joybus_m #(.CLK_HZ(CLK_HZ)) jb (
-    .clk, .rst, .start(m_start), .imm(m_imm), .imm_byte(8'h00), .txlen(m_txlen), .rxlen(m_rxlen), .rx_base(m_base), .t_first,
-    .busy(m_busy), .done(m_done), .rx_cnt(m_cnt), .timeout(m_timeout), .short_(m_short), .t_us(m_us), .tk(m_tk),
+    .clk, .rst, .start(m_start), .imm(scan_run), .txlen(scan_run ? 6'd1 : x_tx), .rxlen(scan_run ? 6'd3 : x_rx),
+    .rx_base(scan_run ? {1'b1, 2'b00, scan_p, 2'b01} : 7'd0), .t_first,
+    .busy(m_busy), .done(m_done), .rx_cnt(m_cnt), .timeout(m_timeout), .short_(m_short), .tk(m_tk),
     .rd_addr(m_rd_addr), .rd_data(qb), .wr_en(m_wr_en), .wr_addr(m_wr_addr), .wr_data(m_wr_data), .low(m_low), .dq(wire_in)
 );
 always_comb case (sel)
@@ -103,16 +104,13 @@ always_comb case (sel)
     default: wire_in = dq_in[3];
 endcase
 
-logic        scan_run;                      // the master is doing the scan's transaction
-logic [1:0]  scan_p;
-logic [11:0] scan_t;                        // us since the last scan transaction
 wire         x_start = sel_wr && a == 4'd3 && !pend;
 always_ff @(posedge clk) begin
     m_start <= 1'b0; s_wr <= 1'b0;
     if (rst) begin
         on <= 1'b0; scan_en <= 1'b0; t_first <= 8'd64; present <= '0; chg <= '0; ptr <= '0; pend <= 1'b0; scan_run <= 1'b0; scan_p <= '0;
-        scan_t <= '0; hits[0] <= '0; hits[1] <= '0; hits[2] <= '0; hits[3] <= '0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; x_us <= '0; sel <= '0; x_port <= '0; x_tx <= '0; x_rx <= '0;
-        m_imm <= 1'b0; m_txlen <= '0; m_rxlen <= '0; m_base <= '0;
+        scan_t <= '0; hits[0] <= '0; hits[1] <= '0; hits[2] <= '0; hits[3] <= '0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0;
+        x_port <= '0; x_tx <= '0; x_rx <= '0;
     end else begin
         // the registers
         if (sel_wr && a == 4'd1) begin on <= wd[0]; scan_en <= wd[1]; t_first <= wd[15:8]; end
@@ -122,14 +120,9 @@ always_ff @(posedge clk) begin
         if (x_start) begin pend <= 1'b1; x_port <= wd[17:16]; x_tx <= wd[5:0]; x_rx <= wd[13:8]; end
         // the master: the runtime's transaction first, else the scan's
         if (!m_busy && !m_start && !m_done && !scan_run) begin
-            if (pend && x_tx != 6'd0) begin
-                m_start <= 1'b1; m_imm <= 1'b0; m_txlen <= x_tx; m_rxlen <= x_rx; m_base <= 7'd0; sel <= x_port;
-            end else if (pend) begin                    // (a transaction with no bytes: nothing to do)
-                pend <= 1'b0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; x_us <= '0;
-            end else if (on && scan_en && scan_t[11]) begin
-                m_start <= 1'b1; m_imm <= 1'b1; m_txlen <= 6'd1; m_rxlen <= 6'd3; m_base <= {1'b1, 2'b00, scan_p, 2'b01}; sel <= scan_p;
-                scan_run <= 1'b1; scan_t <= '0;
-            end
+            if (pend && x_tx != 6'd0) m_start <= 1'b1;
+            else if (pend) begin pend <= 1'b0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; end      // (a transaction with no bytes: nothing to do)
+            else if (on && scan_en && scan_t[11]) begin m_start <= 1'b1; scan_run <= 1'b1; scan_t <= '0; end
         end
         if (m_tk && !scan_t[11] && !(m_busy || scan_run)) scan_t <= scan_t + 12'd1;
         if (m_done) begin
@@ -147,7 +140,7 @@ always_ff @(posedge clk) begin
                 end
                 scan_p <= scan_p + 2'd1;
             end else begin
-                pend <= 1'b0; x_to <= m_timeout; x_sh <= m_short; x_cnt <= m_cnt; x_us <= m_us;
+                pend <= 1'b0; x_to <= m_timeout; x_sh <= m_short; x_cnt <= m_cnt;
             end
         end
     end
@@ -159,7 +152,7 @@ always_comb begin
     4'd0: rd = 32'h534E_0001;
     4'd1: rd = {16'd0, t_first, 6'd0, scan_en, on};
     4'd2: rd = {24'd0, chg, present};
-    4'd3: rd = {pend, x_to, x_sh, 1'b0, x_us, 10'd0, x_cnt};
+    4'd3: rd = {pend, x_to, x_sh, 23'd0, x_cnt};
     4'd4: rd = {25'd0, ptr};
     4'd5: rd = {24'd0, qa};
     default: ;
