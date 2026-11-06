@@ -645,8 +645,10 @@ A picture 512 wide or more is shown with the filters off.
 
 The core's "Picture" setting ([video_options.md](video_options.md)) changes two things here: "Deblur" bypasses the
 anti-alias and the divot filters; "32-bit" turns the RDP's RGB dither off (`dither_off` of `rdp_pix.v`: whatever
-`RGB_DITHER_SEL` says), bypasses the dither filter, takes a 16-bit picture's channels to the full range and keeps a
-32-bit picture's low three bits. Both are off by default, and then the scan-out is what this section describes.
+`RGB_DITHER_SEL` says), bypasses the dither filter and shows 8 bits a channel: a 32-bit picture's own, and a 16-bit
+picture's from the RDP's shadow plane (the low three bits of each channel the blender made, written beside the colour
+image, and read by the blender and the scan-out where a check says they are the pixel's). Both are off by default, and
+then the scan-out and the RDP are what this section describes.
 
 A 32-bit picture (`VI_STATUS` type 3: RGBA8888, a pixel a word) goes through
 the same filters: each pixel is taken as its channels' top five bits, with
