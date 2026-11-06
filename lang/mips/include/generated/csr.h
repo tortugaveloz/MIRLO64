@@ -376,6 +376,47 @@
 #define CSR_GB_CART_ACCESS_BUSY_OFFSET 31
 #define CSR_GB_CART_ACCESS_BUSY_SIZE 1
 
+/* SNAC */
+#define CSR_SNAC_BASE (CSR_BASE + 0xe00)
+#define CSR_SNAC_ID_OFS 0xe00
+#define CSR_SNAC_ID_ADDR (CSR_BASE + 0xe00)
+#define CSR_SNAC_ID_SIZE 1
+#define CSR_SNAC_CTRL_OFS 0xe04
+#define CSR_SNAC_CTRL_ADDR (CSR_BASE + 0xe04)
+#define CSR_SNAC_CTRL_SIZE 1
+#define CSR_SNAC_CTRL_ON_OFFSET 0
+#define CSR_SNAC_CTRL_ON_SIZE 1
+#define CSR_SNAC_CTRL_SCAN_OFFSET 1
+#define CSR_SNAC_CTRL_SCAN_SIZE 1
+#define CSR_SNAC_CTRL_TFIRST_OFFSET 8
+#define CSR_SNAC_CTRL_TFIRST_SIZE 8
+#define CSR_SNAC_STAT_OFS 0xe08
+#define CSR_SNAC_STAT_ADDR (CSR_BASE + 0xe08)
+#define CSR_SNAC_STAT_SIZE 1
+#define CSR_SNAC_STAT_PRESENT_OFFSET 0
+#define CSR_SNAC_STAT_PRESENT_SIZE 4
+#define CSR_SNAC_STAT_CHANGED_OFFSET 4
+#define CSR_SNAC_STAT_CHANGED_SIZE 4
+#define CSR_SNAC_XFER_OFS 0xe0c
+#define CSR_SNAC_XFER_ADDR (CSR_BASE + 0xe0c)
+#define CSR_SNAC_XFER_SIZE 1
+#define CSR_SNAC_XFER_RXCNT_OFFSET 0
+#define CSR_SNAC_XFER_RXCNT_SIZE 6
+#define CSR_SNAC_XFER_US_OFFSET 16
+#define CSR_SNAC_XFER_US_SIZE 12
+#define CSR_SNAC_XFER_SHORT_OFFSET 29
+#define CSR_SNAC_XFER_SHORT_SIZE 1
+#define CSR_SNAC_XFER_TIMEOUT_OFFSET 30
+#define CSR_SNAC_XFER_TIMEOUT_SIZE 1
+#define CSR_SNAC_XFER_BUSY_OFFSET 31
+#define CSR_SNAC_XFER_BUSY_SIZE 1
+#define CSR_SNAC_PTR_OFS 0xe10
+#define CSR_SNAC_PTR_ADDR (CSR_BASE + 0xe10)
+#define CSR_SNAC_PTR_SIZE 1
+#define CSR_SNAC_DATA_OFS 0xe14
+#define CSR_SNAC_DATA_ADDR (CSR_BASE + 0xe14)
+#define CSR_SNAC_DATA_SIZE 1
+
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #ifndef CSR_ACCESSORS_DEFINED
@@ -642,6 +683,59 @@ static inline uint32_t gb_cart_access_busy_extract(uint32_t r) { return (r >> 31
 static inline uint32_t gb_cart_access_busy_read(void) { return gb_cart_access_busy_extract(gb_cart_access_read()); }
 static inline uint32_t gb_cart_access_busy_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 31)) | ((v & 0x1u) << 31); }
 static inline void gb_cart_access_busy_write(uint32_t v) { gb_cart_access_write(gb_cart_access_busy_replace(gb_cart_access_read(), v)); }
+
+/* SNAC */
+static inline uint32_t snac_id_read(void) { return csr_read_simple(CSR_SNAC_ID_ADDR); }
+static inline uint32_t snac_ctrl_read(void) { return csr_read_simple(CSR_SNAC_CTRL_ADDR); }
+static inline void snac_ctrl_write(uint32_t v) { csr_write_simple(v, CSR_SNAC_CTRL_ADDR); }
+static inline uint32_t snac_ctrl_on_extract(uint32_t r) { return (r >> 0) & 0x1u; }
+static inline uint32_t snac_ctrl_on_read(void) { return snac_ctrl_on_extract(snac_ctrl_read()); }
+static inline uint32_t snac_ctrl_on_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 0)) | ((v & 0x1u) << 0); }
+static inline void snac_ctrl_on_write(uint32_t v) { snac_ctrl_write(snac_ctrl_on_replace(snac_ctrl_read(), v)); }
+static inline uint32_t snac_ctrl_scan_extract(uint32_t r) { return (r >> 1) & 0x1u; }
+static inline uint32_t snac_ctrl_scan_read(void) { return snac_ctrl_scan_extract(snac_ctrl_read()); }
+static inline uint32_t snac_ctrl_scan_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 1)) | ((v & 0x1u) << 1); }
+static inline void snac_ctrl_scan_write(uint32_t v) { snac_ctrl_write(snac_ctrl_scan_replace(snac_ctrl_read(), v)); }
+static inline uint32_t snac_ctrl_tfirst_extract(uint32_t r) { return (r >> 8) & 0xffu; }
+static inline uint32_t snac_ctrl_tfirst_read(void) { return snac_ctrl_tfirst_extract(snac_ctrl_read()); }
+static inline uint32_t snac_ctrl_tfirst_replace(uint32_t r, uint32_t v) { return (r & ~(0xffu << 8)) | ((v & 0xffu) << 8); }
+static inline void snac_ctrl_tfirst_write(uint32_t v) { snac_ctrl_write(snac_ctrl_tfirst_replace(snac_ctrl_read(), v)); }
+static inline uint32_t snac_stat_read(void) { return csr_read_simple(CSR_SNAC_STAT_ADDR); }
+static inline void snac_stat_write(uint32_t v) { csr_write_simple(v, CSR_SNAC_STAT_ADDR); }
+static inline uint32_t snac_stat_present_extract(uint32_t r) { return (r >> 0) & 0xfu; }
+static inline uint32_t snac_stat_present_read(void) { return snac_stat_present_extract(snac_stat_read()); }
+static inline uint32_t snac_stat_present_replace(uint32_t r, uint32_t v) { return (r & ~(0xfu << 0)) | ((v & 0xfu) << 0); }
+static inline void snac_stat_present_write(uint32_t v) { snac_stat_write(snac_stat_present_replace(snac_stat_read(), v)); }
+static inline uint32_t snac_stat_changed_extract(uint32_t r) { return (r >> 4) & 0xfu; }
+static inline uint32_t snac_stat_changed_read(void) { return snac_stat_changed_extract(snac_stat_read()); }
+static inline uint32_t snac_stat_changed_replace(uint32_t r, uint32_t v) { return (r & ~(0xfu << 4)) | ((v & 0xfu) << 4); }
+static inline void snac_stat_changed_write(uint32_t v) { snac_stat_write(snac_stat_changed_replace(snac_stat_read(), v)); }
+static inline uint32_t snac_xfer_read(void) { return csr_read_simple(CSR_SNAC_XFER_ADDR); }
+static inline void snac_xfer_write(uint32_t v) { csr_write_simple(v, CSR_SNAC_XFER_ADDR); }
+static inline uint32_t snac_xfer_rxcnt_extract(uint32_t r) { return (r >> 0) & 0x3fu; }
+static inline uint32_t snac_xfer_rxcnt_read(void) { return snac_xfer_rxcnt_extract(snac_xfer_read()); }
+static inline uint32_t snac_xfer_rxcnt_replace(uint32_t r, uint32_t v) { return (r & ~(0x3fu << 0)) | ((v & 0x3fu) << 0); }
+static inline void snac_xfer_rxcnt_write(uint32_t v) { snac_xfer_write(snac_xfer_rxcnt_replace(snac_xfer_read(), v)); }
+static inline uint32_t snac_xfer_us_extract(uint32_t r) { return (r >> 16) & 0xfffu; }
+static inline uint32_t snac_xfer_us_read(void) { return snac_xfer_us_extract(snac_xfer_read()); }
+static inline uint32_t snac_xfer_us_replace(uint32_t r, uint32_t v) { return (r & ~(0xfffu << 16)) | ((v & 0xfffu) << 16); }
+static inline void snac_xfer_us_write(uint32_t v) { snac_xfer_write(snac_xfer_us_replace(snac_xfer_read(), v)); }
+static inline uint32_t snac_xfer_short_extract(uint32_t r) { return (r >> 29) & 0x1u; }
+static inline uint32_t snac_xfer_short_read(void) { return snac_xfer_short_extract(snac_xfer_read()); }
+static inline uint32_t snac_xfer_short_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 29)) | ((v & 0x1u) << 29); }
+static inline void snac_xfer_short_write(uint32_t v) { snac_xfer_write(snac_xfer_short_replace(snac_xfer_read(), v)); }
+static inline uint32_t snac_xfer_timeout_extract(uint32_t r) { return (r >> 30) & 0x1u; }
+static inline uint32_t snac_xfer_timeout_read(void) { return snac_xfer_timeout_extract(snac_xfer_read()); }
+static inline uint32_t snac_xfer_timeout_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 30)) | ((v & 0x1u) << 30); }
+static inline void snac_xfer_timeout_write(uint32_t v) { snac_xfer_write(snac_xfer_timeout_replace(snac_xfer_read(), v)); }
+static inline uint32_t snac_xfer_busy_extract(uint32_t r) { return (r >> 31) & 0x1u; }
+static inline uint32_t snac_xfer_busy_read(void) { return snac_xfer_busy_extract(snac_xfer_read()); }
+static inline uint32_t snac_xfer_busy_replace(uint32_t r, uint32_t v) { return (r & ~(0x1u << 31)) | ((v & 0x1u) << 31); }
+static inline void snac_xfer_busy_write(uint32_t v) { snac_xfer_write(snac_xfer_busy_replace(snac_xfer_read(), v)); }
+static inline uint32_t snac_ptr_read(void) { return csr_read_simple(CSR_SNAC_PTR_ADDR); }
+static inline void snac_ptr_write(uint32_t v) { csr_write_simple(v, CSR_SNAC_PTR_ADDR); }
+static inline uint32_t snac_data_read(void) { return csr_read_simple(CSR_SNAC_DATA_ADDR); }
+static inline void snac_data_write(uint32_t v) { csr_write_simple(v, CSR_SNAC_DATA_ADDR); }
 #endif /* __ASSEMBLER__ */
 
 #endif

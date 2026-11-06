@@ -4,7 +4,7 @@
 //   ID    00 R   0x534E0001
 //   CTRL  04 RW  [0] ON the pins are the Joybus's (needs the adapter to own the port: `own`), [1] SCAN the background scan,
 //                [15:8] TFIRST: us to wait for a reply's first edge (reset 64)
-//   STAT  08 R   [3:0] PRESENT: the device on that port answered the last scan; [7:4] CHANGED: it came or went since (write 1s clear)
+//   STAT  08 R   [3:0] PRESENT: a device on that port answered the scan twice in a row (and has not missed it three times since); [7:4] CHANGED: it came or went since (write 1s clear)
 //   XFER  0C     write: start a transaction {[17:16] port, [13:8] rx bytes expected, [5:0] tx bytes (the buffer's first)};
 //                read: [31] BUSY (from the write until the reply is in), [30] TIMEOUT (nothing answered), [29] SHORT (fewer bytes than
 //                expected, or the wire never went quiet), [27:16] the line time in us, [5:0] the bytes received
@@ -14,7 +14,8 @@
 // The buffer: 0..62 the transaction (the tx bytes, which the reply's bytes then replace), 64 + 4 n the scan of port n:
 // the number of bytes the status command (0x00) was answered with (3: a device is there), then those bytes.
 //
-// One transaction at a time. The scan (SCAN set) takes the wire between the runtime's transactions, a port every 2 ms in turn:
+// One transaction at a time. The scan (SCAN set) takes the wire between the runtime's transactions, a port every 2 ms in turn (a status
+// command is ~36 us of the wire; a port is polled every 8 ms):
 // the status command (0x00) to the port, 3 bytes expected, the answer into the scan table; a transaction asked for meanwhile
 // waits (BUSY is up from its write) at most one scan's time, ~170 us.
 //
@@ -48,6 +49,7 @@ module an_snac_pif #(
 logic        on, scan_en;
 logic [7:0]  t_first;
 logic [3:0]  present, chg;
+logic [1:0]  hits [0:3];                    // each port's run of answers to the scan (0..3): a device appears at 2, goes at 0
 logic [6:0]  ptr;
 logic        pend;                          // a transaction of the runtime's is asked for or under way
 logic [1:0]  x_port;
@@ -109,7 +111,7 @@ always_ff @(posedge clk) begin
     m_start <= 1'b0; s_wr <= 1'b0;
     if (rst) begin
         on <= 1'b0; scan_en <= 1'b0; t_first <= 8'd64; present <= '0; chg <= '0; ptr <= '0; pend <= 1'b0; scan_run <= 1'b0; scan_p <= '0;
-        scan_t <= '0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; x_us <= '0; sel <= '0; x_port <= '0; x_tx <= '0; x_rx <= '0;
+        scan_t <= '0; hits[0] <= '0; hits[1] <= '0; hits[2] <= '0; hits[3] <= '0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; x_us <= '0; sel <= '0; x_port <= '0; x_tx <= '0; x_rx <= '0;
         m_imm <= 1'b0; m_txlen <= '0; m_rxlen <= '0; m_base <= '0;
     end else begin
         // the registers
@@ -134,8 +136,15 @@ always_ff @(posedge clk) begin
             if (scan_run) begin
                 scan_run <= 1'b0;
                 s_wr <= 1'b1; s_wr_addr <= {1'b1, 2'b00, scan_p, 2'b00}; s_wr_data <= {2'b0, m_cnt};
-                present[scan_p] <= m_cnt == 6'd3;
-                if (present[scan_p] != (m_cnt == 6'd3)) chg[scan_p] <= 1'b1;
+                // hysteresis: a device is there after two answers in a row and gone after three misses, so a wire that floats (no board)
+                // or a noisy line cannot make a channel real
+                if (m_cnt == 6'd3) begin
+                    if (hits[scan_p] != 2'd3) hits[scan_p] <= hits[scan_p] + 2'd1;
+                    if (hits[scan_p] == 2'd1 && !present[scan_p]) begin present[scan_p] <= 1'b1; chg[scan_p] <= 1'b1; end
+                end else begin
+                    if (hits[scan_p] != 2'd0) hits[scan_p] <= hits[scan_p] - 2'd1;
+                    if (hits[scan_p] == 2'd1 && present[scan_p]) begin present[scan_p] <= 1'b0; chg[scan_p] <= 1'b1; end
+                end
                 scan_p <= scan_p + 2'd1;
             end else begin
                 pend <= 1'b0; x_to <= m_timeout; x_sh <= m_short; x_cnt <= m_cnt; x_us <= m_us;

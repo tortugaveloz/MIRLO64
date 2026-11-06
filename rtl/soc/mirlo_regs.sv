@@ -19,6 +19,7 @@
 //   UART          the JTAG UART
 //   GB_CART       (MIRLO_GB_CART) a Game Boy cartridge in the Pocket's slot:
 //                 the port on and trusted, one byte read or written at a time
+//   SNAC          the Analogizer's SNAC port as the console's PIF: a Joybus master with four ports (rtl/analogizer/an_snac_pif.sv)
 //   VIDEO_FRAMEBUFFER  the scan-out's base (latched by it at the frame
 //                 boundary), its enables and its mode
 // One access port: an access in the cycle of r_req, its read data the next.
@@ -157,6 +158,11 @@ module mirlo_regs (
     // having commands to run (PEND bit 4), the runtime saying it is done (SIDONE)
     input  wire         si_irq, si_clr, si_ev,
     output wire         si_done,
+    // SNAC (rtl/analogizer/an_snac_pif.sv): the block's strobes and its words; a read is answered by sn_q from the address
+    output wire         sn_wr, sn_rd,
+    output wire  [3:0]  sn_a,
+    output wire  [31:0] sn_wd,
+    input  wire  [31:0] sn_q,
     output logic        gbc_on, gbc_trust, gbc_start, gbc_we,
     output logic [15:0] gbc_addr,
     output logic [7:0]  gbc_wdata,
@@ -392,6 +398,13 @@ assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's
 assign ai_step_wd = r_wdata[19:0];
 assign si_done = wr && a == R_MONITOR_SIDONE;       // (MIRLO_SI: the runtime has run the PIF's commands, rcp_si.sv)
 
+// ---- SNAC: the block at 0x0E00; the module keeps its own registers
+wire sn_sel = a[15:12] == 4'd0 && a[11:8] == 4'd14 && a[7:6] == 2'd0;
+assign sn_wr = wr && sn_sel;
+assign sn_rd = rd && sn_sel;
+assign sn_a  = a[5:2];
+assign sn_wd = r_wdata;
+
 // ---- GB_CART
 always_ff @(posedge clk) begin
     gbc_start <= wr && a == R_GB_CART_ACCESS;
@@ -537,6 +550,7 @@ always_comb begin
     R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
     default: ;
     endcase
+    rb[14] = sn_q;                                              // SNAC
     case (a[5:2])                                               // MONITOR
     R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};

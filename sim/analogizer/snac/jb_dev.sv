@@ -7,6 +7,7 @@
 //        4 holds the wire low for 400 us at the first edge it sees (a shorted line)
 //        5 controller that talks on: two extra bytes after every reply
 //        6 as 2, with a 300 ns glitch on the wire 6 us after each of its replies (a noisy line)
+//        7 a controller that answers every other command only (a flaky contact)
 `default_nettype none
 module jb_dev (
     input  wire         clk,
@@ -60,7 +61,7 @@ reg         line_d = 1;
 reg  [31:0] t = 0, tfall = 0, tlast = 0, tmark = 0, tgo = 0;
 reg  [7:0]  sh = 0;
 integer     nbits = 0, nbytes = 0, elen = 0, rlen = 0, ti = 0, tb = 7, lowdur = 0, k0, a0;
-reg         await_stop = 0, rbit = 0, glitch = 0;
+reg         await_stop = 0, rbit = 0, glitch = 0, flip = 0;
 reg  [7:0]  crc;
 reg  [15:0] addr;
 wire        fall = line_d && !line, rise = !line_d && line;
@@ -94,6 +95,7 @@ always @(posedge clk) begin
                 endcase
                 if (kind == 4'd5 && rlen != 0) begin resp[rlen] = 8'hAA; resp[rlen + 1] = 8'h55; rlen = rlen + 2; end
                 nbits = 0; nbytes = 0; sh = 0;
+                if (kind == 4'd7) begin flip <= ~flip; if (flip) rlen = 0; end
                 if (rlen != 0) begin tgo <= t + {16'd0, delay_us} * 1000; st <= M_WAIT; ti = 0; tb = 7; end
             end else begin
                 sh = {sh[6:0], rbit}; nbits = nbits + 1;
