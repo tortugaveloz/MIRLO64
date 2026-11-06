@@ -67,10 +67,13 @@
 // the Z words, writes each group back as the colour pass does (the new depth buffer's
 // lanes: {depth word 16, hidden 2}).
 //
-// The shadow plane (docs/video_options.md; the core's "Picture: 32-bit" with a 16-bit colour image, `wr_sh`): a halfword for each
-// halfword of the colour image, {the pixel's low three colour bits (9), the check (7) of its 5551 word}, at the colour word's
-// address with bit 24 set (the SoC maps it to its own 2 MiB). The write engine's pass after the colour pass writes them, with the
-// colour pass's masks: the new shadow buffer's words (`lbr_sdata`), or for a fill the fill colour's halfwords' own top bits and checks.
+// The shadow plane (docs/video_options.md; the core's "Picture: 32-bit" with a 16-bit colour image, `wr_sh`): a byte for each pixel
+// of the colour image, {the high two of the low three bits of its R and G and the high one of its B, the 3-bit check of its 5551 word}, so a
+// plane word is for four pixels, two colour words (a pair: the even word and the odd one of the colour word's address). Its address is the
+// pair's, the colour word's address over two, with bit 24 set (the SoC maps it to its own 2 MiB). The write engine sends a pair's plane
+// word with the pair's second colour word (or the span's last, when that is the first), with byte enables for the pixels written, the colour
+// pass's masks: the new shadow buffer's bytes (`lbr_sdata`, kept with the word in `rfs`), the first word's held in `s_pd`; for a fill the fill
+// colour's own top bits and checks. The read engine reads the plane word of a pair before the first colour word it serves.
 //
 // A row's base address (image + y * width * 2) must be 4-byte aligned
 // (images 4-aligned, even widths). Nothing here orders a read after a write
@@ -92,7 +95,7 @@ module rdp_mem (
     input  wire [10:0] rd_x1,          // exclusive, up to 1024
     input  wire        rd_set,
     input  wire        rd_c32,         // a 32-bit colour image: its colour span a word a pixel
-    input  wire        rd_sh,          // a 16-bit colour image with its shadow plane: the colour span's shadow words after it (`lbw_s_we`; c_have counts them, not the colour words)
+    input  wire        rd_sh,          // a 16-bit colour image with its shadow plane: the colour span's shadow words (a plane word for two colour words), each before the first colour word it serves (`lbw_s_we`)
     input  wire [10:0] rd_ldst,
     input  wire [10:0] rd_ln,
     input  wire [1:0]  rd_lmode,
@@ -106,7 +109,7 @@ module rdp_mem (
     // the old line buffers' write port ({set, word})
     output reg         lbw_z_we,
     output reg         lbw_c_we,
-    output reg         lbw_s_we,       // ... the shadow words' (the old shadow buffer)
+    output reg         lbw_s_we,       // ... the old shadow buffer's (a plane word, at {set, the colour word's address over two}, in lbw_data)
     output reg  [9:0]  lbw_addr,
     output reg  [31:0] lbw_data,
 
@@ -123,8 +126,8 @@ module rdp_mem (
     input  wire [10:0] wr_x1,
     input  wire [31:0] wr_fillc,
     input  wire        wr_set,
-    input  wire        wr_sh,          // a 16-bit colour image with its shadow plane: the pass after the colour pass writes it
-    input  wire [31:0] lbr_sdata,      // the new shadow buffer's word at lbr_addr (as lbr_cdata's): the even pixel's halfword first
+    input  wire        wr_sh,          // a 16-bit colour image with its shadow plane: its plane words go with the colour words
+    input  wire [15:0] lbr_sdata,      // the new shadow buffer's word at lbr_addr (as lbr_cdata's): the even pixel's byte first
     input  wire [10:0] res_a, res_b,   // the row's results in the new buffers so far (pixels), by set
     // the new line buffers' read port ({set, word}); masks: bit 0 even pixel, bit 1 odd
     output reg  [9:0]  lbr_addr,
@@ -172,7 +175,7 @@ module rdp_mem (
     reg [9:0]  r_idx;                     // the word to ask for next (the row's words: x >> 1; a 32-bit colour span's: x)
     reg        r_tog, r_all;              // both spans: the colour span's words are next (Z's are out); every command is out
     reg        r_c32;                     // a 32-bit image's colour span
-    reg        r_sh, r_shp, q_shp;        // the span has its shadow words; they are being asked for, coming back
+    reg        r_sh, r_shp, q_shp;        // the span has its shadow words; the colour word's plane word has been asked for, has come back
     reg [9:0]  r_x0, r_xl;                // the span's first and last pixel
     reg [9:0]  q_idx;                     // the word to come back next
     reg        q_tog;
@@ -186,6 +189,8 @@ module rdp_mem (
     wire [9:0] r_cf   = r_c32 ? r_x0 : {1'b0, r_x0[9:1]};
     wire [9:0] r_last = (r_c32 && r_kc) ? r_xl : {1'b0, r_xl[9:1]};
     wire [9:0] q_last = (r_c32 && q_kc) ? r_xl : {1'b0, r_xl[9:1]};
+    wire [9:0] q_sum  = r_cb[9:0] + {1'b0, q_idx[8:0]};            // (the colour word's address: the pixel pipe's hw8b)
+    wire       q_sp   = r_sh && q_kc && !q_shp && (!(r_cb[0] ^ q_idx[0]) || q_idx == r_cf);     // the word coming back is a plane word
     wire [29:0] rd_cw0 = rd_cbase[31:2] + {21'd0, rd_x0[9:1]}, rd_cwl = rd_cbase[31:2] + {21'd0, rd_xl[9:1]};
     // the depth span's (from the registered base, when the colour groups are all asked for)
     wire [20:0] r_zw0 = r_zb[20:0] + {12'd0, r_x0[9:1]};
@@ -238,13 +243,15 @@ module rdp_mem (
     wire        h_want  = r_act && !r_load && h_more && (r_hzp || r_h);
     wire        sp_want = r_act && !r_load && !r_all && (r_z || r_c) && !h_more;
     wire        rd_want = ld_want || h_want || sp_want;
+    // the next command of a colour span with a shadow plane is a plane word's: before the pair's first colour word (or the span's first)
+    wire        sp_s    = r_sh && r_kc && !r_shp && (!(r_cb[0] ^ r_idx[0]) || r_idx == r_cf);
     wire [29:0] rd_word = r_load ? w_next : h_want ? {8'd0, 1'b1, 3'd0, r_hg[17:0]} : (r_kc ? r_cb : r_zb) + {20'd0, r_idx};
 
     // ======================================================================
     // the write engine
     // ======================================================================
     reg        w_act, w_fillm, w_z, w_set, w_c8, w_c32;
-    reg        w_sh, w_ps;                // the span has a shadow pass; and the pass being written is it (w_pz is up too, as for the depth)
+    reg        w_sh;                      // the span has plane words, each written with the second colour word of its pair
     reg        w_fc;                      // the colour words are the fill colour: a fill, or a 32-bit image in fill mode
     reg [29:0] w_cb, w_zb;
     reg [9:0]  w_x0;
@@ -283,32 +290,35 @@ module rdp_mem (
     reg [9:0]  p1_idx, p2_idx;
     reg [79:0] rf [0:3];                  // {old hidden word, word (10), the pass's data (36), the pass's mask}: the colour pass's, or the second pass's depth
                                           // (w_pz only changes with the FIFO empty)
+    reg [15:0] rfs [0:3];                 // ... and the word's shadow bytes (the new shadow buffer's word)
+    reg [15:0] s_pd;                      // the even word of a pair's shadow bytes, for the plane word the odd one writes
+    reg [1:0]  s_pe;                      // ... and which of them are written
     reg [2:0]  rf_wr, rf_rd;
     wire [2:0] rf_cnt = rf_wr - rf_rd;
     wire       rf_room = ({1'b0, rf_cnt} + {3'd0, p1} + {3'd0, p2}) < 4'd4;
     wire [79:0] rf_head = rf[rf_rd[1:0]];
     reg [1:0]  h_ph;                      // the head's commands done: 0 none, 1 its word's (its group's hidden word is next)
-    // the shadow plane's check (lang/c/rdp/rdp.c sh_crc), for a fill's halfwords
-    function [6:0] sh_crc;
+    // the shadow plane's check (lang/c/rdp/rdp.c sh_crc), for a fill's bytes
+    function [2:0] sh_crc;
         input [15:0] w;
         integer i;
-        reg [6:0] c;
+        reg [2:0] c;
         reg fb;
         begin
-            c = 7'd0;
+            c = 3'd0;
             for (i = 15; i >= 0; i = i - 1) begin
-                fb = c[6] ^ w[i];
-                c = {c[5:0], 1'b0};
-                if (fb) c = c ^ 7'h09;
+                fb = c[2] ^ w[i];
+                c = {c[1:0], 1'b0};
+                if (fb) c = c ^ 3'd3;
             end
             sh_crc = c;
         end
     endfunction
-    function [15:0] sh_rep;               // a colour halfword's shadow halfword with its channels' top three bits as the low ones
+    function [7:0] sh_rep;                // a colour halfword's shadow byte with its channels' top bits as the low ones
         input [15:0] w;
-        sh_rep = {w[15:13], w[10:8], w[5:3], sh_crc(w)};
+        sh_rep = {w[15:14], w[10:9], w[5], sh_crc(w)};
     endfunction
-    wire [31:0] w_shfill = {sh_rep(wr_fillc[31:16]), sh_rep(wr_fillc[15:0])};
+    wire [15:0] w_shfill = {sh_rep(wr_fillc[31:16]), sh_rep(wr_fillc[15:0])};
     reg [31:0] hacc;                      // the group's hidden word so far (the head's merged in at its pop)
     reg [3:0]  hbe;                       // a fill: the quads touched so far
     reg        hany;                      // a pixel of the group was written
@@ -351,7 +361,7 @@ module rdp_mem (
     wire [3:0]  h_range = w_wide ? 4'hF : range_sel(h_idx[8:0]);
     wire [3:0]  h_csel  = w_pz ? 4'd0 : w_fillm ? h_range : w_wide ? {4{h_cd36[19]}}
                         : (h_range & { {2{h_cmask[0]}}, {2{h_cmask[1]}} });
-    wire [3:0]  h_zsel  = !w_pz ? 4'd0 : (w_ps && w_fillm) ? h_range : (h_range & { {2{h_zmask[0]}}, {2{h_zmask[1]}} });
+    wire [3:0]  h_zsel  = !w_pz ? 4'd0 : (h_range & { {2{h_zmask[0]}}, {2{h_zmask[1]}} });
     wire        h_v     = rf_wr != rf_rd;
     // the pass's own (the colour pass's, or the second pass's depth): the lanes selected and their hidden bits
     wire [3:0]  h_sel   = w_pz ? h_zsel : h_csel;
@@ -367,7 +377,7 @@ module rdp_mem (
     // 16 and 0), each quad touched enabled
     // the write command's word address: one adder for the colour and the depth span (the group's hidden word is addressed from
     // its pass's image's base)
-    wire [29:0] h_wa    = (w_pz && !w_ps ? w_zb : w_cb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
+    wire [29:0] h_wa    = (w_pz ? w_zb : w_cb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
     wire [2:0]  h_j     = (w_pz ? w_zb[2:0] : w_cb[2:0]) + h_idx[2:0];
     wire        h_first = h_j == 3'd0 || h_idx == {1'b0, w_x0[9:1]};
     wire [31:0] h_base  = h_first ? h_hold : hacc;
@@ -376,15 +386,29 @@ module rdp_mem (
     wire [31:0] h_merge = w_fillm ? {8{w_fillc[0], w_fillc[0], w_fillc[16], w_fillc[16]}}
                                   : (h_base & ~(32'hF << {h_j, 2'b00})) | ({28'd0, h_nib} << {h_j, 2'b00});
     wire [3:0]  h_qbe   = (h_first ? 4'd0 : hbe) | (4'd1 << h_j[2:1]);
-    wire        h_any   = ((w_pz && !w_ps) || (!w_pz && !w_c8 && !w_c32)) && ((h_first ? 1'b0 : hany) | (h_sel != 4'd0));
+    wire        h_any   = (w_pz || (!w_pz && !w_c8 && !w_c32)) && ((h_first ? 1'b0 : hany) | (h_sel != 4'd0));
     wire        h_last  = h_j == 3'd7 || h_idx == w_lastw;
     wire        h_c     = h_v && h_ph == 2'd0 && h_csel != 4'd0;           // the head's colour word is to go
     wire        h_zz    = h_v && h_ph == 2'd0 && h_zsel != 4'd0;           // ... or (the second pass) its Z word
-    wire        h_hh    = h_v && !h_c && !h_zz && h_last && h_any;        // ... or its group's hidden word (the pass's own image)
-    wire        wr_want = (h_c || h_zz || h_hh) && !wf_full;
+    // the shadow plane: a byte for each pixel, so a plane word is for two colour words, the pair (even, odd) by the word's address. It is
+    // written with the pair's second word (or the span's last, when that is the even one), with the bytes of the pixels written: the
+    // first word's held in s_pd, s_pe from its own turn
+    wire        h_par   = w_cb[0] ^ h_idx[0];                                   // the head's colour word is the odd one of its pair
+    wire        h_pend  = h_par || h_idx == w_lastw;                            // ... or the plane word is complete with it
+    wire        h_pfirst = h_idx == {1'b0, w_x0[9:1]};
+    wire [1:0]  h_se    = {h_csel[3], h_csel[1]};                               // this word's pixels that are written
+    wire [1:0]  h_pe    = (h_par && !h_pfirst) ? s_pe : 2'b00;                   // ... and the pair's first word's
+    wire [15:0] h_sdata = w_fillm ? w_shfill : rfs[rf_rd[1:0]];
+    wire        h_need_s = w_sh && !w_pz && h_pend && {h_pe, h_se} != 4'd0;      // the head ends a plane word that has bytes to write
+    wire [31:0] h_sword = h_par ? {s_pd, h_sdata} : {h_sdata, 16'd0};
+    wire [3:0]  h_sbe   = h_par ? {h_pe, h_se} : {h_se, 2'b00};
+    wire        h_s     = h_v && h_need_s && (h_ph == 2'd1 || (h_ph == 2'd0 && h_csel == 4'd0));   // its plane word (after its colour word)
+    wire        h_hh    = h_v && !h_c && !h_zz && !h_s && h_last && h_any;   // ... or its group's hidden word (the pass's own image)
+    wire        wr_want = (h_c || h_zz || h_s || h_hh) && !wf_full;
     wire        wr_go   = wr_want && cmd_free && !rd_want;
-    wire        h_pop   = h_v && ((!h_c && !h_zz && !h_hh) || (wr_go && h_hh)
-                                  || (wr_go && (h_c || h_zz) && !(h_last && h_any)));
+    wire        h_pop   = h_v && ((!h_c && !h_zz && !h_s && !h_hh) || (wr_go && h_hh)
+                                  || (wr_go && h_s && !(h_last && h_any))
+                                  || (wr_go && (h_c || h_zz) && !h_need_s && !(h_last && h_any)));
 
     always @(posedge clk) begin
         lbw_z_we <= 1'b0;
@@ -418,13 +442,16 @@ module rdp_mem (
                 if (rd_want) begin
                     m_cmd_valid <= 1'b1;
                     m_cmd_we <= 1'b0;
-                    m_cmd_addr <= {7'd0, sp_want && r_shp, rd_word[21:0], 2'b00};          // (the address's bit 24 is the shadow plane's: only the shadow words and the shadow pass have it)
+                    m_cmd_addr <= (sp_want && sp_s) ? {7'd0, 1'b1, 2'd0, rd_word[20:1], 2'b00}      // (the address's bit 24 is the shadow plane's: only its words have it; the plane word's number is the colour word's address / 2)
+                                                    : {8'd0, rd_word[21:0], 2'b00};
                 end else if (wr_want) begin
                     m_cmd_valid <= 1'b1;
                     m_cmd_we <= 1'b1;
-                    m_cmd_addr <= h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_wa[20:3], 2'b00} : {7'd0, w_ps, h_wa[21:0], 2'b00};
+                    m_cmd_addr <= h_s ? {7'd0, 1'b1, 2'd0, h_wa[20:1], 2'b00}         // (the plane word's number: the pair's, the colour word's address / 2)
+                                : h_hh && !h_c && !h_zz ? {8'd0, 1'b1, 3'd0, h_wa[20:3], 2'b00} : {8'd0, h_wa[21:0], 2'b00};
                     wf[wf_wr[WF-1:0]] <= (h_c && w_c8) ? {h_c8be, h_c8d}
-                                       : (h_c || h_zz) ? {h_sel, (h_c && w_fc) ? w_fillc : (h_zz && w_ps && w_fillm) ? w_shfill : h_cdata}     // (h_cdata is h_zdata: the pass's word)
+                                       : h_s ? {h_sbe, h_sword}
+                                       : (h_c || h_zz) ? {h_sel, (h_c && w_fc) ? w_fillc : h_cdata}     // (h_cdata is h_zdata: the pass's word)
                                        : {w_fillm ? h_qbe : 4'hF, h_merge};
                     wf_wr <= wf_wr + 1'b1;
                 end
@@ -533,27 +560,36 @@ module rdp_mem (
                 end
                 // a row's spans: a command a cycle, the Z span's words and then the colour span's
                 if (sp_want && cmd_free) begin
-                    r_idx <= r_idx + 10'd1;
-                    if (r_idx == r_last) begin
-                        if (r_both && !r_tog) begin r_tog <= 1'b1; r_idx <= r_cf; end
-                        else if (r_sh && !r_shp) begin r_shp <= 1'b1; r_idx <= r_cf; end      // (the colour span again, from the shadow plane)
-                        else r_all <= 1'b1;
+                    if (sp_s) r_shp <= 1'b1;                                          // (the colour word follows its plane word)
+                    else begin
+                        r_shp <= 1'b0;
+                        r_idx <= r_idx + 10'd1;
+                        if (r_idx == r_last) begin
+                            if (r_both && !r_tog) begin r_tog <= 1'b1; r_idx <= r_cf; end
+                            else r_all <= 1'b1;
+                        end
                     end
                 end
                 // data back, in the order asked
                 if (m_rdata_valid && !q_hin) begin
                     lbw_addr <= {r_set, q_idx[8:0]};
                     lbw_data <= m_rdata;
-                    if (q_kc) begin
-                        if (q_shp) lbw_s_we <= 1'b1; else lbw_c_we <= 1'b1;
-                        if (q_shp || !r_sh) begin if (r_set) c_have1 <= c_have1 + 10'd1; else c_have0 <= c_have0 + 10'd1; end
-                    end
-                    else      begin lbw_z_we <= 1'b1; if (r_set) z_have1 <= z_have1 + 10'd1; else z_have0 <= z_have0 + 10'd1; end
-                    q_idx <= q_idx + 10'd1;
-                    if (q_idx == q_last) begin
-                        if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; end
-                        else if (r_sh && !q_shp) begin q_shp <= 1'b1; q_idx <= r_cf; end
-                        else r_act <= 1'b0;
+                    if (q_sp) begin
+                        // a plane word, whole: at its pair's place (the colour word's address over two)
+                        q_shp <= 1'b1;
+                        lbw_s_we <= 1'b1; lbw_addr <= {r_set, q_sum[9:1]};
+                    end else begin
+                        q_shp <= 1'b0;
+                        if (q_kc) begin
+                            lbw_c_we <= 1'b1;
+                            if (r_set) c_have1 <= c_have1 + 10'd1; else c_have0 <= c_have0 + 10'd1;
+                        end
+                        else      begin lbw_z_we <= 1'b1; if (r_set) z_have1 <= z_have1 + 10'd1; else z_have0 <= z_have0 + 10'd1; end
+                        q_idx <= q_idx + 10'd1;
+                        if (q_idx == q_last) begin
+                            if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; end
+                            else r_act <= 1'b0;
+                        end
                     end
                 end
             end
@@ -570,12 +606,14 @@ module rdp_mem (
                     // (the colour span first: a 32-bit image's a word a pixel)
                     w_idx <= wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}; w_lastw <= wr_c32 ? wr_xl[9:0] : {1'b0, wr_xl[9:1]};
                     w_zl <= wr_xl[9:1];
-                    w_all <= 1'b0; h_ph <= 2'd0; w_pz <= 1'b0; w_ps <= 1'b0; w_sh <= wr_sh && !wr_c8 && !wr_c32;
+                    w_all <= 1'b0; h_ph <= 2'd0; w_pz <= 1'b0; w_sh <= wr_sh && !wr_c8 && !wr_c32;
                 end
             end else begin
                 // the head: a command went (above), or there is none for it
                 if (wr_go && (h_c || h_zz)) h_ph <= 2'd1;
+                if (wr_go && h_s) h_ph <= 2'd2;
                 if (h_pop) begin
+                    if (!h_par) begin s_pd <= h_sdata; s_pe <= h_se; end
                     rf_rd <= rf_rd + 3'd1; h_ph <= 2'd0;
                     hacc <= h_merge; hbe <= h_qbe; hany <= h_any;
                 end
@@ -583,8 +621,9 @@ module rdp_mem (
                 p2 <= p1;
                 p2_idx <= p1_idx;
                 if (p2) begin
-                    rf[rf_wr[1:0]] <= {hlbr_data, p2_idx, w_ps ? {lbr_sdata[31:16], 2'b00, lbr_sdata[15:0], 2'b00} : w_pz ? lbr_zdata : lbr_cdata,
-                                       (w_pz && !w_ps) ? lbr_zmask : lbr_cmask};
+                    rf[rf_wr[1:0]] <= {hlbr_data, p2_idx, w_pz ? lbr_zdata : lbr_cdata,
+                                       w_pz ? lbr_zmask : lbr_cmask};
+                    rfs[rf_wr[1:0]] <= lbr_sdata;
                     rf_wr <= rf_wr + 3'd1;
                 end
                 // the next word, when its results are in
@@ -600,8 +639,7 @@ module rdp_mem (
                 end
                 // the span's words have all gone: the same again for its Z words (Z_UPD), or done
                 if (w_all && !p1 && !p2 && rf_wr == rf_rd) begin
-                    if (w_sh && !w_pz) begin w_pz <= 1'b1; w_ps <= 1'b1; w_all <= 1'b0; w_idx <= {1'b0, w_x0[9:1]}; w_lastw <= {1'b0, w_zl}; end      // (the shadow pass)
-                    else if (w_z && !w_fillm && !(w_pz && !w_ps)) begin w_pz <= 1'b1; w_ps <= 1'b0; w_all <= 1'b0; w_idx <= {1'b0, w_x0[9:1]}; w_lastw <= {1'b0, w_zl}; end
+                    if (w_z && !w_fillm && !w_pz) begin w_pz <= 1'b1; w_all <= 1'b0; w_idx <= {1'b0, w_x0[9:1]}; w_lastw <= {1'b0, w_zl}; end
                     else w_act <= 1'b0;
                 end
             end

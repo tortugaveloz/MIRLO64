@@ -213,10 +213,11 @@ module rdp_top (
     wire [31:0] mw_data;
     wire [9:0]  pix_lb_ra, pix_clb_ra;      // (the depth's and the colour's: a 32-bit image's colour word is the pixel's)
     wire [31:0] zlb_rd, clb_rd, slb_rd;
+    wire [9:0]  pix_slb_ra;             // the shadow buffer's: {set, the colour word's pair}
     rdp_sdpram #(.AW(10), .DW(32), .NB(2)) zold (.clk(clk), .we(mw_z_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_lb_ra), .rdata(zlb_rd));
     rdp_sdpram #(.AW(10), .DW(32), .NB(2)) cold (.clk(clk), .we(mw_c_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_clb_ra), .rdata(clb_rd));
     // the old shadow buffer (docs/video_options.md): the shadow words of the colour span, beside the colour words, for the blender's memory colour
-    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) sold (.clk(clk), .we(mw_s_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_clb_ra), .rdata(slb_rd));
+    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) sold (.clk(clk), .we(mw_s_we), .waddr(mw_addr), .wdata(mw_data), .wbe(2'b11), .raddr(pix_slb_ra), .rdata(slb_rd));
     reg         zn_we, cn_we, msk_we;
     reg  [9:0]  nb_wa;                  // the depth buffers' {set, word}
     reg         nb_x0;                  // the pixel's x[0]: the new colour buffer's address, a 32-bit image's {set, x[8:0]}
@@ -229,14 +230,14 @@ module rdp_top (
     wire [35:0] znew_rd;
     wire [35:0] cnew_rd;
     // the shadow plane's new buffer (docs/video_options.md): the pixel's shadow halfword beside its colour, written with it
-    reg  [31:0] sn_wd;
-    wire [31:0] snew_rd;
-    wire [15:0] px_sh;
+    reg  [15:0] sn_wd;
+    wire [15:0] snew_rd;
+    wire [7:0]  px_sh;
     wire [1:0]  zm_rd, cm_rd;
     wire [9:0]  zn_ra = mem_lb_ra;
     rdp_sdpram #(.AW(10), .DW(36), .NB(2)) znew (.clk(clk), .we(zn_we), .waddr(nb_wa), .wdata(zn_wd), .wbe(nb_be), .raddr(zn_ra), .rdata(znew_rd));
     rdp_sdpram #(.AW(10), .DW(36), .NB(2)) cnew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(cn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(cnew_rd));
-    rdp_sdpram #(.AW(10), .DW(32), .NB(2)) snew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(sn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(snew_rd));
+    rdp_sdpram #(.AW(10), .DW(16), .NB(2)) snew (.clk(clk), .we(cn_we), .waddr(cn_wa), .wdata(sn_wd), .wbe(cn_be), .raddr(mem_lb_ra), .rdata(snew_rd));
     // the raw hidden-bit buffers (rdp_mem): the span's groups' words, by {set,
     // group mod 128}, a copy for the pixels and one for the write engine
     // The depth image has its own (its dz code's low two bits, rule 8 of docs/rdp_exact.md): a copy for the pixels, and in the
@@ -376,7 +377,7 @@ module rdp_top (
         .tm_a0(tm_ra0), .tm_a1(tm_ra1), .tm_a2(tm_ra2),
         .tm_q0(tm_q0), .tm_q1(tm_q1), .tm_q2(tm_q2), .tm_h0(tm_h0), .tm_h1(tm_h1), .tm_h2(tm_h2),
         .tl_a0(tl_a0), .tl_a1(tl_a1), .tl_a2(tl_a2), .tl_q0(tl_q0), .tl_q1(tl_q1), .tl_q2(tl_q2),
-        .lb_raddr(pix_lb_ra), .clb_raddr(pix_clb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd), .slb_rdata(slb_rd), .sh_rd(shadow_en),
+        .lb_raddr(pix_lb_ra), .clb_raddr(pix_clb_ra), .slb_raddr(pix_slb_ra), .zlb_rdata(zlb_rd), .clb_rdata(clb_rd), .slb_rdata(slb_rd), .sh_rd(shadow_en),
         .hl_raddr(pix_hl_ra), .hl_rdata(pix_hl_rd), .rwb0(rwb[0]), .rwb1(rwb[1]), .hz_raddr(pix_hz_ra), .hz_rdata(pix_hz_rd), .rzb0(rzb[0]), .rzb1(rzb[1]), .out_hid(px_hid), .out_sh(px_sh),
         .out_valid(px_valid), .out_set(px_set), .out_x(px_x), .out_color(px_color), .out_r8(px_r8), .out_c27(px_c27), .out_depth(px_depth),
         .out_cpass(px_cpass), .out_zpass(px_zpass), .busy(pix_busy));
@@ -424,12 +425,12 @@ module rdp_top (
     rdp_mem mem (
         .clk(clk), .rst(rst),
         .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h), .rd_hz(rq_hz),
-        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set), .rd_c32(cimg32), .rd_sh(shadow_en && cimg_ok && !cimg8 && !cimg32),
+        .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set), .rd_c32(cimg32), .rd_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:0] != zimg[22:0]),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have0(z_have0), .z_have1(z_have1), .c_have0(c_have0), .c_have1(c_have1), .h_done0(h_done0), .h_done1(h_done1), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_s_we(mw_s_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
         .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
-        .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set), .wr_sh(shadow_en && cimg_ok && !cimg8 && !cimg32), .lbr_sdata(snew_rd),
+        .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set), .wr_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:0] != zimg[22:0]), .lbr_sdata(snew_rd),
         .res_a(res_q[0]), .res_b(res_q[1]),
         .lbr_addr(mem_lb_ra), .lbr_zdata(znew_rd), .lbr_cdata(cnew_rd), .lbr_zmask(zm_rd), .lbr_cmask(cm_rd),
         .hlbr_addr(mem_hl_ra), .hlbr_data(mem_hl_rd),
