@@ -7,7 +7,7 @@ Each line is a code, 8 hex digits, a space, 4 hex digits, and then anything you 
     80123456 0063   Infinite lives
     # a comment, like blank lines and lines starting with ; or //
 
-Every code in the file runs, in every video field, when "Enable Gameshark codes" is on in the core's settings: leave out of the file the
+Every code in the file runs, in every video field, when the codes are on in the core's "Expansion Pak/Gameshark" setting: leave out of the file the
 ones you do not want. Supported: 80 and 81 (write a byte / a 16-bit value), A0 and A1, D0 to D3 (the next line runs only if the value at
 the address is / is not what the code says), 50 (repeater), F0 and F1. 88 and 89 (the GS button) and other types are skipped.
 Codes are read when the game starts.

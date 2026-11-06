@@ -141,7 +141,7 @@ int main(void)
         }
     }
     g.mem_size = GAME_MEM;
-    /* The core's "Expansion Pak" setting (interact.json: field 14, INTERACT1's bit 24; 0 with the Pak in, which is how the
+    /* The core's "Expansion Pak" setting (interact.json's "Expansion Pak/Gameshark": field 14, INTERACT1's bit 24; 0 with the Pak in, which is how the
      * core starts): without it the console has 4 MiB */
     if ((apf_interact_interact1_read() >> 24) & 1u) g.mem_size = 0x400000u;
     g.cic = cic;

@@ -571,7 +571,7 @@ Such a ROM can be smaller than 1 MiB. The boot segment's patches (below) are not
 
 ### The Expansion Pak
 
-The core's "Expansion Pak" setting is a check box, on by default (`INTERACT1` bit 24, which is 0 with the Pak in). The
+The core's "Expansion Pak" setting (a half of the menu's "Expansion Pak/Gameshark" list, in by default; `INTERACT1` bit 24, which is 0 with the Pak in). The
 loader reads it once, as the game starts. Without the Pak the game's memory is 4 MiB: that is what `osMemSize` says,
 and the runtime sets MCTL's bit 10, with which the game's own accesses to the upper 4 MiB of the RDRAM's window go to
 the monitor and are answered as memory that is not there: a load reads 0 and a store goes nowhere. Software that sizes
@@ -1030,7 +1030,7 @@ The setting "Controller 2 pak" (None, or Transfer Pak SD) puts a second one in c
 
 ### GameShark codes
 
-The setting "Enable Gameshark codes" (off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
+The setting "Expansion Pak/Gameshark" with the codes on (the other half of that list; off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
 `n64rt_gs.c`). They are a text file on the SD card, in `Assets/n64/common/gameshark/`, named after the cartridge: its four-character ID
 (ROM `0x3B..0x3E`: `NSME`, the game's code and its region) and, for a revision whose addresses differ, its version byte in decimal:
 `NSME.1.txt` is tried first, then `NSME.txt`. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
@@ -1162,8 +1162,8 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
-| Expansion Pak | `0x1000_0138` | `interact1[24]` | **On** (0), off (1): a check box; read when the game starts |
-| Enable Gameshark codes | `0x1000_013C` | `interact1[25]` | **Off** (0), on (1): a check box; seen in every field ([GameShark codes](#gameshark-codes)) |
+| Picture | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit (1), Deblur (2), 32-bit + Deblur (3): [video_options.md](video_options.md) |
+| Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | **Pak in, codes off** (0), Pak in, codes on (2), Pak out, codes off (1), Pak out, codes on (3). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3) |
 | Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Transfer Pak SD (3) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
@@ -1364,7 +1364,7 @@ stores and branches, cost in cycles (the table in "The FPU").
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
 - `sim/gb_cart`: `run.sh <rom.gb>` runs the cartridge port against the cartridge model, and then mutants of the port,
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
-- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model.
+- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Picture" setting's choices).
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
 
 ### The runtime: `lang/n64rt/test`

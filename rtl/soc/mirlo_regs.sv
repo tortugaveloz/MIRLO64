@@ -267,6 +267,7 @@ always_ff @(posedge clk) begin
             5'd17: ia2[9:5]   <= ia_data[4:0];
             5'd18: ia2[14:10] <= ia_data[4:0];
             5'd19: ia2[19:15] <= ia_data[4:0];
+            5'd20: ia1[25:24] <= ia_data[1:0];           // "Expansion Pak/Gameshark": the two settings of fields 14 and 15 in one list
             default: ;
         endcase
     end
@@ -291,6 +292,7 @@ always_ff @(posedge clk) begin
     5'd17: ia_q <= {27'd0, ia2[9:5]};
     5'd18: ia_q <= {27'd0, ia2[14:10]};
     5'd19: ia_q <= {27'd0, ia2[19:15]};
+    5'd20: ia_q <= {30'd0, ia1[25:24]};
     default: ia_q <= 32'd0;
     endcase
 end
