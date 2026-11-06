@@ -1365,7 +1365,7 @@ stores and branches, cost in cycles (the table in "The FPU").
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
 - `sim/gb_cart`: `run.sh <rom.gb>` runs the cartridge port against the cartridge model, and then mutants of the port,
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
-- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Picture" setting's choices).
+- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Video settings" setting's choices).
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
 
 ### The runtime: `lang/n64rt/test`

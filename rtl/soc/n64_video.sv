@@ -73,8 +73,8 @@ module n64_video #(
     input  wire         vi_aa,          // sys: the VI's anti-alias filter (VI_CTRL's AA_MODE 0 or 1; MIRLO_VI_AA)
     input  wire         vi_divot,       // sys: and its divot filter (VI_CTRL bit 4)
     input  wire         vi_dedither,    // sys: and its dither filter (VI_CTRL bit 16)
-    input  wire         vi_deblur,      // sys: the core's "Picture" option "Deblur": the anti-alias and divot filters are bypassed (docs/video_options.md)
-    input  wire         vi_out32,       // sys: the core's "Picture" option "32-bit": no dedither, 8 bits a channel (full range, and a 32-bit picture's own low bits)
+    input  wire         vi_deblur,      // sys: the core's "Video settings" option "Deblur": the anti-alias and divot filters are bypassed (docs/video_options.md)
+    input  wire         vi_out32,       // sys: the core's "Video settings" option "32-bit": no dedither, 8 bits a channel (full range, and a 32-bit picture's own low bits)
     input  wire  [4:0]  crop_v,         // sys: the core's "Crop Vertical": lines of the picture blanked at its top and its
                                         //      bottom
     input  wire  [1:0]  crop_l,         // sys: and its pixels blanked at the picture's left edge

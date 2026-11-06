@@ -643,7 +643,7 @@ before the VI's scale ([resolution.md](resolution.md)):
 
 A picture 512 wide or more is shown with the filters off.
 
-The core's "Picture" setting ([video_options.md](video_options.md)) changes two things here: "Deblur" bypasses the
+The core's "Video settings" setting ([video_options.md](video_options.md)) changes two things here: "Deblur" bypasses the
 anti-alias and the divot filters; "32-bit" turns the RDP's RGB dither off (`dither_off` of `rdp_pix.v`: whatever
 `RGB_DITHER_SEL` says), bypasses the dither filter and shows 8 bits a channel: a 32-bit picture's own, and a 16-bit
 picture's from the RDP's shadow plane (the low three bits of each channel the blender made, written beside the colour

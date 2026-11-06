@@ -135,7 +135,7 @@ each setting has an address of its own and needs no mask.
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Gameshark codes (1: on; a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
 | 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
-| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Picture (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
+| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Video settings (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
 | 20 | `0x1000_0150` | `INTERACT1[25:24]` | Expansion Pak/Gameshark: one list writing fields 14 and 15 together (bit 0 is the Expansion Pak, 1 = out; bit 1 the Gameshark codes, 1 = on) |
 
 ## APF_VIDEO

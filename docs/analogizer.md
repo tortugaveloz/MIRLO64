@@ -118,4 +118,4 @@ an error and is silently left out, so "Restart Game" has to stay the 14th, the l
 whose lists have more than about 75 options in all ("Load error in 'interact'": 75 loads, 77 does not, 76 untried). The
 core's menu has 14 entries and 67 options: the two sticks share one "Stick dead zone" (steps of 10 %, 0 to 70 %) to make
 room for the video entry, and the Expansion Pak and the Gameshark codes share one list ("Expansion Pak/Gameshark") to make
-room for "Picture" ([video_options.md](video_options.md)).
+room for "Video settings" ([video_options.md](video_options.md)).

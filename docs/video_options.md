@@ -1,6 +1,6 @@
-# The picture options: 32-bit and Deblur
+# The video settings: 32-bit and Deblur
 
-One entry of the core's menu, "Picture", with four choices: **Default**, **32-bit**, **Deblur** and **32-bit + Deblur**.
+One entry of the core's menu, "Video settings", with four choices: **Default**, **32-bit**, **Deblur** and **32-bit + Deblur**.
 The default is the console's picture, bit for bit what the core showed before the entry existed. The entry is
 `interact.json` field 17 (`0x1000_0144`, `INTERACT2[9:5]`): bit 0 is the 32-bit output, bit 1 Deblur. A change takes
 effect at once, no restart.
@@ -151,7 +151,7 @@ What it does not do:
 
 | What | Where |
 |---|---|
-| The entry | `pkg/pocket/Cores/tortuga.Mirlo64/interact.json`, "Picture" (id 254) |
+| The entry | `pkg/pocket/Cores/tortuga.Mirlo64/interact.json`, "Video settings" (id 254) |
 | The register field | `rtl/soc/mirlo_regs.sv` (`ia_out32`, `ia_deblur`), [control.md](control.md) |
 | The RDP's dither and shadow plane | `rtl/rdp/rdp_pix.v` (`dither_off`, `out_sh`, `un565sh`), `rdp_mem.v` (the shadow pass and span), `rdp_top.v` (`snew`, `sold`); `shadow_en` wired in `rtl/soc/mirlo_mips.sv`, which maps the plane |
 | The scan-out | `rtl/soc/n64_video.sv` (`vi_out32`, `vi_deblur`, `sh_f`, `sh_lo`) |
