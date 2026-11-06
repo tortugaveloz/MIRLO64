@@ -250,6 +250,12 @@ works; the SIDONE time above keeps the SI's side right); the extra bytes of an o
 ones only); the GameCube controller's timing and a Joybus device on the Pocket side are not part of this. The pins are 3.3 V CMOS;
 the harness must provide the controllers' supply and the pull-ups.
 
+### Resources
+
+The SNAC block (`an_snac_pif` with `an_joybus_m`) is about 150 ALMs (the master 87, the sequencer, the scan and the pins 62), 170 registers and one M10K block (the 128-byte
+buffer), no DSP block; the register block and the runtime add nothing of note (the runtime grows by 1.2 KiB). Measured in the fit of the whole core.
+The core with it closes timing on some seeds only, as before (14 of the 15 tried did not).
+
 ### Tests
 
 `sim/analogizer/snac/run_tests.sh` (Verilator): the master and the mux against behavioural devices (`jb_dev.sv`): cell widths and periods
