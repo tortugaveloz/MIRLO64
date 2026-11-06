@@ -255,9 +255,10 @@ the harness must provide the controllers' supply and the pull-ups.
 
 ### Resources
 
-The SNAC block (`an_snac_pif` with `an_joybus_m`) is about 150 ALMs (the master 87, the sequencer, the scan and the pins 62), 170 registers and one M10K block (the 128-byte
-buffer), no DSP block; the register block and the runtime add nothing of note (the runtime grows by 1.2 KiB). Measured in the fit of the whole core.
-The core with it closes timing on some seeds only, as before (14 of the 15 tried did not).
+The SNAC block (`an_snac_pif` with `an_joybus_m`) is about 146 ALMs (the master 84, the sequencer, the scan and the pins 61), 159 registers and one M10K block (the 128-byte
+buffer), no DSP block; the register block and the runtime add nothing of note (the runtime grows by 1.3 KiB). Measured in the fit of the whole core (18,162
+ALMs, 98 %). The core is tight in LABs: a version of the block with a third more registers did not fit (1855 LABs of 1848), so the block is kept small.
+Timing closure is a seed lottery as for the rest of the core (the seed 10 closes with +0.025 ns).
 
 ### Tests
 
