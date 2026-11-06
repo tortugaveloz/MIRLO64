@@ -62,7 +62,7 @@ the low ones (what the plain expansion gives) with its check, so that what was t
 The write engine does it with the colour words: after the colour word of a pair of words (or of the span's last word), the plane word
 of the pair, with the bytes of the pixels written (byte enables; the first word's bytes are held in a register,
 `s_pd`), from a new buffer beside the new colour buffer (`snew`, 16 bits a word). **No plane is kept while the
-colour image is at the depth image's address** (`cimg == zimg`): the RDP clears a depth buffer as a fill of a colour image, and
+colour image is at the depth image's address** (`cimg == zimg` to 8 bytes): the RDP clears a depth buffer as a fill of a colour image, and
 that is never shown.
 
 **Validation.** A shadow byte is used only where its check is the CRC-3 of the 5551 word now in the image. Anything

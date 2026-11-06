@@ -176,6 +176,7 @@ module rdp_mem (
     reg        r_tog, r_all;              // both spans: the colour span's words are next (Z's are out); every command is out
     reg        r_c32;                     // a 32-bit image's colour span
     reg        r_sh, r_shp, q_shp;        // the span has its shadow words; the colour word's plane word has been asked for, has come back
+    reg        r_f1, q_f1;                // the next colour word (to ask for, to come back) is the span's first
     reg [9:0]  r_x0, r_xl;                // the span's first and last pixel
     reg [9:0]  q_idx;                     // the word to come back next
     reg        q_tog;
@@ -190,7 +191,7 @@ module rdp_mem (
     wire [9:0] r_last = (r_c32 && r_kc) ? r_xl : {1'b0, r_xl[9:1]};
     wire [9:0] q_last = (r_c32 && q_kc) ? r_xl : {1'b0, r_xl[9:1]};
     wire [9:0] q_sum  = r_cb[9:0] + {1'b0, q_idx[8:0]};            // (the colour word's address: the pixel pipe's hw8b)
-    wire       q_sp   = r_sh && q_kc && !q_shp && (!(r_cb[0] ^ q_idx[0]) || q_idx == r_cf);     // the word coming back is a plane word
+    wire       q_sp   = r_sh && q_kc && !q_shp && (!(r_cb[0] ^ q_idx[0]) || q_f1);     // the word coming back is a plane word
     wire [29:0] rd_cw0 = rd_cbase[31:2] + {21'd0, rd_x0[9:1]}, rd_cwl = rd_cbase[31:2] + {21'd0, rd_xl[9:1]};
     // the depth span's (from the registered base, when the colour groups are all asked for)
     wire [20:0] r_zw0 = r_zb[20:0] + {12'd0, r_x0[9:1]};
@@ -244,7 +245,7 @@ module rdp_mem (
     wire        sp_want = r_act && !r_load && !r_all && (r_z || r_c) && !h_more;
     wire        rd_want = ld_want || h_want || sp_want;
     // the next command of a colour span with a shadow plane is a plane word's: before the pair's first colour word (or the span's first)
-    wire        sp_s    = r_sh && r_kc && !r_shp && (!(r_cb[0] ^ r_idx[0]) || r_idx == r_cf);
+    wire        sp_s    = r_sh && r_kc && !r_shp && (!(r_cb[0] ^ r_idx[0]) || r_f1);
     wire [29:0] rd_word = r_load ? w_next : h_want ? {8'd0, 1'b1, 3'd0, r_hg[17:0]} : (r_kc ? r_cb : r_zb) + {20'd0, r_idx};
 
     // ======================================================================
@@ -400,7 +401,7 @@ module rdp_mem (
     wire [1:0]  h_pe    = (h_par && !h_pfirst) ? s_pe : 2'b00;                   // ... and the pair's first word's
     wire [15:0] h_sdata = w_fillm ? w_shfill : rfs[rf_rd[1:0]];
     wire        h_need_s = w_sh && !w_pz && h_pend && {h_pe, h_se} != 4'd0;      // the head ends a plane word that has bytes to write
-    wire [31:0] h_sword = h_par ? {s_pd, h_sdata} : {h_sdata, 16'd0};
+    wire [31:0] h_sword = {h_par ? s_pd : h_sdata, h_sdata};           // (an even word alone: its bytes go in the upper half, the lower has no byte enable)
     wire [3:0]  h_sbe   = h_par ? {h_pe, h_se} : {h_se, 2'b00};
     wire        h_s     = h_v && h_need_s && (h_ph == 2'd1 || (h_ph == 2'd0 && h_csel == 4'd0));   // its plane word (after its colour word)
     wire        h_hh    = h_v && !h_c && !h_zz && !h_s && h_last && h_any;   // ... or its group's hidden word (the pass's own image)
@@ -465,7 +466,7 @@ module rdp_mem (
                     r_zb <= rd_zbase[31:2]; r_cb <= rd_cbase[31:2];
                     r_idx <= rd_f1; q_idx <= rd_f1; r_c32 <= rd_c32; r_x0 <= rd_x0; r_xl <= rd_xl[9:0];
                     r_tog <= 1'b0; q_tog <= 1'b0; r_all <= 1'b0;
-                    r_sh <= rd_sh && rd_c && !rd_load; r_shp <= 1'b0; q_shp <= 1'b0;
+                    r_sh <= rd_sh && rd_c && !rd_load; r_shp <= 1'b0; q_shp <= 1'b0; r_f1 <= 1'b1; q_f1 <= 1'b1;
                     if (rd_set) begin z_have1 <= 10'd0; c_have1 <= 10'd0; end else begin z_have0 <= 10'd0; c_have0 <= 10'd0; end
                     r_h <= rd_h && !rd_load; r_hz <= rd_hz && !rd_load;
                     r_hall <= !((rd_h || rd_hz) && !rd_load); q_hin <= (rd_h || rd_hz) && !rd_load;
@@ -562,10 +563,10 @@ module rdp_mem (
                 if (sp_want && cmd_free) begin
                     if (sp_s) r_shp <= 1'b1;                                          // (the colour word follows its plane word)
                     else begin
-                        r_shp <= 1'b0;
+                        r_shp <= 1'b0; r_f1 <= 1'b0;
                         r_idx <= r_idx + 10'd1;
                         if (r_idx == r_last) begin
-                            if (r_both && !r_tog) begin r_tog <= 1'b1; r_idx <= r_cf; end
+                            if (r_both && !r_tog) begin r_tog <= 1'b1; r_idx <= r_cf; r_f1 <= 1'b1; end
                             else r_all <= 1'b1;
                         end
                     end
@@ -579,7 +580,7 @@ module rdp_mem (
                         q_shp <= 1'b1;
                         lbw_s_we <= 1'b1; lbw_addr <= {r_set, q_sum[9:1]};
                     end else begin
-                        q_shp <= 1'b0;
+                        q_shp <= 1'b0; q_f1 <= 1'b0;
                         if (q_kc) begin
                             lbw_c_we <= 1'b1;
                             if (r_set) c_have1 <= c_have1 + 10'd1; else c_have0 <= c_have0 + 10'd1;
@@ -587,7 +588,7 @@ module rdp_mem (
                         else      begin lbw_z_we <= 1'b1; if (r_set) z_have1 <= z_have1 + 10'd1; else z_have0 <= z_have0 + 10'd1; end
                         q_idx <= q_idx + 10'd1;
                         if (q_idx == q_last) begin
-                            if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; end
+                            if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; q_f1 <= 1'b1; end
                             else r_act <= 1'b0;
                         end
                     end

@@ -1152,7 +1152,7 @@ static inline unsigned sh_lo9(unsigned s)           /* the nine low bits of the 
 }
 static inline unsigned sh_rep(uint16_t w) { return ((w >> 13) & 7u) << 6 | ((w >> 8) & 7u) << 3 | ((w >> 3) & 7u); }   /* each channel's top three bits */
 /* the plane is kept when the colour image is not the depth image (a clear of the depth buffer is a fill of a "colour image" at its address) */
-static inline int sh_on(const rdp_t *r) { return r->shadow && ((r->cimg ^ r->zimg) & 0x7FFFFFu); }
+static inline int sh_on(const rdp_t *r) { return r->shadow && ((r->cimg ^ r->zimg) & 0x7FFFF8u); }
 static inline void sh_put(rdp_t *r, uint32_t caddr, uint16_t w, unsigned lo9)
 {
     if (sh_on(r)) wr8(r, sh_addr(caddr), sh_pack(lo9) | sh_crc(w));
