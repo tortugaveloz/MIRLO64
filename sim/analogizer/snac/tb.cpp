@@ -279,7 +279,7 @@ int main(int argc, char **argv)
         CHECK(((reg_rd(R_STAT) >> 4) & 15) == 0, "changed cleared by writing 1s");
         for (int p = 0; p < 4; p++) {
             reg_wr(R_PTR, 64 + 4 * p);
-            uint8_t n = (uint8_t)reg_rd(R_DATA), b0 = (uint8_t)reg_rd(R_DATA), b1 = (uint8_t)reg_rd(R_DATA), b2 = (uint8_t)reg_rd(R_DATA);
+            uint8_t b0 = (uint8_t)reg_rd(R_DATA), b1 = (uint8_t)reg_rd(R_DATA), b2 = (uint8_t)reg_rd(R_DATA), n = (uint8_t)reg_rd(R_DATA);
             if (p == 2) { }
             else CHECK(n == 3 && b0 == 5 && b1 == 0 && b2 == ((p & 1) ? 1 : 2), "scan table port %d: %u %02x %02x %02x", p + 1, n, b0, b1, b2);
         }
@@ -319,6 +319,26 @@ int main(int argc, char **argv)
     unsigned c1 = ncmds(0);
     idle_us(10000);
     CHECK(ncmds(0) == c1, "no scan, no commands");
+
+    // ---- a cartridge's pins: the adapter does not own the port (a Game Boy cartridge keeps it) and bank 0 carries its PHI clock. Even with ON and
+    // SCAN set the scan must not run, no device may appear and nothing is driven
+    {
+        reg_wr(R_CTRL, 3 | (64 << 8));
+        for (int p = 0; p < 4; p++) set_dev(p, 8);
+        t->own = 0;
+        reg_wr(R_STAT, 0xF0);
+        size_t n0 = pulses.size();
+        unsigned c0_ = ncmds(2);
+        idle_us(40000);
+        uint32_t s = reg_rd(R_STAT);
+        CHECK((s & 15) == 0 && ((s >> 4) & 15) == 0, "a cartridge's PHI on the wires, the adapter not the owner: nothing present (%x)", s);
+        CHECK(pulses.size() == n0 && !t->en, "... and nothing driven");
+        (void)c0_;
+        for (int p = 0; p < 4; p++) set_dev(p, 0);
+        t->own = 1;
+        reg_wr(R_CTRL, 1 | (64 << 8));
+        idle_us(500);
+    }
 
     // ---- the pins stay off: ON clear, or the adapter not the owner
     {

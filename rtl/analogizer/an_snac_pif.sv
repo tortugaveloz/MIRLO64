@@ -2,7 +2,7 @@
 // registers the runtime drives them with (SNAC, 0x0E00: tools/mirlo_regs.py; docs/analogizer.md "The SNAC port as the console's PIF").
 //
 //   ID    00 R   0x534E0001
-//   CTRL  04 RW  [0] ON the pins are the Joybus's (needs the adapter to own the port: `own`), [1] SCAN the background scan,
+//   CTRL  04 RW  [0] ON the Joybus is wanted (the pins are its only while the adapter owns the port: `own`; a Game Boy cartridge keeps them), [1] SCAN the background scan,
 //                [15:8] TFIRST: us to wait for a reply's first edge (reset 64)
 //   STAT  08 R   [3:0] PRESENT: a device on that port answered the scan twice in a row (and has not missed it three times since); [7:4] CHANGED: it came or went since (write 1s clear)
 //   XFER  0C     write: start a transaction {[17:16] port, [13:8] rx bytes expected, [5:0] tx bytes (the buffer's first)};
@@ -12,7 +12,7 @@
 //   DATA  14 RW  the byte at PTR; each access moves PTR on by one
 //
 // The buffer: 0..62 the transaction (the tx bytes, which the reply's bytes then replace), 64 + 4 n the scan of port n:
-// the number of bytes the status command (0x00) was answered with (3: a device is there), then those bytes.
+// the 3 bytes the status command (0x00) was answered with, then at 64 + 4 n + 3 the number of bytes that came (3: a device is there).
 //
 // One transaction at a time. The scan (SCAN set) takes the wire between the runtime's transactions, a port every 2 ms in turn (a status
 // command is ~36 us of the wire; a port is polled every 8 ms):
@@ -90,27 +90,24 @@ logic        m_start;
 wire  [1:0]  sel = scan_run ? scan_p : x_port;           // the port the wire is for
 wire         m_busy, m_done, m_timeout, m_short, m_low, m_tk;
 wire  [5:0]  m_cnt;
-logic        wire_in;
+wire         wire_in;
 an_joybus_m #(.CLK_HZ(CLK_HZ)) jb (
     .clk, .rst, .start(m_start), .imm(scan_run), .txlen(scan_run ? 6'd1 : x_tx), .rxlen(scan_run ? 6'd3 : x_rx),
-    .rx_base(scan_run ? {1'b1, 2'b00, scan_p, 2'b01} : 7'd0), .t_first,
+    .rx_base(scan_run ? {1'b1, 2'b00, scan_p, 2'b00} : 7'd0), .t_first,
     .busy(m_busy), .done(m_done), .rx_cnt(m_cnt), .timeout(m_timeout), .short_(m_short), .tk(m_tk),
     .rd_addr(m_rd_addr), .rd_data(qb), .wr_en(m_wr_en), .wr_addr(m_wr_addr), .wr_data(m_wr_data), .low(m_low), .dq(wire_in)
 );
-always_comb case (sel)
-    2'd0: wire_in = dq_in[0];
-    2'd1: wire_in = dq_in[1];
-    2'd2: wire_in = dq_in[2];
-    default: wire_in = dq_in[3];
-endcase
+// (while the adapter does not own the port the pins are a cartridge's -- bank 0 carries its PHI, /WR, /RD and /CS -- and nothing on them is a
+// device: the wire reads idle, so no transaction can see an edge, and the scan does not run)
+wire         dq_sel = dq_in[sel];
+assign wire_in = dq_sel | ~own;
 
 wire         x_start = sel_wr && a == 4'd3 && !pend;
 always_ff @(posedge clk) begin
     m_start <= 1'b0; s_wr <= 1'b0;
     if (rst) begin
         on <= 1'b0; scan_en <= 1'b0; t_first <= 8'd64; present <= '0; chg <= '0; ptr <= '0; pend <= 1'b0; scan_run <= 1'b0; scan_p <= '0;
-        scan_t <= '0; hits[0] <= '0; hits[1] <= '0; hits[2] <= '0; hits[3] <= '0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0;
-        x_port <= '0; x_tx <= '0; x_rx <= '0;
+        hits[0] <= '0; hits[1] <= '0; hits[2] <= '0; hits[3] <= '0;
     end else begin
         // the registers
         if (sel_wr && a == 4'd1) begin on <= wd[0]; scan_en <= wd[1]; t_first <= wd[15:8]; end
@@ -122,13 +119,13 @@ always_ff @(posedge clk) begin
         if (!m_busy && !m_start && !m_done && !scan_run) begin
             if (pend && x_tx != 6'd0) m_start <= 1'b1;
             else if (pend) begin pend <= 1'b0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; end      // (a transaction with no bytes: nothing to do)
-            else if (on && scan_en && scan_t[11]) begin m_start <= 1'b1; scan_run <= 1'b1; scan_t <= '0; end
+            else if (on && own && scan_en && scan_t[11]) begin m_start <= 1'b1; scan_run <= 1'b1; scan_t <= '0; end
         end
         if (m_tk && !scan_t[11] && !(m_busy || scan_run)) scan_t <= scan_t + 12'd1;
         if (m_done) begin
             if (scan_run) begin
                 scan_run <= 1'b0;
-                s_wr <= 1'b1; s_wr_addr <= {1'b1, 2'b00, scan_p, 2'b00}; s_wr_data <= {2'b0, m_cnt};
+                s_wr <= 1'b1; s_wr_addr <= {1'b1, 2'b00, scan_p, 2'b11}; s_wr_data <= {2'b0, m_cnt};
                 // hysteresis: a device is there after two answers in a row and gone after three misses, so a wire that floats (no board)
                 // or a noisy line cannot make a channel real
                 if (m_cnt == 6'd3) begin
@@ -151,7 +148,7 @@ always_comb begin
     case (a)
     4'd0: rd = 32'h534E_0001;
     4'd1: rd = {16'd0, t_first, 6'd0, scan_en, on};
-    4'd2: rd = {24'd0, chg, present};
+    4'd2: rd = {24'd0, chg & {4{own}}, present & {4{own}}};      // (not the adapter's port: nobody is there)
     4'd3: rd = {pend, x_to, x_sh, 23'd0, x_cnt};
     4'd4: rd = {25'd0, ptr};
     4'd5: rd = {24'd0, qa};

@@ -146,6 +146,8 @@ for (genvar snp = 0; snp < 4; snp = snp + 1) begin : sndev
               .n_cmds(nc), .n_wr(nw), .last_wr_addr(la), .last_cmd(lc));
 end
 // (a 1 driven on a bank 0 bit against a device that pulls that wire low is a fault of the port mux)
+// ... nor any Joybus pin driven (translator outward or driver on) while the adapter does not own the port: a cartridge's /WR, /RD, /CS and /RES are there
+always @(posedge clk_sys) if (!an_own && (sn_p30_dir | sn_p30_oe | sn_p31_dir | sn_p31_oe | sn_b0_dir | sn_b0_oe)) $display("SNAC: a Joybus pin driven while the adapter does not own the port");
 always @(posedge clk_sys) begin
     if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[0] & sn_dlow[2]) $display("SNAC: bank 0 drove port 3 high against its device");
     if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[3] & sn_dlow[3]) $display("SNAC: bank 0 drove port 4 high against its device");
