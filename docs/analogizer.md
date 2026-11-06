@@ -112,20 +112,20 @@ that is the only time it is looked at.
 
 One entry in the core's menu: "Analogizer" (it was "Analogizer video"; its values are the same, so a saved setting stays): Off, RGBS, RGsB, YPbPr, Y/C NTSC,
 Y/C PAL, RGBHV, and RGBHV with scanlines 25 %, 50 %, 75 % (the scanlines dim the odd lines, which only the doubled
-RGBHV picture has). The Pocket's own picture stays on.
+RGBHV picture has), and N64 SNAC (no picture: the real N64 controllers on the adapter's SNAC connector only). The Pocket's own picture stays on.
+Everything but Off also turns the SNAC controllers on ([below](#the-switch-the-menus-analogizer)).
 
 The Pocket's menu has two limits, both measured on a Pocket: it shows only 14 of the core's entries (a 15th loads without
 an error and is silently left out, so "Restart Game" has to stay the 14th, the last), and it refuses an `interact.json`
 whose lists have more than about 75 options in all ("Load error in 'interact'": 75 loads, 77 does not, 76 untried). The
-core's menu has 14 entries and 67 options: the two sticks share one "Stick dead zone" (steps of 10 %, 0 to 70 %) to make
+core's menu has 14 entries and 68 options: the two sticks share one "Stick dead zone" (steps of 10 %, 0 to 70 %) to make
 room for the video entry, and the Expansion Pak and the Gameshark codes share one list ("Expansion Pak/Gameshark") to make
-room for "Video settings" ([video_options.md](video_options.md)). The SNAC controllers have no entry: they are found by themselves
-([below](#the-snac-port-as-the-consoles-pif)).
+room for "Video settings" ([video_options.md](video_options.md)). The SNAC controllers have no entry of their own: they are a choice of "Analogizer".
 
 ## The SNAC port as the console's PIF
 
 The adapter's USB 3 connector is the N64 SNAC board's: four Joybus data lines, one for each controller port of a console. With
-an Analogizer in the slot the core talks Joybus to whatever is plugged into them, as a console's PIF does, and gives the game the
+the menu's "Analogizer" not Off the core talks Joybus to whatever is plugged into them, as a console's PIF does, and gives the game the
 devices' own answers. Nothing about a device is special-cased: the game's command bytes go out on the wire and the reply bytes
 (with the device's CRC) come back, so a controller, a Controller Pak, a Rumble Pak, a Transfer Pak with a real Game Boy
 cartridge, a mouse, a keyboard or a VRU work as far as the game's own code does.
@@ -137,7 +137,7 @@ Each channel of the game's 64-byte block is one of three kinds:
 
 | Channel | Kind | When |
 |---|---|---|
-| 0 to 3 | a real device | the SNAC scan has seen a device answer on that controller's port |
+| 0 to 3 | a real device | the menu's "Analogizer" is not Off and the SNAC scan has seen a device answer on that controller's port |
 | 0 to 3 | virtual | else: the Pocket's pad (or the dock's) and the virtual Controller Pak or Transfer Pak, as before |
 | 4 | the cartridge's EEPROM | always the runtime's |
 
@@ -173,7 +173,7 @@ the device's stop bit and the next command do not meet (255 us at most: a wire h
 `an_snac_pif` puts four ports behind it: a 128-byte buffer (one M10K block), the registers of [control.md](control.md#snac) and
 the scan. One transaction runs at a time; the selected port's wire is the master's and the other three are released. The scan
 (`CTRL.SCAN`) polls each port in turn, one every 2 ms, with the status command, into the scan table in the buffer
-(`64 + 4 n`); a transaction the runtime asks for meanwhile waits for the scan's one that is under way (170 us at most).
+(`64 + 4 n`: the three bytes, then their count); a transaction the runtime asks for meanwhile waits for the scan's one that is under way (170 us at most).
 
 ### The pins and the electrical rules
 
@@ -208,38 +208,41 @@ The pins are the same that the Game Boy cartridge and the video DAC arbitrate fo
 turned it on (`SNAC.CTRL.ON`, set by the runtime). `core_top.sv`'s existing assignments for those pins gain one more case, `sn_en`;
 there is still a single writer for each pin.
 
-### No switch: when the pins are the Joybus's
+### The switch: the menu's "Analogizer"
 
-There is no setting. The Joybus is on, and its scan runs, whenever the runtime has found that the adapter owns the cartridge port (the
-header test of "Who owns the port" above, made once at the core's start); a Game Boy cartridge in the slot keeps the port, the pins stay
-the cartridge's, `SNAC.CTRL.ON` is never set and the hardware also gates every pin with `an_own`. The menu's "Analogizer" entry only
-chooses the picture ("Off" included): the controllers work with any choice.
+The menu entry "Analogizer" (it was "Analogizer video"; the values it had are the same, so a saved setting stays) decides it: **Off** leaves
+the Joybus off, and every other choice turns it on -- a video mode (RGBS ... RGBHV, values 1 to 9) with its picture, or **N64 SNAC** (value 10),
+which is the controllers alone: the DAC's pins as with Off, no picture. That is the whole policy (`n64rt_snac_sync`, `INTERACT2` bits 3:0). The
+runtime looks at it at the core's start and at every run of the PIF's commands, so changing it while a game runs turns the controllers on or off at the
+game's next poll (turning them on costs one pause of 26 ms, for the scan's first sweeps, which the game's clock does not see); there is no need to
+restart. A game that has asked for its controllers before the change keeps what it found (a game looks for its controllers when it starts, as with the
+Controller 2 pak): Restart Game after choosing.
 
-How safe that is, point by point:
+**A Game Boy cartridge in the slot, with the menu not Off.** The pins are the cartridge's: bank 0 is its PHI, /WR, /RD and /CS, pin 30 its /RES,
+pin 31 its VIN. A low pulse there would be a write or a reset the cartridge's save would pay for, so the hardware does not let the menu decide
+the pins: the Joybus gets them (`sn_en` in `core_top.sv`) only when the adapter owns the port (`an_own`: the header test of "Who owns the port", made
+once at the core's start), and `an_own` is 0 with a Game Boy cartridge. So the menu turns the Joybus on in the runtime, which says so in its log, but
+nothing is driven, the scan does not run (the wires are read as idle, because bank 0 carries the cartridge's PHI clock, which would look like a device) and
+nobody is present: controllers 1 to 4 stay the Pocket's and the virtual ones. This keeps the existing arbitration as it was (the same signal gives
+the DAC's pins and the cartridge's their owner) and there is no pin that two drivers can fight on. The simulations check it: the bench reports any
+Joybus pin driven without the adapter owning the port, and a cartridge's PHI on the wires makes no device appear. To use real controllers, take
+the cartridge out (the owner is decided at the core's start).
 
-1. **Ownership.** The header test (Nintendo logo CRC and header checksum, read with only the address pins and /RD driven) is
-   decisive for a Game Boy cartridge. Anything else answers as "no cartridge": the Analogizer, an empty slot, or a cartridge of
-   another kind (which is also treated as the adapter's today, for the video). So the Joybus is also on with nothing in the slot, and
-   with a foreign cartridge, if one were left there.
-2. **Nothing connected, or an adapter without a SNAC board.** The scan is the hardware's; the runtime only reads `STAT` (a register
-   read) in each run of the PIF's commands, never waits for the wire except for a transaction on a port that is present, and the PIF's
-   timing does not change. A wire with nothing on it either floats high (the pull-up) and times out after 64 us, or reads low and the
-   master gives up after 255 us: either way no port becomes present, because a device needs **two answers in a row** of three
-   whole bytes (and goes after three misses), so noise does not make a channel real. The virtual channels are then exactly as
-   before. The cost is the scan's pulses on the pins (below), and 26 ms at the core's start while the first sweeps run.
+How safe the rest is:
+
+1. **Default.** Off: nothing is driven and nothing is scanned, as before this feature. The default of the entry is Off.
+2. **Nothing connected, or an adapter without a SNAC board, with the menu on.** The scan is the hardware's; the runtime only reads `STAT`
+   in each run of the PIF's commands and waits for the wire only for a transaction on a port that is present, so the PIF's timing does not change. A
+   wire with nothing on it either floats high and times out after 64 us, or reads low and the master gives up after 255 us: no port becomes
+   present, because a device needs **two answers in a row** of three whole bytes (and goes after three misses). The virtual channels are as before.
 3. **What the pins see.** Only low pulses (never a 1: ports 1 and 2 are open drain; on ports 3 and 4 the shared bank 0 drives the
    other lines 1, the level the pull-ups give, for the pulse). A scan is one status command (`0x00`): 8 cells of 3 us low in 4 us and a stop
    bit, about 36 us of the wire (about 150 us with a device's 3-byte reply), one port every 2 ms, so each port every 8 ms and the wire
-   busy at most 7 % of the time. Nothing is sent while the pins are the cartridge's.
-4. **Cold start.** The runtime turns the Joybus on in `n64rt_io_init`, after the cartridge slot's owner is known and before the game
-   runs, and waits 26 ms once so that the first sweeps have told who is there. It also follows a change of owner (there is none while a
-   game runs).
+   busy at most 7 % of the time.
 
 The risk this does not remove: a SNAC harness for another kind of pad (NES, SNES, DB15, plugged into the same connector for another
 core) has push-pull outputs on some of these lines, and a low pulse against one of them is a short of a few microseconds every 8 ms
-through the translator's output. That harness is not usable with this core, so nobody should have it on; if that matters, the
-minimal alternative is one more value of the "Analogizer" entry that keeps the Joybus off (the menu's option limit has room for
-it: 67 options, 75 allowed), which this implementation does not add.
+through the translator's output. That harness is not usable with this core, so it should not be connected while the menu is not Off.
 
 ### What it takes and what it does not
 
@@ -263,6 +266,7 @@ of every command on every port, replies, pak reads and writes with CRC, an absen
 reply, a short reply, a device that talks on, a noisy line, a wire held low, a flaky contact that never becomes present, the scan with a
 device coming and going, and the pins' rules (never a 1 against a device, the driver and translator order).
 `sim/mips_soc/snac_check.sh` (the whole SoC with the runtime): `lang/n64rt/test/snac_game.c` drives the PIF with the SI's DMA as libultra does
-(status, buttons, pak blocks with their CRC, the EEPROM) against the same device models on the four wires, in four runs: nothing on the wires,
-devices on ports 1, 2 and 4, a device on port 2 only (the Pocket's pad on controller 1 with a virtual Controller Pak), and a Game Boy cartridge
-in the slot (the Joybus never comes on).
+(status, buttons, pak blocks with their CRC, the EEPROM) against the same device models on the four wires, in five runs: the menu Off with devices
+on the wires (nothing is seen), N64 SNAC with devices on ports 1, 2 and 4, RGBS with a device on port 2 only (the Pocket's pad on controller 1 with a
+virtual Controller Pak), a Game Boy cartridge in the slot with the menu on (the pins stay the cartridge's, no device is seen), and the menu changed from
+Off to N64 SNAC while the game runs.

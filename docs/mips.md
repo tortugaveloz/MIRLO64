@@ -905,7 +905,7 @@ itself. With another CIC the block is left as it was. The commands:
 A command nothing answers gets the no-response bit. Controller 1 is always there; controllers 2 to 4 are there while the
 dock reports a pad, checked at every command, so a pad can be plugged in or removed while a game runs.
 
-With an Analogizer in the slot (no setting: the scan finds what is plugged in) a third kind of channel joins these two: where the SNAC
+With the menu's "Analogizer" not Off (and the adapter, not a Game Boy cartridge, in the slot) a third kind of channel joins these two: where the SNAC
 port's scan has seen a device on a controller's port, `pif_run` forwards the game's own command bytes to it (the `SNAC`
 block, `n64rt_snac.c`) and writes its raw reply, with the device's own CRC byte, into the block; the no-response bit is the
 wire's timeout, bit 6 a reply that was short. A channel with a device is the real one's; a channel without keeps the
