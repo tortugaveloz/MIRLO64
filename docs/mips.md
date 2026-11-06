@@ -910,8 +910,7 @@ port's scan has seen a device on a controller's port, `pif_run` forwards the gam
 block, `n64rt_snac.c`) and writes its raw reply, with the device's own CRC byte, into the block; the no-response bit is the
 wire's timeout, bit 6 a reply that was short. A channel with a device is the real one's; a channel without keeps the
 Pocket's pad and the virtual paks as above (and the EEPROM stays the runtime's). The console's time for the commands that
-`SIDONE` carries is the figures above less the time the runtime spent on the wire, which the game has been held for
-already ([analogizer.md](analogizer.md#the-snac-port-as-the-consoles-pif)).
+`SIDONE` carries is the figures above, or the wire's own time if that is longer ([analogizer.md](analogizer.md#the-snac-port-as-the-consoles-pif)).
 
 ### SP and DPC
 

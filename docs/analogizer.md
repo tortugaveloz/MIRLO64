@@ -153,12 +153,13 @@ is the wire's timeout: no edge within `TFIRST` (64 us) after the console's stop 
 when fewer bytes than the game asked for came, or the wire never went quiet. A device that sends more than the game asked for
 is not noticed (the extra bytes are waited out, not reported).
 
-**Timing.** The game is held no longer than the wire: `pif_run` busy-waits for each transaction (a controller read is about
-0.2 ms, a pak block write 36 bytes x 32 us = 1.3 ms). The console's time for the commands, which `MONITOR.SIDONE` hands the SI so that the
-game's read of the block ends when it would on a console, is for each real command the figure of a virtual one (`pif_run`'s, fitted to the console) or,
-if the device is slower than that, 10,500 RCP cycles plus the wire's own time (the clocks the runtime waited), and from the total the
-time the runtime has waited already is taken off, since the game was held for it. A block of four controller reads ends about when the console's does (1.5 ms), and a slow
-device holds it as long as it holds the wire.
+**Timing.** The runtime busy-waits for each transaction (a controller read is about 0.2 ms, a pak block write 36 bytes x 32 us = 1.3 ms),
+so the game's thread is held for the wire's time, no longer. The monitor level does not advance the game's Count, so the game does not see that
+wait itself: `MONITOR.SIDONE` carries the console's whole time for the commands, which is for each real command the figure of a virtual
+one (`pif_run`'s, fitted to the console) or, if the device is slower than that, 10,500 RCP cycles plus the wire's own time. A block of four
+controller reads then ends about when the console's does (1.5 ms by the game's clock), and a slow device holds it as long as it holds the wire.
+What the game does not have, in real time, is the CPU during the wait (about 0.5 ms for a frame's four controllers, 3 % of a frame); the
+hardware (video, audio) goes on.
 
 ### The hardware
 
