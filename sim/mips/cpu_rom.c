@@ -224,7 +224,7 @@ static void sec_overflow64(void)
 #undef OVF
 #undef NOV
 }
-/* ---- dmfc0 of LLAddr and TagLo is zero-extended (32 bits); mfc0 gives the word */
+/* ---- dmfc0 of LLAddr, TagLo and Count is zero-extended (32 bits); mfc0 gives the word (nemu64-test: Count) */
 #define DMFC0(r, hi, lo) __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tdmfc0 $8, $" #r "\n\tnop\n\tnop\n\tdsra32 %0, $8, 0\n\tsll %1, $8, 0\n\t.set pop" : "=r"(hi), "=r"(lo) :: "$8")
 static void sec_dmfc0(void)
 {
@@ -238,6 +238,10 @@ static void sec_dmfc0(void)
     u32 w;
     __asm__ volatile("mfc0 %0, $28\n\tnop\n\tnop" : "=r"(w));
     check(0x0803, w, 0x89ABCDEFu);                                     /* (mfc0: the word) */
+    MTC0(9, 0xFFFF0000u);
+    DMFC0(9, hi, lo);
+    check(0x0804, hi, 0);
+    check(0x0805, lo >> 12, 0xFFFF0u);                                 /* (Count has run on a few hundred clocks at most) */
     MTC0(12, MFC0(12));
 }
 /* ---- the 64-bit registers: EPC, ErrorEPC and Context keep all 64 bits of a dmtc0 (Context's low word has its mask); an mtc0 writes the sign extension */

@@ -231,6 +231,8 @@ nothing. (A conformance suite runs three of the undefined ones, an emulator's de
 handlers, and passes on a console; no manual was found that says so.) `cfc0`, `ctc0` and `bc0` are decoded and do nothing; the other `rs`
 values of COP0 are Reserved Instructions.
 
+`dmfc0` of Count, as of LLAddr and TagLo, is zero-extended (nemu64-test: Count).
+
 **Cycles of the integer side**, against the console's, from `sim/mips/fpu_cycles.py` (its blocks of `mult` ... `ddiv`, loads and branches) and the
 console model's figures (`sim/mips_soc/con_model.h`: `mult` 5, `dmult` 8, `div` 37, `ddiv` 69 cycles during which the pipeline waits; a load's use 1).
 The VR4300 User's Manual says of its branch (Chapter 2, "Branch Delay") that the pipeline has a delay of one cycle, the delay slot: a taken

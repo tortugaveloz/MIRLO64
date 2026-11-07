@@ -345,7 +345,7 @@ typedef struct packed {
     x_t          x64;
     logic        b_imm, imm_zero;
     logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
-    logic        zx0;                       // dmfc0 of LLAddr or TagLo: a 32-bit value, zero-extended (a wide result)
+    logic        zx0;                       // dmfc0 of LLAddr, TagLo or Count: a 32-bit value, zero-extended (a wide result)
     logic        ovf;                       // add, addi, sub: Integer Overflow on a 32-bit signed overflow
     logic        ovf64;                     // dadd, daddi, dsub: the same on the 64-bit result (the upper word's sum, at M)
     logic        cop2;                      // a COP2 instruction: Coprocessor Unusable without Status.CU2, and nothing with it
@@ -468,7 +468,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     end
     6'h10: begin
         // (dmfc0, dmtc0: the registers are 32 bits)
-        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd4 || i[15:11] == 5'd14 || i[15:11] == 5'd17 || i[15:11] == 5'd20 || i[15:11] == 5'd28 || i[15:11] == 5'd30); end
+        if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd4 || i[15:11] == 5'd9 || i[15:11] == 5'd14 || i[15:11] == 5'd17 || i[15:11] == 5'd20 || i[15:11] == 5'd28 || i[15:11] == 5'd30); end
         else if (rs == 5'h04 || (W64 && rs == 5'h05)) begin c.mtc0 = 1; c.use_rt = 1; end
         else if (rs == 5'h02 || rs == 5'h06 || rs == 5'h08) begin end   // cfc0, ctc0, bc0: decoded, no operation (nemu64-test: 655)
         else if (rs[4]) begin                        // a CO instruction: the function selects, whatever its other fields (nemu64-test: 653, 658-662)

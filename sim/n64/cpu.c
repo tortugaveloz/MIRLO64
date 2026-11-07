@@ -566,10 +566,10 @@ void n64_cpu_step(n64_t *n)
             uint32_t x = c->cop0[rdi];
             uint32_t b31 = (c->cop0[C0_CONTEXT] >> 22) & 1u;                          /* the last bad address's bit 31, from Context's BadVPN2 */
             if (rdi == C0_XCONTEXT) x = (b31 << 31) | (b31 ? 0x7F800000u : 0u) | (c->cop0[C0_CONTEXT] & 0x007FFFF0u);   /* XContext: R, BadVPN2 (VA[39:13]) */
-            if (fmt == 0x01) {                                                       /* dmfc0: the 64-bit registers whole, LLAddr and TagLo zero-extended, the rest sign-extended */
+            if (fmt == 0x01) {                                                       /* dmfc0: the 64-bit registers whole, LLAddr, TagLo and Count zero-extended, the rest sign-extended */
                 uint32_t hi = (rdi == C0_CONTEXT || rdi == C0_EPC || rdi == C0_ERROREPC) ? c->cop0h[rdi]
                             : rdi == C0_XCONTEXT ? ((c->cop0h[C0_XCONTEXT] & 0xFFFFFFFEu) | b31)
-                            : (rdi == C0_LLADDR || rdi == C0_TAGLO) ? 0u : (x & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+                            : (rdi == C0_LLADDR || rdi == C0_TAGLO || rdi == C0_COUNT) ? 0u : (x & 0x80000000u) ? 0xFFFFFFFFu : 0u;
                 WR(rti, ((uint64_t)hi << 32) | x);
             } else WR(rti, SX(x));
         } else if (fmt == 0x04 || fmt == 0x05) {                                    /* mtc0, dmtc0 */
