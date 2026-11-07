@@ -238,6 +238,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4; i++) { top->clk = 1; eval_comb(); top->clk = 0; eval_comb(); }
     top->rst = 0;
 
+    const bool nolock = getenv("TB_NOLOCK") != nullptr;
     uint64_t last_progress = 0, last_frame = 0;
     int bad = 0;
     uint32_t verdict = 0;
@@ -275,6 +276,9 @@ int main(int argc, char **argv)
         }
 #endif
 
+        if (nolock) {                                   // TB_NOLOCK=1: the RTL alone (a ROM that checks itself, for what the model does not have: caches)
+            if (ret) { n64_advance(&A, 1); retired++; }
+        } else
         if (ret) {
             if (B.cpu.pc != tpc) { bad = check_fail("pc"); fprintf(stderr, "  RTL retired %08x %08x\n", tpc, tinsn); break; }
             uint32_t mi; n64_read(&B, B.cpu.pc, 4, &mi);
@@ -314,7 +318,7 @@ int main(int argc, char **argv)
                 break;
             }
         }
-        if (exc) {
+        if (exc && !nolock) {
             if (B.cpu.pc != epc) {
                 char w[128];
                 snprintf(w, sizeof w, "exception %u at %08x, model at %08x", ecode, epc, B.cpu.pc);
