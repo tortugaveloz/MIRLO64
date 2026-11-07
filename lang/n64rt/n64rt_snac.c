@@ -43,18 +43,14 @@ void n64rt_snac_sync(void)
     const int want = (i2 & AN_MENU) != 0;
     if (want != s_on) {
         s_on = (u8)want;
-        snac_ctrl_write(want ? 3u | TFIRST_US << 8 : 0u);
-        if (want) wait_us(SCAN_SWEEP_US);        /* (the first sweep of the scan: who is there is known before the game asks) */
-        else s_pres = 0;
+        snac_ctrl_write(want ? 1u | TFIRST_US << 8 : 0u);     /* DIAGNOSTIC: the Joybus on, the hardware scan OFF */
+        if (!want) s_pres = 0;
         n64rt_log("n64rt: SNAC: the Joybus is %s%s\n", want ? "on" : "off", want && !(i2 & AN_OWN) ? " (the pins are a cartridge's: nobody is scanned)" : "");
     }
     if (!s_on) return;
-    const u32 st = snac_stat_read();
-    s_pres = (u8)(st & 15u);
-    if (st & 0xF0u) {
-        n64rt_log("n64rt: SNAC: controller port(s) %x changed, present %x\n", (unsigned)(st >> 4) & 15u, (unsigned)s_pres);
-        snac_stat_write(st & 0xF0u);             /* (write 1s: clears them) */
-    }
+    /* DIAGNOSTIC: no scan -- every port counts as there while the adapter owns the cartridge port, so the game's own commands are the only traffic on
+     * the wires; a port nothing answers on gets the wire's no-response, as an empty port of a console. */
+    s_pres = (i2 & AN_OWN) ? 15u : 0u;
 }
 
 int n64rt_snac_present(int ch) { return s_on && ch >= 0 && ch < 4 && ((s_pres >> ch) & 1u); }
