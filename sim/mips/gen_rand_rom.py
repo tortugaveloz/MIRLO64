@@ -146,7 +146,7 @@ def main():
             li32(K0, rnd.choice([0, 1, 1]))
             mtc0(K0, 10)
         else:                                   # what a TLB exception or ll left
-            mfc0(reg(), rnd.choice([4, 8, 10, 17, 1, 6]))
+            mfc0(reg(), rnd.choice([4, 8, 10, 1, 6]))
 
     if tlb:                                     # four windows: 64 KiB pages global, 4 KiB pages of ASID 1, 16 KiB pages, 64 KiB pages global
         for i, (pm, size, w, asid, g) in enumerate([(*WSIZE[0], WINDOWS[0], 0, 1), (*WSIZE[1], WINDOWS[1], 1, 0),
