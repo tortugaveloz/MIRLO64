@@ -470,17 +470,18 @@ function automatic ctl_t decode(input logic [31:0] i);
         // (dmfc0, dmtc0: the registers are 32 bits)
         if (rs == 5'h00 || (W64 && rs == 5'h01)) begin c.mfc0 = 1; c.wr = 1; c.rd = rt; c.late = 1; c.zx0 = rs[0] && (i[15:11] == 5'd4 || i[15:11] == 5'd14 || i[15:11] == 5'd17 || i[15:11] == 5'd20 || i[15:11] == 5'd28 || i[15:11] == 5'd30); end
         else if (rs == 5'h04 || (W64 && rs == 5'h05)) begin c.mtc0 = 1; c.use_rt = 1; end
-        else if (rs[4] && fn[5]) begin end           // a CO instruction of an undefined function 0x20 - 0x3F does nothing, whatever its other fields
-        else if (rs == 5'h10) begin
+        else if (rs == 5'h02 || rs == 5'h06 || rs == 5'h08) begin end   // cfc0, ctc0, bc0: decoded, no operation (nemu64-test: 655)
+        else if (rs[4]) begin                        // a CO instruction: the function selects, whatever its other fields (nemu64-test: 653, 658-662)
             case (fn)
             6'h01: c.tlbr = 1;  6'h02: c.tlbwi = 1; 6'h06: c.tlbwr = 1; 6'h08: c.tlbp = 1;
             6'h18: c.eret = 1;
-            default: c.ri = 1;
+            6'h10: c.ri = 1;                         // (the R3000's RFE slot)
+            default: ;                               // the other undefined functions do nothing
             endcase
         end else c.ri = 1;
     end
     6'h11: begin
-        if (rs == 5'h08) begin c.br = rt[0] ? B_C1T : B_C1F; c.likely = rt[1]; end
+        if (rs == 5'h08) begin if (|rt[4:2]) c.ri = 1; else begin c.br = rt[0] ? B_C1T : B_C1F; c.likely = rt[1]; end end   // (bc1: only rt 0 - 3 are conditions)
         else if (!fpu_implements(i)) c.ri = 1;                            // dmfc1, dmtc1, .l, ...
         else begin
             c.cop1 = 1;

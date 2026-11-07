@@ -225,9 +225,11 @@ interlocked: `mult(u)` is one product of the DSP block, in HI and LO two cycles 
 times that; the dividend's magnitude is what the multiplier's registers take from M). HI and LO keep the
 upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is made as `mfhi` / `mflo` read them; which words of HI and LO are 32-bit values is a flag set as they are written.
 
-A `COP0` instruction with the CO bit set and an undefined function, 0x20 - 0x3F (whatever its other fields), does nothing; the undefined
-functions below 0x20 are Reserved Instructions. (A conformance suite runs three of them, an emulator's detection and log calls, before it
-installs its exception handlers, and passes on a console; no manual was found that says so.)
+A `COP0` instruction with the CO bit set is decoded by its function alone, whatever its other fields (nemu64-test, `sim/mips/reserved_rom.c`):
+`tlbr`, `tlbwi`, `tlbwr`, `tlbp` and `eret` execute, function 0x10 (the R3000's RFE) is a Reserved Instruction, and every other function does
+nothing. (A conformance suite runs three of the undefined ones, an emulator's detection and log calls, before it installs its exception
+handlers, and passes on a console; no manual was found that says so.) `cfc0`, `ctc0` and `bc0` are decoded and do nothing; the other `rs`
+values of COP0 are Reserved Instructions.
 
 **Cycles of the integer side**, against the console's, from `sim/mips/fpu_cycles.py` (its blocks of `mult` ... `ddiv`, loads and branches) and the
 console model's figures (`sim/mips_soc/con_model.h`: `mult` 5, `dmult` 8, `div` 37, `ddiv` 69 cycles during which the pipeline waits; a load's use 1).

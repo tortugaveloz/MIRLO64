@@ -105,8 +105,9 @@ static void sec_cop0_masks(void)
     check(0x0412, MFC0(12), st);
 }
 
-/* ---- COP0 CO instructions of an undefined function 0x20 - 0x3F do nothing (no Reserved Instruction), whatever their other fields: a
- * test suite runs three of them, an emulator's detection and log calls, before it has a handler. The defined ones' neighbours stay RI. */
+/* ---- COP0 CO instructions of an undefined function do nothing (no Reserved Instruction), whatever their other fields: a
+ * test suite runs three of them, an emulator's detection and log calls, before it has a handler. Only function 0x10 (the R3000's RFE)
+ * is a Reserved Instruction (nemu64-test: 653, 662, 661). The function alone selects tlbr, tlbp and eret too, with any other bits. */
 static void sec_cop0_co(void)
 {
     u32 r8 = 0x12345678u;
@@ -115,7 +116,14 @@ static void sec_cop0_co(void)
                      ".word 0x42000020\n\t.word 0x4200003f\n\t.word 0x43f0ffe5\n\tmove %0, $8\n\t.set at\n\t.set reorder" : "+r"(r8) :: "$8", "memory");
     check(0x0601, h_count, 0);
     check(0x0602, r8, 0x12345678);
-    __asm__ volatile(".word 0x42000007" ::: "memory");                /* function 7: a Reserved Instruction */
+    __asm__ volatile(".word 0x42000007\n\t.word 0x4200003f\n\t.word 0x42000003\n\t.word 0x4200001f" ::: "memory");    /* functions 7, 3, 0x1F: no operation */
+    check(0x0605, h_count, 0);
+    __asm__ volatile(".word 0x40420000\n\t.word 0x40C20000\n\t.word 0x41000000\n\tnop" ::: "memory");   /* cfc0, ctc0, bc0f: decoded, no operation */
+    check(0x0606, h_count, 0);
+    __asm__ volatile(".word 0x41C00000" ::: "memory");              /* ... rs 0xE is no COP0 instruction: Reserved */
+    check(0x0607, h_count, 1);
+    h_count = 0;
+    __asm__ volatile(".word 0x42000010" ::: "memory");                /* function 0x10: a Reserved Instruction */
     check(0x0603, h_count, 1);
     check(0x0604, h_cause & 0x8000007C, 0x28);
 }

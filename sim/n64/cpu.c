@@ -520,7 +520,7 @@ void n64_cpu_step(n64_t *n)
         case 0x3C: OP64(N64_OP64_SHIFT); WR(rdi, rt << (sa + 32)); break;             /* dsll32 */
         case 0x3E: OP64(N64_OP64_SHIFT); WR(rdi, rt >> (sa + 32)); break;             /* dsrl32 */
         case 0x3F: OP64(N64_OP64_SHIFT); WR(rdi, (uint64_t)((int64_t)rt >> (sa + 32))); break;   /* dsra32 */
-        default: N64_FATAL(n, "unimplemented SPECIAL %02x at %08x (%08x)", f, pc, insn);
+        default: exception(n, pc, dly, EXC_RI, 0); break;                             /* (the reserved SPECIAL functions: Reserved Instruction) */
         }
         break;
     }
@@ -541,7 +541,7 @@ void n64_cpu_step(n64_t *n)
         case 0x11: r[31] = SX(pc + 8); BRANCH(s >= 0, btarget); break;
         case 0x12: r[31] = SX(pc + 8); BRANCH_L(s < 0, btarget); break;
         case 0x13: r[31] = SX(pc + 8); BRANCH_L(s >= 0, btarget); break;
-        default: N64_FATAL(n, "unimplemented REGIMM %02x at %08x", rti, pc);
+        default: exception(n, pc, dly, EXC_RI, 0); break;                             /* (the reserved REGIMM codes: Reserved Instruction) */
         }
         break;
     }
@@ -597,7 +597,7 @@ void n64_cpu_step(n64_t *n)
                 }
             }
             }
-        } else if (fmt == 0x10) {                                                   /* CO */
+        } else if (fmt & 0x10) {                                                    /* CO (the function selects: the other fields are not looked at) */
             switch (insn & 63) {
             case 0x01: {                                                            /* tlbr */
                 uint32_t i = c->cop0[C0_INDEX] & 31u;
@@ -641,15 +641,14 @@ void n64_cpu_step(n64_t *n)
                 c->next_pc = c->pc + 4;
                 c->ll_bit = 0;
                 break;
-            default: if (insn & 0x20) break;                                        /* (functions 0x20 - 0x3F: no operation, below) */
-                exception(n, pc, dly, EXC_RI, 0);                                   /* the others that are not defined: Reserved Instruction */
-                break;
+            case 0x10: exception(n, pc, dly, EXC_RI, 0); break;                     /* (function 0x10, the R3000's RFE: Reserved Instruction) */
+            default: break;                                                         /* the other undefined functions do nothing (the conformance suite runs
+                                                                                     * three of them, an emulator's detection and log calls, before it
+                                                                                     * installs its exception handlers) */
             }
-        } else if ((fmt & 0x10) && (insn & 0x20)) {
-            /* a CO instruction of an undefined function 0x20 - 0x3F does nothing (the other fields are not looked at): the conformance
-             * suite runs three of them, an emulator's detection and log calls, before it installs its exception handlers */
+        } else if (fmt == 0x02 || fmt == 0x06 || fmt == 0x08) {                     /* cfc0, ctc0, bc0: decoded, no operation */
         } else {
-            N64_FATAL(n, "unimplemented COP0 fmt %02x at %08x", fmt, pc);
+            exception(n, pc, dly, EXC_RI, 0);                                       /* (the other rs values of COP0: Reserved Instruction) */
         }
         break;
     }
@@ -662,6 +661,7 @@ void n64_cpu_step(n64_t *n)
          * mid-calculation (2026-09-29) */
         if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }
         if (RS(insn) == 0x08) {                                                     /* bc1 */
+            if (RT(insn) > 3) { exception(n, pc, dly, EXC_RI, 0); break; }          /* (only rt 0 - 3 are conditions) */
             int t = (c->fcr31 >> 23) & 1;
             switch (RT(insn) & 3) {
             case 0: BRANCH(!t, btarget); break;
@@ -672,12 +672,24 @@ void n64_cpu_step(n64_t *n)
             break;
         }
         uint64_t g;
+        {   /* (the encodings the FPU has, as mips_core's fpu_implements: the others are a Reserved Instruction for the core) */
+            const uint32_t f = insn & 63, fm = RS(insn);
+            int ok;
+            switch (fm) {
+            case 0x00: case 0x01: case 0x02: case 0x04: case 0x05: case 0x06: ok = 1; break;
+            case 0x10: case 0x11: ok = f <= 0x0F || f == 0x24 || f == 0x25 || f >= 0x30 || (f == 0x20 && fm == 0x11) || (f == 0x21 && fm == 0x10); break;
+            case 0x14: case 0x15: ok = f == 0x20 || f == 0x21; break;
+            default: ok = 0; break;
+            }
+            if (!ok) { exception(n, pc, dly, EXC_RI, 0); break; }
+        }
         int w = n64_cop1_exec(c, insn, rt, &g);
         if (w < 0) N64_FATAL(n, "unimplemented COP1 %08x at %08x", insn, pc);
         else if (w) WR(rti, g);
         break;
     }
-    case 0x12: case 0x13: exception(n, pc, dly, EXC_CPU, (int)(op & 3)); break;   /* COP2/3 */
+    case 0x12: exception(n, pc, dly, EXC_CPU, 2); break;                            /* COP2 (unusable) */
+    case 0x13: exception(n, pc, dly, EXC_RI, 0); break;                             /* COP3 does not exist: Reserved Instruction, whatever CU3 */
     case 0x14: BRANCH_L(rs == rt, btarget); break;
     case 0x15: BRANCH_L(rs != rt, btarget); break;
     case 0x16: BRANCH_L((int64_t)rs <= 0, btarget); break;
@@ -752,7 +764,7 @@ void n64_cpu_step(n64_t *n)
     case 0x3D: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (sdc1: CpU, see COP1) */
         store(n, pc, dly, a, 8, (uint64_t)fl_get(c, rti)); break;           /* sdc1 */
     case 0x3F: OP64(N64_OP64_MEM); store(n, pc, dly, a, 8, rt); break;             /* sd */
-    default: N64_FATAL(n, "unimplemented opcode %02x at %08x (%08x)", op, pc, insn);
+    default: exception(n, pc, dly, EXC_RI, 0); break;                               /* the reserved opcodes: Reserved Instruction */
     }
     r[0] = 0;
 #undef WR
