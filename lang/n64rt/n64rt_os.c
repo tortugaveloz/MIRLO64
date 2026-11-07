@@ -662,7 +662,7 @@ static int rt_code(u32 pc) { return (pc >> 28) == 0x4u; }
 static int insn_at(u32 pc, u32 *insn)
 {
     u32 pa;
-    if ((pc >> 28) == 0x8u || rt_code(pc)) { *insn = *(volatile u32 *)(uintptr_t)pc; return 1; }
+    if ((pc >> 28) == 0x8u || rt_code(pc) || (pc >> 23) == 0x140u) { *insn = *(volatile u32 *)(uintptr_t)pc; return 1; }   /* (KSEG1's first 8 MiB: the RDRAM, uncached) */
     if (!n64rt_tlb_phys(pc, &pa)) return 0;
     *insn = *(volatile u32 *)(uintptr_t)(0x80000000u | (pa & ~3u));
     return 1;
@@ -1566,6 +1566,54 @@ static void exc_deliver(n64rt_ctx_t *x, u32 code, u32 bd)
     x->status |= 2u;                                    /* (EXL; the eret to the vector clears ERL) */
     x->epc = 0x80000180u;
 }
+/* A trap instruction (tge, tgeu, tlt, tltu, teq, tne, and the immediate ones) whose operand is a 64-bit value that is not the sign
+ * extension of its low word: the core does the 32-bit compare itself, a wider one it sends here (a Reserved Instruction for the monitor
+ * level), done on all 64 bits. Taken: the game's own Trap exception (code 13); not taken: the game goes on past it. */
+static int trap_insn(n64rt_ctx_t *x, u32 bd)
+{
+    const u32 pc = x->epc + (bd ? 4u : 0u);
+    u32 next = pc + 4u, insn;
+    if (!insn_at(pc, &insn)) return 0;
+    const u32 op = insn >> 26, rs = (insn >> 21) & 31u, rt = (insn >> 16) & 31u, fn = insn & 63u;
+    const s64 a = (s64)g64(x, rs);
+    s64 b;
+    int take;
+    if (op == 0u && fn >= 0x30u && fn <= 0x36u && fn != 0x35u) {
+        b = (s64)g64(x, rt);
+        switch (fn) {
+        case 0x30: take = a >= b; break;                                   /* tge */
+        case 0x31: take = (u64)a >= (u64)b; break;                         /* tgeu */
+        case 0x32: take = a < b; break;                                    /* tlt */
+        case 0x33: take = (u64)a < (u64)b; break;                          /* tltu */
+        case 0x34: take = a == b; break;                                   /* teq */
+        default: take = a != b; break;                                     /* tne */
+        }
+    } else if (op == 1u && ((rt >= 8u && rt <= 0xCu) || rt == 0xEu)) {
+        b = (s64)(s16)insn;
+        switch (rt) {
+        case 8: take = a >= b; break;                                      /* tgei */
+        case 9: take = (u64)a >= (u64)b; break;                            /* tgeiu */
+        case 10: take = a < b; break;                                      /* tlti */
+        case 11: take = (u64)a < (u64)b; break;                            /* tltiu */
+        case 12: take = a == b; break;                                     /* teqi */
+        default: take = a != b; break;                                     /* tnei */
+        }
+    } else return 0;
+    if (take) { exc_deliver(x, 13u, bd); return 1; }
+    if (bd && !branch_next(x, x->epc, &next)) return 0;
+    x->epc = next;
+    return 1;
+}
+/* A COP1 encoding the FPU does not have (the core makes it a Reserved Instruction; COP1 is usable, or Coprocessor Unusable came first): on the
+ * console a Floating-Point Exception, FCSR's cause bits cleared but Unimplemented Operation (bit 17). FCSR is the context's, put back on the way out. */
+static int cop1_unimpl(n64rt_ctx_t *x, u32 bd)
+{
+    u32 insn;
+    if (!insn_at(x->epc + (bd ? 4u : 0u), &insn) || (insn >> 26) != 0x11u) return 0;
+    x->fcsr = (x->fcsr & ~(0x3Fu << 12)) | (1u << 17);      /* (the console clears the other causes: only this one is left) */
+    exc_deliver(x, 15u, bd);
+    return 1;
+}
 void n64rt_mon_exception(void)
 {
     n64rt_ctx_t *x = &n64rt_mon_ctx;
@@ -1591,6 +1639,10 @@ void n64rt_mon_exception(void)
         /* the game's own tlbwi / tlbwr / tlbr / tlbp */
     } else if (code == 10 && !bd && own_tlb_call(x)) {
         /* osMapTLB / osUnmapTLB / osUnmapTLBAll, the runtime's (n64rt_boot.c: a core that does not take the TLB instructions) */
+    } else if (code == 10 && trap_insn(x, bd)) {
+        /* a trap on a 64-bit operand */
+    } else if (code == 10 && cop1_unimpl(x, bd)) {
+        /* an FPU encoding the console raises Unimplemented Operation for */
     } else if (code == 10 || code == 4 || code == 5) {
         exc_deliver(x, code, bd);
     } else {

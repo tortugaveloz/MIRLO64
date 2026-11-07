@@ -336,8 +336,8 @@ The bitstream and `n64rt.sys` are a pair, and the shipped CPU has every level. C
 bits 31 (ALU), 30 (SH), 29 (MD), 28 (DIV) and 27 (UA); the runtime checks at start-up that all five are set and, if one
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
-Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
-runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand. `lld` and `scd` are the CPU's, with `ll` and `sc`'s link bit.
+Reserved Instruction. A trap instruction (`teq`, `tge` ...) on a 64-bit operand that is not the sign extension of its low word is one:
+the monitor (`trap_insn`) does the compare on all 64 bits and delivers the game's Trap exception, or goes on past it. `lld` and `scd` are the CPU's, with `ll` and `sc`'s link bit.
 
 ### The FPU
 
@@ -630,7 +630,7 @@ with seven of the game's registers saved in the context for the work.
 | 31, the monitor's interrupt | `n64rt_rcp_events`: the hardware's wake-ups (below) |
 | 4, 5 (address error) | `emulate_hw`: the game's access to an RCP register, or to the cartridge, by a pointer or through a page of the TLB |
 | 1, 2, 3 (TLB; the tables' CPU only) | `tlb_fault`: the page entered in the tables, or the exception delivered to the game |
-| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction (the tables' CPU only) |
+| 10 (Reserved Instruction) | `tlb_insn`: the game's TLB instruction (the tables' CPU only); `trap_insn`: a trap on a 64-bit operand; `cop1_unimpl`: a COP1 encoding the FPU does not have, delivered as the console's Floating-Point Exception (FCSR bit 17) |
 
 Anything else stops the game with a message on the UART.
 
