@@ -25,6 +25,8 @@
 
 static u8  s_probed, s_hw, s_on, s_pres;
 static u64 s_wait;                             /* SoC clocks spent in snac_xfer since n64rt_snac_wait_take */
+static u64 s_ok[4];                            /* when a transaction on each port was last answered */
+#define HOLD_MS 300u                           /* a port the scan lost still counts as there this long after an answered transaction */
 
 static u64 now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
 static void wait_us(u32 us) { const u64 e = now() + (u64)us * (CONFIG_CLOCK_FREQUENCY / 1000000u); while (now() < e) { } }
@@ -51,6 +53,13 @@ void n64rt_snac_sync(void)
     if (!s_on) return;
     const u32 st = snac_stat_read();
     s_pres = (u8)(st & 15u);
+    /* The scan's hysteresis (three misses in a row) is shorter than a frame: one missed status command would send the game's poll to the
+     * virtual channel -- the Pocket's pad, with no input and a pak of its own -- for that poll. A port whose last real transaction was
+     * answered a moment ago is still there: if it has gone, its transactions time out and the game sees the wire's "no response". */
+    {
+        const u64 t = now(), hold = (u64)HOLD_MS * (CONFIG_CLOCK_FREQUENCY / 1000u);
+        for (int c = 0; c < 4; c++) if (!((s_pres >> c) & 1u) && s_ok[c] && t - s_ok[c] < hold) s_pres |= (u8)(1u << c);
+    }
     if (st & 0xF0u) {
         n64rt_log("n64rt: SNAC: controller port(s) %x changed, present %x\n", (unsigned)(st >> 4) & 15u, (unsigned)s_pres);
         snac_stat_write(st & 0xF0u);             /* (write 1s: clears them) */
@@ -81,6 +90,7 @@ int n64rt_snac_xfer(int ch, const u8 *tx, u32 txlen, u8 *rx, u32 rxlen, u32 *got
     snac_ptr_write(0);
     for (u32 i = 0; i < n; i++) rx[i] = (u8)snac_data_read();
     *got = n;
+    if (n && !(r & 4) && ch >= 0 && ch < 4) s_ok[ch] = now();
     s_wait += now() - t0;
     return r;
 }
