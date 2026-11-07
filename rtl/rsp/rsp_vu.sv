@@ -746,7 +746,8 @@ wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || (mtc2 && NP == 1)) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free)
                   : NP == 2 ? idle : 1'b1)
-              && !(m_stall && ls_go);                       // (a load or store waits for the port)
+              && !(m_stall && ls_go)                        // (a load or store waits for the port)
+              && !(cfc2 && x_v && x_wait);                  // (CFC2 waits for the flags of a clip's EX that waits a cycle)
 // a pair goes as one: its computation's SEL and the other's start in the same cycle, or neither
 wire sel0     = sel0r && (!lp || start_r);
 wire start_nc = start_r && (!lp || sel0r || none_ok);
@@ -757,26 +758,16 @@ wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv &&
 wire  [4:0]  tv_nn   = {1'b0, tv_n} + 5'd1;
 wire  [2:0]  tvr_n   = !in_tv ? 3'd0 : m_stall ? tv_n[3:1] : tv_nn[3:1];
 assign rdd_n = stv_n ? {ltn[4:3], tvr_n} : rd_n;
-// CFC2's flags, the cycle after it starts: the registers, or what an older EX that waited a cycle writes into them now
-logic        cf_v, cf_x;              // CFC2 started last cycle; ... and an older EX was to run now
+// CFC2's flags, the cycle after it starts: the register it names (CFC2 does not start while a clip's EX waits a cycle for
+// its flags -- cf_x -- so the registers are final by then, whatever EX ran before)
+logic        cf_v;                    // CFC2 started last cycle
 logic        ct_v, ct_p;              // CTC2 started last cycle (its write is now); ... in a pair (counted with its computation)
 logic [1:0]  ct_r;
 logic [15:0] ct_d;
 logic [1:0]  cf_r;
-// (the register CFC2 names is chosen first, and then only its 16 bits take the older EX's flags: bit g_we of the register
-// as that EX writes it, g_val)
-logic [15:0] cf_base, cf_val, cf_we, cf_o;
+logic [15:0] cf_o;
 always_comb begin
-    cf_base = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
-    cf_val = '0; cf_we = '0;
-    for (int l = 0; l < LANES; l++) begin
-        automatic int li = int'(x_pass) * LANES + l;
-        cf_we[li]  = cf_x && x_exec && (cf_r == 2'd0 ? ex[l].co_w : cf_r == 2'd1 ? ex[l].cc_w : ex[l].ce_w);
-        cf_val[li] = cf_r == 2'd0 ? ex[l].co_lo : cf_r == 2'd1 ? ex[l].cc_lo : ex[l].ce;
-        cf_we[8 + li]  = cf_x && x_exec && !cf_r[1] && (cf_r[0] ? ex[l].cc_w : ex[l].co_w);
-        cf_val[8 + li] = cf_r[0] ? ex[l].cc_hi : ex[l].co_hi;
-    end
-    cf_o = (cf_we & cf_val) | (~cf_we & cf_base);
+    cf_o = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
     res_l = cf_r[1] ? {24'd0, cf_o[7:0]} : {{16{cf_o[15]}}, cf_o};
 end
 
@@ -941,7 +932,7 @@ always_ff @(posedge clk) begin
         default: st <= V_IDLE;
         endcase
         // CFC2: its flags the cycle after
-        cf_v <= start_nc && cfc2; cf_r <= li[12:11]; cf_x <= x_v && x_wait;
+        cf_v <= start_nc && cfc2; cf_r <= li[12:11];
         nop_l <= lp && none_ok && start_nc && (lw_nx || ctc2);
         // CTC2: the flag register written the cycle after (over an older EX's write then)
         ct_v <= start_nc && ctc2; ct_p <= lp && !none_ok; ct_r <= li[12:11]; ct_d <= b[15:0];

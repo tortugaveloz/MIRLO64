@@ -330,9 +330,9 @@ that is still busy:
 * LTV and STV wait until nothing is under way; a store or MFC2 waits for a
   pending write of the register it reads (an EX that waits a cycle for another
   register's does not hold it); a load or MTC2 starts under a running
-  computation, and under a clip's EX that waits if not of its register; CFC2
-  and CTC2 start at once (with eight lanes; with four they wait until nothing
-  is under way).
+  computation, and under a clip's EX that waits if not of its register; CTC2
+  starts at once, and CFC2 too unless a clip's EX is waiting (with eight lanes;
+  with four they wait until nothing is under way).
 
 The register file has one write port. When the last pass's write would fall
 in the cycle a load writes its register, the load has the port and vd is
@@ -371,9 +371,9 @@ group, one byte per cycle.
 
 MFC2, MTC2, CFC2 and CTC2 take one cycle in E. MFC2's bytes are read in E
 (copy D); MTC2 writes its bytes the cycle after, as a load does. CFC2's value is
-taken the cycle after, in the scalar unit's M (an older EX that waited a cycle
-gives its flags then); CTC2 writes the flag register the cycle after, over such
-an EX's write.
+taken the cycle after, in the scalar unit's M, from the flag registers (it does
+not start in a cycle a clip's EX waits, whose flags would be written under it);
+CTC2 writes the flag register the cycle after, over an older EX's write.
 
 ## Memories
 
