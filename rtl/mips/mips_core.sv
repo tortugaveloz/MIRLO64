@@ -2170,7 +2170,8 @@ always_ff @(posedge clk) begin
                 5'd11: begin c0_compare <= m_st_lo; c0_cause[15] <= 1'b0; end
                 5'd13: begin c0_cause[9:8] <= m_st_lo[9:8];
                              // (the monitor level delivers a TLB exception to the game: its BD and ExcCode are its to set)
-                             if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[6:2] <= m_st_lo[6:2]; end end
+                             // (and CE: the console's exception that is not a Coprocessor Unusable one leaves it 0)
+                             if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[29:28] <= m_st_lo[29:28]; c0_cause[6:2] <= m_st_lo[6:2]; end end
                 // the VR4300's writable bits (the constant rest is not stored; BadVAddr,
                 // XContext, TagHi and the reserved registers take no write)
                 // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game -- and to put the game's back, a state loaded)

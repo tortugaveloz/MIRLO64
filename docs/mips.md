@@ -716,7 +716,7 @@ the SDRAM there. The game starts with an `eret` from ERL, so the runtime's code 
 **Exceptions the monitor level cannot do for the game.** The core sends every Reserved Instruction of the game's code to the
 monitor level, and an address error at an address of a device's registers (an unaligned access to them). When the runtime
 has nothing to do for the game there -- no instruction it emulates, no register it serves -- the exception is the game's, as on
-the console: the monitor writes Cause.ExcCode (10 Reserved Instruction, 4 AdEL, 5 AdES), EPC (the branch's, with BD, in a delay
+the console: the monitor writes Cause.ExcCode (10 Reserved Instruction, 4 AdEL, 5 AdES; CE is cleared, as for every exception but a Coprocessor Unusable one), EPC (the branch's, with BD, in a delay
 slot) and Status.EXL, and for an address error BadVAddr and Context's BadVPN2, and returns to `0x8000_0180`. The runtime's
 own fatal stop (`n64rt_fatal`) leaves Status.ERL set so that its code stays at unmapped addresses while it draws its message.
 

@@ -1163,7 +1163,7 @@ static void tlb_deliver(n64rt_ctx_t *x, int res, u32 code, u32 bd, u32 badv)
     CP0_SET(8, badv);                                                             /* (BadVAddr: the monitor level's to write) */
     CP0_SET(10, (badv & 0xFFFFE000u) | (hi & 0xFFu));                             /* EntryHi: the page pair, the ASID as it is */
     const u32 exl = x->status & 2u, exc = res == TLBX_MOD ? 1u : code == 3u ? 3u : 2u;
-    cause = (cause & ~0x7Cu) | exc << 2;
+    cause = (cause & ~0x3000007Cu) | exc << 2;                                     /* (CE: 0 but for a Coprocessor Unusable) */
     if (!exl) { cause = (cause & 0x7FFFFFFFu) | bd << 31; CP0_SET(14, x->epc); }
     CP0_SET(13, cause);
     CP0_SET(4, (ctxt & 0xFF800000u) | ((badv >> 13) << 4));
@@ -1550,7 +1550,7 @@ static void exc_deliver(n64rt_ctx_t *x, u32 code, u32 bd)
 {
     u32 cause;
     CP0_GET(13, cause);
-    cause = (cause & ~0x7Cu) | code << 2;
+    cause = (cause & ~0x3000007Cu) | code << 2;                                    /* (CE: 0 but for a Coprocessor Unusable) */
     if (!(x->status & 2u)) { cause = (cause & 0x7FFFFFFFu) | bd << 31; CP0_SET(14, x->epc); }
     CP0_SET(13, cause);
     if (code == 4u || code == 5u) {
