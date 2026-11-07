@@ -1798,9 +1798,44 @@ static void pi_advance(u32 dev, u32 pa, u32 size, int rd)
     n64rt_pi_regs[1] = (dev & 0xFFFFFFFEu) + ((size + 1u) & ~1u);
     if (!rd) s_pi_wr_len = 0x7Fu;
 }
+/* A cartridge DMA into the RDRAM at an address that is not 8 bytes aligned (m = its low three bits, 2, 4 or 6: the register
+ * keeps bit 0 clear), as the console's PI does it (after n64-systemtest's measurements): the cartridge's bytes go to the
+ * destination in order, but a block is counted from the aligned address -- the first block ends 128 - m bytes on, or at the
+ * 2 KiB row's end if that is sooner (B1) -- and the last m bytes of it are not written, a hole; a copy shorter than that block
+ * loses its last m bytes. A destination within 8 bytes of the row's end (B1 < 8) opens a second hole at the end of the next
+ * block and moves everything after it m bytes down. The odd length is rounded up to an even one from B1 - 2 (B1 itself
+ * for such a short first block). RDRAM_ADDR then holds the aligned end of what was written, CART_ADDR the even length
+ * read. Done here, from a staging copy: a copy larger than it, or not wholly in the ROM, takes the usual path (0). */
+static int pi_misaligned(u32 dev, u32 pa, u32 len)
+{
+    static u8 stage[512];
+    const u32 m = pa & 7u, off = dev & 0x0FFFFFFFu, n = (len & 0x00FFFFFFu) + 1u, P = 0x800u - (pa & 0x7FFu);
+    const u32 B1 = P < 128u - m ? P : 128u - m, thr = B1 > 8u ? B1 - 2u : B1;
+    const u32 R = n >= thr ? (n + 1u) & ~1u : n;
+    if (is_flash(dev) || R > sizeof stage || R > n64rt_game->rom_size || off > n64rt_game->rom_size - R) return 0;
+    n64rt_rom_copy(stage, off, R);
+    u32 A = R < B1 ? (R > m ? R - m : 0u) : R;
+    const u32 sh = P + 128u - m, h0 = B1 > m ? B1 - m : 0u;
+    if (P < 8u && A > sh) A += m;
+    u8 *d = K0P(pa);
+    for (u32 x = 0; x < A; x++) {
+        if (x >= h0 && x < B1) continue;
+        if (P < 8u && x >= sh) { if (x >= sh + m) d[x] = stage[x - m]; }
+        else d[x] = stage[x];
+    }
+    n64rt_pi_regs[0] = ((pa - m) + ((A + m + 7u) & ~7u)) & 0x00FFFFFEu;
+    n64rt_pi_regs[1] = (dev & 0xFFFFFFFEu) + ((R + 1u) & ~1u);
+    s_pi_wr_len = 0x7Fu;
+    n64rt_late_poll();
+    return 1;
+}
 /* a write of PI_WR_LEN (rd 0) or PI_RD_LEN (1): the DMA, by the engine or here */
 static void pi_start(int rd, u32 len)
 {
+    if (!rd && (n64rt_pi_regs[0] & 7u & 0xFFFFFFFEu) && pi_misaligned(n64rt_pi_regs[1] & 0xFFFFFFFEu, n64rt_pi_regs[0] & 0x00FFFFFEu, len)) {
+        mi_set(MI_PI);
+        return;
+    }
     const u32 dev = n64rt_pi_regs[1] & 0xFFFFFFFEu, pa = n64rt_pi_regs[0] & 0x00FFFFFEu;
     const u32 size = rd ? ((len & 0x00FFFFFFu) | 1u) + 1u : pi_wr_bytes(pa, len);
     pi_advance(dev, pa, size, rd);
