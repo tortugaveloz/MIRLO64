@@ -1405,6 +1405,7 @@ end
 // the d-shifts: the value in sh_r, a byte or a bit a cycle
 // (registered with the instruction: M's wait for it is on the D-cache's address path)
 logic       m_xshift;
+logic       m_ovw, m_xovf_r;                 // dadd, daddi, dsub: M's first cycle (held), and the overflow found in it
 wire [5:0]  m_xsh = m_insn[5] ? {m_insn[2], m_insn[10:6]} : m_a_lo[5:0];        // dsll(32) ..., or the v forms
 logic [63:0] sh_r; logic [6:0] sh_n; logic sh_on;
 // ldl, ldr, sdl, sdr (XUA), on sh_r, as a d-shift left by bytes with a byte of its own coming in at the bottom (decoded as
@@ -1506,9 +1507,11 @@ wire int_pending = int_game || int_mon;
 logic int_pend_r, int_mon_r;
 always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; end
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
-// Integer Overflow of dadd, daddi, dsub: the 64-bit result's sign (the upper word's sum) is not the operands' (the subtrahend inverted)
+// Integer Overflow of dadd, daddi, dsub: the 64-bit result's sign (the upper word's sum) is not the operands' (the subtrahend inverted).
+// The upper word's adder is the end of a carry chain, so its verdict is registered (m_xovf_r) and M holds these instructions a cycle
+// (m_ovw) for it: the exception comes from the register, a cycle later (the console's as well), and nothing behind the instruction commits
 wire m_xovf = m_c.ovf64 && (m_xha[31] == (m_xhb[31] ^ m_xsub)) && (m_xsum[31] != m_xha[31]);
-wire m_exc_v = (m_exc && !(m_hwx && m_dev)) || m_xovf;          // (MI: the game's word access to a register the hardware has is no exception)
+wire m_exc_v = (m_exc && !(m_hwx && m_dev)) || m_xovf_r;          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
@@ -1599,6 +1602,7 @@ always_comb begin
         // (FAST: a line on its way in for a load that is on its way back)
         if (FAST && (ms == MS_REFILL || ms == MS_REREAD)) m_done = 1'b0;
         if (m_shwait) m_done = 1'b0;                                // (a d-shift: still shifting)
+        if (m_ovw) m_done = 1'b0;                                   // (dadd, daddi, dsub: the overflow is registered)
         if (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last) m_done = 1'b0;
     end
 end
@@ -2015,7 +2019,7 @@ always_ff @(posedge clk) begin
         c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_h_ctx <= 0; c0_h_epc <= 0; c0_h_eepc <= 0; c0_h_xc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
         c0_watchhi <= 0; c0_taglo <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
-        hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
+        hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0; m_ovw <= 0; m_xovf_r <= 0;
         hilo_soft <= 0; c0_latch <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
         md_busy <= 0; md_mt <= 0; md_cnt <= 0; md_dm <= 0; md_dvon <= 0; md_ph <= DV_STEP; md_c <= 0; md_w <= 0; md_m32 <= 0; md_m32b <= 0;
         wb_rp <= 0; wb_wp <= 0; wb_cnt <= 0; port <= P_IDLE; port_cnt <= 0;
@@ -2213,6 +2217,7 @@ always_ff @(posedge clk) begin
             m_xshift <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_shwait <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_xc <= e_cs[32]; m_xltu <= e_ltu; m_k_ua <= e_ua;
+            m_ovw <= e_c.ovf64;
             m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
             m_res <= e_res;
             m_addr <= e_ea;
@@ -2231,6 +2236,8 @@ always_ff @(posedge clk) begin
             m_exc <= e_exc; m_exc_code <= e_exc_code; m_badv <= e_badv;
             m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx;
         end
+        if (!m_adv) m_ovw <= 1'b0;
+        m_xovf_r <= m_xovf && !m_adv;
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
         rp_pend <= 1'b0;
