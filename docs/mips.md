@@ -283,9 +283,14 @@ hold the SDRAM only: the runtime's memory and the RDRAM through KSEG0. The D-cac
 the FIFO orders earlier stores before the device accesses that start DMA. External writes do not snoop the D-cache in
 the default build: software manages buffer ownership and invalidates stale destination lines with cache instructions.
 Index invalidation covers every line represented by the VR4300's 8 KiB index. A mapped hit invalidation drops every
-possible physical page colour. Hit writeback is a no-op because lines are clean; index load tag reports an invalid tag
-to writeback-walking software, rather than exposing actual cache tags. Code that uses tags for other purposes is not
-fully emulated.
+possible physical page colour. Hit writeback is a no-op because lines are clean. On an unmapped address the tag
+operations are the VR4300's: Index_Load_Tag gives TagLo the line's tag (a valid D-cache line reads as state 3, which is
+all the console ever reads of it; an I-cache line as state 2), Index_Store_Tag writes TagLo's state (the valid bit) and
+PTag, a Hit_ operation drops a line only when the address' tag is the line's, and the invalidating ones leave the tag in
+the line (Index_Invalidate and the D-cache's Index_Writeback_Invalidate write the address'). The I-cache's tags have a second read port for this.
+The other operations (Fill, Hit_Writeback, Create_Dirty_Exclusive, a mapped address) drop the line. There is no dirty
+state: a line's contents are always in memory (`sim/mips/cache_rom.c` lists what the console's write-back D-cache does
+that this does not).
 
 When enabled, the D-cache also drops by itself a line that another master writes into (`SNOOP`). Each 16-byte line is independent of
 its neighbours. `mirlo_mips.sv` takes from the arbiter the line of every

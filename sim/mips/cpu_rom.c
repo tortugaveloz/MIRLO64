@@ -315,6 +315,60 @@ static void sec_sc_link(void)
     check(0x0C22, a, 0);                                               /* (the exception's eret cleared the link) */
     check(0x0C23, w[1], 0x2222);
 }
+/* ---- the caches' tags (nemu64-test, cache: Index Load Tag, Hit / Index ops, icache Cache(IndexInvalidate), (HitInvalidate), (IndexStoreTag)): the
+ * operations on an unmapped address leave the line's tag and drop it by its valid bit; a Hit_ op drops a line only if the address' tag is its; Index_Store_Tag
+ * writes TagLo's state (the D-cache's valid line reads 3, the I-cache's 2) and PTag. Lines are written by Index_Store_Tag first: the model has no fills. */
+#define PT(a) ((((a) & 0x1FFFFFFFu) >> 12) << 8)
+#define CACHEOP(op, a) __asm__ volatile("cache %0, 0(%1)" :: "i"(op), "r"(a) : "memory")
+#define LTAGX(op, a) ({ u32 t_; __asm__ volatile("cache %1, 0(%2)\n\tnop\n\tnop\n\tmfc0 %0, $28\n\tnop\n\tnop" : "=r"(t_) : "i"(op), "r"(a) : "memory"); t_; })
+static void sec_cache_tags(void)
+{
+    const u32 A = 0x80201000u, B = A + 0x2000u;              /* the D-cache: 8 KiB apart, one line */
+    MTC0(28, PT(A) | 0xC0);   CACHEOP(0x09, A);
+    check(0x0D01, LTAGX(0x05, A), PT(A) | 0xC0);                       /* a valid line reads as state 3 */
+    CACHEOP(0x15, B);                                                  /* Hit_Writeback_Invalidate on another tag: nothing */
+    check(0x0D02, LTAGX(0x05, A), PT(A) | 0xC0);
+    CACHEOP(0x11, B);
+    check(0x0D03, LTAGX(0x05, A), PT(A) | 0xC0);
+    CACHEOP(0x15, A);                                                  /* on the right one: invalid, the tag kept */
+    check(0x0D04, LTAGX(0x05, A), PT(A));
+    CACHEOP(0x11, A);                                                  /* (an invalid line stays so) */
+    check(0x0D05, LTAGX(0x05, A), PT(A));
+    MTC0(28, PT(A) | 0x80);   CACHEOP(0x09, A);                        /* clean: reads as 3 */
+    check(0x0D06, LTAGX(0x05, A), PT(A) | 0xC0);
+    CACHEOP(0x01, B);                                                  /* Index_Writeback_Invalidate through the other address: invalid, with its tag */
+    check(0x0D07, LTAGX(0x05, A), PT(B));
+    CACHEOP(0x01, A);                                                  /* (an invalid line keeps its tag) */
+    check(0x0D08, LTAGX(0x05, A), PT(B));
+    MTC0(28, PT(A) | 0x40);   CACHEOP(0x09, A);                        /* state 1 is invalid */
+    check(0x0D09, LTAGX(0x05, A), PT(A));
+    MTC0(28, PT(B) | 0xC0);   CACHEOP(0x09, A);
+    check(0x0D0A, LTAGX(0x05, A), PT(B) | 0xC0);
+    CACHEOP(0x11, A);                                                  /* Hit_Invalidate (a miss at A: the tag is B's) */
+    check(0x0D0B, LTAGX(0x05, A), PT(B) | 0xC0);
+    CACHEOP(0x11, B);
+    check(0x0D0C, LTAGX(0x05, A), PT(B));
+    MTC0(28, PT(A));          CACHEOP(0x09, A);
+    check(0x0D0D, LTAGX(0x05, A), PT(A));
+    /* the I-cache: 16 KiB apart */
+    const u32 I = 0x80003000u, J = I + 0x4000u;
+    MTC0(28, PT(I) | 0x80);   CACHEOP(0x08, I);
+    check(0x0D11, LTAGX(0x04, I), PT(I) | 0x80);                       /* a valid line reads as state 2 */
+    CACHEOP(0x10, J);                                                  /* Hit_Invalidate on another tag: nothing */
+    check(0x0D12, LTAGX(0x04, I), PT(I) | 0x80);
+    CACHEOP(0x10, I);                                                  /* on the right one: invalid, the tag kept */
+    check(0x0D13, LTAGX(0x04, I), PT(I));
+    CACHEOP(0x00, J);                                                  /* Index_Invalidate: the address' tag, even on an invalid line */
+    check(0x0D14, LTAGX(0x04, I), PT(J));
+    CACHEOP(0x00, I);
+    check(0x0D15, LTAGX(0x04, I), PT(I));
+    MTC0(28, PT(J) | 0x40);   CACHEOP(0x08, I);                        /* state 1 is invalid */
+    check(0x0D16, LTAGX(0x04, I), PT(J));
+    MTC0(28, PT(I) | 0xC0);   CACHEOP(0x08, I);                        /* state 3 is a valid line (state 2) */
+    check(0x0D17, LTAGX(0x04, I), PT(I) | 0x80);
+    CACHEOP(0x00, I);
+    MTC0(28, 0);
+}
 /* ---- CACHE with an address that is not a word's raises Address Error (AdEL); a word's does not */
 static void sec_cache_align(void)
 {
@@ -345,6 +399,7 @@ int main(void)
     sec_cp0_64();
     sec_mtc0_64();
     sec_sc_link();
+    sec_cache_tags();
     sec_cache_align();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;

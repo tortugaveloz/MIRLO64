@@ -359,6 +359,34 @@ void n64_cpu_interrupt(n64_t *n)
 }
 
 /* ---- the step ---------------------------------------------------------- */
+/* The caches' tags, as the cache operations leave them (CACHE's Index_Load_Tag / Index_Store_Tag and the invalidating ops on an unmapped address).
+ * The model has no caches: these are the tags a program sees by Index_Load_Tag after its own CACHE instructions, not what a load or a fetch
+ * fills (a program that reads a line's tag must have written it with Index_Store_Tag first). t is the tag: physical address 28:12. The D-cache's
+ * tag has no bit 12 and the I-cache's none of 13:12 (the index says them: Index_Load_Tag gives the address'), a hit compares the rest. A valid D line
+ * reads as state 3, an I line as 2. Fill, Hit_Writeback, Create_Dirty_Exclusive and an address that is mapped drop the line. */
+static struct { uint8_t v; uint32_t t; } m_dtag[512], m_itag[512];
+static void cache_tags(n64_cpu_t *c, unsigned op5, uint32_t a)
+{
+    const unsigned sel = op5 & 3, o = op5 >> 2;
+    const int kseg = a >= 0x80000000u && a < 0xC0000000u;
+    const uint32_t t = ((a & 0x1FFFFFFFu) >> 12) & 0x1FFFFu, taglo = c->cop0[C0_TAGLO];
+    if (sel > 1 || (sel == 1 && o == 6)) return;                            /* (not a cache; the D-cache's Hit_Writeback does nothing) */
+    const unsigned i = sel ? (a >> 4) & 511u : (a >> 5) & 511u, sh = sel ? 1 : 2;
+    typeof(m_dtag[0]) *l = sel ? &m_dtag[i] : &m_itag[i];
+    const int hit = l->v && (l->t >> sh) == (t >> sh);
+    if (o == 1) {                                                           /* Index_Load_Tag */
+        uint32_t tg = (l->t & ~((1u << sh) - 1)) | ((a >> 12) & ((1u << sh) - 1));
+        c->cop0[C0_TAGLO] = (tg << 8) | (l->v ? (sel ? 0xC0u : 0x80u) : 0u);
+        return;
+    }
+    if (!kseg || o == 3 || (!sel && (o == 5 || o == 6))) { l->v = 0; l->t = 0; return; }
+    switch (o) {
+    case 0: if (!sel || l->v) { l->v = 0; l->t = t; } break;                /* Index_Invalidate: invalid with the address' tag (the D-cache's: if it was valid) */
+    case 2: l->v = (taglo >> 7) & 1; l->t = (taglo >> 8) & 0x1FFFFu; break;  /* Index_Store_Tag */
+    case 4: case 5: if (hit) l->v = 0; break;                               /* Hit_Invalidate, Hit_Writeback_Invalidate */
+    default: break;
+    }
+}
 void n64_cpu_step(n64_t *n)
 {
     n64_cpu_t *c = &n->cpu;
@@ -702,7 +730,7 @@ void n64_cpu_step(n64_t *n)
         store(n, pc, dly, a & ~7u, 8, w);
         break;
     }
-    case 0x2F: if (a & 3) { set_badv(n, a); exception(n, pc, dly, EXC_ADEL, 0); } break;      /* cache: the address must be a word's (AdEL) */
+    case 0x2F: if (a & 3) { set_badv(n, a); exception(n, pc, dly, EXC_ADEL, 0); } else cache_tags(c, rti, (uint32_t)a); break;      /* cache: the address must be a word's (AdEL) */
     case 0x30: if (!load(n, pc, dly, a, 4, &v)) { WR(rti, SX(v)); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;   /* ll */
     case 0x31: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (lwc1: CpU, see COP1) */
         if (!load(n, pc, dly, a, 4, &v)) c->f[rti] = (uint32_t)v; break;              /* lwc1 */

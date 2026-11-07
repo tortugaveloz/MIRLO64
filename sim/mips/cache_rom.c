@@ -481,8 +481,29 @@ static void t460(void)
     tcheck(3, regs[3], (ptn << 8) | (ST_CLEAN << 6));
 }
 
+#ifdef SOC
+static void isv_text(const char *t)
+{
+    volatile u32 *buf = (volatile u32 *)0xB3FF0020u;
+    u32 n = 0, w = 0;
+    for (; t[n]; n++) {
+        w |= (u32)(unsigned char)t[n] << (24 - 8 * (n & 3));
+        if ((n & 3) == 3) { buf[n >> 2] = w; w = 0; }
+    }
+    if (n & 3) buf[n >> 2] = w;
+    *(volatile u32 *)0xB3FF0014u = n;
+}
+static void isv_hex(u32 v)
+{
+    char b[9]; for (int i = 0; i < 8; i++) b[i] = "0123456789abcdef"[(v >> (28 - 4 * i)) & 15]; b[8] = 0;
+    isv_text(b);
+}
+#endif
 int main(void)
 {
+#ifdef SOC
+    MTC0(12, MFC0(12) | 0x30000000u);                  /* (CU1 and FR) */
+#endif
     for (u32 v = 0; v < 0x200; v += 0x180) {
         u32 a = (u32)(void *)h_entry;
         *K1(v) = 0x3C1A0000u | (a >> 16);
@@ -503,5 +524,15 @@ int main(void)
     if (SEL & 64) { t457_459(); t460(); }
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
+#ifdef SOC
+    /* in the SoC simulation (n64rt's ISV=1 runtime): the results as the IS-Viewer's text; the failed checks of the table */
+    isv_text("cache_rom: ");
+    isv_hex(nfail); isv_text(" checks failed\n");
+    for (u32 i = 0; i < nfail && i < 32; i++) {
+        volatile u32 *e = K1(0x000F0F08 + 20 * i);
+        isv_text("c "); isv_hex(e[0]); isv_text(" got "); isv_hex(e[1]); isv_hex(e[2]); isv_text(" want "); isv_hex(e[3]); isv_hex(e[4]); isv_text("\n");
+    }
+    isv_text("cache_rom: done\n");
+#endif
     for (;;) ;
 }

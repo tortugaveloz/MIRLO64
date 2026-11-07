@@ -1884,20 +1884,55 @@ always_comb begin
     // the enables' -- but go by the port only: no store completes while a line is coming in)
     dc_waddr = port == P_DLINE ? {m_fpa[DW+1:4], ms_cnt[1:0]} : m_cst_idx;
     dc_wdata = port == P_DLINE ? mem_rdata : m_cst_data;
-    // cache instructions: invalidate a line (every op but the fills; a write-through D-cache has nothing to write back)
+    // cache instructions: drop a line (a write-through D-cache has nothing to write back)
     // (a cache of more lines than the VR4300's: an index op -- software that
     // empties "the" cache walks the VR4300's size -- drops every line the
     // VR4300's index stands for, one a cycle: ck_n)
+    // An unmapped address (m_kseg) has the VR4300's tag operations: the line is dropped by its valid bit, the tag stays (Index_Load_Tag
+    // reads it back); a Hit_ op drops a line only if the address' tag is what it holds; Index_Invalidate and Index_Writeback_Invalidate
+    // leave the address' tag in the line (the D-cache's: only if it was valid); Index_Store_Tag writes TagLo's state and PTag.
+    // The other ops (Fill, Hit_Writeback, Create_Dirty_Exclusive, a mapped address) drop the line as before.
     if (m_cache_go) begin
-        if (m_insn[17:16] == 2'd0) begin ict_we = 1; ict_waddr = m_addr[IW+1:5]; if (!m_insn[20]) ict_waddr = IC_LOG2'({ck_n, m_addr[13:5]}); else if (ck_isw) ict_waddr = IC_LOG2'({ck_n, m_addr[11:5]}); ict_wdata = '0; end
+        if (m_insn[17:16] == 2'd0) begin
+            ict_we = 1; ict_waddr = m_addr[IW+1:5]; if (!m_insn[20]) ict_waddr = IC_LOG2'({ck_n, m_addr[13:5]}); else if (ck_isw) ict_waddr = IC_LOG2'({ck_n, m_addr[11:5]}); ict_wdata = '0;
+            if (m_insn[20:18] == 3'd1) ict_we = 1'b0;                                           // Index_Load_Tag: nothing is written
+            else if (m_kseg && !ck_isw) case (m_insn[20:18])      // (ck_isw: a page was mapped at another colour: a Hit_ op drops the line under all of them, as before)
+            3'd0: ict_wdata = {1'b0, m_pa[28:TLO]};
+            3'd2: ict_wdata = {c0_taglo[7], ct_tag_i};
+            3'd4: begin ict_we = ic_hit2; ict_wdata = {1'b0, ic_tq2[ITW-1:0]}; end
+            default: ;
+            endcase
+        end
         else if (m_insn[17:16] == 2'd1 && m_insn[20:16] != 5'h05 && m_insn[20:16] != 5'h19) begin
             dct_we = 1; dct_waddr = m_addr[DW+1:4];
             if (!m_insn[20]) dct_waddr = DC_LOG2'({ck_n, m_addr[12:4]});
             else if (ck_dalias) dct_waddr = DC_LOG2'({ck_n, m_addr[11:4]});
             dct_wdata = 17'd0;
+            if (m_kseg) case (m_insn[20:18])
+            3'd0: begin dct_we = dc_tq[16]; dct_wdata = {1'b0, m_pa[28:13]}; end
+            3'd2: dct_wdata = {c0_taglo[7], ct_tag_d};
+            3'd4, 3'd5: begin dct_we = m_dc_hit; dct_wdata = {1'b0, dc_tq[15:0]}; end
+            default: ;
+            endcase
         end
     end
 end
+// The I-cache's tags for M (a cache instruction reads them in E, as the D-cache's, by the address it will have in M): a second read port
+logic [ITW:0] ic_tq2;
+always_ff @(posedge clk) ic_tq2 <= ic_tag[m_stall ? m_addr[IW+1:5] : e_ea[IW+1:5]];
+wire ic_hit2 = ic_tq2[ITW] && ic_tq2[ITW-1:0] == m_pa[28:TLO];
+// TagLo's PTag (physical address 31:12) and the tags' (physical address 28:12, the D-cache's from 13 and the I-cache's from TLO; with N64WIN the
+// game's RDRAM is at N64_RDRAM in the SDRAM: its tag bits above the 8 MiB are the base's)
+function automatic logic [19:0] ptag_of(input logic [16:0] pa17);
+    return (FLAT && N64WIN && pa17[16:11] == N64_RDRAM[28:23]) ? {9'd0, pa17[10:0]} : {3'd0, pa17};
+endfunction
+wire [16:0]     ct_pa17  = (FLAT && N64WIN) ? {N64_RDRAM[28:23], c0_taglo[18:8]} : c0_taglo[24:8];
+wire [ITW-1:0]  ct_tag_i = ct_pa17[16:TLO-12];
+wire [15:0]     ct_tag_d = ct_pa17[16:1];
+wire [31:0]     taglo_d  = {4'd0, ptag_of({dc_tq[15:0], m_addr[12]}), dc_tq[16] ? 2'b11 : 2'b00, 6'd0};
+wire [16:0]     it_pa17;
+generate if (TLO == 12) begin : g_it12 assign it_pa17 = ic_tq2[16:0]; end else begin : g_it14 assign it_pa17 = {ic_tq2[ITW-1:0], m_addr[13:12]}; end endgenerate
+wire [31:0]     taglo_i  = {4'd0, ptag_of(it_pa17), ic_tq2[ITW] ? 2'b10 : 2'b00, 6'd0};
 // the D-cache read: the next M's address, or M's own while it waits
 // (a cached 64-bit load: its second word once the first is taken)
 // (PGD: a mapped load in MS_XLAT reads at its physical index -- the bits above the page offset are the translation's)
@@ -2124,9 +2159,8 @@ always_ff @(posedge clk) begin
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
             if (m_c.md == MD_MTHI || m_c.md == MD_MTLO) begin md_mt <= 1'b1; md_mth <= m_c.md == MD_MTHI; md_busy <= 1'b1; end
             if (m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) hilo_soft <= 1'b0;   // (a multiply or a divide: HI and LO are the core's again)
-            // A write-through cache has no dirty lines for software to write
-            // back. Report an invalid tag to cache-walking writeback code.
-            if (m_c.cache && m_insn[20:16] == 5'h05) c0_taglo <= 0;
+            // Index_Load_Tag: TagLo takes the line's tag; the D-cache's valid line reads as the console's "dirty" (3) -- it never says clean
+            if (m_c.cache && m_insn[20:18] == 3'd1 && m_insn[17:16] < 2'd2) c0_taglo <= m_insn[16] ? taglo_d : taglo_i;
             if (m_c.mtc0) begin
                 if (m_gacc) c0_latch <= m_st_lo;
                 case (m_insn[15:11])
