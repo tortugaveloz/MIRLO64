@@ -79,6 +79,20 @@ int main(void)
     __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\t.set gp=64\n\tlui $2, 0xB000\n\tlui $3, 0x9876\n\tori $3, $3, 0x5432\n\tdsll $3, $3, 32\n\tlui $5, 0x1AF1\n\tor $3, $3, $5\n\tsd $3, 0($2)\n\t.set pop" ::: "$2", "$3", "$5", "memory");
     *x = 0xDECAFu;
     check(22, *x, 0x98765432u); check(23, *x, w0);
+    /* PI_STATUS' IO busy (bit 1) while it is held */
+    {
+        volatile u32 *st = (volatile u32 *)0xA4600010u;
+        *CART(0) = 0xBADC0FFEu;
+        u32 s1 = *st;
+        (void)*x;
+        u32 s2 = *st;
+        check(40, s1 & 2, 2); check(41, s2 & 2, 0);
+        __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\t.set gp=64\n\tlui $2, 0xB000\n\tlui $3, 0x0101\n\tdsll32 $3, $3, 0\n\tlui $5, 0x2323\n\tor $3, $3, $5\n\tsd $3, 0($2)\n\t.set pop" ::: "$2", "$3", "$5", "memory");
+        s1 = *st;
+        (void)*x;
+        s2 = *st;
+        check(42, s1 & 2, 2); check(43, s2 & 2, 0);
+    }
     /* the decay: a few iterations is still there, a hundred is gone */
     static u32 (*const waits[4])(u32, volatile u32 *, u32 *) = { wait_sw, wait_sb, wait_sh, wait_sd };
     volatile u32 *R = (volatile u32 *)0xA0100000u;
