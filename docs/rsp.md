@@ -214,9 +214,8 @@ second), MFC0 or MTC0, and with eight lanes a vector load (LBV to LUV) or store
 (SBV to SUV, SHV, SFV), MFC2, MTC2, CFC2 or CTC2. The rule is the console's: no
 pair when the first writes a vector or control register the second reads or
 writes (a one-lane op's lane field, or VNOP's vd behind MTC2, is taken for a
-register, as on the console; a reserved function is taken to read vs and vt
-and write vd, which the console's rule does not count, so that a pair's result
-is the two in order). D's instruction must not be a delay slot (a taken branch's target at an
+register, as on the console; a reserved function does nothing and uses no
+register). D's instruction must not be a delay slot (a taken branch's target at an
 odd word pairs too, which the console's does not).
 IMEM's second port gives D the word after its own; the pair enters E
 together, the scalar instruction takes E's path as any other and the
@@ -255,8 +254,10 @@ It implements:
 SHV and SFV (the packed stores of every second and every fourth byte) take one
 cycle; SFV only with an element that is a multiple of 4. Not implemented:
 LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ and VMACQ.
-They change nothing and set `unimpl` (no microcode in the ROMs scanned with
-`rom_ucode_scan.py` has them).
+The reserved COP2 functions (0x12, 0x16 to 0x1C, 0x1E, 0x1F, 0x2E, 0x2F and 0x38
+to 0x3E) are not implemented either. They change nothing and set `unimpl` (no
+microcode in the ROMs scanned with `rom_ucode_scan.py` has them: the few words
+of a scan that decode as one are data or main-CPU code).
 
 ### Lanes
 
@@ -351,9 +352,6 @@ address, and the ROM's word is shifted back in the last pass's EX. VRCPH and
 VRSQH store the input's high half and return the high half of the previous
 result. With eight lanes a reciprocal starts under the EX of the one before
 it: the divide registers it reads are forwarded from that EX.
-
-The reserved COP2 functions give the console's result: vd 0, the
-accumulator's low word vs + vt (the lanes' adder, as VADDC), the flags kept.
 
 ### Loads, stores and moves
 

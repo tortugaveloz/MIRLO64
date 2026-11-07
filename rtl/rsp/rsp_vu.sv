@@ -31,8 +31,8 @@
 //   SHV, SFV        one cycle (a JPEG microcode's YUV packing)
 // Not implemented (no microcode of the ROMs scanned has them -- sim/rsp/
 // rom_ucode_scan.py; they do nothing and set `unimpl`): LHV LFV LWV, SWV, SFV
-// at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ. The reserved
-// functions give the console's result: vd 0, the accumulator's low word vs + vt.
+// at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ, and the reserved
+// COP2 functions (0x12, 0x16 - 0x1C, 0x1E, 0x1F, 0x2E, 0x2F, 0x38 - 0x3E).
 `default_nettype none
 
 module rsp_vu #(
@@ -121,11 +121,8 @@ wire fn_rcp  = fn[5:3] == 3'b110 && fn[1:0] != 2'b11;              // VRCP VRCPL
 wire fn_mov  = fn == 6'h33;
 wire fn_one  = fn_rcp || fn_mov;                                   // writes one lane of vd
 wire fn_none = fn == 6'h37 || fn == 6'h3F;                         // VNOP, VNULL
-// the reserved functions: vd 0, the accumulator's low word vs + vt (the adder's, as VADDC's), the flags kept
-function automatic logic is_resv(input logic [5:0] f);
-    return f == 6'h12 || (f >= 6'h16 && f <= 6'h1C) || f == 6'h1E || f == 6'h1F || f == 6'h2E || f == 6'h2F || (f >= 6'h38 && f <= 6'h3E);
-endfunction
-wire fn_known = fn_mul || fn_one || fn_none || is_resv(fn) || fn == 6'h10 || fn == 6'h11 || fn == 6'h13 || fn == 6'h14 || fn == 6'h15
+// (the reserved functions are none of the above: like VMULQ they do nothing and set `unimpl`)
+wire fn_known = fn_mul || fn_one || fn_none || fn == 6'h10 || fn == 6'h11 || fn == 6'h13 || fn == 6'h14 || fn == 6'h15
               || fn == 6'h1D || (fn >= 6'h20 && fn <= 6'h2D);
 
 // ------------------------------------------------------------- registers --
@@ -201,8 +198,6 @@ function automatic logic [2:0] amode(input logic [5:0] f);
     6'h10:   return 3'd1;
     6'h11:   return 3'd2;
     6'h14:   return 3'd3;
-    6'h12, 6'h16, 6'h17, 6'h18, 6'h19, 6'h1A, 6'h1B, 6'h1C, 6'h1E, 6'h1F, 6'h2E, 6'h2F,
-    6'h38, 6'h39, 6'h3A, 6'h3B, 6'h3C, 6'h3D, 6'h3E: return 3'd3;
     6'h25:   return 3'd4;
     6'h24:   return 3'd5;
     6'h26:   return 3'd6;
@@ -290,7 +285,7 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         // is a function of the lane's two bits: a table of its four values (tt, the same
         // for the lane's sixteen bits), beside the adder's sum and -t.
         o.accl_w = f != 6'h1D;
-        c_l = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
+        c_l = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15;
         c_x = f >= 6'h28 && f <= 6'h2D;
         // the compares: b16 is s < t (signed)
         unique case (f)
@@ -341,7 +336,6 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
         c15 = !abs_sat && b16;                               // (abs_sat: 7FFF; ovf: b16, then its inverse)
         clo = abs_sat || !b16;
-        if (is_resv(f)) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
         // (VSAR: the accumulator's word e names -- vs, the lane's -- or 0)
         // (one pass: the accumulator's word from the multiply adder, which adds 0 to it: the high word (2), the middle (1) or the low (0, accl))
         if (f == 6'h1D) begin
