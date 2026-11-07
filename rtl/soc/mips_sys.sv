@@ -51,7 +51,8 @@ module mips_sys #(
     input  wire         sn_t,
     input  wire  [21:0] sn_line,
     output wire         sn_hold,
-    output logic [31:0] dbg_pc, dbg_cause, dbg_epc
+    output logic [31:0] dbg_pc, dbg_cause, dbg_epc,
+    output wire         mon_lvl             // the monitor level is running (Status.ERL): the game's time is not passing
 );
 
 logic        c_req, c_we, c_line, c_ack, c_rvalid;
@@ -129,6 +130,7 @@ mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(
     .dbg_pc, .dbg_cause, .dbg_status, .dbg_epc, .hwx_on
 );
 
+assign mon_lvl = dbg_status[2];
 wire is_sd   = c_addr[31:26] == 6'b010000;
 wire is_boot = c_addr[31:12] == 20'h1FC00 && !(CPU_SIW && hwx_on && c_addr[11:6] == 6'h1F);
 

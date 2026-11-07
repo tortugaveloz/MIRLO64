@@ -3,6 +3,8 @@
  * cannot hold here (tb TB_NOLOCK=1 -x skips it). A check's id is (test number << 8) + the check, so `check 1ac00` is test 0x1ac = 428.
  *
  *   ./tlb_rom.sh OUT.z64 cache_rom.c && TB_NOLOCK=1 obj_c/Vmips_core OUT.z64 -x
+ * In the SoC simulation (a ROM made with `#define SOC 1` in front of it and nust64 --elf OUT.elf) the table of failed checks is in the RDRAM at 0xF0F00
+ * (MEMWATCH=0x438F0F00,0x438F1200 shows what is written there).
  */
 typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -481,24 +483,6 @@ static void t460(void)
     tcheck(3, regs[3], (ptn << 8) | (ST_CLEAN << 6));
 }
 
-#ifdef SOC
-static void isv_text(const char *t)
-{
-    volatile u32 *buf = (volatile u32 *)0xB3FF0020u;
-    u32 n = 0, w = 0;
-    for (; t[n]; n++) {
-        w |= (u32)(unsigned char)t[n] << (24 - 8 * (n & 3));
-        if ((n & 3) == 3) { buf[n >> 2] = w; w = 0; }
-    }
-    if (n & 3) buf[n >> 2] = w;
-    *(volatile u32 *)0xB3FF0014u = n;
-}
-static void isv_hex(u32 v)
-{
-    char b[9]; for (int i = 0; i < 8; i++) b[i] = "0123456789abcdef"[(v >> (28 - 4 * i)) & 15]; b[8] = 0;
-    isv_text(b);
-}
-#endif
 int main(void)
 {
 #ifdef SOC
@@ -524,15 +508,5 @@ int main(void)
     if (SEL & 64) { t457_459(); t460(); }
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;
-#ifdef SOC
-    /* in the SoC simulation (n64rt's ISV=1 runtime): the results as the IS-Viewer's text; the failed checks of the table */
-    isv_text("cache_rom: ");
-    isv_hex(nfail); isv_text(" checks failed\n");
-    for (u32 i = 0; i < nfail && i < 32; i++) {
-        volatile u32 *e = K1(0x000F0F08 + 20 * i);
-        isv_text("c "); isv_hex(e[0]); isv_text(" got "); isv_hex(e[1]); isv_hex(e[2]); isv_text(" want "); isv_hex(e[3]); isv_hex(e[4]); isv_text("\n");
-    }
-    isv_text("cache_rom: done\n");
-#endif
     for (;;) ;
 }

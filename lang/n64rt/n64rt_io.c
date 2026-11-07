@@ -1169,6 +1169,30 @@ static void isv_write(u32 pa, u32 v)
     }
 }
 #endif
+/* A write to the cartridge's space (0x1000_0000 - 0x1FBF_FFFF) sets a latch on the PI bus: the next read of the cartridge -- of any address -- gives the
+ * word that was written instead of the ROM's (a byte or a half read of it gives the part at its address, as of any word), and then it is gone; a second write
+ * while it is set is lost; it also goes by itself a short while after (a few hundred CPU cycles; nemu64-test "cart-writing: Temp value decay" puts the cut-off around
+ * 70 iterations of a three-instruction loop); PI_STATUS says IO busy while it is held. A game depends on it. With the cartridge's reads in hardware (PI2: the
+ * game's word accesses are no trap) the latch is the SoC's (mirlo_mips.sv cl_*), and what comes here -- a byte, a half, a doubleword, a read of a byte or a half --
+ * is done on it as the word the bus would have had (n64rt_os.c emulate_hw_at: a byte or a half in its lane, zeros elsewhere, an sd only the upper word). Without,
+ * it is kept here, the game's Count the clock (the monitor's own time is not counted in it). */
+u32 n64rt_game_count(void);
+#define CART_LATCH_TICKS 128u
+static u32 s_cl_set, s_cl_val, s_cl_t;
+static void cart_latch_write(u32 v)
+{
+    if (s_pi2_hw) { hw_wr(0x10000000u, v); return; }
+    const u32 now = n64rt_game_count();
+    if (s_cl_set && (now - s_cl_t) <= CART_LATCH_TICKS) return;                    /* (the first write is the one that counts) */
+    s_cl_set = 1; s_cl_val = v; s_cl_t = now;
+}
+static int cart_latch_read(u32 *v)
+{
+    const int hit = s_cl_set && (n64rt_game_count() - s_cl_t) <= CART_LATCH_TICKS;
+    s_cl_set = 0;
+    if (hit) *v = s_cl_val;
+    return hit;
+}
 int n64rt_hw_read(u32 addr, u32 *v)
 {
     u32 pa = addr & 0x1FFFFFFFu;
@@ -1180,7 +1204,11 @@ int n64rt_hw_read(u32 addr, u32 *v)
 #endif
     if (pa >= 0x10000000u && pa < 0x1FC00000u) {                /* the cartridge: the ROM */
         u32 off = pa - 0x10000000u;
-        *v = off < n64rt_game->rom_size ? n64rt_rom_word(off & ~3u) : 0;
+        if (s_pi2_hw && off < n64rt_game->rom_size) *v = hw_rd(pa & ~3u);        /* (the latch is the hardware's: a word read of the bus) */
+        else {
+            *v = off < n64rt_game->rom_size ? n64rt_rom_word(off & ~3u) : 0;
+            (void)cart_latch_read(v);
+        }
         hw_note("reads the cartridge at", addr & ~0xFFFFFu);
         return 1;
     }
@@ -1237,6 +1265,7 @@ int n64rt_hw_write(u32 addr, u32 v)
 #ifdef N64RT_ISV
     if (pa >= 0x13FF0000u && pa < 0x13FF1000u) { isv_write(pa, v); return 1; }
 #endif
+    if (pa >= 0x10000000u && pa < 0x1FC00000u) { cart_latch_write(v); hw_note("writes the cartridge at", addr & ~0xFFFFFu); return 1; }
     if (si_write(pa, v)) { si_note(); return 1; }
     if (pa >= 0x03F00000u && pa < 0x04000000u) { hw_note("writes (ignored)", addr); return 1; }      /* (the RDRAM's registers: the console's boot set them) */
 #ifdef N64RT_RSP

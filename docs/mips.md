@@ -817,7 +817,12 @@ with the CPU.
 
 Between copies the engine also does the game's own word accesses to the cartridge: a read of the ROM (the word at
 1 MiB plus the offset), and a read or write of domain 2 at the save's memory plus the offset's low 17 bits. With
-`MONITOR.PI2` bit 0 set (a FlashRAM), a read of domain 2 is the status word and a write goes nowhere.
+`MONITOR.PI2` bit 0 set (a FlashRAM), a read of domain 2 is the status word and a write goes nowhere. A word written to the ROM's space
+(`0x1000_0000` - `0x13FF_FFFF`) is held in a latch (`mirlo_mips.sv` cl_*): the next read of the ROM, at any address, gives that word, and
+then it is gone; a second write while it is held is lost; it goes by itself after 160 clocks of the SoC's (the console's cut-off is some 250 of the
+CPU's); PI_STATUS reads IO busy (bit 1) while it is held. The runtime's bytes, halves and doublewords written there, and its
+reads of a byte or a half, are done on the same latch as the word the bus would have had (`n64rt_io.c` cart_latch_*; without PI2 the latch is
+the runtime's own, on the game's Count). A game locks up without it.
 
 ### VI
 

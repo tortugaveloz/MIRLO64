@@ -219,11 +219,13 @@ logic [31:0] c_x_addr, c_x_rdata, st_addr, st_data;
 logic [3:0]  st_strb;
 always_ff @(posedge clk_cpu) rst_cpu <= reset;
 always_ff @(posedge clk) begin irq_s <= cpu_irq; irq_mon_s <= mon_irq; end
+logic cpu_mon_lvl, mon_lvl_a, mon_lvl_s;                         // (the CPU's, the SoC's clock a cycle or two behind)
+always_ff @(posedge clk) begin mon_lvl_a <= cpu_mon_lvl; mon_lvl_s <= mon_lvl_a; end
 mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(rst_cpu),
     .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
     .x_req(c_x_req), .x_we(), .x_addr(c_x_addr), .x_wdata(), .x_strb(), .x_ack(c_x_ack), .x_rdata(c_x_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:2]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
+    .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:2]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc, .mon_lvl(cpu_mon_lvl));
 cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .s_req, .s_line, .s_addr, .s_rvalid, .s_rdata,
@@ -281,6 +283,15 @@ wire x_rom = !x_addr[30] && x_addr[28:26] == 3'b100;
 wire x_psw = x_addr[31:26] == 6'b001100;
 wire x_psh = x_addr[31:21] == 11'h1a0;  // runtime-only raw access to save storage in PSRAM
 wire io_ps = x_psh || x_d2 || x_addr[25:20] < 6'd30;
+// The cartridge bus' write latch (nemu64-test "cart-writing"; a game depends on it): a word written to the ROM's space is what the next read of
+// the cartridge -- any address -- gives, once; a second write while it is held is lost; it is gone by itself a short while after (CL_LIFE clocks of the
+// SoC's: some 250 of the CPU's); PI_STATUS' IO busy says it is held. The runtime's sub-word writes and reads come here as words too (n64rt_io.c).
+localparam logic [7:0] CL_LIFE = 8'd160;
+logic        cl_set;
+logic [31:0] cl_dat;
+logic [7:0]  cl_age;
+wire         cl_live = cl_set && cl_age < CL_LIFE;
+wire         x_cart_rom = x_rom && !x_psw && !x_psh;
 logic        d2_flash, io_ack;
 logic [31:0] pa_dat_r /*verilator public_flat_rd*/;      // (the bridge's port's read data: below)
 wire  [23:0] io_adr = x_psh ? {5'd0, x_addr[20:2]} : (x_rom || x_psw) ? {x_addr[25:20] + (x_addr[25:20] < 6'd30 ? 6'd2 : 6'd35), x_addr[19:2]} : d2_flash ? 24'h05_8040 : {9'h00a, x_addr[16:2]};
@@ -331,7 +342,8 @@ logic        rsp_h_ready;
 wire         rsp_x_go = xs == X_RSP && (!rx_we || rsp_h_ready);
 always_ff @(posedge clk) begin
     x_ack <= 0;
-    if (rst) begin xs <= X_IDLE; bus_errors <= 0; end
+    if (cl_set && cl_age != 8'hFF && !mon_lvl_s) cl_age <= cl_age + 8'd1;     // (the game's time: not the monitor level's)
+    if (rst) begin xs <= X_IDLE; bus_errors <= 0; cl_set <= 1'b0; end
     else case (xs)
     X_IDLE: if (x_req && !x_ack) begin
         if (x_regs) xs <= X_REGS;
@@ -343,7 +355,12 @@ always_ff @(posedge clk) begin
         else if (x_ai) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_si) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_pif) xs <= X_PIF;
-        else if (x_d2 || x_rom || x_psw || x_psh) begin if (x_we && ((x_rom && !x_psw && !x_psh) || (x_d2 && d2_flash) || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
+        else if (x_d2 || x_rom || x_psw || x_psh) begin
+            if (x_cart_rom && x_we) begin x_ack <= 1; if (!cl_live) begin cl_set <= 1'b1; cl_dat <= x_wdata; cl_age <= 8'd0; end end        // (a ROM's write: the latch's)
+            else if (x_cart_rom && cl_live) begin x_ack <= 1; cl_set <= 1'b0; end                                                          // (a read of it: the latch's word)
+            else if (x_we && ((x_d2 && d2_flash) || (x_psw && !io_ps))) x_ack <= 1;
+            else begin xs <= X_CART; if (x_cart_rom) cl_set <= 1'b0; end
+        end
         else if (x_grom) x_ack <= 1;
         else if (x_rsp || x_spr || x_sppc || x_dpcr) begin
             rx_wdata <= x_wdata; rx_we <= x_we; xs <= X_RSP;
@@ -375,7 +392,7 @@ end
 // from X_IDLE with nothing -- and not held in between (a hold was one more input of each bit's select)
 always_ff @(posedge clk)
     case (xs)
-    X_IDLE:  x_rdata <= (x_mi || x_pi) ? mi_w_rd : x_ai ? ai_rd : x_si ? si_rd : 32'd0;
+    X_IDLE:  x_rdata <= x_cart_rom ? cl_dat : (x_mi || x_pi) ? (mi_w_rd | {30'd0, x_pi && cl_live, 1'b0}) : x_ai ? ai_rd : x_si ? si_rd : 32'd0;     // (PI_STATUS bit 1: the latch is held)
     X_MOND:  x_rdata <= mon_rd;
     X_VIR:   x_rdata <= vi_rd;
     X_PIFR:  x_rdata <= si_q;

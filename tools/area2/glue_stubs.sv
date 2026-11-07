@@ -11,13 +11,14 @@ module mips_sys #(parameter BOOTROM = "", parameter int BOOT_WORDS = 1024, param
     input  wire         x_ack, input wire [31:0] x_rdata,
     output wire         st_valid, st_dev, output wire [31:0] st_addr, st_data, output wire [3:0] st_strb,
     input  wire         st_full, st_done, irq, irq_mon, sn_t, input wire [20:0] sn_line, output wire sn_hold,
-    output logic [31:0] dbg_pc, dbg_cause, dbg_epc
+    output logic [31:0] dbg_pc, dbg_cause, dbg_epc,
+    output wire         mon_lvl
 );
-localparam int N = 1 + 1 + 32 + 32 + 4 + 1 + 1 + 1 + 1 + 32 + 32 + 4 + 2 + 32 + 32 + 4 + 1 + 96;
+localparam int N = 1 + 1 + 32 + 32 + 4 + 1 + 1 + 1 + 1 + 32 + 32 + 4 + 2 + 32 + 32 + 4 + 1 + 96 + 1;
 logic [N-1:0] s;
 always_ff @(posedge clk) s <= {s[N-2:0], ^{rst, s_ack, s_rvalid, s_rdata, s_busy, x_ack, x_rdata, st_full, st_done, irq, irq_mon, sn_t, sn_line}};
 assign {s_req, s_we, s_addr, s_wdata, s_strb, s_line, s_wrun, x_req, x_we, x_addr, x_wdata, x_strb, st_valid, st_dev, st_addr, st_data,
-        st_strb, sn_hold, dbg_pc, dbg_cause, dbg_epc} = s;
+        st_strb, sn_hold, dbg_pc, dbg_cause, dbg_epc, mon_lvl} = s;
 endmodule
 
 module rsp_top #(parameter int LANES = 4, parameter bit MULW = 0, parameter DIV_ROM = "rsp_div_rom.hex") (
