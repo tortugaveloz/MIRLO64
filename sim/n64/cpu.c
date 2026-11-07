@@ -476,8 +476,10 @@ void n64_cpu_step(n64_t *n)
         case 0x27: WR(rdi, ~(rs | rt)); break;
         case 0x2A: WR(rdi, (int64_t)rs < (int64_t)rt); break;
         case 0x2B: WR(rdi, rs < rt); break;
-        case 0x2C: case 0x2D: OP64(N64_OP64_ADD); WR(rdi, rs + rt); break;            /* dadd(u) */
-        case 0x2E: case 0x2F: OP64(N64_OP64_ADD); WR(rdi, rs - rt); break;            /* dsub(u) */
+        case 0x2C: { int64_t o_; OP64(N64_OP64_ADD); if (__builtin_add_overflow((int64_t)rs, (int64_t)rt, &o_)) exception(n, pc, dly, EXC_OV, 0); else WR(rdi, rs + rt); } break;   /* dadd */
+        case 0x2D: OP64(N64_OP64_ADD); WR(rdi, rs + rt); break;                       /* daddu */
+        case 0x2E: { int64_t o_; OP64(N64_OP64_ADD); if (__builtin_sub_overflow((int64_t)rs, (int64_t)rt, &o_)) exception(n, pc, dly, EXC_OV, 0); else WR(rdi, rs - rt); } break;   /* dsub */
+        case 0x2F: OP64(N64_OP64_ADD); WR(rdi, rs - rt); break;                       /* dsubu */
         case 0x30: TRAP((int64_t)rs >= (int64_t)rt); break;
         case 0x31: TRAP(rs >= rt); break;
         case 0x32: TRAP((int64_t)rs < (int64_t)rt); break;
@@ -652,7 +654,8 @@ void n64_cpu_step(n64_t *n)
     case 0x15: BRANCH_L(rs != rt, btarget); break;
     case 0x16: BRANCH_L((int64_t)rs <= 0, btarget); break;
     case 0x17: BRANCH_L((int64_t)rs > 0, btarget); break;
-    case 0x18: case 0x19: OP64(N64_OP64_ADD); WR(rti, rs + IMM(insn)); break;      /* daddi(u) */
+    case 0x18: { int64_t o_; OP64(N64_OP64_ADD); if (__builtin_add_overflow((int64_t)rs, (int64_t)IMM(insn), &o_)) exception(n, pc, dly, EXC_OV, 0); else WR(rti, rs + IMM(insn)); } break;   /* daddi */
+    case 0x19: OP64(N64_OP64_ADD); WR(rti, rs + IMM(insn)); break;                 /* daddiu */
     case 0x1A: case 0x1B: {                                                        /* ldl, ldr */
         OP64(N64_OP64_MEM);
         uint64_t w;

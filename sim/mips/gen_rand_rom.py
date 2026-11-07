@@ -244,6 +244,15 @@ def main():
             R(0, b, b, 0, 0x00)
             if rnd.random() < 0.7: R(a, b, nreg(), 0, rnd.choice([0x20, 0x22]))
             else: I(0x08, a, nreg(), rnd.choice([0x7FFF, 0x8000, 1, 0xFFFF, rnd.randrange(0x10000)]))
+        elif not base and rnd.random() < float(os.environ.get("GEN_OV64", "0.3")):   # dadd, dsub, daddi on the 64-bit limits
+            for r in (a, b):
+                li32(r, rnd.choice([1, -1, 0x7FFFFFFF, rnd.randrange(1 << 31)]))
+                k = rnd.randrange(4)
+                if k == 0: R(0, r, r, 1, 0x3A)                                       # dsrl r, r, 1 (of -1: the largest)
+                elif k == 1: R(0, r, r, 31, 0x3C)                                    # dsll32 r, r, 31 (of 1: the smallest)
+                elif k == 2: R(0, r, r, 0, 0x3C)                                     # dsll32 r, r, 0
+            if rnd.random() < 0.7: R(a, b, nreg(), 0, rnd.choice([0x2C, 0x2E]))
+            else: I(0x18, a, nreg(), rnd.choice([0x7FFF, 0x8000, 1, 0xFFFF, rnd.randrange(0x10000)]))
         elif rnd.random() < 0.5:
             R(0, b, b, 0, 0x00)
             R(a, b, 0, 0, rnd.choice([0x30, 0x31, 0x32, 0x33, 0x34, 0x36]))

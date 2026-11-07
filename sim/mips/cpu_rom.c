@@ -147,6 +147,75 @@ static void sec_overflow(void)
     check(0x0741, h_count, 0);
     check(0x0742, r, 0x7FFFFFFF);
 }
+/* ---- dadd, dsub and daddi raise it the same way on the 64-bit result; the unsigned forms never do. OPD runs one such instruction on
+ * the 64-bit values (ah:al, bh:bl) in registers 8 and 9, the destination ($10) preset to (rh:rl) and read back */
+#define OPD(ins, ah, al, bh, bl, rh, rl) __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\t" \
+    "dsll32 $8, %2, 0\n\tdsll32 $11, %3, 0\n\tdsrl32 $11, $11, 0\n\tor $8, $8, $11\n\t" \
+    "dsll32 $9, %4, 0\n\tdsll32 $11, %5, 0\n\tdsrl32 $11, $11, 0\n\tor $9, $9, $11\n\t" \
+    "dsll32 $10, %0, 0\n\tdsll32 $11, %1, 0\n\tdsrl32 $11, $11, 0\n\tor $10, $10, $11\n\t" \
+    ins "\n\tnop\n\tdsra32 %0, $10, 0\n\tsll %1, $10, 0\n\t.set pop" \
+    : "+r"(rh), "+r"(rl) : "r"(ah), "r"(al), "r"(bh), "r"(bl) : "$8", "$9", "$10", "$11", "memory")
+static void sec_overflow64(void)
+{
+    u32 rh, rl;
+    const u32 H = 0x7FFFFFFFu, L = 0x80000000u, M = 0xFFFFFFFFu;
+#define OVF(id, ins, ah, al, bh, bl) \
+    h_count = 0; rh = 0x1111; rl = 0x2222; OPD(ins, ah, al, bh, bl, rh, rl); \
+    check(id, h_count, 1); check(id + 1, h_cause & 0x8000007C, 12 << 2); check(id + 2, ((u64)rh << 32) | rl, 0x111100002222ull)
+#define NOV(id, ins, ah, al, bh, bl, wh, wl) \
+    h_count = 0; rh = 0x1111; rl = 0x2222; OPD(ins, ah, al, bh, bl, rh, rl); \
+    check(id, h_count, 0); check(id + 1, ((u64)rh << 32) | rl, ((u64)(wh) << 32) | (wl))
+    h_ret = 0;
+    OVF(0x0800, "dadd $10, $8, $9", H, M, 0, 1);                          /* the largest + 1 */
+    OVF(0x0810, "dadd $10, $8, $9", L, 0, M, M);                          /* the smallest + -1 */
+    OVF(0x0820, "dadd $10, $8, $9", H, M, H, M);
+    OVF(0x0830, "dadd $10, $8, $9", L, 0, L, 0);
+    OVF(0x0840, "dsub $10, $8, $9", L, 0, 0, 1);                          /* the smallest - 1 */
+    OVF(0x0850, "dsub $10, $8, $9", H, M, M, M);                          /* the largest - -1 */
+    OVF(0x0860, "dsub $10, $8, $9", 0, 0, L, 0);                          /* 0 - the smallest */
+    OVF(0x0870, "daddi $10, $8, 1", H, M, 0, 0);
+    OVF(0x0880, "daddi $10, $8, 0x7FFF", H, M, 0, 0);
+    OVF(0x0890, "daddi $10, $8, -1", L, 0, 0, 0);
+    OVF(0x08A0, "dadd $10, $8, $9", H, M, 0, 1);                          /* (again: nothing was left behind) */
+    NOV(0x0900, "dadd $10, $8, $9", H, M, M, M, H, M - 1);                /* the largest + -1 */
+    NOV(0x0910, "dadd $10, $8, $9", 0, H, 0, 1, 0, L);                    /* a 32-bit overflow is not a 64-bit one */
+    NOV(0x0920, "dadd $10, $8, $9", M, M, 0, 1, 0, 0);
+    NOV(0x0930, "dadd $10, $8, $9", L, 0, H, M, M, M);                    /* the smallest + the largest */
+    NOV(0x0940, "dsub $10, $8, $9", 0, L, 0, 1, 0, H);
+    NOV(0x0950, "dsub $10, $8, $9", H, M, H, M, 0, 0);
+    NOV(0x0960, "dsub $10, $8, $9", L, 0, L, 0, 0, 0);
+    NOV(0x0970, "dsub $10, $8, $9", 0, 0, 0, 1, M, M);
+    NOV(0x0980, "daddi $10, $8, -1", H, M, 0, 0, H, M - 1);
+    NOV(0x0990, "daddi $10, $8, 1", 0, H, 0, 0, 0, L);
+    NOV(0x09A0, "daddu $10, $8, $9", H, M, 0, 1, L, 0);                   /* the unsigned forms wrap */
+    NOV(0x09B0, "daddu $10, $8, $9", L, 0, M, M, H, M);
+    NOV(0x09C0, "dsubu $10, $8, $9", L, 0, 0, 1, H, M);
+    NOV(0x09D0, "dsubu $10, $8, $9", H, M, M, M, L, 0);
+    NOV(0x09E0, "daddiu $10, $8, 1", H, M, 0, 0, L, 0);
+    /* EPC, and in a branch's delay slot Cause.BD and the branch's address */
+    {
+        u32 pc;
+        h_count = 0; rh = 0x1111; rl = 0x2222;
+        __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tla %2, 1f\n\t"
+            "dsll32 $8, %3, 0\n\tdsll32 $11, %4, 0\n\tdsrl32 $11, $11, 0\n\tor $8, $8, $11\n\tli $9, 1\n\t"
+            "1: dadd $10, $8, $9\n\tnop\n\t.set pop" : "+r"(rh), "+r"(rl), "=&r"(pc) : "r"(H), "r"(M) : "$8", "$9", "$10", "$11", "memory");
+        check(0x0A00, h_count, 1);
+        check(0x0A01, h_epc, pc);
+        check(0x0A02, h_cause & 0x8000007C, 12 << 2);
+        h_count = 0;
+        __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\t"
+            "dsll32 $8, %3, 0\n\tdsll32 $11, %4, 0\n\tdsrl32 $11, $11, 0\n\tor $8, $8, $11\n\tli $9, 1\n\tli $10, 0x2222\n\t"
+            "la %2, 1f\n\t1: beq $0, $0, 2f\n\tdadd $10, $8, $9\n\t2: nop\n\tsll %0, $10, 0\n\t.set pop"
+            : "=r"(rl), "+r"(rh), "=&r"(pc) : "r"(H), "r"(M) : "$8", "$9", "$10", "$11", "memory");
+        check(0x0A10, h_count, 1);
+        check(0x0A11, h_epc, pc);
+        check(0x0A12, h_cause & 0x8000007C, 0x80000000u | (12 << 2));
+        check(0x0A13, h_cause >> 31, 1);                                  /* (BD) */
+        check(0x0A14, rl, 0x2222);
+    }
+#undef OVF
+#undef NOV
+}
 /* ---- dmfc0 of LLAddr and TagLo is zero-extended (32 bits); mfc0 gives the word */
 #define DMFC0(r, hi, lo) __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tdmfc0 $8, $" #r "\n\tnop\n\tnop\n\tdsra32 %0, $8, 0\n\tsll %1, $8, 0\n\t.set pop" : "=r"(hi), "=r"(lo) :: "$8")
 static void sec_dmfc0(void)
@@ -214,6 +283,7 @@ int main(void)
     sec_cop0_masks();
     sec_cop0_co();
     sec_overflow();
+    sec_overflow64();
     sec_dmfc0();
     sec_cp0_64();
     sec_cache_align();

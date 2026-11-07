@@ -347,6 +347,7 @@ typedef struct packed {
     logic        lld, scd;                  // ll / sc on a doubleword (ld / sd, linked)
     logic        zx0;                       // dmfc0 of LLAddr or TagLo: a 32-bit value, zero-extended (a wide result)
     logic        ovf;                       // add, addi, sub: Integer Overflow on a 32-bit signed overflow
+    logic        ovf64;                     // dadd, daddi, dsub: the same on the 64-bit result (the upper word's sum, at M)
     logic        cop2;                      // a COP2 instruction: Coprocessor Unusable without Status.CU2, and nothing with it
     logic        use_rs, use_rt;
     load_t       ld;
@@ -402,8 +403,8 @@ function automatic ctl_t decode(input logic [31:0] i);
         6'h14, 6'h38, 6'h3C: begin c.x64 = X_SLL; c.late = 1; end        // dsllv, dsll, dsll32
         6'h16, 6'h3A, 6'h3E: begin c.x64 = X_SRL; c.late = 1; end
         6'h17, 6'h3B, 6'h3F: begin c.x64 = X_SRA; c.late = 1; end
-        6'h2C, 6'h2D: begin c.x64 = X_ADD; c.alu = A_ADD; end            // dadd, daddu (the lower word is E's, the upper M's)
-        6'h2E, 6'h2F: begin c.x64 = X_SUB; c.alu = A_SUB; end
+        6'h2C, 6'h2D: begin c.x64 = X_ADD; c.alu = A_ADD; c.ovf64 = !fn[0]; end            // dadd, daddu (the lower word is E's, the upper M's)
+        6'h2E, 6'h2F: begin c.x64 = X_SUB; c.alu = A_SUB; c.ovf64 = !fn[0]; end
         6'h18: begin c.wr = 0; c.md = MD_MULT; end
         6'h19: begin c.wr = 0; c.md = MD_MULTU; end
         6'h1A: begin c.wr = 0; c.md = MD_DIV; end
@@ -462,7 +463,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     6'h0E: begin c.alu = A_XOR;  c.b_imm = 1; c.imm_zero = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
     6'h0F: begin c.alu = A_LUI;  c.b_imm = 1; c.wr = 1; c.rd = rt; end
     6'h18, 6'h19: begin                                                   // daddi, daddiu
-        if (XALU) begin c.x64 = X_ADD; c.alu = A_ADD; c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; end
+        if (XALU) begin c.x64 = X_ADD; c.alu = A_ADD; c.b_imm = 1; c.use_rs = 1; c.wr = 1; c.rd = rt; c.ovf64 = !op[0]; end
         else c.ri = 1;
     end
     6'h10: begin
@@ -1191,7 +1192,7 @@ always_comb begin
     else if (e_c.ri) e_exc_code = 5'd10;
     else if (e_c.sys) e_exc_code = 5'd8;
     else if (e_c.brk) e_exc_code = 5'd9;
-    else if (e_ovf) e_exc_code = 5'd12;
+    else if (e_ovf || e_c.ovf64) e_exc_code = 5'd12;       // (dadd, daddi, dsub: the code is carried; M's m_xovf says whether it is taken)
     else if (e_trap) e_exc_code = 5'd13;
     else if (e_misalign || e_n64dev) e_exc_code = e_c.st != S_NONE ? 5'd5 : 5'd4;
 end
@@ -1505,7 +1506,9 @@ wire int_pending = int_game || int_mon;
 logic int_pend_r, int_mon_r;
 always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; end
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
-wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
+// Integer Overflow of dadd, daddi, dsub: the 64-bit result's sign (the upper word's sum) is not the operands' (the subtrahend inverted)
+wire m_xovf = m_c.ovf64 && (m_xha[31] == (m_xhb[31] ^ m_xsub)) && (m_xsum[31] != m_xha[31]);
+wire m_exc_v = (m_exc && !(m_hwx && m_dev)) || m_xovf;          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
