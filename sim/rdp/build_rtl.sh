@@ -11,7 +11,7 @@ MD="${MODEL_DIR:-$HERE/../../lang/c/rdp}"     # (the model: MODEL_DIR=<dir> for 
 export VERILATOR_ROOT="${VERILATOR_ROOT:-$HOME/local/usr/share/verilator}"
 V="${VERILATOR:-$HOME/local/usr/bin/verilator}"
 # (the rules of docs/rdp_exact.md that rtl/rdp follows: the model is built with them; XRULES=-DRDP_EXACT is all of them)
-XR="${XRULES--DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ}"
+XR="${XRULES--DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -DRDP_X_FRAC0}"
 # (the noise LFSR steps once for each pixel with coverage, as the model's does: RDP_LFSR_PIXEL, what the lockstep comparison needs. The RTL's default
 # is a free-running one, which steps every clock: VDEFS= (empty) builds that, and obj_rdp/tb_rdp then differs from the model in the noise's bits only)
 VDEFS="${VDEFS--DRDP_LFSR_PIXEL}"

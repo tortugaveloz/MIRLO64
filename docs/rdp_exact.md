@@ -12,8 +12,8 @@ benches can follow the ones the RTL has and no more:
 
 | what | where |
 |---|---|
-| the rules, one switch each | `RDP_X_RECTLOD` (rule 2), `RDP_X_COPY` (rule 6's copy mode), `RDP_X_SHADE` (rule 4's pixel side), `RDP_X_SPAN` (rule 4's span start), `RDP_X_MEMDZ` (rule 8; needs `RDP_X_SHADE`). `sim/rdp/build_rtl.sh` builds the model with the ones `rtl/rdp` follows (`XRULES=` to change them); the oracle's `rdpo_x` is that model |
-| all the rules | `RDP_EXACT`, with `RDP_N64`: the five above and the rest (the walk's edges and spans, rectangles as primitives, the LOD in 1-cycle mode, TEXEL1 a pixel ahead). Off by default |
+| the rules, one switch each | `RDP_X_RECTLOD` (rule 2), `RDP_X_COPY` (rule 6's copy mode), `RDP_X_SHADE` (rule 4's pixel side), `RDP_X_SPAN` (rule 4's span start), `RDP_X_MEMDZ` (rule 8; needs `RDP_X_SHADE`), `RDP_X_FRAC0` (rule 9). `sim/rdp/build_rtl.sh` builds the model with the ones `rtl/rdp` follows (`XRULES=` to change them); the oracle's `rdpo_x` is that model |
+| all the rules | `RDP_EXACT`, with `RDP_N64`: the six above and the rest (the walk's edges and spans, rectangles as primitives, the LOD in 1-cycle mode, TEXEL1 a pixel ahead). Off by default |
 | the console's perspective divide | rule 1, the model's whatever the switch, as `rtl/rdp` has it: `rdp_n64_div` in `rdp.c` (declared in `rdp.h`), and `n64_persp` (static) for the texel |
 | a frame | `make rdp_task EXACT=1` in `sim/rdp` |
 | the comparison | `sim/rdp_oracle`: `make` builds `build/rdpo` (no switch), `build/rdpo_x` (the rules the RTL follows) and `build/rdpo_exact` (`RDP_EXACT`); `./run.sh 50` runs them on every suite, the minimal streams and the captured dumps |
@@ -23,8 +23,8 @@ Without a switch the model is as it was.
 
 ## In short
 
-`rtl/rdp` follows rules 1, 2, 5, 4 whole (the pixel side and the span's start) and 8 (the depth image's
-own dz), the copy mode of rule 6, and the CVG_X_ALPHA write rule; it does not follow the rest of rule 6 (edges,
+`rtl/rdp` follows rules 1, 2, 5, 4 whole (the pixel side and the span's start), 8 (the depth image's
+own dz) and 9 (the LOD fraction without TEX_LOD), the copy mode of rule 6, and the CVG_X_ALPHA write rule; it does not follow the rest of rule 6 (edges,
 spans, rectangles as primitives), rule 3 (the LOD in 1-cycle and copy mode) or rule 7 (TEXEL1 a pixel
 ahead). The benches build the model with the rules the RTL follows, so `rdp_regress.sh` passes.
 
@@ -57,7 +57,8 @@ On the suites of `run.sh 50` (colour words that differ; the model with no rule, 
 | suite | no rule | the RTL's rules | `RDP_EXACT` |
 |---|---|---|---|
 | cal_shade, cal_aff, cal_persp (cal_z: the depth words of 57 primitives) | 753, 2,899, 7,181 (57) | 0, 0, 0 (0) | 0 |
-| lod2, frac2 (the 2-cycle LOD, shade, Z, perspective) | 97,047, 112,872 | 0, 0 | 0 |
+| lod2 (the 2-cycle LOD, shade, Z, perspective) | 97,047 | 0 | 0 |
+| frac2 (the combiner reads LOD_FRACTION, no TEX_LOD) | 112,872 | the difference of rule 9, on purpose (153,788 words in 10 seeds) | the same |
 | cal_rect | 1,197 | 1,197 | 0 |
 | cal_t1, lod2_t1 (TEXEL1 a pixel ahead) | 72,762, 733,470 | 72,497, 731,711 | 0 |
 | floor, floor_affine (rows past 2,048 pixels) | 10,856, 3,520 | 10,560, 3,520 | 0 |
@@ -445,6 +446,9 @@ attribute rounding, 0 with rule 4), `texrect_next_line` (224; rule 2),
 (3,100 colour and 3,100 coverage words) and `fill_scissor_edge` (199; rule 6),
 `cycle2_texel1` (120; rule 7), `memdz_weights` (256 colour and 256 depth words), `memdz_tolerance` (388 colour, 12 coverage and 370 depth),
 `memdz_floor` (66 colour, 1,060 depth) and `memdz_coplanar` (8 colour, 3 coverage, 10 depth; rule 8). No rule raises the dumps' count.
+The columns are the oracle's agreement: rule 9 (the LOD fraction without TEX_LOD) is the one rule that leaves it on purpose, so the
+`frac2` rows above are the model before it, and `lod_frac_no_tex_lod` (160 colour words) is the stream that
+shows it (the oracle's pixels are tile 1's, the console's and the model's tile 0's).
 
 Notes:
 
@@ -492,6 +496,27 @@ the RTL decode and re-encode; a 16-bit texel and a TLUT entry are copied raw, as
 `streams/copy_raw16.rdps`), and a texture rectangle drawn with PERSP (with the switch it goes through
 the perspective divide with W = 0, as on the console; untested).
 
+### 9. The LOD fraction without TEX_LOD
+
+**The console** shows a 2-cycle primitive without TEX_LOD whose combiner reads LOD_FRACTION as if the fraction were 0: a
+trilinear combiner, `(TEXEL1 - TEXEL0) * LOD_FRACTION + TEXEL0`, on a texture of a level count of 0 draws TEXEL0, the
+primitive's own tile, however the next tile (TEXEL1's) is set. A game that draws a figure so, with the next tile never set
+(a tile of zeros), is correct on the console and, with the oracle's rule, wrong: the oracle computes the fraction because
+the combiner reads it, and a level count of 0 makes it all ones (the far level, rdp_lod), so each pixel is TEXEL1, a
+constant texel of the zero tile (or, on the RTL, whatever its stale tile and TMEM give: stripes). The console's picture
+is the evidence; no other rule of this page is. 1-cycle mode is not changed (rule 3 computes its fraction as before).
+
+**Without the switch** the fraction is computed whenever the combiner reads it (`LOD_FRAC_USED`, docs/lod.md choice 3), as
+the oracle does.
+
+**With it** (`RDP_X_FRAC0`, `lod_wanted`): the LOD is computed for a 2-cycle primitive only with TEX_LOD; otherwise
+LOD_FRACTION reads 0 and the tiles are the primitive's and the next, as before. The `frac2` suites differ from the
+oracle by this rule on purpose (every pixel whose combiner reads the fraction, which the oracle draws with its fraction);
+`streams/lod_frac_no_tex_lod.rdps` is the minimal one.
+
+**RTL**: done, `rdp_top.v`'s `lod_on` is `cyc == 2'd1 && other_h[16]`: the four compares of the combiner's C selects are
+gone (a few ALUTs fewer).
+
 ## The RTL, in all
 
 | rule | where | status | cost, fitted ALMs (RDP alone, 3 seeds) |
@@ -507,6 +532,7 @@ the perspective divide with W = 0, as on the console; untested).
 | 6 rectangles as primitives | `rdp_top.v` the rectangle path | not done | about even |
 | 6 copy mode | `rdp_pix.v` P5b, `rdp_top.v` `cp_m` | done (texture rectangles) | |
 | 7 TEXEL1 a pixel ahead | `rdp_pix.v` combiner input, `rdp_top.v` ghost pixel | not done | doc: 60 to 110, 80 to 120 FFs |
+| 9 LOD fraction without TEX_LOD | `rdp_top.v` `lod_on` | done | fewer (4 compares gone) |
 
 The order that keeps the lockstep benches useful: each rule leaves the switch as the RTL follows it
 (`build_rtl.sh`'s `XR`, the oracle Makefile's `XRULES`).

@@ -284,11 +284,10 @@ module rdp_top (
     // a triangle's S and T are the N64's -- s10.5 in the integer half, against
     // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
     // affine path, take the integer halves (lang/c/rdp/rdp.c draw_pixel_cvg)
-    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
-    // 0 in an alpha, either cycle). (Registered: the modes are set many clocks before a primitive's first pixel.)
+    // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD. Without it LOD_FRACTION reads 0 (docs/rdp_exact.md,
+    // rule 9), however the combiner uses it. (Registered: the modes are set many clocks before a primitive's first pixel.)
     reg         lod_on;
-    always @(posedge clk) lod_on <= cyc == 2'd1 && (other_h[16] || cc_hi[19:15] == 5'd13 || cc_hi[4:0] == 5'd13
-                                                         || cc_hi[11:9] == 3'd0 || cc_lo[20:18] == 3'd0);
+    always @(posedge clk) lod_on <= cyc == 2'd1 && other_h[16];
     reg         lod_lft;            // the walk goes to the right (a triangle's lft; a rectangle's always): x + 1 is next
     reg  [2:0]  lod_lvl;            // the level count (the triangle's level field; a rectangle's 0)
     reg  [4:0]  min_lvl;            // SET_PRIM_COLOR's minimum level
