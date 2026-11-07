@@ -258,6 +258,63 @@ static void sec_cp0_64(void)
     MTC0(4, c0);
     MTC0(12, st);
 }
+/* ---- an mtc0 of a 64-bit register writes the register's own upper word into EPC, ErrorEPC, Context (PTEBase) and XContext (PTEBase), not the sign
+ * extension of the word (nemu64-test, cop0: Context/XContext/ExceptPC) */
+#define MTC0X(r, vh, vl) do { u32 vh_ = (vh), vl_ = (vl); \
+    __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tdsll32 $8, %0, 0\n\tdsll32 $9, %1, 0\n\tdsrl32 $9, $9, 0\n\tor $8, $8, $9\n\t" \
+                     "mtc0 $8, $" #r "\n\tnop\n\tnop\n\t.set pop" :: "r"(vh_), "r"(vl_) : "$8", "$9", "memory"); } while (0)
+static void sec_mtc0_64(void)
+{
+    u32 hi, lo, st = MFC0(12), c0 = MFC0(4);
+    MTC0(12, st & ~0x2u);
+    MTC0X(14, 0xF7654321u, 0x89ABCDEFu);
+    DMFC0(14, hi, lo);
+    check(0x0B01, ((u64)hi << 32) | lo, 0xF765432189ABCDEFull);
+    MTC0X(14, 0x00000000u, 0xFFFFFFFFu);                               /* (not the sign extension: zero) */
+    DMFC0(14, hi, lo);
+    check(0x0B02, ((u64)hi << 32) | lo, 0x00000000FFFFFFFFull);
+    MTC0X(30, 0x12345678u, 0x80000001u);
+    DMFC0(30, hi, lo);
+    check(0x0B03, ((u64)hi << 32) | lo, 0x1234567880000001ull);
+    MTC0X(4, 0xFF123FFFu, 0x8B000000u);
+    DMFC0(4, hi, lo);
+    check(0x0B04, hi, 0xFF123FFFu);
+    check(0x0B05, lo & 0xFF800000u, 0x8B000000u);
+    MTC0X(4, 0x00000000u, 0xFB000000u);
+    DMFC0(4, hi, lo);
+    check(0x0B06, hi, 0);
+    MTC0X(20, 0x87654321u, 0x8B000000u);                               /* XContext: PTEBase is bits 63:33 */
+    DMFC0(20, hi, lo);
+    check(0x0B07, hi & 0xFFFFFFFEu, 0x87654320u);
+    MTC0X(20, 0x00000000u, 0x8B000000u);
+    DMFC0(20, hi, lo);
+    check(0x0B08, hi & 0xFFFFFFFEu, 0);
+    MTC0(4, c0);
+    MTC0(12, st);
+}
+/* ---- sc and scd leave LLbit set: the next sc stores too (only an eret and the exceptions clear it) */
+static void sec_sc_link(void)
+{
+    volatile u32 *w = (volatile u32 *)0x80101000u;
+    u32 a, b, c, d;
+    w[0] = 0x1111; w[1] = 0; w[2] = 0;
+    __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tll $8, 0(%4)\n\tli %0, 0x2222\n\tsc %0, 4(%4)\n\tli %1, 0x3333\n\tsc %1, 8(%4)\n\t.set pop"
+                     : "=&r"(a), "=&r"(b), "=&r"(c), "=&r"(d) : "r"(w) : "$8", "memory");
+    check(0x0C01, a, 1);
+    check(0x0C02, b, 1);                                               /* (the second sc succeeds too) */
+    check(0x0C03, w[1], 0x2222);
+    check(0x0C04, w[2], 0x3333);
+    h_count = 0; h_ret = 0;
+    __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tlld $8, 0(%2)\n\tli %0, 0x4444\n\tscd %0, 8(%2)\n\tli %1, 0x5555\n\tscd %1, 16(%2)\n\t.set pop"
+                     : "=&r"(a), "=&r"(b) : "r"(w) : "$8", "memory");
+    check(0x0C11, a, 1);
+    check(0x0C12, b, 1);
+    __asm__ volatile(".set push\n\t.set noat\n\t.set noreorder\n\tll $8, 0(%1)\n\tbreak\n\tli %0, 0x6666\n\tsc %0, 4(%1)\n\t.set pop"
+                     : "=&r"(a) : "r"(w) : "$8", "memory");
+    check(0x0C21, h_count, 1);
+    check(0x0C22, a, 0);                                               /* (the exception's eret cleared the link) */
+    check(0x0C23, w[1], 0x2222);
+}
 /* ---- CACHE with an address that is not a word's raises Address Error (AdEL); a word's does not */
 static void sec_cache_align(void)
 {
@@ -286,6 +343,8 @@ int main(void)
     sec_overflow64();
     sec_dmfc0();
     sec_cp0_64();
+    sec_mtc0_64();
+    sec_sc_link();
     sec_cache_align();
     *K1(0x000F0F04) = nfail;
     *K1(0x000F0F00) = nfail ? 0xBAD00000u | nfail : 0x600DC0DEu;

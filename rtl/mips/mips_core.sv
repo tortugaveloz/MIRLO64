@@ -2118,7 +2118,7 @@ always_ff @(posedge clk) begin
             end
             // (LLAddr: the N64's physical address >> 4, as the VR4300's -- with N64WIN the RDRAM's place in the SDRAM is not the game's)
             if ((m_c.ld == M_LL || m_c.lld) && !m_lmiss) begin ll_bit <= 1'b1; c0_lladdr <= (FLAT && N64WIN && m_pa[31:23] == N64_RDRAM[31:23]) ? {13'd0, m_pa[22:4]} : m_pa >> 4; end
-            if (m_c.st == S_SC || m_c.scd) ll_bit <= 1'b0;
+            // (sc and scd leave LLbit as it is: the console's next sc succeeds too; only eret and the exceptions clear it -- nemu64-test, cache: Read cached vs uncached)
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
             // mthi, mtlo: written in the next cycle, from md_ma (rs's lower word, which the multiplier's
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
@@ -2142,7 +2142,7 @@ always_ff @(posedge clk) begin
                 5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0]; c0_index[31] <= m_st_lo[31]; end   // (P is writable, as the VR4300's)
                 5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
-                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23]; c0_h_ctx <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}};
+                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23]; c0_h_ctx <= m_b64[63:32];
                              // (likewise its BadVPN2: the tables' faults do not set it)
                              if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
                 5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
@@ -2152,13 +2152,13 @@ always_ff @(posedge clk) begin
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)
                 5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
-                5'd14: begin c0_epc <= m_st_lo; c0_h_epc <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}; end
+                5'd14: begin c0_epc <= m_st_lo; c0_h_epc <= m_b64[63:32]; end
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
                 5'd17: c0_lladdr <= m_st_lo;
                 5'd18: c0_watchlo <= m_st_lo & 32'hFFFFFFFB;  5'd19: c0_watchhi <= m_st_lo & 32'hF;
                 5'd28: c0_taglo <= m_st_lo;                          // (all 32 bits read back, as the console's)
-                5'd30: begin c0_errorepc <= m_st_lo; c0_h_eepc <= m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}; end
-                5'd20: c0_h_xc <= (m_insn[21] ? m_b64[63:32] : {32{m_st_lo[31]}}) & 32'hFFFFFFFE;   // XContext: PTEBase (R and BadVPN2 are the hardware's)
+                5'd30: begin c0_errorepc <= m_st_lo; c0_h_eepc <= m_b64[63:32]; end
+                5'd20: c0_h_xc <= m_b64[63:32] & 32'hFFFFFFFE;   // XContext: PTEBase (R and BadVPN2 are the hardware's)
                 default: ;
                 endcase
             end

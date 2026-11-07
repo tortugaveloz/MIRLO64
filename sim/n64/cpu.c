@@ -562,9 +562,9 @@ void n64_cpu_step(n64_t *n)
                     [C0_CONFIG] = 0x0F00800F, [C0_LLADDR] = 0xFFFFFFFF, [C0_WATCHLO] = 0xFFFFFFFB,
                     [C0_WATCHHI] = 0x0000000F, [C0_TAGLO] = 0xFFFFFFFF, [C0_ERROREPC] = 0xFFFFFFFF };
                 c->cop0[rdi] = (c->cop0[rdi] & ~wm[rdi]) | (rt32 & wm[rdi]);
-                /* the upper words: a dmtc0 gives them, an mtc0 the sign extension of the word */
+                /* the upper words: the register's own, whether dmtc0 or mtc0 (a register that is not the sign extension of its low word shows) */
                 if (rdi == C0_CONTEXT || rdi == C0_EPC || rdi == C0_ERROREPC || rdi == C0_XCONTEXT) {
-                    uint32_t hi = fmt == 0x05 ? (uint32_t)(rt >> 32) : (rt32 & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+                    uint32_t hi = (uint32_t)(rt >> 32);          /* (an mtc0 too: the register's own upper word, as the console's) */
                     c->cop0h[rdi] = rdi == C0_XCONTEXT ? (hi & 0xFFFFFFFEu) : hi;
                 }
             }
@@ -711,14 +711,14 @@ void n64_cpu_step(n64_t *n)
         if (!load(n, pc, dly, a, 8, &v)) fl_set(c, rti, (int64_t)v); break;          /* ldc1 */
     case 0x37: if (!load(n, pc, dly, a, 8, &v)) { OP64(N64_OP64_MEM); WR(rti, v); } break;  /* ld */
     case 0x38:                                                                     /* sc */
-        if (c->ll_bit) { if (!store(n, pc, dly, a, 4, rt32)) { WR(rti, 1); c->ll_bit = 0; } }      /* (the link ends with the sc) */
+        if (c->ll_bit) { if (!store(n, pc, dly, a, 4, rt32)) WR(rti, 1); }      /* (the link stays: the console's next sc succeeds too) */
         else if (!sc_fault(n, pc, dly, a, 4)) WR(rti, 0);
         break;
     case 0x39: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (swc1: CpU, see COP1) */
         store(n, pc, dly, a, 4, c->f[rti]); break;                          /* swc1 */
     case 0x3C:                                                                     /* scd */
         OP64(N64_OP64_MEM);
-        if (c->ll_bit) { if (!store(n, pc, dly, a, 8, rt)) { WR(rti, 1); c->ll_bit = 0; } }
+        if (c->ll_bit) { if (!store(n, pc, dly, a, 8, rt)) WR(rti, 1); }
         else if (!sc_fault(n, pc, dly, a, 8)) WR(rti, 0);
         break;
     case 0x3D: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (sdc1: CpU, see COP1) */

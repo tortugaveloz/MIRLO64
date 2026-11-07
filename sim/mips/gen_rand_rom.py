@@ -238,6 +238,11 @@ def main():
 
     def trap():
         # (on 32-bit values: with any other the core has a Reserved Instruction)
+        if not base and rnd.random() < float(os.environ.get("GEN_C064", "0.15")):     # mtc0 of a 64-bit register into EPC, ErrorEPC, Context or XContext, read back whole by dmfc0
+            rd = rnd.choice([4, 14, 20, 30])
+            mtc0(src(), rd)
+            emit(0x40200000 | wreg() << 16 | rd << 11)                               # dmfc0
+            return
         a, b = nreg(), nreg()
         R(0, a, a, 0, 0x00)                     # sll a, a, 0
         if rnd.random() < float(os.environ.get("GEN_OV", "0.3")):                  # add, sub, addi: Integer Overflow when the 32-bit signed result does not fit
