@@ -116,7 +116,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42DD_0000` | 8 KiB | The runtime's `.data` as it was when the program started, which [Restart Game](#restart-game) puts back |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
-| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: the low three bits of each channel of a 16-bit colour image's pixels, and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
+| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: a byte for each pixel of a 16-bit colour image, some of the low bits of its channels and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 

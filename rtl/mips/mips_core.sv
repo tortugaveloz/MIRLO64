@@ -581,8 +581,9 @@ function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {3
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
 
 logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wired, c0_badvaddr,
-             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_lladdr,
-             c0_watchlo, c0_watchhi, c0_taglo, c0_errorepc;
+             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_errorepc;
+// (no LLAddr, WatchLo, WatchHi, TagLo: they only store what mtc0 gives them -- LL's address, the watch of an access that no exception follows
+// here, a cache tag -- and no game reads them back; mfc0 finds 0 there and mtc0 does nothing)
 logic        count_frac;
 logic [4:0]  c0_random;                     // decrements every step, from 31 down to Wired
 wire  [4:0]  rnd_dec = (c0_random <= c0_wired[4:0]) ? 5'd31 : c0_random - 5'd1;
@@ -1426,9 +1427,7 @@ always_comb begin
     5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
     5'd10: c0_rd = c0_entryhi; 5'd11: c0_rd = c0_compare;
     5'd12: c0_rd = c0_status;  5'd13: c0_rd = cause_now;  5'd14: c0_rd = c0_epc;   // (Cause: IP2 live, as the model)
-    5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd17: c0_rd = c0_lladdr;
-    5'd18: c0_rd = c0_watchlo; 5'd19: c0_rd = c0_watchhi;
-    5'd28: c0_rd = c0_taglo;   5'd30: c0_rd = c0_errorepc;
+    5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd30: c0_rd = c0_errorepc;
     default: c0_rd = 32'd0;
     endcase
 end
@@ -1934,8 +1933,7 @@ always_ff @(posedge clk) begin
         d_valid <= 0; e_valid <= 0; m_valid <= 0; w_valid <= 0;
         c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0; c0_count <= 0; c0_compare <= 0;
         c0_wired <= 0; c0_index <= 0; c0_entryhi <= 0; c0_entrylo0 <= 0; c0_entrylo1 <= 0; c0_pagemask <= 0;
-        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0; c0_lladdr <= 0; c0_watchlo <= 0;
-        c0_watchhi <= 0; c0_taglo <= 0;
+        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
@@ -2028,17 +2026,13 @@ always_ff @(posedge clk) begin
             if (m_st && !m_sc_fail && m_cached && m_dc_hit) begin
                 sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
             end
-            // (LLAddr: the N64's physical address >> 4, as the VR4300's -- with N64WIN the RDRAM's place in the SDRAM is not the game's)
-            if (m_c.ld == M_LL && !m_lmiss) begin ll_bit <= 1'b1; c0_lladdr <= (FLAT && N64WIN && m_pa[31:23] == N64_RDRAM[31:23]) ? {13'd0, m_pa[22:4]} : m_pa >> 4; end
+            if (m_c.ld == M_LL && !m_lmiss) ll_bit <= 1'b1;
             if (m_c.st == S_SC) ll_bit <= 1'b0;
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
             // mthi, mtlo: written in the next cycle, from md_ma (rs's lower word, which the multiplier's
             // operand register takes every cycle) and md_ah -- md_busy holds back whoever reads them
             if (m_c.md == MD_MTHI || m_c.md == MD_MTLO) begin md_mt <= 1'b1; md_mth <= m_c.md == MD_MTHI; md_busy <= 1'b1; end
             if (m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) hilo_soft <= 1'b0;   // (a multiply or a divide: HI and LO are the core's again)
-            // A write-through cache has no dirty lines for software to write
-            // back. Report an invalid tag to cache-walking writeback code.
-            if (m_c.cache && m_insn[20:16] == 5'h05) c0_taglo <= 0;
             if (m_c.mtc0) begin
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
@@ -2065,9 +2059,7 @@ always_ff @(posedge clk) begin
                 5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
                 5'd14: c0_epc <= m_st_lo;
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
-                5'd17: c0_lladdr <= m_st_lo;
-                5'd18: c0_watchlo <= m_st_lo & 32'hFFFFFFFB;  5'd19: c0_watchhi <= m_st_lo & 32'hF;
-                5'd28: c0_taglo <= m_st_lo & 32'h0FFFFFC0;    5'd30: c0_errorepc <= m_st_lo;
+                5'd30: c0_errorepc <= m_st_lo;
                 default: ;
                 endcase
             end

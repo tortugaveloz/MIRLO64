@@ -52,8 +52,9 @@
 #define LAYOUT_GS           0x42D40000
 #define LAYOUT_GS_SLOT      7
 #define LAYOUT_GS_MAX       0x00010000
-#define LAYOUT_SHADOW       0x43200000      /* the RDP's shadow plane (the core's "Picture: 32-bit", docs/video_options.md): 2 MiB, the low colour
-                                             * bits of a 16-bit image's pixels, the image's address folded into it (rtl/soc/mirlo_mips.sv); no program reads it */
+#define LAYOUT_SHADOW       0x43200000      /* the RDP's shadow plane (the core's "Picture: 32-bit", docs/video_options.md): 2 MiB, a byte for each pixel
+                                             * of a 16-bit image (some of its low colour bits and a check), the image's address folded into it
+                                             * (rtl/soc/mirlo_mips.sv); no program reads it */
 #define LAYOUT_SHADOW_BYTES 0x00200000
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */

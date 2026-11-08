@@ -56,12 +56,15 @@ SV
 ;;
 rdp)  top=rdp_top ;;
 rdpw) cat > top.sv <<SV
-module ooc_rdpw (input wire clk, rst, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
+module ooc_rdpw (input wire clk, rst, dither_off, shadow_en, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
     output wire m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,
     output wire m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we,
-    input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy);
+    input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy,
+    output wire sr_valid, input wire sr_ready, output wire [19:0] sr_addr, output wire [8:0] sr_len, input wire sr_rvalid, input wire [31:0] sr_rdata,
+    output wire sw_valid, input wire sw_ready, output wire [19:0] sw_addr, output wire [31:0] sw_data, output wire [3:0] sw_be, output wire sw_last);
     wire [31:0] rdp_addr;
-    rdp_top rdp (.clk, .rst, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
+    rdp_top rdp (.clk, .rst, .dither_off, .shadow_en, .sr_valid, .sr_ready, .sr_addr, .sr_len, .sr_rvalid, .sr_rdata,
+        .sw_valid, .sw_ready, .sw_addr, .sw_data, .sw_be, .sw_last, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
         .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we, .m_rdata_valid, .m_rdata,
         .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(), .unknown_ops(), .idle(rdp_idle), .tmem_busy(rdp_tmem_busy));
     // (rtl/soc/mirlo_mips.sv: the address bits it reads, the hidden plane's remap; the load and unknown counters are not read)
@@ -128,7 +131,7 @@ for c in clk clk_vid clk_c; do echo "if {[get_collection_size [get_ports -nowarn
 echo 'PROJECT_REVISION = "ooc"' > ooc.qpf
 ${QUARTUS:-$HOME/altera/25.1std/quartus/bin}/quartus_map ooc > map.log 2>&1 || { grep "Error (" map.log | head -5; exit 1; }
 f() { grep -h "$1" out/ooc.map.rpt | head -1 | awk -F';' '{gsub(/ /,"",$3); print $3}'; }
-echo "$tag [$unit]: ALUTs $(f 'Combinational ALUT usage for logic'), registers $(f 'Dedicated logic registers'), memory ALUTs $(f 'Memory ALUT usage'), DSP $(f 'Total DSP Blocks'), block memory bits $(f 'Total block memory bits')"
+echo "$tag [$unit]: ALMs(est) $(f 'Estimate of Logic utilization'), ALUTs $(f 'Combinational ALUT usage for logic'), registers $(f 'Dedicated logic registers'), memory ALUTs $(f 'Memory ALUT usage'), DSP $(f 'Total DSP Blocks'), block memory bits $(f 'Total block memory bits')"
 # FIT="<seeds>": the unit placed alone, once a seed
 [ -n "${FIT:-}" ] || exit 0
 cp ooc.qsf ooc.map.qsf

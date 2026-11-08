@@ -92,6 +92,7 @@ static int region(uint32_t wa)                               // C colour, Z dept
     if (b >= (reg_ti & 0x7FFFFFu) && b < (reg_ti & 0x7FFFFFu) + 0x40000u) return 2;
     return 3;
 }
+static int sd_why; static uint64_t ch_n[16];
 static bool bank_hash, hid_remap; static uint32_t hid_x = 2;                                       // TB_HASH=1: the SDRAM's bank is a[10:9] xor the row's pairs of bits
 static struct {
     bool open[4]; uint32_t row[4]; int c_act[4], c_pre[4], c_wr[4]; int c_rd, c_wrany;
@@ -113,6 +114,7 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     }
     int cmd = 0, ba = 0; uint32_t row = (ra >> 11) & 0x1FFF; int bank = ((ra >> 9) ^ (bank_hash ? (row ^ row >> 2 ^ row >> 4 ^ row >> 6 ^ row >> 8 ^ row >> 10 ^ row >> 12) : 0)) & 3;   // 1 ACT 2 PRE 3 RD 4 WR 5 PREALL 6 REF
     bool go = false;
+    sd_why = (sd.wait || sd.st || sd.ref_due) ? 3 : !rv ? 5 : (sd.open[bank] && sd.row[bank] == row) ? 4 : 1;      // (TB_PROF: why a request waits: 1 row miss, 3 refresh, 4 timing of an open row, 2 read/write turn)
     if (sd.wait == 0) {
         if (sd.st == 1) {
             bool ok = true;
@@ -123,7 +125,7 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
             ba = bank;
             if (sd.open[bank] && sd.row[bank] == row) {
                 if (sd.c_act[bank] >= 2 && (rwe ? sd.c_rd >= 3 : sd.c_wrany >= 2)) { cmd = rwe ? 4 : 3; go = true; }
-                else if (sd.c_act[bank] >= 2) sd.n_turn++;
+                else if (sd.c_act[bank] >= 2) { sd.n_turn++; sd_why = 2; }
             } else if (sd.open[bank]) { if (sd.c_act[bank] >= 4 && sd.c_wr[bank] >= 2) cmd = 2; }
             else if (sd.c_pre[bank] >= 2) { cmd = 1; sd.n_miss++; if (!pick_cpu) miss_h[region(ra)][last_reg[bank]]++; }
         }
@@ -149,6 +151,20 @@ static bool sd_step(bool v, bool we, uint32_t a, bool *is_rdp)
     if (!sd.cpu_v && cpu_pct && rnd() % 100 < cpu_pct) { sd.cpu_v = true; sd.cpu_we = rnd() % 5 == 0; sd.cpu_a = (rnd() << 8 ^ rnd()) & 0x1FFFFF; }
     return go && !pick_cpu;
 }
+// the RDP's byte address as the SoC's SDRAM word address (mirlo_mips.sv): the hidden plane (bit 23) 1 MiB below the RDRAM, the shadow plane (bit 24)
+// folded into 2 MiB at 0x0320_0000, its bank the other of the colour words'. TB_SHFLAT=1: the shadow plane at the colour word's own address (the
+// bench's first mapping)
+static uint32_t sd_word(uint32_t a)
+{
+    if (a & 0x1000000u) {
+        if (getenv("TB_SHFLAT")) return 0xE00000u + ((a >> 2) & 0x1FFFFFu);
+        const uint32_t n = (a >> 2) & 0xFFFFFu;                                // the plane word's number: the colour image's byte address / 8
+        const uint32_t w = ((n & 0x7FFFFu) ^ ((n >> 19) << 18)) & ~0x7FFu | ((n >> 10) & 1u) << 8 | (((n >> 8) & 3u) ^ 1u) << 9 | (n & 0xFFu);
+        return 0xC80000u + w;
+    }
+    if (a & 0x800000u) return 0xDC0000u + ((a >> 2) & 0x3FFFFu);          // (the hidden plane)
+    return 0xE00000u + ((a >> 2) & 0x1FFFFFu);
+}
 static uint64_t pix_why2[2][8], st_cyc[32], pix_why[8], st_rd[32], st_wr[32];   // (and the memory commands taken in each state)
 static std::vector<uint64_t> take_cyc, start_cyc;                // TB_CLS: the cycle each command word was taken, and each command started executing                      // TB_CLS: the cycle each command word was taken
 
@@ -173,8 +189,7 @@ static void tick()
             static unsigned long nz[2]; nz[top->m_cmd_we ? 1 : 0]++;      // (how many they are, as it goes)
             if (((nz[0] + nz[1]) & 0x3FFF) == 0) fprintf(stderr, "\r  Z words: %lu read, %lu written", nz[0], nz[1]);
         } else
-        top->m_cmd_ready = sd_step(top->m_cmd_valid, top->m_cmd_we, (top->m_cmd_addr & 0x800000u) ? 0xDC0000u + ((top->m_cmd_addr >> 2) & 0x3FFFFu)     // (the hidden plane, 1 MiB below the RDRAM: mirlo_mips.sv)
-                                                                                                              : 0xE00000u + ((top->m_cmd_addr >> 2) & 0x1FFFFFu), &mine);
+        top->m_cmd_ready = sd_step(top->m_cmd_valid, top->m_cmd_we, sd_word(top->m_cmd_addr), &mine);
         top->m_wdata_ready = !wr_addrs.empty();
     }
     bool rv = !reads.empty() && reads.front().due <= cycles;
@@ -187,6 +202,11 @@ static void tick()
     bool wd = top->m_wdata_valid && top->m_wdata_ready;
     uint32_t wdat = top->m_wdata, wwe = top->m_wdata_we;
     if (prof) {
+        {   // the command channel, a cycle at a time: 0 a command goes, 1.. a request waits (1 row miss, 2 read/write turn, 3 refresh, 4 an open row's timing), 8.. no request (8 neither engine active, 9 read engine, 10 write engine, 11 both)
+            auto *r = top->rootp;
+            if (top->m_cmd_valid) ch_n[top->m_cmd_ready ? 0 : sd_why]++;
+            else ch_n[8 + (r->rdp_top__DOT__mem__DOT__r_act ? 1 : 0) + (r->rdp_top__DOT__mem__DOT__w_act ? 2 : 0)]++;
+        }
         st_cyc[top->rootp->rdp_top__DOT__st & 31]++;
         if (top->m_cmd_valid && top->m_cmd_ready) (top->m_cmd_we ? st_wr : st_rd)[top->rootp->rdp_top__DOT__st & 31]++;
         if ((top->rootp->rdp_top__DOT__st & 31) == 6) {      // S_PIX: why the clock was spent
@@ -227,6 +247,8 @@ static void tick()
     }
     if (wd) {
         uint32_t a = wr_addrs.front() & (MSIZE - 4); wr_addrs.pop_front();
+        static const long watch = getenv("TB_WATCH") ? strtol(getenv("TB_WATCH"), 0, 0) : -1;       // TB_WATCH=<byte address>: the writes that reach its word
+        if (watch >= 0 && (uint32_t)watch >= a && (uint32_t)watch < a + 4) fprintf(stderr, "  cycle %llu: write %08x data %08x be %x\n", (unsigned long long)cycles, a, wdat, wwe);
         for (int b = 0; b < 4; b++) if (wwe & (8u >> b)) rtl_mem[a + b] = (uint8_t)(wdat >> (24 - 8 * b));   // we[3]: the first byte
         n_wr++;
     }
@@ -238,7 +260,7 @@ static std::set<uint32_t> foreign_px;                 // TB_FOREIGN: the colour 
 static uint32_t f_cimg, f_w;
 static std::set<uint32_t> frand;
 static uint64_t fn_n, fn_ok;
-static unsigned sh_crc7(unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; }
+static unsigned sh_crc3(unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 2) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 7u; if (fb) c ^= 3u; } return c; }
 static std::set<unsigned> kinds;
 static void on_rdp(void *, const uint32_t *w, int n) { for (int i = 0; i < 2 * n; i++) cmds.push_back(w[i]); }
 
@@ -692,9 +714,9 @@ int main(int argc, char **argv)
                 f_cimg = cimg; f_w = width;
                 // (at once: the pixels the others wrote whose shadow word the RDP had written -- the check must fail on nearly all)
                 for (uint32_t a : frand) {
-                    const unsigned sw = mdl_mem[0x01000000u + a] << 8 | mdl_mem[0x01000000u + a + 1], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
-                    if (sw == 0xFFFFu) continue;
-                    fn_n++; fn_ok += (sw & 0x7Fu) == sh_crc7(cw);
+                    const unsigned sw = mdl_mem[0x01000000u + (a >> 1)], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
+                    if (sw == 0xFFu) continue;
+                    fn_n++; fn_ok += (sw & 7u) == sh_crc3(cw);
                 }
                 frand.clear();
             }
@@ -723,20 +745,18 @@ int main(int argc, char **argv)
                (unsigned long long)mdl.pixels_drawn, diff ? "MISMATCH" : "RTL == model\n");
         if (getenv("TB_FOREIGN") && f_w) {
             // the colour image's pixels with a shadow halfword the RDP wrote: its check against the colour word, for the pixels others wrote and the rest
-            auto crc7 = [](unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; };
             uint64_t u_n = 0, u_ok = 0;
             for (uint32_t a = f_cimg & (SIZE - 2), e = a + f_w * 200u * 2u; a < e && a + 2 <= SIZE; a += 2) {
-                const uint32_t sa = 0x01000000u + a;
-                const unsigned sw = mdl_mem[sa] << 8 | mdl_mem[sa + 1], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
-                if (sw == 0xFFFFu) continue;                                  // (never written by the RDP: the initial plane)
-                const bool ok = (sw & 0x7Fu) == crc7(cw);
+                const unsigned sw = mdl_mem[0x01000000u + (a >> 1)], cw = mdl_mem[a] << 8 | mdl_mem[a + 1];
+                if (sw == 0xFFu) continue;                                    // (never written by the RDP: the initial plane)
+                const bool ok = (sw & 7u) == sh_crc3(cw);
                 if (!foreign_px.count(a)) { u_n++; u_ok += ok; }
             }
             printf("    TB_FOREIGN: shadow words of pixels nothing else wrote: %llu of %llu pass the check; of the random pixels others wrote (with a shadow word the RDP had written), right after: %llu of %llu pass\n",
                    (unsigned long long)u_ok, (unsigned long long)u_n, (unsigned long long)fn_ok, (unsigned long long)fn_n);
             if (u_ok != u_n) bad = 1;
-            if (fn_n > 100 && fn_ok * 20 > fn_n) bad = 1;
-            if (u_ok != u_n || (fn_n > 100 && fn_ok * 20 > fn_n)) printf("    TB_FOREIGN: BAD\n");
+            if (fn_n > 100 && fn_ok * 4 > fn_n) bad = 1;
+            if (u_ok != u_n || (fn_n > 100 && fn_ok * 4 > fn_n)) printf("    TB_FOREIGN: BAD\n");
             f_w = 0; foreign_px.clear(); fn_n = fn_ok = 0;
         }
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
@@ -763,6 +783,10 @@ int main(int argc, char **argv)
             for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) if (miss_h[i][j]) { printf("    MISS %s after %s: %llu\n", rn[i], rn[j], (unsigned long long)miss_h[i][j]); miss_h[i][j] = 0; }
         }
         if (prof) {
+            printf("\n    channel: go %llu | waits: row miss %llu, turn %llu, refresh %llu, open-row timing %llu | no request: engines idle %llu, read engine %llu, write engine %llu, both %llu",
+                   (unsigned long long)ch_n[0], (unsigned long long)ch_n[1], (unsigned long long)ch_n[2], (unsigned long long)ch_n[3], (unsigned long long)ch_n[4],
+                   (unsigned long long)ch_n[8], (unsigned long long)ch_n[9], (unsigned long long)ch_n[10], (unsigned long long)ch_n[11]);
+            memset(ch_n, 0, sizeof ch_n);
             static const char *nm[21] = { "idle (waiting for commands)", "triangle start", "row", "setup", "AA init", "AA subscanlines", "pixels", "drain the pipeline",
                                           "AA span", "triangle words", "next row", "wait for memory", "fill", "texture load", "sync", "rectangle start", "load start", "span", "attributes", "XL",
                                           "a span's second half" };

@@ -161,11 +161,12 @@ int rdp_cmd_len(uint32_t w0);   /* 64-bit words, from a command's first word */
  * touches, {a, a} by its colour's bit 0. With RDP_X_MEMDZ the depth image has its own two hidden bits a pixel (the
  * low two of the dz code), in the same plane at the depth image's addresses. */
 #define RDP_HID_BASE 0x00800000u
-/* The shadow plane (the core's "Picture: 32-bit" setting, docs/video_options.md), a halfword for each halfword of a 16-bit colour
- * image, at RDP_SH_BASE + the pixel's byte address (the SoC: SDRAM 0x0320_0000, 2 MiB, the address folded; rtl/soc/mirlo_mips.sv maps
- * the RDP's address bit 24 there): {the low three bits of the pixel's R, G and B as the blender made them, 9 bits; a 7-bit check of the
- * pixel's 5551 word (sh_crc)}. The scan-out and the blender take the low bits only where the check is the word's now; a halfword the
- * RDP did not write (the CPU, a copy) fails it. A fill and a copy write the pixel's own top bits repeated. */
+/* The shadow plane (the core's "Picture: 32-bit" setting, docs/video_options.md), a byte for each pixel of a 16-bit colour
+ * image, at RDP_SH_BASE + the pixel's byte address / 2 (the SoC: SDRAM 0x0320_0000, 4 MiB; rtl/soc/mirlo_mips.sv maps
+ * the RDP's address bit 24 there): {R[2:1], G[2:1], B[2] -- the high two (one for blue) of the three low bits of the pixel's channels as
+ * the blender made them -- and a 3-bit check of the pixel's 5551 word (sh_crc)}. The scan-out and the blender take the low bits only
+ * where the check is the word's now; a byte the RDP did not write (the CPU) fails it. A fill and a copy write the pixel's own top bits
+ * repeated. No plane is kept while the colour image is at the depth image's address (the RDP clears a depth buffer as a colour image). */
 #define RDP_SH_BASE  0x01000000u
 
 /* RDP_N64: the N64's own command stream, as a game's microcode gives it

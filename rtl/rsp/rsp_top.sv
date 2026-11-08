@@ -345,7 +345,9 @@ assign dpc_start_we  = mtc0 && c0r == 4'd8;
 assign dpc_end_we    = mtc0 && c0r == 4'd9;
 assign dpc_status_we = mtc0 && c0r == 4'd11;
 assign dpc_wdata = c_b;
-assign h_rdata = h_addr == 4'd8 ? {20'd0, pc_next} : cop0_rd(h_addr);
+// (the host's reads: SP_PC, or one of the eight SP registers -- the SoC maps no other word of the window than these to h_addr
+// 0 to 8; the microcode alone reads the DPC registers)
+assign h_rdata = h_addr[3] ? {20'd0, pc_next} : cop0_rd({1'b0, h_addr[2:0]});
 
 always_ff @(posedge clk) begin
     if (rst) begin

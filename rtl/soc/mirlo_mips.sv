@@ -564,10 +564,13 @@ rdp_top rdp (.clk, .rst, .dither_off(vid_out32), .shadow_en(vid_out32),
     .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
     .tmem_busy(rdp_tmem_busy));
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
-// (bit 24: the shadow plane of a 16-bit colour image, 2 MiB at SDRAM 0x0320_0000 -- the image's address folded into it, its bank
-// the other of the colour word's, so that a pixel's two words (the scan-out reads both) are in two banks: n64_video.sv has the same fold)
-wire [18:0] sh_x = rdp_addr[20:2] ^ {rdp_addr[22:21], 17'd0};
-wire [18:0] sh_w = {sh_x[18:11], sh_x[10:9] ^ 2'b01, sh_x[8:0]};
+// (bit 24: the shadow plane of a 16-bit colour image, a byte for each pixel: a plane word, number rdp_addr[21:2] = the colour image's byte
+// address / 8, is for four pixels, two colour words. 2 MiB at SDRAM 0x0320_0000: the number's top bit exclusive-ored into its bit 18, so that
+// two images 4 MiB apart share plane space; the bank of a plane word is the other of its colour words' (the colour word's bank is the
+// address's bits 12:11, the number's 9:8; the number's bit 10 is the column's top bit), so that the scan-out, which reads a plane word
+// and the colour words it serves by turns, has them in two banks, and neither is the hidden plane's. n64_video.sv has the same map.)
+wire [19:0] sh_n = rdp_addr[21:2];
+wire [18:0] sh_w = {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
 assign m_cmd_addr = {6'd0, rdp_addr[24] ? 24'hC8_0000 + {5'd0, sh_w} : rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,

@@ -492,10 +492,11 @@ wire pre_lt = {ax.e, ax.f} < {ay.e, ay.f}, pre_eq = {ax.e, ax.f} == {ay.e, ay.f}
 logic [31:0] rxl, rxh, ryl, ryh;
 wire         dc_nx = rxh[30:20] == 11'h7FF && {rxh[19:0], rxl} != 52'd0, dc_ny = ryh[30:20] == 11'h7FF && {ryh[19:0], ryl} != 52'd0;
 wire [62:0]  dc_mx = {rxh[30:0], rxl}, dc_my = {ryh[30:0], ryl};
-wire         dc_zx = dc_mx == 63'd0, dc_zy = dc_my == 63'd0;
+wire         dc_mlt = dc_mx < dc_my, dc_meq = dc_mx == dc_my;      // (one comparator: the other direction is "not below, and not equal")
+wire         dc_zz = dc_meq && dc_mx == 63'd0;                     // both are zero
 wire         dc_un = dc_nx || dc_ny;
-wire         dc_eq = !dc_un && ((dc_zx && dc_zy) || (dc_mx == dc_my && rxh[31] == ryh[31]));
-wire         dc_lt = !dc_un && !(dc_zx && dc_zy) && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? dc_mx > dc_my : dc_mx < dc_my);
+wire         dc_eq = !dc_un && (dc_zz || (dc_meq && rxh[31] == ryh[31]));
+wire         dc_lt = !dc_un && !dc_zz && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? !dc_mlt && !dc_meq : dc_mlt);
 
 // ============================================================ the FSM
 always_ff @(posedge clk) begin

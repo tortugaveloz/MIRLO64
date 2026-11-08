@@ -10,7 +10,7 @@ for pixel.
 --off: the picture as the scan-out shows it without the filters.
 --deblur, --out32: the core's "Picture" options (docs/video_options.md): the anti-alias and divot filters bypassed; the
 dither filter bypassed and the 16-bit picture's channels with their low three bits from the shadow plane (here a plane of zeros, which
-passes the check for the words whose CRC-7 is 0), else the top three bits again.
+passes the check for the words whose CRC-3 is 0), else the top three bits again.
 """
 import sys
 import numpy as np
@@ -26,27 +26,30 @@ def channels(fb):
     return [(fb >> 11) & 31, (fb >> 6) & 31, (fb >> 1) & 31]
 
 
-def crc7(w):
-    """the shadow plane's check of a 16-bit word: CRC-7 (x^7 + x^3 + 1), the top bit first (lang/c/rdp/rdp.c sh_crc), of an array"""
+def crc3(w):
+    """the shadow plane's check of a 16-bit word: CRC-3 (x^3 + x + 1), the top bit first (lang/c/rdp/rdp.c sh_crc), of an array"""
     w = np.asarray(w, dtype=np.int64)
     c = np.zeros_like(w)
     for i in range(15, -1, -1):
-        fb = ((c >> 6) & 1) ^ ((w >> i) & 1)
-        c = (c << 1) & 0x7F
-        c = np.where(fb == 1, c ^ 0x09, c)
+        fb = ((c >> 2) & 1) ^ ((w >> i) & 1)
+        c = (c << 1) & 7
+        c = np.where(fb == 1, c ^ 3, c)
     return c
 
 
 def sh_lows(fb, sh=None):
-    """the 32-bit output's low three bits of each channel of a 16-bit picture: the shadow halfword's where its check is the word's
-    (sh: the plane's halfwords, default a plane of zeros, as the simulator's SDRAM), else the channel's top three bits again"""
+    """the 32-bit output's low three bits of each channel of a 16-bit picture: the shadow byte's where its check is the word's
+    (sh: the plane's bytes, default a plane of zeros, as the simulator's SDRAM; red and green keep two of the three bits, blue one, the
+    bit missing repeating the one above it), else the channel's top three bits again"""
     if sh is None:
         sh = np.zeros_like(fb)
-    ok = (sh & 0x7F) == crc7(fb)
+    ok = (sh & 7) == crc3(fb)
+    two_r, two_g, one_b = (sh >> 6) & 3, (sh >> 4) & 3, (sh >> 3) & 1
+    plane = [(two_r << 1) | (two_r & 1), (two_g << 1) | (two_g & 1), one_b * 7]
     lows = []
-    for k, (rs, ss) in enumerate(((11, 13), (6, 10), (1, 7))):
+    for k, rs in enumerate((11, 6, 1)):
         top = (fb >> (rs + 2)) & 7
-        lows.append(np.where(ok, (sh >> ss) & 7, top))
+        lows.append(np.where(ok, plane[k], top))
     return lows
 
 

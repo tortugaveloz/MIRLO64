@@ -31,8 +31,8 @@
 //   SHV, SFV        one cycle (a JPEG microcode's YUV packing)
 // Not implemented (no microcode of the ROMs scanned has them -- sim/rsp/
 // rom_ucode_scan.py; they do nothing and set `unimpl`): LHV LFV LWV, SWV, SFV
-// at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ. The reserved
-// functions give the console's result: vd 0, the accumulator's low word vs + vt.
+// at an element not a multiple of 4, VRNDP VRNDN VMULQ VMACQ, and the reserved
+// COP2 functions (0x12, 0x16 - 0x1C, 0x1E, 0x1F, 0x2E, 0x2F, 0x38 - 0x3E).
 `default_nettype none
 
 module rsp_vu #(
@@ -121,11 +121,8 @@ wire fn_rcp  = fn[5:3] == 3'b110 && fn[1:0] != 2'b11;              // VRCP VRCPL
 wire fn_mov  = fn == 6'h33;
 wire fn_one  = fn_rcp || fn_mov;                                   // writes one lane of vd
 wire fn_none = fn == 6'h37 || fn == 6'h3F;                         // VNOP, VNULL
-// the reserved functions: vd 0, the accumulator's low word vs + vt (the adder's, as VADDC's), the flags kept
-function automatic logic is_resv(input logic [5:0] f);
-    return f == 6'h12 || (f >= 6'h16 && f <= 6'h1C) || f == 6'h1E || f == 6'h1F || f == 6'h2E || f == 6'h2F || (f >= 6'h38 && f <= 6'h3E);
-endfunction
-wire fn_known = fn_mul || fn_one || fn_none || is_resv(fn) || fn == 6'h10 || fn == 6'h11 || fn == 6'h13 || fn == 6'h14 || fn == 6'h15
+// (the reserved functions are none of the above: like VMULQ they do nothing and set `unimpl`)
+wire fn_known = fn_mul || fn_one || fn_none || fn == 6'h10 || fn == 6'h11 || fn == 6'h13 || fn == 6'h14 || fn == 6'h15
               || fn == 6'h1D || (fn >= 6'h20 && fn <= 6'h2D);
 
 // ------------------------------------------------------------- registers --
@@ -201,8 +198,6 @@ function automatic logic [2:0] amode(input logic [5:0] f);
     6'h10:   return 3'd1;
     6'h11:   return 3'd2;
     6'h14:   return 3'd3;
-    6'h12, 6'h16, 6'h17, 6'h18, 6'h19, 6'h1A, 6'h1B, 6'h1C, 6'h1E, 6'h1F, 6'h2E, 6'h2F,
-    6'h38, 6'h39, 6'h3A, 6'h3B, 6'h3C, 6'h3D, 6'h3E: return 3'd3;
     6'h25:   return 3'd4;
     6'h24:   return 3'd5;
     6'h26:   return 3'd6;
@@ -290,7 +285,7 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         // is a function of the lane's two bits: a table of its four values (tt, the same
         // for the lane's sixteen bits), beside the adder's sum and -t.
         o.accl_w = f != 6'h1D;
-        c_l = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
+        c_l = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15;
         c_x = f >= 6'h28 && f <= 6'h2D;
         // the compares: b16 is s < t (signed)
         unique case (f)
@@ -341,7 +336,6 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         rsel = (abs_sat || ovf) ? 2'd3 : 2'd0;
         c15 = !abs_sat && b16;                               // (abs_sat: 7FFF; ovf: b16, then its inverse)
         clo = abs_sat || !b16;
-        if (is_resv(f)) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
         // (VSAR: the accumulator's word e names -- vs, the lane's -- or 0)
         // (one pass: the accumulator's word from the multiply adder, which adds 0 to it: the high word (2), the middle (1) or the low (0, accl))
         if (f == 6'h1D) begin
@@ -746,7 +740,8 @@ wire ls_go    = (lwc2 || swc2) && ls_known && !ls_tv;
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
               && (ls_tv ? idle : (lwc2 || (mtc2 && NP == 1)) ? ld_ok : (swc2 || mfc2) ? (l_free && x_free)
                   : NP == 2 ? idle : 1'b1)
-              && !(m_stall && ls_go);                       // (a load or store waits for the port)
+              && !(m_stall && ls_go)                        // (a load or store waits for the port)
+              && !(cfc2 && x_v && x_wait);                  // (CFC2 waits for the flags of a clip's EX that waits a cycle)
 // a pair goes as one: its computation's SEL and the other's start in the same cycle, or neither
 wire sel0     = sel0r && (!lp || start_r);
 wire start_nc = start_r && (!lp || sel0r || none_ok);
@@ -757,26 +752,16 @@ wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv &&
 wire  [4:0]  tv_nn   = {1'b0, tv_n} + 5'd1;
 wire  [2:0]  tvr_n   = !in_tv ? 3'd0 : m_stall ? tv_n[3:1] : tv_nn[3:1];
 assign rdd_n = stv_n ? {ltn[4:3], tvr_n} : rd_n;
-// CFC2's flags, the cycle after it starts: the registers, or what an older EX that waited a cycle writes into them now
-logic        cf_v, cf_x;              // CFC2 started last cycle; ... and an older EX was to run now
+// CFC2's flags, the cycle after it starts: the register it names (CFC2 does not start while a clip's EX waits a cycle for
+// its flags -- cf_x -- so the registers are final by then, whatever EX ran before)
+logic        cf_v;                    // CFC2 started last cycle
 logic        ct_v, ct_p;              // CTC2 started last cycle (its write is now); ... in a pair (counted with its computation)
 logic [1:0]  ct_r;
 logic [15:0] ct_d;
 logic [1:0]  cf_r;
-// (the register CFC2 names is chosen first, and then only its 16 bits take the older EX's flags: bit g_we of the register
-// as that EX writes it, g_val)
-logic [15:0] cf_base, cf_val, cf_we, cf_o;
+logic [15:0] cf_o;
 always_comb begin
-    cf_base = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
-    cf_val = '0; cf_we = '0;
-    for (int l = 0; l < LANES; l++) begin
-        automatic int li = int'(x_pass) * LANES + l;
-        cf_we[li]  = cf_x && x_exec && (cf_r == 2'd0 ? ex[l].co_w : cf_r == 2'd1 ? ex[l].cc_w : ex[l].ce_w);
-        cf_val[li] = cf_r == 2'd0 ? ex[l].co_lo : cf_r == 2'd1 ? ex[l].cc_lo : ex[l].ce;
-        cf_we[8 + li]  = cf_x && x_exec && !cf_r[1] && (cf_r[0] ? ex[l].cc_w : ex[l].co_w);
-        cf_val[8 + li] = cf_r[0] ? ex[l].cc_hi : ex[l].co_hi;
-    end
-    cf_o = (cf_we & cf_val) | (~cf_we & cf_base);
+    cf_o = cf_r == 2'd0 ? vco : cf_r == 2'd1 ? vcc : {8'd0, vce};
     res_l = cf_r[1] ? {24'd0, cf_o[7:0]} : {{16{cf_o[15]}}, cf_o};
 end
 
@@ -941,7 +926,7 @@ always_ff @(posedge clk) begin
         default: st <= V_IDLE;
         endcase
         // CFC2: its flags the cycle after
-        cf_v <= start_nc && cfc2; cf_r <= li[12:11]; cf_x <= x_v && x_wait;
+        cf_v <= start_nc && cfc2; cf_r <= li[12:11];
         nop_l <= lp && none_ok && start_nc && (lw_nx || ctc2);
         // CTC2: the flag register written the cycle after (over an older EX's write then)
         ct_v <= start_nc && ctc2; ct_p <= lp && !none_ok; ct_r <= li[12:11]; ct_d <= b[15:0];

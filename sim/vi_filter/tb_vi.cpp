@@ -24,8 +24,8 @@
 //   the dedither stays as the game asked. TB_OUT32=1: the core's "32-bit" output (vi_out32): no dedither; a 16-bit picture's channels
 //   taken to the full range (v + (v >> 5), white 255); a 32-bit picture (TB_PX32) keeps the low three bits of each channel, in the
 //   anti-alias filter's centre too. Both default 0 (the console's output: the pad hash is the same as before the options).
-//   TB_OUT32=1 with a 16-bit picture reads the RDP's shadow plane (docs/video_options.md; not for a woven frame); TB_SHADOW=1 fills it: it is in memory beside the colour image, a halfword
-//   a pixel -- the low three bits of its channels and the CRC-7 of its 5551 word; for a share of the pixels a halfword that is the pixel's
+//   TB_OUT32=1 with a 16-bit picture reads the RDP's shadow plane (docs/video_options.md; not for a woven frame); TB_SHADOW=1 fills it: it is in memory beside the colour image, a byte
+//   a pixel -- two of the three low bits of its red and green, one of its blue, and the CRC-3 of its 5551 word; for a share of the pixels a byte that is the pixel's
 //   (random low bits), for the rest noise (which passes the check now and then, as it will). The scan-out reads a pixel's low bits from it
 //   where the check is the word's, and takes the top three bits of each channel again where it is not.
 //   TB_BLANK=1: the VI blanked after the first frame checked (`enable` low: H_START 0, an origin out of the RDRAM): one
@@ -58,11 +58,12 @@ static std::vector<uint8_t> hidw;                 // each pixel's hidden two cov
 static bool px32;                                 // TB_PX32: a 32-bit picture
 static bool deblur, out32;                        // TB_DEBLUR, TB_OUT32
 static bool shadow;                               // TB_SHADOW
-static std::vector<uint16_t> shw;                 // each pixel's shadow halfword
-static std::vector<uint32_t> shm;                 // the shadow plane as the SDRAM has it (2 MiB, the image's address folded: n64_video.sv)
+static std::vector<uint8_t> shw;                  // each pixel's shadow byte
+static std::vector<uint32_t> shm;                 // the shadow plane as the SDRAM has it (2 MiB, a word four pixels, mapped as n64_video.sv does)
 static long sh_reads;
-static unsigned sh_crc(uint16_t w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; }
-static uint32_t sh_fold(uint32_t k) { uint32_t x = (k & 0x7FFFFu) ^ (((k >> 19) & 3u) << 17); return (x & ~0x600u) | (((x >> 9) & 3u) ^ 1u) << 9; }
+static unsigned sh_crc(uint16_t w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 2) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 7u; if (fb) c ^= 3u; } return c; }
+// the plane word of the number n (the colour image's byte address / 8): its SDRAM word in the plane (rtl/soc/mirlo_mips.sv)
+static uint32_t sh_fold(uint32_t n) { return (((n & 0x7FFFFu) ^ ((n >> 19) << 18)) & ~0x7FFu) | ((n >> 10) & 1u) << 8 | ((((n >> 8) & 3u) ^ 1u) << 9) | (n & 0xFFu); }
 static std::vector<uint32_t> fb32;                // its buffer: RGBA8888, R the top byte (the word as the SDRAM gives it); fbw / hidw its 16-bit view
 static long hid_reads;                            // reads of the hidden plane (none for a 32-bit picture)
 static unsigned rng = 1;
@@ -93,9 +94,10 @@ static int lowv(int x, unsigned r, int k)
 {
     size_t i = (size_t)r * (wov ? (WB == 1280 ? 640 : WB) : WB) + (size_t)x;
     if (shadow && !px32) {         // the shadow halfword where its check is the pixel's word's, else the channel's top three bits again
-        const uint16_t c = i < fbw.size() ? fbw[i] : 0, sw = i < shw.size() ? shw[i] : 0;
+        const uint16_t c = i < fbw.size() ? fbw[i] : 0; const unsigned sw = i < shw.size() ? shw[i] : 0;
         const int top = k == 0 ? (c >> 13) & 7 : k == 1 ? (c >> 8) & 7 : (c >> 3) & 7;
-        return (sw & 0x7Fu) == sh_crc(c) ? (int)(sw >> (13 - 3 * k)) & 7 : top;
+        const unsigned two = k == 0 ? (sw >> 6) & 3u : (sw >> 4) & 3u;                  // (the two bits kept of red and green, the one of blue: the bit missing repeats the one above it)
+        return (sw & 7u) == sh_crc(c) ? (k == 2 ? ((sw >> 3) & 1u ? 7 : 0) : (int)(two << 1 | (two & 1u))) : top;
     }
     if (!(px32 && out32)) return 0;
     uint32_t w = i < fb32.size() ? fb32[i] : 0;
@@ -243,8 +245,8 @@ int main(int argc, char **argv)
     }
     if (shadow) {
         shw.assign(fbw.size(), 0); shm.assign(1u << 19, 0);       // (not filled: a plane of zeros, which passes the check now and then)
-        if (shfill) for (size_t i = 0; i < fbw.size(); i++) shw[i] = (rnd() % 100) < 70 ? (uint16_t)((rnd() & 0x1FFu) << 7 | sh_crc(fbw[i])) : (uint16_t)(rnd() ^ rnd() << 7);
-        if (shfill) for (size_t k = 0; 2 * k + 1 < fbw.size(); k++) shm[sh_fold((uint32_t)k)] = (uint32_t)shw[2 * k] << 16 | shw[2 * k + 1];
+        if (shfill) for (size_t i = 0; i < fbw.size(); i++) shw[i] = (rnd() % 100) < 70 ? (uint8_t)((rnd() & 0x1Fu) << 3 | sh_crc(fbw[i])) : (uint8_t)(rnd() ^ rnd() >> 3);
+        if (shfill) for (size_t k = 0; 4 * k + 3 < fbw.size(); k++) shm[sh_fold((uint32_t)k)] = (uint32_t)shw[4 * k] << 24 | (uint32_t)shw[4 * k + 1] << 16 | (uint32_t)shw[4 * k + 2] << 8 | shw[4 * k + 3];
     }
     if (px32) {   // a 32-bit buffer: patches of 8-bit colour (their low bits as random as the rest), the coverage in alpha[7:5], alpha[4:0] noise
         fb32.resize(fbw.size());
