@@ -290,29 +290,31 @@ wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // word is held, a colour word takes its pair's four bits (the even pixel's in
 // [1:0]). The FIFO word: {epoch, row start, the pair's hidden bits, the two pixels}.
 // The 32-bit output option (vi_out32) with a 16-bit picture (docs/video_options.md): the RDP's shadow plane (2 MiB at SDRAM 0x0320_0000,
-// the image's address folded into it and its bank the other of the colour word's), a halfword for each pixel of the colour image,
-// {the low three bits of its R, G, B, the 7-bit check of its 5551 word}. Each colour word is read after its shadow word; a pixel whose
-// halfword's check is its word's CRC-7 takes the shadow's low bits, else the top three bits of each channel again (the plain
-// expansion). The 18 bits (a pixel's nine) ride in the FIFO word, above the hidden bits. Not for a woven frame (a serrated 640 x 480
-// picture): its 307,200 words a frame would be 29 % of the SDRAM's cycles, more than the scan-out is sure of; it is shown as a 16-bit picture is without the plane.
+// the image's address folded into it and its bank the other of the colour word's), a byte for each pixel of the colour image,
+// {R[2:1], G[2:1], B[2] of the low three bits of its channels, the 3-bit check of its 5551 word}: a word of it serves two colour words,
+// and is read before the first of each pair (and before a row's first word, if that is the second of its pair). A pixel whose byte's
+// check is its word's CRC-3 takes the shadow's low bits (the bit missing repeats the one above it), else the top three bits of each
+// channel again (the plain expansion). The 18 bits (a pixel's nine) ride in the FIFO word, above the hidden bits. Not for a woven frame (a
+// serrated 640 x 480 picture): its 307,200 words a frame would be more than the scan-out is sure of; it is shown as a 16-bit picture is
+// without the plane.
 localparam int FW = 56;
 logic        sh_f;                  // the frame's pictures has its shadow words read
-logic        s_next;                // the next read is the colour word's shadow word (after the group's hidden word)
+logic        s_next;                // the next read is a shadow word (after the group's hidden word)
 logic [31:0] sreg;                  // the shadow word that came back last
-function automatic logic [6:0] sh_crc(input logic [15:0] w);            // lang/c/rdp/rdp.c sh_crc
-    logic [6:0] c;
+function automatic logic [2:0] sh_crc(input logic [15:0] w);            // lang/c/rdp/rdp.c sh_crc
+    logic [2:0] c;
     logic fb;
-    c = 7'd0;
+    c = 3'd0;
     for (int i = 15; i >= 0; i--) begin
-        fb = c[6] ^ w[i];
-        c = {c[5:0], 1'b0};
-        if (fb) c = c ^ 7'h09;
+        fb = c[2] ^ w[i];
+        c = {c[1:0], 1'b0};
+        if (fb) c = c ^ 3'd3;
     end
     return c;
 endfunction
-// a pixel's nine low bits: the shadow halfword's where it is that pixel's, else the colour's top three bits of each channel
-function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [15:0] s);
-    return (s[6:0] == sh_crc(c)) ? s[15:7] : {c[15:13], c[10:8], c[5:3]};
+// a pixel's nine low bits: the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
+function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [7:0] s);
+    return (s[2:0] == sh_crc(c)) ? {s[7], s[6], s[6], s[5], s[4], s[4], s[3], s[3], s[3]} : {c[15:13], c[10:8], c[5:3]};
 endfunction
 logic        h_next;                // the next read is the group's hidden word
 logic [31:0] hreg;
@@ -359,7 +361,7 @@ always_ff @(posedge clk) begin
             end else if (m_valid && m_ready) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
-                s_next <= sh_f;
+                s_next <= sh_f && raddr[0];                  // (the next word is a pair's first)
                 raddr <= raddr + 24'd1;
                 if (col == nwm1_f) begin                  // a row's last word: the next row
                     col <= 0;
@@ -367,7 +369,7 @@ always_ff @(posedge clk) begin
                     if (w2nd) wodd <= 1'b1;               // (the second field's line)
                     else begin rowp <= rowp_n; yacc <= yan[9:0]; wodd <= 1'b0; end
                     orow <= orow + 9'd1; all <= orow == nrm1;
-                    rs_next <= 1'b1; h_next <= hid_f;
+                    rs_next <= 1'b1; h_next <= hid_f; s_next <= sh_f;
                 end else begin
                     col <= col + 11'd1;
                     if (raddr[2:0] == 3'd7) h_next <= hid_f;   // the next word starts a group
@@ -391,8 +393,10 @@ end
 // (a registered stage in front of the FIFO, with the epoch of the word's arrival)
 logic        f_we, f_ep;
 logic [54:0] f_wd;
-// (the colour word's pixels, the left one in rd_w's low half, and the shadow word's halfwords: the even pixel's in its high half)
-wire  [17:0] f_lo = {sh_lo(rd_w[31:16], sreg[15:0]), sh_lo(rd_w[15:0], sreg[31:16])};
+// (the colour word's pixels, the left one in rd_w's low half, and its bytes of the shadow word: the pair's first word's are the upper two,
+// the left pixel's first)
+wire  [15:0] f_sb = tq_h[0] ? sreg[15:0] : sreg[31:16];
+wire  [17:0] f_lo = {sh_lo(rd_w[31:16], f_sb[7:0]), sh_lo(rd_w[15:0], f_sb[15:8])};
 always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3] && !tq_h[5]; f_wd <= {tq_h[4], f_lo, h_nib, rd_w}; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
@@ -410,8 +414,8 @@ assign m_urgent = low;
 assign m_valid  = running && !fb_sys && drop == 0 && room
                   && !all && tq_n < 6'd30;
 // (the hidden plane: SDRAM 0x0370_0000; the shadow plane's word: rtl/soc/mirlo_mips.sv's fold of the RDP's address)
-wire  [18:0] sh_x = raddr[18:0] ^ {raddr[20:19], 17'd0};
-wire  [18:0] sh_w = {sh_x[18:11], sh_x[10:9] ^ 2'b01, sh_x[8:0]};
+wire  [19:0] sh_n = raddr[20:1];
+wire  [18:0] sh_w = {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
 assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : m_shd ? 24'hC8_0000 + {5'd0, sh_w} : raddr;
 
 // ------------------------------------------------------------------ the FIFO

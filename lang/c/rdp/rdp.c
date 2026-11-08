@@ -1132,22 +1132,30 @@ static inline void hid_set(rdp_t *r, uint32_t a, unsigned v)
     r->wr16(r->ctx, ha, h);
 }
 
-/* The shadow plane (rdp.h, RDP_SH_BASE) */
-static inline unsigned sh_crc(uint16_t w)          /* CRC-7 (x^7 + x^3 + 1) of the 16 bits, the top first */
+/* The shadow plane (rdp.h, RDP_SH_BASE): a byte for each pixel, {R[2:1], G[2:1], B[2], the check} */
+static inline unsigned sh_crc(uint16_t w)          /* CRC-3 (x^3 + x + 1) of the 16 bits, the top first */
 {
     unsigned c = 0;
     for (int i = 15; i >= 0; i--) {
-        const unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u);
-        c = (c << 1) & 0x7Fu;
-        if (fb) c ^= 0x09u;
+        const unsigned fb = ((c >> 2) & 1u) ^ ((w >> i) & 1u);
+        c = (c << 1) & 7u;
+        if (fb) c ^= 3u;
     }
     return c;
 }
-static inline uint32_t sh_addr(uint32_t a) { return RDP_SH_BASE + (a & 0x7FFFFEu); }
+static inline uint32_t sh_addr(uint32_t a) { return RDP_SH_BASE + ((a & 0x7FFFFEu) >> 1); }
+static inline unsigned sh_pack(unsigned lo9) { return ((lo9 >> 7) & 3u) << 6 | ((lo9 >> 4) & 3u) << 4 | ((lo9 >> 2) & 1u) << 3; }   /* the stored bits of the nine */
+static inline unsigned sh_lo9(unsigned s)           /* the nine low bits of the stored ones: the missing bit repeats the one above it */
+{
+    const unsigned r = (s >> 6) & 3u, g = (s >> 4) & 3u, b = (s >> 3) & 1u;
+    return ((r << 1 | (r & 1u)) << 6) | ((g << 1 | (g & 1u)) << 3) | (b ? 7u : 0u);
+}
 static inline unsigned sh_rep(uint16_t w) { return ((w >> 13) & 7u) << 6 | ((w >> 8) & 7u) << 3 | ((w >> 3) & 7u); }   /* each channel's top three bits */
+/* the plane is kept when the colour image is not the depth image (a clear of the depth buffer is a fill of a "colour image" at its address) */
+static inline int sh_on(const rdp_t *r) { return r->shadow && ((r->cimg ^ r->zimg) & 0x7FFFF8u); }
 static inline void sh_put(rdp_t *r, uint32_t caddr, uint16_t w, unsigned lo9)
 {
-    r->wr16(r->ctx, sh_addr(caddr), (uint16_t)(lo9 << 7 | sh_crc(w)));
+    if (sh_on(r)) wr8(r, sh_addr(caddr), sh_pack(lo9) | sh_crc(w));
 }
 
 /* The colour image's word for the pixel: RGBA5551, bit 0 the coverage's top
@@ -1493,9 +1501,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         {
             uint16_t mw = r->rd16(r->ctx, caddr);
             mem = unrgb565(mw);
-            if (r->shadow & 2) {        /* the low bits of the colour the blender made, where the shadow word is the pixel's */
-                const uint16_t sw = r->rd16(r->ctx, sh_addr(caddr));
-                if ((sw & 0x7Fu) == sh_crc(mw)) { mem.r |= (sw >> 13) & 7u; mem.g |= (sw >> 10) & 7u; mem.b |= (sw >> 7) & 7u; }
+            if ((r->shadow & 2) && sh_on(r)) {        /* the low bits of the colour the blender made, where the shadow word is the pixel's */
+                const uint32_t sa = sh_addr(caddr);
+                const unsigned sw = (r->rd16(r->ctx, sa & ~1u) >> ((sa & 1u) ? 0 : 8)) & 0xFFu;
+                if ((sw & 7u) == sh_crc(mw)) { const unsigned lo = sh_lo9(sw); mem.r |= (lo >> 6) & 7u; mem.g |= (lo >> 3) & 7u; mem.b |= lo & 7u; }
             }
             if (l & RDP_L_IM_RD) memcvg = (mw & 1u) << 2 | hid_get(r, caddr);                   /* bit 0 and the hidden two */
         }

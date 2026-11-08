@@ -214,9 +214,8 @@ second), MFC0 or MTC0, and with eight lanes a vector load (LBV to LUV) or store
 (SBV to SUV, SHV, SFV), MFC2, MTC2, CFC2 or CTC2. The rule is the console's: no
 pair when the first writes a vector or control register the second reads or
 writes (a one-lane op's lane field, or VNOP's vd behind MTC2, is taken for a
-register, as on the console; a reserved function is taken to read vs and vt
-and write vd, which the console's rule does not count, so that a pair's result
-is the two in order). D's instruction must not be a delay slot (a taken branch's target at an
+register, as on the console; a reserved function does nothing and uses no
+register). D's instruction must not be a delay slot (a taken branch's target at an
 odd word pairs too, which the console's does not).
 IMEM's second port gives D the word after its own; the pair enters E
 together, the scalar instruction takes E's path as any other and the
@@ -255,8 +254,10 @@ It implements:
 SHV and SFV (the packed stores of every second and every fourth byte) take one
 cycle; SFV only with an element that is a multiple of 4. Not implemented:
 LHV, LFV, LWV, SWV, SFV with another element, VRNDP, VRNDN, VMULQ and VMACQ.
-They change nothing and set `unimpl` (no microcode in the ROMs scanned with
-`rom_ucode_scan.py` has them).
+The reserved COP2 functions (0x12, 0x16 to 0x1C, 0x1E, 0x1F, 0x2E, 0x2F and 0x38
+to 0x3E) are not implemented either. They change nothing and set `unimpl` (no
+microcode in the ROMs scanned with `rom_ucode_scan.py` has them: the few words
+of a scan that decode as one are data or main-CPU code).
 
 ### Lanes
 
@@ -330,9 +331,9 @@ that is still busy:
 * LTV and STV wait until nothing is under way; a store or MFC2 waits for a
   pending write of the register it reads (an EX that waits a cycle for another
   register's does not hold it); a load or MTC2 starts under a running
-  computation, and under a clip's EX that waits if not of its register; CFC2
-  and CTC2 start at once (with eight lanes; with four they wait until nothing
-  is under way).
+  computation, and under a clip's EX that waits if not of its register; CTC2
+  starts at once, and CFC2 too unless a clip's EX is waiting (with eight lanes;
+  with four they wait until nothing is under way).
 
 The register file has one write port. When the last pass's write would fall
 in the cycle a load writes its register, the load has the port and vd is
@@ -352,9 +353,6 @@ VRSQH store the input's high half and return the high half of the previous
 result. With eight lanes a reciprocal starts under the EX of the one before
 it: the divide registers it reads are forwarded from that EX.
 
-The reserved COP2 functions give the console's result: vd 0, the
-accumulator's low word vs + vt (the lanes' adder, as VADDC), the flags kept.
-
 ### Loads, stores and moves
 
 Every load and store except LTV and STV is one DMEM access in the
@@ -371,9 +369,9 @@ group, one byte per cycle.
 
 MFC2, MTC2, CFC2 and CTC2 take one cycle in E. MFC2's bytes are read in E
 (copy D); MTC2 writes its bytes the cycle after, as a load does. CFC2's value is
-taken the cycle after, in the scalar unit's M (an older EX that waited a cycle
-gives its flags then); CTC2 writes the flag register the cycle after, over such
-an EX's write.
+taken the cycle after, in the scalar unit's M, from the flag registers (it does
+not start in a cycle a clip's EX waits, whose flags would be written under it);
+CTC2 writes the flag register the cycle after, over an older EX's write.
 
 ## Memories
 

@@ -32,7 +32,7 @@ LD = ["LBV", "LSV", "LLV", "LDV", "LQV", "LRV", "LPV", "LUV", "LHV", "LFV", "LWV
 ST = ["SBV", "SSV", "SLV", "SDV", "SQV", "SRV", "SPV", "SUV", "SHV", "SFV", "SWV", "STV"]
 
 # ---- what the RTL implements
-VEC_OK = set(VEC_NAMES) - {0x02, 0x03, 0x0A, 0x0B}
+VEC_OK = set(VEC_NAMES) - {0x02, 0x03, 0x0A, 0x0B}      # (the reserved functions, not in VEC_NAMES, are not implemented either)
 LD_OK = set(range(8)) | {11}                # LBV..LUV, LTV
 ST_OK = LD_OK | {8, 9}                     # SBV..SUV, SHV, SFV (an element a multiple of 4), STV
 SPECIAL_OK = {0x00, 0x02, 0x03, 0x04, 0x06, 0x07, 0x08, 0x09, 0x0D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x2B}
@@ -59,7 +59,7 @@ def classify(w):
     if op == 0x12:
         if w & (1 << 25):
             fn = w & 63
-            return VEC_NAMES.get(fn, f"COP2 reserved fn {fn:02x}"), fn in VEC_OK or fn not in VEC_NAMES, fn in VEC_NAMES, True
+            return VEC_NAMES.get(fn, f"COP2 reserved fn {fn:02x}"), fn in VEC_OK, fn in VEC_NAMES, True
         rs = (w >> 21) & 31
         name = {0: "MFC2", 2: "CFC2", 4: "MTC2", 6: "CTC2"}.get(rs)
         ok = name is not None and (w & 0x7F) == 0

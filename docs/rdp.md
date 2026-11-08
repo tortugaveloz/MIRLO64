@@ -646,8 +646,8 @@ A picture 512 wide or more is shown with the filters off.
 The core's "Video settings" setting ([video_options.md](video_options.md)) changes two things here: "Deblur" bypasses the
 anti-alias and the divot filters; "32-bit" turns the RDP's RGB dither off (`dither_off` of `rdp_pix.v`: whatever
 `RGB_DITHER_SEL` says), bypasses the dither filter and shows 8 bits a channel: a 32-bit picture's own, and a 16-bit
-picture's from the RDP's shadow plane (the low three bits of each channel the blender made, written beside the colour
-image, and read by the blender and the scan-out where a check says they are the pixel's). Both are off by default, and
+picture's from the RDP's shadow plane (a byte a pixel with the high two of the low three bits of red and green the blender made, the high one of blue, and a
+check, written beside the colour image, and read by the blender and the scan-out where the check says they are the pixel's). Both are off by default, and
 then the scan-out and the RDP are what this section describes.
 
 A 32-bit picture (`VI_STATUS` type 3: RGBA8888, a pixel a word) goes through
@@ -732,14 +732,20 @@ switches:
 * `TB_FAST=1` is a memory that takes every request; `TB_PROF=1` prints the
   cycles spent in each sequencer state with the memory commands taken in it,
   and why the pixel state waits (for the row's write-back request, for the row
-  before's, for the row's reads to be taken or for their words);
+  before's, for the row's reads to be taken or for their words), and what the
+  command channel spent each clock on (a command going; a request waiting for a row
+  change, a read/write turn, the refresh or an open row's timing; no request, with
+  which engines were busy);
   `TB_CMDT=<file>` logs when each command word is taken; `TB_CLS=<file>` the
   time of every command (its start and the next's) for `sim/rdp/rdp_classes.py`,
   which adds it up by kind of primitive.
 * `TB_HREMAP=<k>` (with `TB_SDRAM=1`) places the hidden plane in the SDRAM's
   banks as `rtl/soc/sdr_arb.sv` does (k = 2: the bank two on from the image's
   row's); `TB_MISS=1` counts the SDRAM's row changes by what they are between
-  (colour, depth, hidden words of either).
+  (colour, depth, hidden words of either). With `TB_SHADOW` (the shadow plane,
+  [video_options.md](video_options.md)) its words are placed as `rtl/soc/mirlo_mips.sv` does
+  (`TB_SHFLAT=1`: at the colour words' own address, the first measurements'); `TB_WATCH=<byte address>`
+  prints the writes that reach a word.
 
 `TB_ZDZ=1` makes streams of shaded, anti-aliased, depth-tested triangles that are points of a few planes (slopes of every dz code, now and then a step within a code's tolerance), the blender's B mostly the memory's coverage: the depth image's own dz.
 

@@ -52,7 +52,7 @@ static void band(double y0, double y1, double r, double g, double b)
     rdp_vtx_t a = V(32, y0, 0, 0, 0), bb = V(288, y0, 255 * r, 255 * g, 255 * b), c = V(32, y1, 0, 0, 0), d = V(288, y1, 255 * r, 255 * g, 255 * b);
     tri(&a, &bb, &c); tri(&bb, &d, &c);
 }
-static unsigned crc7(unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 6) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 0x7Fu; if (fb) c ^= 0x09u; } return c; }
+static unsigned crc3(unsigned w) { unsigned c = 0; for (int i = 15; i >= 0; i--) { unsigned fb = ((c >> 2) & 1u) ^ ((w >> i) & 1u); c = (c << 1) & 7u; if (fb) c ^= 3u; } return c; }
 int main(int argc, char **argv)
 {
     if (argc < 3) { fprintf(stderr, "usage: vishadow_gen <0|1> <out.ppm> [cmds.h]\n"); return 2; }
@@ -76,10 +76,13 @@ int main(int argc, char **argv)
     int levels[4] = {0, 0, 0, 0}; int seen[4][256]; memset(seen, 0, sizeof seen);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
         const uint32_t a = FB + 2u * (uint32_t)(y * W + x);
-        const unsigned p = g_mem[a >> 1], sw = g_mem[(RDP_SH_BASE + a) >> 1];
+        const unsigned p = g_mem[a >> 1], sa = RDP_SH_BASE + (a >> 1), sw = (g_mem[sa >> 1] >> ((sa & 1u) ? 0 : 8)) & 0xFFu;       /* (a byte a pixel) */
         int ch[3] = { (int)(p >> 11) & 31, (int)(p >> 6) & 31, (int)(p >> 1) & 31 }, lo[3];
-        const int ok = mode && (sw & 0x7Fu) == crc7(p);
-        for (int k = 0; k < 3; k++) lo[k] = !mode ? 0 : ok ? (int)(sw >> (13 - 3 * k)) & 7 : ch[k] >> 2;
+        const int ok = mode && (sw & 7u) == crc3(p);
+        for (int k = 0; k < 3; k++) {       /* red and green keep two of the three low bits, blue one; the bit missing repeats the one above it */
+            const int two = k == 0 ? (sw >> 6) & 3 : (sw >> 4) & 3;
+            lo[k] = !mode ? 0 : ok ? (k == 2 ? ((sw >> 3) & 1 ? 7 : 0) : (two << 1 | (two & 1))) : ch[k] >> 2;
+        }
         uint8_t px[3];
         for (int k = 0; k < 3; k++) { px[k] = (uint8_t)(ch[k] << 3 | lo[k]); }
         fwrite(px, 1, 3, f); fwrite(px, 1, 3, f);
@@ -89,9 +92,9 @@ int main(int argc, char **argv)
         if (y == 144 && x >= 40 && x < 280) { if (!seen[3][px[0]]++) levels[3]++; }
     }
     fclose(f);
-    if (getenv("VISHADOW_SH")) {            /* the model's main and shadow halfwords of the picture, 2 x 320 x 240 */
+    if (getenv("VISHADOW_SH")) {            /* the model's main halfwords and shadow bytes of the picture, 2 x 320 x 240 */
         FILE *q = fopen(getenv("VISHADOW_SH"), "wb");
-        for (int i = 0; i < W * H; i++) { uint16_t v[2] = { g_mem[(FB >> 1) + i], g_mem[(RDP_SH_BASE + FB) / 2 + i] }; fwrite(v, 2, 2, q); }
+        for (int i = 0; i < W * H; i++) { uint16_t v[2] = { g_mem[(FB >> 1) + i], (uint16_t)((g_mem[(RDP_SH_BASE + FB / 2 + i) >> 1] >> (((RDP_SH_BASE + FB / 2 + i) & 1u) ? 0 : 8)) & 0xFFu) }; fwrite(v, 2, 2, q); }
         fclose(q);
     }
     printf("vishadow_gen: mode %d: distinct levels along the middle row of the red, green, blue and grey ramps (240 pixels): %d %d %d %d\n", mode, levels[0], levels[1], levels[2], levels[3]);
