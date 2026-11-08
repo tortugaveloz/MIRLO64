@@ -116,6 +116,9 @@ static inline int32_t s105_noperp(int32_t s)
 #ifndef RDP_X_MEMDZ
 #define RDP_X_MEMDZ
 #endif
+#ifndef RDP_X_FRAC0
+#define RDP_X_FRAC0
+#endif
 #endif
 #if (defined(RDP_X_RECTLOD) || defined(RDP_X_COPY) || defined(RDP_X_SHADE) || defined(RDP_X_SPAN) || defined(RDP_X_MEMDZ)) && !defined(RDP_CVG)
 #error "RDP_X_* are the N64's pixel pipeline's: build them with RDP_N64 (and without RDP_NO_BLEND)"
@@ -950,13 +953,19 @@ rdp_lod_t rdp_lod(uint32_t h, unsigned min_level, unsigned max_level, unsigned p
 }
 
 /* is the LOD computed for this 2-cycle primitive's pixels: TEX_LOD, or the combiner reads LOD_FRACTION (C 13 in a
- * colour, C 0 in an alpha, either cycle) */
+ * colour, C 0 in an alpha, either cycle). RDP_X_FRAC0 (docs/rdp_exact.md, rule 9): TEX_LOD alone -- without it the
+ * fraction reads 0, TEXEL0 of the primitive's tile alone, as the console shows a trilinear combiner on a texture of
+ * a level count of 0 whose next tile was never set */
 static int lod_wanted(const rdp_t *r)
 {
     if (r->other_h & RDP_H_TEX_LOD) return 1;
+#ifdef RDP_X_FRAC0
+    return 0;
+#else
     if (!LOD_FRAC_USED) return 0;
     uint32_t hi = r->combine_hi, lo = r->combine_lo;
     return ((hi >> 15) & 31) == 13 || (hi & 31) == 13 || ((hi >> 9) & 7) == 0 || ((lo >> 18) & 7) == 0;
+#endif
 }
 
 /* The pixel's LOD: S, T at the pixel (at), at the next pixel of the walk and on the next line, each taken as the pixel's

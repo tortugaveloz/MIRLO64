@@ -12,7 +12,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; T="$HERE/../../lang/mips/test/build"
 TB="$1"; W="$2"; mkdir -p "$W"; head -c 65536 /dev/zero > "$W/dummy.rom"
 n=0; fail=0
-cc -O2 -DRDP_N64 -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -I"$HERE/../../lang/c/rdp" -o "$W/vishadow_gen" "$HERE/vishadow_gen.c" "$HERE/../../lang/c/rdp/rdp.c" -lm || exit 1
+cc -O2 -DRDP_N64 -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -DRDP_X_FRAC0 -I"$HERE/../../lang/c/rdp" -o "$W/vishadow_gen" "$HERE/vishadow_gen.c" "$HERE/../../lang/c/rdp/rdp.c" -lm || exit 1
 for opt in 0 1; do
     d="$W/vishadow_$opt"; rm -rf "$d"; mkdir -p "$d"
     "$W/vishadow_gen" $opt "$W/vishadow_$opt.ppm" > /dev/null
