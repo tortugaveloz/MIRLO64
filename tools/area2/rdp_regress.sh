@@ -35,6 +35,8 @@ for s in 79 80; do TB_COPY=1 TB_C8=1 run ./obj_rdp/tb_rdp -r $s 200; done
 TB_COPY=1 TB_SDRAM=1 TB_CPU=30 run ./obj_rdp/tb_rdp -r 81 150
 # a texture rectangle's LOD: the next line as the console keeps it (rule 2)
 for s in 101 102 103 104 105 106; do TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rdp -r $s 300; done
+# triangles with the LOD, a quarter of the 2-cycle ones without TEX_LOD (LOD_FRACTION reads 0 there: docs/rdp_exact.md rule 9)
+for s in 1 2 3 107; do TB_LOD=1 run ./obj_rdp/tb_rdp -r $s 300; done
 # the depth image's own dz (rule 8): planes at nearly the same depth, AA_EN, Z_CMP, IM_RD, the blender's B the memory's coverage;
 # a width whose rows share depth-hidden groups, the SoC's memory, and 32-bit images (a wide span in two halves)
 for s in 111 112 113 114 115 116; do TB_ZDZ=1 run ./obj_rdp/tb_rdp -r $s 200; done

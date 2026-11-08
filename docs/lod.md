@@ -34,8 +34,10 @@ pipeline used before the LOD and which only RDP's own triangles still take.
   and copy mode too, as the console does ([rdp_exact.md](rdp_exact.md), rule 3).
 * **TEX_LOD** (bit 16 of SET_OTHER_MODES' high word) moves the tiles.
 * The **LOD fraction** is computed for every pixel of a 2-cycle primitive
-  with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C 0 in
-  an alpha, either cycle), with or without TEX_LOD.
+  with TEX_LOD (without it, as the RTL follows the console, LOD_FRACTION reads
+  0: `RDP_X_FRAC0`, [rdp_exact.md](rdp_exact.md) rule 9; the model without the
+  switch, as the oracle, also computes it when the combiner reads it: C 13 in a
+  colour, C 0 in an alpha, either cycle).
 * **DETAIL** (bit 18) and **SHARPEN** (bit 17) change the fraction and the
   tiles, as below.
 * The **level count** is the triangle command's level field (bits 21:19 of
@@ -158,8 +160,11 @@ with captured frames.
    its magnitude, as an inverter without the increment would give. A step of
    exactly one texel backward counts as magnified. Set to 0 for `|d|`.
 3. **LOD_FRACTION without TEX_LOD** (`LOD_FRAC_USED`): computed whenever the
-   combiner reads it; TEX_LOD only moves the tiles. Set to 0 to compute it
-   only with TEX_LOD (LOD_FRACTION then reads 0 otherwise, as without the LOD).
+   combiner reads it; TEX_LOD only moves the tiles (the oracle's rule). Set to 0
+   to compute it only with TEX_LOD (LOD_FRACTION then reads 0 otherwise, as
+   without the LOD). The console is the second ([rdp_exact.md](rdp_exact.md),
+   rule 9, `RDP_X_FRAC0`, which the RTL follows): a game's trilinear combiner on
+   a texture of a level count of 0, without TEX_LOD, draws TEXEL0.
 4. **The perspective divide** (`lod_pixel`): the console's (`rdp_n64_div`),
    for the pixel and the three points alike, as the RTL has it; the range
    check is the 17 bits the console keeps there, and a W with a zero or

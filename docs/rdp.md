@@ -354,8 +354,7 @@ cycle TEXEL0 is the next tile's sample and TEXEL1 the tile's own. In 1-cycle
 mode TEXEL1 is the same sample as TEXEL0.
 
 The texture LOD ([lod.md](lod.md)) applies to a 2-cycle primitive with
-TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C 0 in an
-alpha). For each pixel S and T go through the perspective divide at three
+TEX_LOD (without it LOD_FRACTION reads 0, whatever the combiner: [rdp_exact.md](rdp_exact.md), rule 9). For each pixel S and T go through the perspective divide at three
 points: the pixel, the next pixel of the N64's walk (x + 1 for a triangle with
 `lft` and for a rectangle, else x - 1) and the next line (plus DaDy, its top
 17 bits). The largest step of S or T, in texels, gives the level (the top

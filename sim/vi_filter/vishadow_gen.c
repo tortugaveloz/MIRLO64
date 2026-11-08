@@ -7,7 +7,7 @@
  *           the check is the word's, else the channel's top three bits again (what rtl/soc/n64_video.sv does)
  * The picture is written as the pads send it (640 x 240: each pixel twice), the VI with its filters off (VI_STATUS 0x302). cmds.h: the command
  * words as a C array (lang/mips/test/vishadow_cmds.h).
- *   cc -O2 -DRDP_N64 -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -I../../lang/c/rdp -o vishadow_gen vishadow_gen.c ../../lang/c/rdp/rdp.c -lm
+ *   cc -O2 -DRDP_N64 -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -DRDP_X_FRAC0 -I../../lang/c/rdp -o vishadow_gen vishadow_gen.c ../../lang/c/rdp/rdp.c -lm
  * (the rules of docs/rdp_exact.md that rtl/rdp follows, as sim/rdp/build_rtl.sh builds the model with) */
 #include "rdp.h"
 #include "rdp_setup.h"

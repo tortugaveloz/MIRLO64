@@ -23,7 +23,7 @@
 // stage takes them from the pass's own read, carried down with it.
 //
 // LOD (lod_on; lang/c/rdp/rdp.c rdp_lod, docs/lod.md): a 2-cycle primitive
-// with TEX_LOD, or whose combiner reads LOD_FRACTION. Its pixels take two
+// with TEX_LOD (LOD_FRACTION reads 0 without it, rdp_exact.md rule 9). Its pixels take two
 // clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
 // W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
 // is the neighbour's own perspective divide -- rdp_top issues the pixels in

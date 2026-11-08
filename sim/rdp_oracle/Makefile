@@ -40,7 +40,7 @@ $(B)/rdpo: rdpo.c $(B)/oracle.o $(B)/rdp_hooked.c $(M)/rdp.h | $(B)
 	$(CC) $(CFLAGS) -DRDP_N64 -I$(M) rdpo.c $(B)/rdp_hooked.c $(B)/oracle.o -o $@
 
 # the model with the rules rtl/rdp follows (XRULES, the same default as sim/rdp/build_rtl.sh): the RTL's differences from the oracle
-XRULES ?= -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ
+XRULES ?= -DRDP_X_RECTLOD -DRDP_X_COPY -DRDP_X_SHADE -DRDP_X_SPAN -DRDP_X_MEMDZ -DRDP_X_FRAC0
 $(B)/rdpo_x: rdpo.c $(B)/oracle.o $(B)/rdp_hooked.c $(M)/rdp.h | $(B)
 	$(CC) $(CFLAGS) -DRDP_N64 $(XRULES) -I$(M) rdpo.c $(B)/rdp_hooked.c $(B)/oracle.o -o $@
 
