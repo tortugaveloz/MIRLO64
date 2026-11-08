@@ -1,14 +1,14 @@
 #!/bin/bash
 # snac_check.sh <tb_soc dir> <out dir> [Mcycles]: the SNAC port as the console's PIF on the whole SoC (docs/analogizer.md). lang/n64rt/test/snac_game.c is a game
 # that drives the PIF with the SI's DMA as libultra does; the bench puts the Joybus device models of sim/analogizer/snac/jb_dev.sv on the four wires
-# (+snac<n> options, soc_sim_top.sv), sets the menu's "Analogizer" (0 Off, 1 RGBS ... 9, 10 N64 SNAC; INTERACT) and the runtime (lang/n64rt, built here) is the
+# (+snac<n> options, soc_sim_top.sv), sets the menu's "Analogizer controllers" (a mask of the players that are the SNAC port's; INTERACT) and the runtime (lang/n64rt, built here) is the
 # PIF. Runs:
-#   A  menu Off, devices on ports 1, 2, 4       the Joybus is off: the Pocket's pad and the virtual Controller Pak are controller 1, the rest do not answer
-#   B  menu N64 SNAC, the same devices          ports 1 (pad + pak), 2 (pad), 4 (pad + pak) are the real devices', raw, with their CRC bytes; port 3 does not answer
-#   C  menu RGBS, a device on port 2 only       a video mode turns the Joybus on too: controller 1 stays the virtual one, controller 2 is real
+#   A  Dock P1P2P3P4 (0), devices on ports 1, 2, 4   the Joybus is off: the Pocket's pad and the virtual Controller Pak are controller 1, the rest do not answer
+#   B  SNAC P1P2P3P4 (15), the same devices          ports 1 (pad + pak), 2 (pad), 4 (pad + pak) are the real devices', raw, with their CRC bytes; port 3 does not answer
+#   C  Dock P1, SNAC P2P3P4 (14), a device on port 2 only   controller 1 stays the virtual one (the Pocket's pad and Controller Pak), controller 2 is real
 #   D  as B, with a Game Boy cartridge in the slot (GBCART=<rom>, lang/n64rt/test/make_gb.py; needs ULTRALIB): the pins are the cartridge's, no device is
 #      seen -- as A -- and the bench reports no bank 0 conflict
-#   E  menu Off, changed to N64 SNAC at field 60 while the game runs: the game sees virtual only, then the real devices as in B
+#   E  Dock P1P2P3P4, changed to SNAC P1P2P3P4 at field 60 while the game runs: the game sees virtual only, then the real devices as in B
 # The EEPROM (channel 4) is the runtime's in all of them. Pass: the game's report says 0 failed checks and the log has what the run needs.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"; R="$(cd "$HERE/../.." && pwd)"
@@ -25,10 +25,10 @@ for r in $RUNS; do
     ia=0x10000108:1; at=""
     case $r in
     A) args="$DEV" ;;
-    B) args="$DEV"; ia="$ia,0x10000140:10" ;;
-    C) args="$DEVC"; ia="$ia,0x10000140:1" ;;
-    D) args="$DEV +gbcart=$GBCART"; ia="$ia,0x10000140:10" ;;
-    E) args="$DEV"; at="60:0x10000140:10" ;;
+    B) args="$DEV"; ia="$ia,0x10000148:15" ;;
+    C) args="$DEVC"; ia="$ia,0x10000148:14" ;;
+    D) args="$DEV +gbcart=$GBCART"; ia="$ia,0x10000148:15" ;;
+    E) args="$DEV"; at="60:0x10000148:15" ;;
     esac
     mkdir -p "$OUT/run_$r"
     ( cd "$HERE"; ROM="$OUT/game_$r/snac_game.z64" INTERACT="$ia" INTERACT_AT="$at" DUMP=0x43B00000,64 PAD=0-99999:0018 \

@@ -1,33 +1,33 @@
 /* The SNAC port as the console's PIF: real Joybus devices on the Analogizer's four controller ports (rtl/analogizer/an_snac_pif.sv; docs/analogizer.md).
  *
- * The hardware is a Joybus master with four ports behind it, a 128-byte buffer, and a scan that polls each port's status every 8 ms. This file is the
- * runtime's side of it:
- *   - the switch. The menu's "Analogizer" (INTERACT2 bits 3:0, interact.json id 253): Off (0) leaves the Joybus off, any other value -- a video mode,
- *     or 10, "N64 SNAC", which is no picture -- turns it on. That is all the policy there is, and it is looked at at every run of the PIF's commands (and
- *     at the core's start), so changing the menu while a game runs turns the controllers on or off at the game's next poll. The pins are another matter:
- *     the hardware gives them to the Joybus only while the adapter owns the cartridge port (INTERACT2 bit 31, decided in n64rt_pak.c from the cartridge's
- *     header); with a Game Boy cartridge in the slot they stay the cartridge's -- bank 0 is its /WR, /RD and /CS -- whatever the menu says, and the
- *     scan finds nobody there.
- *   - presence. A port has a device when the scan's last status command was answered; that is read at every run of the PIF's commands.
+ * The hardware is a Joybus master with four ports behind it and a 128-byte buffer. This file is the runtime's side of it:
+ *   - the switch. The menu's "Analogizer controllers" (INTERACT2 bits 13:10, interact.json id 249) says which of the four players are the SNAC port's:
+ *     bit n set, player n + 1 is the real controller on SNAC port n + 1; clear, the Dock's (the Pocket's pad, the virtual paks). 0 (the default) leaves
+ *     the Joybus off. It is looked at at every run of the PIF's commands (and at the core's start), so changing the menu while a game runs moves a
+ *     player at the game's next poll. The pins are another matter: the hardware gives them to the Joybus only while the adapter owns the cartridge
+ *     port (INTERACT2 bit 31, decided in n64rt_pak.c from the cartridge's header); with a Game Boy cartridge in the slot they stay the cartridge's --
+ *     bank 0 is its /WR, /RD and /CS -- whatever the menu says, and the players stay the Dock's.
+ *   - no scan, no detection. The hardware scan is OFF and the runtime does not look for devices: the menu says where they are. A device that sits on a
+ *     port beside the game's own commands has a command start 12 us after the pad's reply to the scan whenever the game's command waits for a scan in
+ *     progress, and a pad that close to its last reply can miss the command (the game then sees no-response and pauses); with the wire's traffic the
+ *     game's alone that does not happen. A SNAC port with nothing plugged in answers nothing, as a console's does.
  *   - a transaction: the game's own command bytes go to the device and its reply, with the device's own CRC byte, comes back as it is
  *     (n64rt_io.c, pif_run). The line time is the real one; the time the runtime waited for it is taken off the console's time for the commands
  *     (SIDONE), so the game is held no longer than the console's PIF would hold it.
- * Where a physical device is present on a port it is that channel; otherwise the channel is the virtual one (the Pocket's pad, the virtual paks). */
+ * Where a player is the SNAC port's it is that channel; otherwise the channel is the virtual one (the Pocket's pad, the virtual paks). */
 #include <generated/csr.h>
 #include <generated/soc.h>
 #include "n64rt.h"
 
 #define SNAC_ID       0x534E0001u
 #define AN_OWN        0x80000000u              /* INTERACT2 bit 31: the adapter owns the cartridge port (n64rt_pak.c) */
-#define AN_MENU       0x0000000Fu              /* INTERACT2 bits 3:0: the menu's "Analogizer" (0 Off) */
+#define AN_PORTS(w)   (((w) >> 10) & 15u)      /* INTERACT2 bits 13:10: the menu's "Analogizer controllers", bit n = player n + 1 is the SNAC port's */
 #define TFIRST_US     64u                      /* the console's wait for a reply's first edge, as the hardware resets it */
-#define SCAN_SWEEP_US 26000u                   /* the scan visits a port every 2 ms (four ports in 8 ms): three sweeps are two answers in a row for sure */
 
-static u8  s_probed, s_hw, s_on, s_pres;
+static u8  s_probed, s_hw, s_on, s_ports;       /* s_ports: the players that are the SNAC port's now */
 static u64 s_wait;                             /* SoC clocks spent in snac_xfer since n64rt_snac_wait_take */
 
 static u64 now(void) { timer0_uptime_latch_write(1); return timer0_uptime_cycles_read(); }
-static void wait_us(u32 us) { const u64 e = now() + (u64)us * (CONFIG_CLOCK_FREQUENCY / 1000000u); while (now() < e) { } }
 
 int n64rt_snac_hw(void)
 {
@@ -35,29 +35,23 @@ int n64rt_snac_hw(void)
     return s_hw;
 }
 
-/* follow the menu, and read who is there */
+/* follow the menu */
 void n64rt_snac_sync(void)
 {
     if (!n64rt_snac_hw()) return;
     const u32 i2 = apf_interact_interact2_read();
-    const int want = (i2 & AN_MENU) != 0;
+    const u8 menu = (u8)AN_PORTS(i2);
+    const int want = menu != 0;
     if (want != s_on) {
         s_on = (u8)want;
-        snac_ctrl_write(want ? 3u | TFIRST_US << 8 : 0u);
-        if (want) wait_us(SCAN_SWEEP_US);        /* (the first sweep of the scan: who is there is known before the game asks) */
-        else s_pres = 0;
-        n64rt_log("n64rt: SNAC: the Joybus is %s%s\n", want ? "on" : "off", want && !(i2 & AN_OWN) ? " (the pins are a cartridge's: nobody is scanned)" : "");
+        snac_ctrl_write(want ? 1u | TFIRST_US << 8 : 0u);       /* (the Joybus on, the hardware scan off) */
+        n64rt_log("n64rt: SNAC: the Joybus is %s%s\n", want ? "on" : "off", want && !(i2 & AN_OWN) ? " (the pins are a cartridge's: the players stay the Dock's)" : "");
     }
-    if (!s_on) return;
-    const u32 st = snac_stat_read();
-    s_pres = (u8)(st & 15u);
-    if (st & 0xF0u) {
-        n64rt_log("n64rt: SNAC: controller port(s) %x changed, present %x\n", (unsigned)(st >> 4) & 15u, (unsigned)s_pres);
-        snac_stat_write(st & 0xF0u);             /* (write 1s: clears them) */
-    }
+    const u8 ports = (u8)((s_on && (i2 & AN_OWN)) ? menu : 0u);
+    if (ports != s_ports) { s_ports = ports; n64rt_log("n64rt: SNAC: players %x are the SNAC port's\n", (unsigned)ports); }
 }
 
-int n64rt_snac_present(int ch) { return s_on && ch >= 0 && ch < 4 && ((s_pres >> ch) & 1u); }
+int n64rt_snac_present(int ch) { return ch >= 0 && ch < 4 && ((s_ports >> ch) & 1u); }
 
 /* One command to port `ch`: tx[0..txlen) out, up to rxlen bytes back into rx; *got is how many came. Returns 0 clean, else bit 0 nothing answered,
  * bit 1 fewer bytes than asked or the wire never went quiet, bit 2 the hardware did not finish. */

@@ -2,14 +2,14 @@
  * block read back with the replies -- and checks what the Analogizer's SNAC port and the virtual channels answer (n64rt_io.c, pif_run;
  * n64rt_snac.c). A program linked for 0x8000_0400 that runs under the loader (OWN) on the SoC in sim/mips_soc, with the Joybus device models of
  * sim/analogizer/snac/jb_dev.sv on the four wires (sim/mips_soc/snac_check.sh gives them the +snac<n> options and the menu's value for the run, and
- * builds this with -DSNAC_RUN= to match). The menu is the core's "Analogizer" (0 Off, 1..9 a video mode, 10 N64 SNAC): anything but Off turns the
- * Joybus on.
+ * builds this with -DSNAC_RUN= to match). The menu is the core's "Analogizer controllers": a mask of the players that are the SNAC port's (0 none:
+ * the Joybus is off).
  *
- *   A  the menu is Off, devices on the wires: controller 1 is the Pocket's pad with a virtual Controller Pak, the others do not answer
- *   B  the menu is N64 SNAC, devices on ports 1 (pad + pak), 2 (pad), 4 (pad + pak); none on port 3: the channels with a device are the real ones
- *   C  the menu is RGBS (a video mode), a device on port 2 only: controller 1 stays the Pocket's pad and the virtual Controller Pak, controller 2 is real
+ *   A  the menu is Dock P1P2P3P4 (0), devices on the wires: controller 1 is the Pocket's pad with a virtual Controller Pak, the others do not answer
+ *   B  the menu is SNAC P1P2P3P4 (15), devices on ports 1 (pad + pak), 2 (pad), 4 (pad + pak); none on port 3: the channels with a device are the real ones
+ *   C  the menu is Dock P1, SNAC P2P3P4 (14), a device on port 2 only: controller 1 stays the Pocket's pad and the virtual Controller Pak, controller 2 is real
  *   D  as B, with a Game Boy cartridge in the slot: the pins are the cartridge's whatever the menu says, no device is seen: as A
- *   E  the menu is Off at the start (as A) and is changed to N64 SNAC while the game runs: the game polls until controller 2 answers, then as B
+ *   E  the menu is Dock P1P2P3P4 at the start (as A) and is changed to SNAC P1P2P3P4 while the game runs: the game polls until controller 2 answers, then as B
  * In every run the cartridge's EEPROM (channel 4) is the runtime's.
  *
  * The report, in the RDRAM at 0x8030_0000 (DUMP=0x43B00000,64 in the sim): word 0 the magic 0x600D600D when done, 1 the number of failed checks, 2 the

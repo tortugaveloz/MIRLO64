@@ -905,10 +905,9 @@ itself. With another CIC the block is left as it was. The commands:
 A command nothing answers gets the no-response bit. Controller 1 is always there; controllers 2 to 4 are there while the
 dock reports a pad, checked at every command, so a pad can be plugged in or removed while a game runs.
 
-With the menu's "Analogizer" not Off (and the adapter, not a Game Boy cartridge, in the slot) a third kind of channel joins these two: where the SNAC
-port's scan has seen a device on a controller's port, `pif_run` forwards the game's own command bytes to it (the `SNAC`
+With the menu's "Analogizer controllers" giving players to the SNAC (and the adapter, not a Game Boy cartridge, in the slot) a third kind of channel joins these two: for a player the menu gives to the SNAC port, `pif_run` forwards the game's own command bytes to it (the `SNAC`
 block, `n64rt_snac.c`) and writes its raw reply, with the device's own CRC byte, into the block; the no-response bit is the
-wire's timeout, bit 6 a reply that was short. A channel with a device is the real one's; a channel without keeps the
+wire's timeout, bit 6 a reply that was short. A player given to the SNAC is the real one's, a device plugged in or not (an empty port answers nothing); a player that is not keeps the
 Pocket's pad and the virtual paks as above (and the EEPROM stays the runtime's). The console's time for the commands that
 `SIDONE` carries is the figures above, or the wire's own time if that is longer ([analogizer.md](analogizer.md#the-snac-port-as-the-consoles-pif)).
 
@@ -964,7 +963,7 @@ the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs a
 
 ### Controller 1's accessory
 
-The setting "Controller 1 pak" is read at every access (`lang/n64rt/n64rt_pak.c`); the other controllers have none.
+The setting "Controller paks" is read at every access (`lang/n64rt/n64rt_pak.c`); the other controllers have none.
 The accessory is what the joybus sees, 32-byte blocks at a 16-bit address, and the game's own `osPfs*` and `osGbpak*`
 code runs on top of it. There is no Rumble Pak: the core's interface to the Pocket has no vibration output.
 
@@ -996,13 +995,13 @@ file is involved. `core.json` has `cartridge_adapter` 0, which has the Pocket po
 
 ### The Transfer Pak SD
 
-The setting "Controller 1 pak" has a second Transfer Pak, **Transfer Pak SD** (the one with the Game Boy cartridge in the Pocket's slot is "Transfer Pak cartridge"): the same accessory (the registers above) with a cartridge that
+The setting "Controller paks" has a second Transfer Pak, **Transfer Pak SD** (the one with the Game Boy cartridge in the Pocket's slot is "Transfer Pak cartridge"): the same accessory (the registers above) with a cartridge that
 is made of a ROM file the Pocket loads and the Game Boy game's own save file, in place of the Game Boy cartridge in the Pocket's slot (`lang/n64rt/n64rt_gbvirt.c`; the slot's port is not
 touched). The game's own `osGbpak*` code runs on it as on the real one.
 
-The setting "Controller 2 pak" (None, or Transfer Pak SD) puts a second one in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
+The same setting's values 4, 5 and 6 (Transfer Pak SD P2, Transfer Pak SD P1P2, TPak cart P1 with SD P2) put a Transfer Pak SD in controller 2, with a cartridge of its own: two instances of the same code (`n64rt_gbvirt.c`, n = 0 and 1; `n64rt_pak.c` keeps the Transfer Pak's registers of each controller apart), each with its own mapper, RAM and clock, and the slots below with "2". Controller 2 is a pad that is there when that setting asks for the pak (the dock's, with its keys, if it reports one; else with nothing pressed). A game that looks for its controllers when it starts finds the pak only if the setting was made before. The real cartridge in the Pocket's slot is controller 1's alone.
 
-**Two steps, both before the N64 game starts**: choose "Transfer Pak SD" in "Controller 1 pak" (or 2), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak cartridge a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it, or the core's Restart Game after them ([Restart Game](#restart-game)).
+**Two steps, both before the N64 game starts**: choose a Transfer Pak SD in "Controller paks" (for controller 1, 2 or both), and load the Game Boy game with "Load Transfer Pak 1" (or 2). There is no automatic choice: with the setting at None, Controller Pak or Transfer Pak cartridge a Game Boy ROM that is loaded is ignored (no save is read or written for it). The runtime looks at both in every video field, so the order does not matter, and each takes effect when the second of the two is there: the ROM is made a cartridge and its save is read; when either goes away (the setting is changed, or the ROM is replaced or gone) the cartridge's RAM is written back to its save first, if the game changed it. A game that has already looked for its pak sees it come or go as a pak plugged or unplugged while it runs (measured with a game that checks its pak at its start: it shows its "Transfer Pak not installed" error when the setting goes to None, and does not look again); one that looks only when it starts needs both steps before it, or the core's Restart Game after them ([Restart Game](#restart-game)).
 
 * **The ROM** is data slot 8, "Transfer Pak 1" (`.gb`, `.gbc`; at most 3 MiB), `0x4340_0000`; controller 2's is slot 9, "Transfer Pak 2", `0x42E0_0000`. With no
   file in a slot there is no cartridge in that pak, for either one. They are last among the data slots, and the Pocket lists the Load entries together, next to "Load Game". There is no default file: "Load Transfer Pak 1"
@@ -1172,8 +1171,8 @@ scan-out instead.
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
 | Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit color (1), Deblur (2), 32-bit color + Deblur (3): [video_options.md](video_options.md) |
 | Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | Exp Pak and GameShark (2), **Exp Pak** (0, the default), GameShark (3), None (1). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
-| Controller 1 pak | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3) |
-| Controller 2 pak | `0x1000_0118` | `interact0[24:20]` | **None** (0), Transfer Pak SD (3) |
+| Controller paks | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3), Transfer Pak SD P2 (4: SD in controller 2 alone), Transfer Pak SD P1P2 (5), TPak cart P1, SD P2 (6) |
+| Analogizer controllers | `0x1000_0148` | `interact2[14:10]` | **Dock: P1P2P3P4** (0), SNAC: P1P2P3P4 (15), Dock: P1 and SNAC: P2P3P4 (14), SNAC: P1 and Dock: P2P3P4 (1), SNAC: P1P2 and Dock: P3P4 (3), SNAC: P1P2P3 and Dock: P4 (7): a mask of the players that are the SNAC port's ([analogizer.md](analogizer.md)) |
 | Stick | `0x1000_012C` | `interact1[19:15]` | **D-pad** (0), L stick (1), R stick (2) |
 | D-pad | `0x1000_0134` | `interact1[23:22]` | **None** (0), D-pad (1), L stick (2), R stick (3) |
 | Stick dead zone | `0x1000_0124` | `interact1[9:5]` | Menu 0 % (1), 10 % (3), 20 % (5), ... 70 % (15), for both sticks; actual threshold is 30 % larger (0 % to 91 %) |

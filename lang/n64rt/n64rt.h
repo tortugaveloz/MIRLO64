@@ -300,7 +300,7 @@ void n64rt_io_init(void);
 extern u32 n64rt_yield_wait_ms;            /* a port's: a graphics task's yield held back this long (n64rt_rsp.c) */
 /* the accessories of controllers 1 and 2 (n64rt_pak.c): the game's own osPfs* and osGbpak*
  * run on these blocks */
-enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller 1 pak" setting's values: n64rt_pak.c) */
+enum { N64RT_PAK_NONE, N64RT_PAK_CONTROLLER, N64RT_PAK_TRANSFER, N64RT_PAK_VIRTUAL };   /* (the "Controller paks" setting's kinds: n64rt_pak.c) */
 void n64rt_pak_init(void);
 int  n64rt_pak_kind(int ch);
 int  n64rt_pak_rw(int ch, u32 addr, u8 *block, int write);
