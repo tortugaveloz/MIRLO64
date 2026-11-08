@@ -23,7 +23,7 @@ soc)
         "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/psram.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
         "$S/mirlo_regs.sv" "$S/rcp_mi.sv" "$S/rcp_vi.sv" "$S/rcp_dpc_view.sv" "$S/rcp_ai.sv" "$S/rcp_si.sv" "$S/n64_ports.sv" "$S/cpu_port.sv" "$S/n64_uart.sv" "$S/jtag_uart_bridge.v" \
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
-        "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" \
+        "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" "$R/rtl/analogizer/an_joybus_m.sv" "$R/rtl/analogizer/an_snac_pif.sv" "$R/sim/analogizer/snac/jb_dev.sv" \
         "$R/rtl/rsp/rsp_lutram.v" "$R/rtl/rsp/rsp_su.sv" "$R/rtl/rsp/rsp_vu.sv" "$R/rtl/rsp/rsp_dpram.sv" "$R/rtl/rsp/rsp_top.sv" \
         "$R/rtl/rdp/rdp_sdpram.v" "$R/rtl/rdp/rdp_rcp_rom.v" "$R"/rtl/rdp/rdp_*.v "$R/rtl/rdp/rdp_dpc.sv" \
         "$HERE/soc_sim_top.sv" "$HERE/tb_soc.cpp" -o tb_soc > "${OBJ:-$HERE/obj_soc}.log" 2>&1 || { grep -E "%Error" "${OBJ:-$HERE/obj_soc}.log" | head -30; tail -5 "${OBJ:-$HERE/obj_soc}.log"; exit 1; }

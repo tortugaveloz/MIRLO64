@@ -584,6 +584,7 @@ static void read_pad(OSContPad *p, int index)
  * when the dock reports a pad */
 static int pad_there(int i)
 {
+    if (n64rt_snac_present(i)) return 1;                   /* (a real controller on the SNAC port) */
     if (i == 0) return 1;
     if (n64rt_pak_kind(i) != N64RT_PAK_NONE) return 1;     /* (controller 2's "Transfer Pak (SD)": a pad that is there, nothing pressed if the dock has none) */
     u32 k = i == 1 ? apf_input_cont2_key_read() : i == 2 ? apf_input_cont3_key_read() : apf_input_cont4_key_read();
@@ -749,14 +750,17 @@ static u8 s_pif_joy;                    /* the block holds commands */
  * mark, 37,987 for one controller read, 97,890 for four with one controller there -- 13,600, then 1,420 for each byte that
  * is no command (0x00, 0xFD, 0xFF, the end), 22,000 for a command a device answers, 18,000 for one nothing answers (the
  * timeout), 20,000 for the cartridge's; a command longer than a controller read's 5 bytes (a pak's block, 36) adds the
- * joybus's 32 us (2,000) for each byte more. */
+ * joybus's 32 us (2,000) for each byte more. A command forwarded to a real device on the SNAC port takes the figure above, or PIF_TREAL (the console's
+ * 22,000 for a controller read less its 5 bytes' line time) plus the time the wire really took (the SoC clocks the runtime waited for it), if that is more. */
 #define PIF_T0    13600u
 #define PIF_TSKIP 1420u
 #define PIF_TCMD(ok, ch, n) (((ch) == 4 ? 20000u : (ok) ? 22000u : 18000u) + ((n) > 5u ? ((n) - 5u) * 2000u : 0u))
+#define PIF_TREAL 10500u
 static u32 pif_run(void)
 {
     int ch = 0;
     u32 t = PIF_T0;
+    n64rt_snac_sync();                               /* (the setting, and who is on the SNAC port) */
     for (int i = 0; i < 63 && ch < 6; ) {
         u8 tx = s_pif[i];
         if (tx == 0xFEu) { t += PIF_TSKIP; break; }
@@ -768,6 +772,25 @@ static u32 pif_run(void)
         u8 *cmd = &s_pif[i + 2], *rep = cmd + tx;
         if (i + 2 + tx + rx > 63) break;
         int ok = 0;
+        if (ch < 4 && tx != 0 && n64rt_snac_present(ch)) {
+            /* a real device on the SNAC port: the game's own command bytes go to it and its raw reply, with its own CRC byte, comes back as it
+             * is; the "no response" flag (0x80, below) is the wire's timeout, 0x40 a reply that was short. The time is the console's figure for
+             * the command or, if the wire took longer, the wire's own (the clocks the runtime waited). The game's Count does not run while the
+             * monitor does, so the game sees none of the wait itself: the time the SI hands it is the whole of the console's. */
+            u32 got = 0;
+            const int r = n64rt_snac_xfer(ch, cmd, tx, rep, rx, &got);
+            const u32 w = n64rt_snac_wait_take();
+            ok = got != 0;
+            if (ok && (r & 2)) s_pif[i + 1] |= 0x40u;
+            if (!ok) s_pif[i + 1] |= 0x80u;
+            {   /* the console's figure for the command, or the wire's own time if a device is slower than that */
+                const u32 c = PIF_TCMD(ok, ch, (u32)tx + rx), r = PIF_TREAL + w;
+                t += r > c ? r : c;
+            }
+            i += 2 + tx + rx;
+            ch++;
+            continue;
+        }
         if (ch < 4 && pad_there(ch)) {
             const int pak = n64rt_pak_kind(ch) != N64RT_PAK_NONE;
             if ((cmd[0] == 0x00u || cmd[0] == 0xFFu) && rx >= 3) { rep[0] = 0x05; rep[1] = 0x00; rep[2] = pak ? 0x01 : 0x02; ok = 1; }   /* a pad, its pak */
@@ -1238,6 +1261,7 @@ void n64rt_io_init(void)
     eep_db_init();
     n64rt_cheat_init();
     n64rt_pak_init();
+    n64rt_snac_sync();                                   /* (after the cartridge slot's owner is known) */
     extern void n64rt_audio_init(void), n64rt_gfx_init(void);
     n64rt_audio_init();
     n64rt_gfx_init();
@@ -1352,7 +1376,9 @@ void n64rt_si_hw_event(void)
     for (int i = 0; i < 16; i++) orig[i] = s_pif_w[i] = hw_rd(PIF_RAM + 4u * (u32)i);
     u32 t = 0;
     if (s_pif[63] & 2u) pif_challenge();             /* (the status byte keeps that bit: a challenge, not commands) */
-    else { t = pif_run(); n64rt_si_joy = 1; }
+    else {
+        t = pif_run(); n64rt_si_joy = 1;
+    }
     for (int i = 0; i < 16; i++) if (s_pif_w[i] != orig[i]) hw_wr(PIF_RAM + 4u * (u32)i, s_pif_w[i]);
     monitor_sidone_write(t < 0x3FFFFu ? t : 0x3FFFFu);
 }

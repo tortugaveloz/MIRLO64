@@ -104,6 +104,54 @@ always @(posedge clk_sys) begin     // (the runtime's decision about the cartrid
 end
 gb_cart_model gbcart (.clk(clk_sys), .res_n(gb_on), .a_dir(gb_a_dir), .a_oe(gb_a_oe), .a(gb_a), .d_dir(gb_d_dir),
     .d_oe(gb_d_oe), .d_o(gb_d_o), .d_i(gb_d_i), .phi(gb_phi), .wr_n(gb_wr_n), .rd_n(gb_rd_n), .cs_n(gb_cs_n));
+// the SNAC port's four Joybus wires (rtl/analogizer/an_snac_pif.sv), each with a device (sim/analogizer/snac/jb_dev.sv) set by plusargs:
+//   +snac<n>=<kind>  (n 0..3 the port: 1 the first; kind 0 nothing, 1 controller, 2 controller with a pak, 3 short replies, 4 wire held low,
+//   5 talkative, 6 noisy), +snac<n>_btn=, +snac<n>_stick= (the controller's two words, decimal), +snac<n>_delay= (us), +snac<n>_cell= (ns)
+wire        sn_en, sn_p30_dir, sn_p30_oe, sn_p31_dir, sn_p31_oe, sn_b0_dir, sn_b0_oe;
+wire  [3:0] sn_b0_o, sn_mlow, sn_dlow, sn_wire;
+reg   [15:0] snk_kind = 16'd0;
+reg   [63:0] snk_cell = {4{16'd4000}}, snk_delay = {4{16'd3}}, snk_btn = 64'd0, snk_stick = 64'd0;
+integer      sn_v;
+initial begin
+    if ($value$plusargs("snac0=%d", sn_v)) snk_kind[3:0] = sn_v[3:0];
+    if ($value$plusargs("snac1=%d", sn_v)) snk_kind[7:4] = sn_v[3:0];
+    if ($value$plusargs("snac2=%d", sn_v)) snk_kind[11:8] = sn_v[3:0];
+    if ($value$plusargs("snac3=%d", sn_v)) snk_kind[15:12] = sn_v[3:0];
+    if ($value$plusargs("snac0_btn=%d", sn_v)) snk_btn[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_btn=%d", sn_v)) snk_btn[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_btn=%d", sn_v)) snk_btn[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_btn=%d", sn_v)) snk_btn[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_stick=%d", sn_v)) snk_stick[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_stick=%d", sn_v)) snk_stick[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_stick=%d", sn_v)) snk_stick[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_stick=%d", sn_v)) snk_stick[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_delay=%d", sn_v)) snk_delay[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_delay=%d", sn_v)) snk_delay[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_delay=%d", sn_v)) snk_delay[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_delay=%d", sn_v)) snk_delay[63:48] = sn_v[15:0];
+    if ($value$plusargs("snac0_cell=%d", sn_v)) snk_cell[15:0] = sn_v[15:0];
+    if ($value$plusargs("snac1_cell=%d", sn_v)) snk_cell[31:16] = sn_v[15:0];
+    if ($value$plusargs("snac2_cell=%d", sn_v)) snk_cell[47:32] = sn_v[15:0];
+    if ($value$plusargs("snac3_cell=%d", sn_v)) snk_cell[63:48] = sn_v[15:0];
+end
+assign sn_mlow[0] = sn_en & sn_p30_dir & sn_p30_oe;
+assign sn_mlow[1] = sn_en & sn_p31_dir & sn_p31_oe;
+assign sn_mlow[2] = sn_en & sn_b0_dir & sn_b0_oe & ~sn_b0_o[0];
+assign sn_mlow[3] = sn_en & sn_b0_dir & sn_b0_oe & ~sn_b0_o[3];
+assign sn_wire = ~(sn_mlow | sn_dlow);
+for (genvar snp = 0; snp < 4; snp = snp + 1) begin : sndev
+    wire [31:0] nc, nw; wire [15:0] la; wire [7:0] lc;
+    jb_dev d (.clk(clk_sys), .line(sn_wire[snp]), .low(sn_dlow[snp]), .kind(snk_kind[4*snp +: 4]), .cell_ns(snk_cell[16*snp +: 16]),
+              .delay_us(snk_delay[16*snp +: 16]), .btn(snk_btn[16*snp +: 16]), .stick(snk_stick[16*snp +: 16]),
+              .n_cmds(nc), .n_wr(nw), .last_wr_addr(la), .last_cmd(lc));
+end
+// (a 1 driven on a bank 0 bit against a device that pulls that wire low is a fault of the port mux)
+// ... nor any Joybus pin driven (translator outward or driver on) while the adapter does not own the port: a cartridge's /WR, /RD, /CS and /RES are there
+always @(posedge clk_sys) if (!an_own && (sn_p30_dir | sn_p30_oe | sn_p31_dir | sn_p31_oe | sn_b0_dir | sn_b0_oe)) $display("SNAC: a Joybus pin driven while the adapter does not own the port");
+always @(posedge clk_sys) begin
+    if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[0] & sn_dlow[2]) $display("SNAC: bank 0 drove port 3 high against its device");
+    if (sn_en & sn_b0_dir & sn_b0_oe & sn_b0_o[3] & sn_dlow[3]) $display("SNAC: bank 0 drove port 4 high against its device");
+end
 // the APF audio FIFO (core_top's): its fill, flushed, drained at 48 kHz while playing
 logic [11:0] aud_fill = 0;
 logic [10:0] aud_div = 0;
@@ -146,6 +194,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .cram0_oe_n(), .cram1_oe_n(), .cram0_we_n(), .cram1_we_n(), .cram0_ub_n(), .cram0_lb_n(), .cram1_ub_n(), .cram1_lb_n(),
     .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
     .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
+    .sn_en, .sn_p30_dir, .sn_p30_oe, .sn_p31_dir, .sn_p31_oe, .sn_b0_dir, .sn_b0_oe, .sn_b0_o, .sn_dq(sn_wire),
     .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_scan(), .an_own(an_own),
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),

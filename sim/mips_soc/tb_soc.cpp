@@ -850,7 +850,7 @@ int main(int argc, char **argv)
               if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 31u; t->ia_data = ia_list[k].second; }
               else if ((sys & 3) == 0 && k >= (long)ia_list.size() && !ia_q.empty()) {
                   const auto w = ia_q.front(); ia_q.pop_front();
-                  t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 15u; t->ia_data = w.second;
+                  t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 31u; t->ia_data = w.second;
               } }
             // the bridge: an access (as apf_wishbone_master hands it on: the address's
             // bits 26-2, bit 28 set), its ack awaited; the reset's end after the load

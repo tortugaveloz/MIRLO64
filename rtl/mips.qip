@@ -23,6 +23,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path)
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "analogizer/an_yc.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "analogizer/an_scandbl.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "analogizer/an_out.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "analogizer/an_joybus_m.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "analogizer/an_snac_pif.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_ports.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/cpu_port.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_uart.sv"]
