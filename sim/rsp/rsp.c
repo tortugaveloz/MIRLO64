@@ -36,8 +36,13 @@ static void make_roms(void)
         rcp_rom[i] = (uint16_t)((((1ull << 34) / (i + 512u)) + 1u) >> 8);
     for (uint32_t i = 0; i < 512; i++) {
         uint64_t a = (i + 512u) >> (i & 1u);
-        uint64_t b = 1u << 17;
-        while (a * (b + 1u) * (b + 1u) < (1ull << 44)) b++;
+        /* the smallest b in [2^17, 2^18] with a * (b + 1)^2 >= 2^44 (a >= 256: 2^18 always is one), by bisection:
+         * the linear search from 2^17 took ~15M steps, most of a short task's run */
+        uint64_t b = 1u << 17, hi = 1u << 18;
+        while (b < hi) {
+            uint64_t mid = (b + hi) / 2;
+            if (a * (mid + 1u) * (mid + 1u) < (1ull << 44)) b = mid + 1u; else hi = mid;
+        }
         rsq_rom[i] = (uint16_t)(b >> 1);
     }
     roms_ready = 1;
