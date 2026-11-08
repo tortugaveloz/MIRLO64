@@ -131,6 +131,9 @@ devices' own answers. Nothing about a device is special-cased: the game's comman
 (with the device's CRC) come back, so a controller, a Controller Pak, a Rumble Pak, a Transfer Pak with a real Game Boy
 cartridge, a mouse, a keyboard or a VRU work as far as the game's own code does.
 
+How to connect an N64 SNAC board to the Analogizer, and the wiring it needs, is illustrated on the Analogizer's page for it:
+<https://analogizer-fpga.com/pages/nintendo-64-snac>.
+
 ### Where it sits
 
 `rtl/soc/rcp_si.sv` is the SI and the PIF RAM; the PIF's command interpreter is the runtime's (`pif_run`, `lang/n64rt/n64rt_io.c`).
