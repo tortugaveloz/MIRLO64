@@ -337,6 +337,15 @@ uint32_t n64_msys_gfxtime(void) { return s_gfxtime; }
 /* ---- the bus ----------------------------------------------------------- */
 int n64_read(n64_t *n, uint32_t va, int size, uint32_t *val)
 {
+    /* inline KSEG0 RDRAM fast path: most data loads come from KSEG0 RDRAM.
+     * Skips phys() (branch + mask) and n64_read_phys() (long if-else chain)
+     * for the common case. pc & 3 == 0 alignment is guaranteed by callers. */
+    if ((va & 0xE0000000u) == 0x80000000u && (uint32_t)(va & 0x1FFFFFFFu) < RDRAM_SIZE) {
+        *val = size == 4 ? rd32(n->mem.rdram, va & 0x1FFFFFFFu)
+                         : size == 2 ? rd16(n->mem.rdram, va & 0x1FFFFFFFu)
+                                     : rd8(n->mem.rdram, va & 0x1FFFFFFFu);
+        return 0;
+    }
     uint32_t pa;
     int t = phys(n, va, &pa, 0);
     if (t) return t;
@@ -380,6 +389,14 @@ int n64_read_phys(n64_t *n, uint32_t pa, int size, uint32_t *val)
 
 int n64_write(n64_t *n, uint32_t va, int size, uint32_t v)
 {
+    /* inline KSEG0 RDRAM fast path: most data stores go to KSEG0 RDRAM.
+     * Skips phys() and n64_write_phys() for the common case. */
+    if ((va & 0xE0000000u) == 0x80000000u && (uint32_t)(va & 0x1FFFFFFFu) < RDRAM_SIZE) {
+        if (size == 4) wr32(n->mem.rdram, va & 0x1FFFFFFFu, v);
+        else if (size == 2) wr16(n->mem.rdram, va & 0x1FFFFFFFu, (uint16_t)v);
+        else wr8(n->mem.rdram, va & 0x1FFFFFFFu, (uint8_t)v);
+        return 0;
+    }
     uint32_t pa;
     int t = phys(n, va, &pa, 1);
     if (t) return t;
