@@ -1,16 +1,18 @@
-/* The accessory in controller 1 -- the core's "Controller 1 pak" setting
- * (interact.json: word 0's bits 4-0), read at every access, so it can be
- * changed while a game runs -- and in controller 2: the "Controller 2 pak" setting (word 0's bits 24-20), None or a
- * Transfer Pak (SD), which makes controller 2 a pad that is there (with nothing pressed, when the dock reports none) so that
- * the game finds the pak. The values of controller 1's:
+/* The accessories in controllers 1 and 2 -- the core's "Controller paks" setting
+ * (interact.json: word 0's bits 4-0), read at every access, so it can be changed while a game runs. A Transfer Pak (SD)
+ * in controller 2 makes it a pad that is there (with nothing pressed, when the dock reports none) so that the game finds the pak.
+ * The values:
  *   0  nothing (the default, and what the setting word is until the Pocket
  *      has sent it: the cartridge slot is left alone)
- *   1  a Controller Pak
+ *   1  a Controller Pak in controller 1
  *   2  a Transfer Pak with the Game Boy cartridge that is in the Pocket's
- *      own slot
- *   3  a Transfer Pak with an SD cartridge: a Game Boy ROM and its save,
+ *      own slot, in controller 1
+ *   3  a Transfer Pak with an SD cartridge in controller 1: a Game Boy ROM and its save,
  *      files the Pocket loads (the slots "Transfer Pak 1" and "Game Boy Save 1"; n64rt_gbvirt.c)
- * Any other value is nothing. Controller 2's takes 3 as well (its own cartridge: the slots "2"); controllers 3 and 4 have none.
+ *   4  a Transfer Pak (SD) in controller 2 (its own cartridge: the slots "2")
+ *   5  a Transfer Pak (SD) in controllers 1 and 2
+ *   6  the Transfer Pak with the cartridge from the slot in controller 1 and a Transfer Pak (SD) in controller 2
+ * Any other value is nothing; controllers 3 and 4 have none. (Values 0 to 3 are what the setting "Controller 1 pak" had.)
  *
  * It is the accessory as the controller's joybus sees it: 32-byte blocks
  * read and written at a 16-bit address. The game's own libultra runs on top
@@ -259,12 +261,17 @@ int n64rt_pak_kind(int ch)
 {
     if (ch < 0 || ch >= NPAK) return N64RT_PAK_NONE;
 #ifdef N64RT_PAK_FORCE                          /* (a simulation, where nothing sets the core's settings) */
-    u32 k = ch == 0 ? N64RT_PAK_FORCE : 0u;
+    const u32 k = N64RT_PAK_FORCE;
 #else
-    u32 k = (apf_interact_interact0_read() >> (ch == 0 ? 0 : 20)) & 31u;
+    const u32 k = apf_interact_interact0_read() & 31u;                  /* "Controller paks" */
 #endif
-    if (ch == 1) return k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one) */
-    return k == 1u ? N64RT_PAK_CONTROLLER : k == 2u ? N64RT_PAK_TRANSFER : k == 3u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;
+    if (ch == 1) return k >= 4u && k <= 6u ? N64RT_PAK_VIRTUAL : N64RT_PAK_NONE;     /* (controller 2's: only the SD one, in 4, 5 and 6) */
+    switch (k) {
+    case 1: return N64RT_PAK_CONTROLLER;
+    case 2: case 6: return N64RT_PAK_TRANSFER;
+    case 3: case 5: return N64RT_PAK_VIRTUAL;
+    default: return N64RT_PAK_NONE;
+    }
 }
 
 /* a block of 32 bytes at address a (its low 5 bits clear); 0, or 1 with no pak there */

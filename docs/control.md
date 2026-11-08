@@ -23,6 +23,7 @@ runtime (`n64rt.sys`) is what uses the registers here.
 | `UART` | `0xF000_0900` | The JTAG UART |
 | `VIDEO_FRAMEBUFFER` | `0xF000_0A00` | The scan-out: its base, its enables, the picture's pitch, window and scales |
 | `GB_CART` | `0xF000_0C00` | A Game Boy cartridge in the Pocket's slot |
+| `SNAC` | `0xF000_0E00` | The Analogizer's SNAC port as the console's PIF: a Joybus master on four ports |
 | `MONITOR` | `0xF000_0D00` | The monitor level's events, and the MI, PI, VI, AI and SI blocks' controls |
 
 An address that no register has reads 0. A 64-bit register is two words, the high one first.
@@ -120,11 +121,11 @@ each setting has an address of its own and needs no mask.
 |---|---|---|---|
 | 0 | `0x1000_0100` | `INTERACT0`, whole | |
 | 1 | `0x1000_0104` | `INTERACT1`, whole | |
-| 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller 1 pak |
+| 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller paks (the accessories of controllers 1 and 2: 0 none, 1 Controller Pak, 2 Transfer Pak cartridge, 3 Transfer Pak SD, 4 Transfer Pak SD in controller 2, 5 Transfer Pak SD in 1 and 2, 6 Transfer Pak cartridge in 1 and SD in 2) |
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
 | 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Controller 2 pak (None, or Transfer Pak SD: 3) |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | (free: it was Controller 2 pak; "Controller paks", field 2, serves both) |
 | 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
 | 8 | `0x1000_0120` | `INTERACT1[4:0]` | Start macro |
 | 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
@@ -135,6 +136,7 @@ each setting has an address of its own and needs no mask.
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Gameshark codes (1: on; a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
 | 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
+| 18 | `0x1000_0148` | `INTERACT2[14:10]` | Analogizer controllers (a mask, bit n: player n + 1 is the SNAC port's: 0 Dock: P1P2P3P4, 15 SNAC: P1P2P3P4, 14 Dock: P1 and SNAC: P2P3P4, 1 SNAC: P1 and Dock: P2P3P4, 3 SNAC: P1P2, 7 SNAC: P1P2P3; the runtime reads it, `SNAC.CTRL` is on while it is not 0) |
 | 17 | `0x1000_0144` | `INTERACT2[9:5]` | Video settings (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
 | 20 | `0x1000_0150` | `INTERACT1[25:24]` | Expansion Pak/Gameshark: one list writing fields 14 and 15 together (bit 0 is the Expansion Pak, 1 = out; bit 1 the Gameshark codes, 1 = on) |
 
@@ -224,6 +226,24 @@ Pak uses.
 | `ID` | `0x00` | R | `0x4742_0001` |
 | `CTRL` | `0x04` | RW | Bit 0 `ON`: the cartridge out of reset, the bus driven. Bit 1 `TRUST`: chip select and writes allowed (it is a Game Boy's cartridge) |
 | `ACCESS` | `0x08` | RW | Write: an access starts (not while `BUSY`): `DATA` bits 7:0, `ADDR` bits 23:8, `WE` bit 24. Read: `BUSY` bit 31 and the byte read in `DATA` |
+
+## SNAC
+
+The Analogizer's SNAC port as the console's PIF (`rtl/analogizer/an_joybus_m.sv`, `an_snac_pif.sv`;
+[analogizer.md](analogizer.md#the-snac-port-as-the-consoles-pif)): a Joybus master with four ports, a 128-byte buffer
+and a scan of who is plugged in. One transaction at a time.
+
+| Register | Offset | Dir | What |
+|---|---|---|---|
+| `ID` | `0x00` | R | `0x534E_0001` |
+| `CTRL` | `0x04` | RW | Bit 0 `ON`: the Joybus is wanted (the runtime sets it while the menu's "Analogizer controllers", `INTERACT2[13:10]`, is not 0). The pins are the Joybus's only while the adapter also owns the port (`INTERACT2` bit 31); with a Game Boy cartridge in the slot they stay the cartridge's, nothing is driven and nothing is scanned. Bit 1 `SCAN`: the background scan of the four ports, one every 2 ms (the runtime leaves it off). Bits 15:8 `TFIRST`: the microseconds to wait for a reply's first edge (reset 64) |
+| `STAT` | `0x08` | RW | Bits 3:0 `PRESENT`: the port's device answered the scan twice in a row and has not missed it three times since. Bits 7:4 `CHANGED`: it came or went since (a write of 1s clears) |
+| `XFER` | `0x0C` | RW | Write: start a transaction: bits 5:0 the bytes to send (the buffer's first), bits 13:8 the bytes to receive, bits 17:16 the port (0 to 3). Read: bit 31 `BUSY` (from the write until the reply is in), bit 30 `TIMEOUT` (nothing answered), bit 29 `SHORT` (fewer bytes than asked, or the wire did not go quiet), bits 5:0 the bytes received (the runtime times the wire itself, with `TIMER0`) |
+| `PTR` | `0x10` | RW | The buffer's pointer (bits 6:0) |
+| `DATA` | `0x14` | RW | The byte at `PTR`; each access moves `PTR` on by one |
+
+The buffer: bytes 0 to 62 are the transaction (the bytes sent, which the bytes received then replace); `64 + 4 n` is
+port n's scan: the three bytes the status command was answered with, then at `64 + 4 n + 3` the number of bytes that came (3: a device is there).
 
 ## MONITOR
 

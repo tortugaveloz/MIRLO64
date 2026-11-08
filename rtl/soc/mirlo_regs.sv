@@ -19,6 +19,7 @@
 //   UART          the JTAG UART
 //   GB_CART       (MIRLO_GB_CART) a Game Boy cartridge in the Pocket's slot:
 //                 the port on and trusted, one byte read or written at a time
+//   SNAC          the Analogizer's SNAC port as the console's PIF: a Joybus master with four ports (rtl/analogizer/an_snac_pif.sv)
 //   VIDEO_FRAMEBUFFER  the scan-out's base (latched by it at the frame
 //                 boundary), its enables and its mode
 // One access port: an access in the cycle of r_req, its read data the next.
@@ -66,7 +67,7 @@ module mirlo_regs (
     input  wire         ia_wr,
     output logic [31:0] ia_q,
     output wire  [2:0]  ia_an_mode,         // interact: the Analogizer's video (field 16: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV,
-    output wire  [1:0]  ia_an_scan,         //   7..9 RGBHV with the odd lines 25, 50, 75 % darker: mode 6, scan 1..3), and INTERACT2's bit 31, which the
+    output wire  [1:0]  ia_an_scan,         //   7..9 RGBHV with the odd lines 25, 50, 75 % darker: mode 6, scan 1..3; a larger value, from a build that had a 10: mode 0), INTERACT2's bits 13:10 (the runtime's: "Analogizer controllers"), and its bit 31, which the
     output wire         ia_an_own,          //   runtime sets: the adapter owns the port (docs/analogizer.md)
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
@@ -157,6 +158,11 @@ module mirlo_regs (
     // having commands to run (PEND bit 4), the runtime saying it is done (SIDONE)
     input  wire         si_irq, si_clr, si_ev,
     output wire         si_done,
+    // SNAC (rtl/analogizer/an_snac_pif.sv): the block's strobes and its words; a read is answered by sn_q from the address
+    output wire         sn_wr, sn_rd,
+    output wire  [3:0]  sn_a,
+    output wire  [31:0] sn_wd,
+    input  wire  [31:0] sn_q,
     output logic        gbc_on, gbc_trust, gbc_start, gbc_we,
     output logic [15:0] gbc_addr,
     output logic [7:0]  gbc_wdata,
@@ -234,8 +240,8 @@ assign ia_crop_l = ia0[18:17];
 assign ia_out32  = ia2[5];
 assign ia_deblur = ia2[6];
 wire [3:0] ia_an_video = ia2[3:0];
-wire       ia_an_dark  = ia_an_video >= 4'd7;
-assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video[2:0];
+wire       ia_an_dark  = ia_an_video >= 4'd7 && ia_an_video <= 4'd9;
+assign ia_an_mode = ia_an_dark ? 3'd6 : ia_an_video >= 4'd10 ? 3'd0 : ia_an_video[2:0];     // (a value no entry has: the DAC as with Off)
 assign ia_an_scan = ia_an_dark ? 2'(ia_an_video - 4'd6) : 2'd0;
 assign ia_an_own  = ia2[31];
 always_ff @(posedge clk) begin
@@ -392,6 +398,13 @@ assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's
 assign ai_step_wd = r_wdata[19:0];
 assign si_done = wr && a == R_MONITOR_SIDONE;       // (MIRLO_SI: the runtime has run the PIF's commands, rcp_si.sv)
 
+// ---- SNAC: the block at 0x0E00; the module keeps its own registers
+wire sn_sel = a[15:12] == 4'd0 && a[11:8] == 4'd14 && a[7:6] == 2'd0;
+assign sn_wr = wr && sn_sel;
+assign sn_rd = rd && sn_sel;
+assign sn_a  = a[5:2];
+assign sn_wd = r_wdata;
+
 // ---- GB_CART
 always_ff @(posedge clk) begin
     gbc_start <= wr && a == R_GB_CART_ACCESS;
@@ -537,6 +550,7 @@ always_comb begin
     R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
     default: ;
     endcase
+    rb[14] = sn_q;                                              // SNAC
     case (a[5:2])                                               // MONITOR
     R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};
