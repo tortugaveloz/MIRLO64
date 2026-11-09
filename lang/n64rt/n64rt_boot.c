@@ -90,7 +90,7 @@ static void hooks_arm(void);
  * floats: 2^k by the exponent, the rest by a polynomial. Against the double steps, a rate under 2 (a ramp of more than
  * eight samples) is the same 16.16 value or one 2^-16 off; above that, a float's 24 bits leave a relative 1e-6.
  * The function is found by its words, those that a link relocates masked (a lui's half, the offsets and immediates
- * off a register a lui set, a jump's target: ul_mask), through a hash. Three builds of it are known (s_ul_fns), and
+ * off a register a lui set, a jump's target: ul_mask), through a hash. Eight builds of it are known (s_ul_fns), and
  * ul_patch puts a jump to a wrapper over each:
  *  - two take the O32 ABI's arguments, the two doubles in $f12 / $f14, the count and the rate's lower half's address in
  *    the caller's fifth and sixth words;
@@ -181,16 +181,24 @@ static const struct { u32 first, last2, last1, words, hash; void (*fn)(void); } 
     { 0x27BDFFB8u, 0x03E00008u, 0x27BD0048u, 160u, 0x97830ABCu, ulw_getrate },     /* (FNV-1a of the masked words) */
     { 0x27BDFF48u, 0x03E00008u, 0x27BD00B8u, 121u, 0xB31A06F9u, ulw_getrate },
     { 0x27BDFF18u, 0x03E00008u, 0x00000000u, 116u, 0x23CA9D96u, ulw_getrate_r },
+    /* the same function in other builds, all O32 (the doubles in $f12 / $f14, the count and the address in the caller's fifth and sixth words) */
+    { 0x27BDFFB8u, 0x03E00008u, 0x27BD0048u, 148u, 0xB9159521u, ulw_getrate },
+    { 0x27BDFF68u, 0x03E00008u, 0x27BD0098u, 174u, 0x854D3A75u, ulw_getrate },
+    { 0x27BDFF48u, 0x03E00008u, 0x27BD00B8u, 190u, 0x65E70FB6u, ulw_getrate },
+    { 0x27BDFF48u, 0x03E00008u, 0x27BD00B8u, 121u, 0x0C9E6EAEu, ulw_getrate },
+    { 0x27BDFF88u, 0x03E00008u, 0x27BD0078u, 116u, 0xE16A7EFBu, ulw_getrate },
 };
 /* The patch goes into the runtime's code with interrupts off (an interrupt of the game's would arrive at the runtime's
  * vector) and Status bit 4 (KSU's, which the game's code never sets) on: while the game runs, 0x2000_0000 - 0x4FFF_FFFF are
  * the game's mapped addresses (mips_core, game_view: a game can map an overlay at 0x4000_0000 and run it there), and bit 4
  * gives the runtime's code back its own SDRAM there. The wrapper's mtc0 puts the game's Status back in the delay slot of the
  * return, where the next instruction is the game's again. */
-static void ul_patch(u32 vram, u32 len)
+static u32 ul_patch(u32 vram, u32 len)
 {
+    u32 patched = 0;
     for (u32 a = vram; a + 4u * 116u <= vram + len; a += 4u) {
         const u32 *w = rd32(a);
+        if ((w[0] >> 8) != 0x27BDFFu) continue;      /* (every known build starts with an addiu $sp, $sp, -n of 0xFF18 - 0xFFB8: the scan of a big range stays cheap) */
         for (u32 k = 0; k < sizeof s_ul_fns / sizeof s_ul_fns[0]; k++) {
             const u32 n = s_ul_fns[k].words;
             if (a + 4u * n > vram + len || w[0] != s_ul_fns[k].first || w[n - 2] != s_ul_fns[k].last2 || w[n - 1] != s_ul_fns[k].last1) continue;
@@ -213,9 +221,38 @@ static void ul_patch(u32 vram, u32 len)
             d[8] = 0;
             printf("n64rt: the audio library's envelope rate at %08lx done in the runtime (build %lu)\n", (unsigned long)a,
                    (unsigned long)k);
+            patched++;
             break;
         }
     }
+    return patched;
+}
+/* The audio library is not always in the boot segment: a game that loads its code after the boot (decompressed, or from an overlay) has the
+ * function in the RDRAM only some time into the run. So the lowest 4 MiB of the RDRAM (the code is there; the frame buffers and the heap are
+ * higher) are looked through again, a sweep that starts when the game sets the audio's rate (its audio thread has started, its library is
+ * loaded) and at a few ticks after (4.2 ms each: 2.5, 5.5, 11, 22 and 44 s). A sweep reads 8 KiB a tick, some 0.5 ms of it: a pass over the
+ * whole range in one go would hold the game for 0.2 s. A function that comes in behind the sweep is found by the next one. */
+#define UL_CHUNK 0x2000u
+#define UL_TOP   0x400000u
+static u8 s_ul_late_on;
+static u32 s_ul_pos;                                   /* where the sweep is (a KSEG0 address); 0 when there is none */
+void n64rt_ul_late(void)
+{
+    if (s_ul_late_on && !s_ul_pos) s_ul_pos = 0x80000400u;     /* (one at a time) */
+}
+void n64rt_ul_tick(void)
+{
+    static const u16 s_at[] = { 600u, 1310u, 2620u, 5240u, 10480u };
+    static u32 s_ticks, s_next;
+    if (!s_ul_late_on) return;
+    if (s_next < sizeof s_at / sizeof s_at[0] && ++s_ticks == s_at[s_next]) { s_next++; n64rt_ul_late(); }
+    if (!s_ul_pos) return;
+    const u32 top = 0x80000000u + (n64rt_game->mem_size < UL_TOP ? n64rt_game->mem_size : UL_TOP);
+    const u32 end = s_ul_pos + UL_CHUNK;
+    /* (a function that starts in this chunk may reach 190 words past its end) */
+    u32 len = end + 4u * 190u < top ? UL_CHUNK + 4u * 190u : top - s_ul_pos;
+    if (ul_patch(s_ul_pos, len)) { flush_cpu_dcache(); flush_cpu_icache(); }
+    s_ul_pos = end < top ? end : 0;
 }
 
 /* ---- a float matrix to the RSP's fixed point by a double's mantissa -------------------------------------------------
@@ -506,6 +543,7 @@ void n64rt_run(const n64rt_game_t *g)
     /* (the game's code is its own but for two functions that compute in doubles, which the FPU does as floats) */
     if (g->ipl3 != N64RT_IPL3_ELF) {                   /* (an ELF's segments are not a libultra's boot segment) */
         ul_patch(g->boot_vram, g->boot_len);           /* (the audio library's envelope rate) */
+        s_ul_late_on = 1;                              /* (and again later: n64rt_ul_late) */
         mf_patch(g->boot_vram, g->boot_len);           /* (and a matrix conversion through a double's mantissa) */
     }
     flush_cpu_dcache();

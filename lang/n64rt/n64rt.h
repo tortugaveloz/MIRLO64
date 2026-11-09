@@ -198,6 +198,15 @@ typedef struct {
 extern const n64rt_late_t n64rt_late[] __attribute__((weak));
 extern const unsigned n64rt_nlate __attribute__((weak));
 void n64rt_late_poll(void);
+/* The audio library's envelope rate in code that came into the RDRAM after the boot (n64rt_boot.c): looked for by a sweep of the RDRAM that starts when the game
+ * sets the audio's rate and at a few ticks, and goes on a chunk a tick. */
+#ifdef N64RT_OWN
+void n64rt_ul_late(void);
+void n64rt_ul_tick(void);
+#else
+static inline void n64rt_ul_late(void) { }
+static inline void n64rt_ul_tick(void) { }
+#endif
 /* Where the boot segment goes into such code by itself -- a jump there once it
  * has unpacked it, with nothing of the runtime's called in between (a port's
  * list of those instructions, ended by 0). A break is put on each; the first

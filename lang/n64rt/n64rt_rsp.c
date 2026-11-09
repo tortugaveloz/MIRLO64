@@ -475,6 +475,7 @@ s32 n64rt_osAiSetFrequency(u32 f)
 void n64rt_ai_hw_event(void)
 {
     (void)n64rt_osAiSetFrequency(VI_NTSC_CLOCK / ((monitor_airate_read() & 0x3FFFu) + 1u));
+    { static u32 s_n; if (!s_n++) n64rt_ul_late(); }              /* (the game's audio thread is up: its library is loaded) */
 }
 void n64rt_ai_hw_reset(void)
 {

@@ -1488,6 +1488,7 @@ void n64rt_rcp_events(void)
         }
     }
     if (pend & 4u) {                                  /* a tick */
+        n64rt_ul_tick();
         if (s_vi_hw) {
             /* (no field wakes the monitor: its count follows the ticks, 262,144 SoC cycles each, a field 1,042,710 -- the console's
              * 59.940 Hz: 4096 * 262,144 / 1,042,710 = 1029.8; it was 1,045,440 and 1027 -- and the frame buffers the game has

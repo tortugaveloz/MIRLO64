@@ -418,7 +418,8 @@ The loader then:
 6. Checks the CPU (before anything else, with the layout mark): the five 64-bit levels in COP0 register 7 must all be
    present, or a notice is shown and nothing is started. Reads the translation tables' mark in register 23. The runtime
    takes what else the core has from `MONITOR.ID` and from this, not from its own build.
-7. Replaces the audio library's envelope rate and a matrix conversion in the boot segment (below).
+7. Replaces the audio library's envelope rate and a matrix conversion in the boot segment (below); the envelope rate is looked for
+   again later in the RDRAM.
 8. Reads the save slot's file size, looks the cartridge up in the save-type database, initialises the accessory and
    the audio FIFO, and loads DMEM with the ROM's boot code (ROM `0x40` - `0xFFF`, at the same offsets), as the
    console's boot leaves it -- or, for a boot code that wipes the RSP's memories, DMEM and IMEM as it leaves them (below).
@@ -626,11 +627,17 @@ eight samples, `(target / volume)^(8 / samples)` in 16.16, which it takes as `(1
 `2^30 / samples`, squared three times, in double precision. With this FPU's doubles (floats, above) `1 + ln(x) / 2^30` is
 1.0, so every rate was 1.0 and no volume moved: notes that start from silence stayed silent, the others never faded and
 stopped dead. `ul_patch` finds the function by its words (the ones a link relocates masked, through a hash) and puts the
-same jump over it. Three builds of the function are known: two take the O32 ABI's arguments, and one, from a compiler
-that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`) and is
-called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
+same jump over it. Eight builds of the function are known (116 to 190 words): seven take the O32 ABI's arguments, and one,
+from a compiler that allocates registers across a module, takes them in registers of its own (`$a0`, `$f16`, `$f14`, `$s1`)
+and is called with values live in what it leaves alone, so its wrapper keeps every register but the result. Each jumps to
 `ul_getrate`, which takes the same power as `2^y` in floats -- `y` the library's own logarithm
-of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. The
+of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. A
+game that loads its code after the boot (unpacked, or from an overlay) has the function in the RDRAM only some time into the run,
+so `n64rt_ul_late` starts a sweep of the lowest 4 MiB of the RDRAM for it: when the game first sets the audio's rate (its audio
+thread is up) and at ticks 600, 1310, 2620, 5240 and 10480 (2.5, 5.5, 11, 22 and 44 s), one at a time. `n64rt_ul_tick` goes
+through 8 KiB of the range each tick (some 0.5 ms of the 4.2 ms, 31,000 cycles at most; the whole range is 12.9 million cycles, 0.2 s, which one pass would hold the game for), looking for the same
+words with a first test that the function's first word is an `addiu $sp, $sp, -n` of `0xFF18` - `0xFFB8`. The sweep's position
+and the tick counters are in the runtime's `.bss`, which a state keeps with the RDRAM and a Restart Game clears. The
 envelope rate is the one change the runtime makes to the game's arithmetic, made in the RDRAM's copy; it is entered with
 the game's interrupts off and Status bit 4 on, and the wrapper puts Status back in the delay slot of its return (the CPU
 sends an interrupt to the game's handler only when the interrupted instruction is the game's). The other patch of the same
