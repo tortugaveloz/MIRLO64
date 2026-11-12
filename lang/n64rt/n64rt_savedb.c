@@ -73,3 +73,11 @@ int n64rt_savedb_lookup(const char *db, unsigned len, const unsigned char id[4],
     }
     return N64RT_SAVEDB_NONE;
 }
+
+int n64rt_savedb_header(const unsigned char id[4], unsigned rev)
+{
+    static const signed char kinds[16] = { N64RT_SAVEDB_NOSAVE, N64RT_SAVEDB_EEP4K, N64RT_SAVEDB_EEP16K, N64RT_SAVEDB_SRAM,
+                                           N64RT_SAVEDB_SRAM, N64RT_SAVEDB_FLASH, N64RT_SAVEDB_SRAM };    /* (7..15: none yet) */
+    if (id[1] != 'E' || id[2] != 'D') return N64RT_SAVEDB_NONE;
+    return kinds[(rev >> 4) & 15u];
+}
