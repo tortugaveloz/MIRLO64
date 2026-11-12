@@ -956,10 +956,14 @@ loads it as slot 4, and the runtime looks the cartridge up once at boot (`lang/n
 - **rev=**: the line is only for those values of the header's version byte (ROM `0x3F`).
 
 Only the EEPROM's size is acted on: an SRAM or a FlashRAM is found from the game's accesses. A cartridge that is not in
-the file, or no file, is a 4 Kbit EEPROM. A command for block 64 or above makes the slot 2,048 bytes whatever the file
-says. No setting overrides the database; a wrong entry is corrected in the file. The lookup is bounded by the file's
-size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file from public lists (mupen64plus,
-the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types only.
+the file, or no file, is what the ROM's own header says if it is an [advanced homebrew
+header](https://n64brew.dev/wiki/ROM_Header#Advanced_Homebrew_ROM_Header) (`ED` at `0x3C` - `0x3D`, the save type in the
+high nibble of `0x3F`: 1 is a 4 Kbit EEPROM, 2 a 16 Kbit one; some ROM hacks, such as Mario Kart 64 Amped Up, and
+libdragon games that set a save type have one), and otherwise a 4 Kbit EEPROM. A command for block 64 or above makes the
+slot 2,048 bytes whatever the file says. No setting overrides the database; a wrong entry is corrected in the file. The
+lookup is bounded by the file's size and cannot fail on malformed input. `tools/build_savedb.py` regenerates the file
+from public lists (mupen64plus, the libretro No-Intro database, ares, micro-64.com); it contains cartridge IDs and types
+only.
 
 ### Controller 1's accessory
 
@@ -1379,7 +1383,7 @@ stores and branches, cost in cycles (the table in "The FPU").
 | Test | How it runs | What it checks |
 |---|---|---|
 | `pad_test.py` | on the host (needs gcc) | `n64rt_pad_map()` against an independent table, over every combination of settings |
-| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the shipped file, random bytes |
+| `savedb_host.c` | on the host, with the address sanitiser (the command is in its header) | the database's lookup: its cases, the homebrew header, the shipped file, random bytes |
 | `cart_host.c` | on the host (the command is in its header) | the cartridge's byte and halfword reads (`n64rt_cart.h`) against the console's: a halfword of odd index reads the next one |
 | `tlb_insn_host.py` | on the host (needs gcc) | the runtime's TLB instructions against a model of the VR4300's registers, on random operations |
 | `rcp_bench.mk` | a ROM the released runtime runs in `sim/mips_soc` | the monitor's RCP emulation against the console's answers |
