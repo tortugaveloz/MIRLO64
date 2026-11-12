@@ -27,7 +27,7 @@ MIRLO 64 is experimental and not every game works. What is known of v0.9:
 * ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controllers 1 and 2 can have a pak, and controller 2's can only be a Transfer Pak SD.
-* The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
+* The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets what its ROM's homebrew header says (an `ED` ID, as some ROM hacks and libdragon games have), else a 4 Kbit one.
 
 ## Installing on the Pocket
 
