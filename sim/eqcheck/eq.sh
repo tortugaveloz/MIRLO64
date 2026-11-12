@@ -14,6 +14,7 @@
 #   EXTRA=cport.extra SAMPLE="t->a_p_valid || t->b_p_valid" eq.sh old/cpu_port.sv rtl/soc/cpu_port.sv cpu_port p_addr,p_valid
 #   EXTRA_POST=si.post SAMPLE_c_q='!pb_now' SAMPLE_wdata=pb_now SAMPLE_c_busy=1 eq.sh old/rcp_si.sv rtl/soc/rcp_si.sv rcp_si c_q,wdata,c_busy
 #   EXTRA=video2.extra EXTRA_POST=video.post eq.sh old/n64_video.sv rtl/soc/n64_video.sv n64_video m_valid rtl/soc/afifo.sv
+#   SAMPLE_x_ack=1 EXTRA=psram.extra eq.sh old/psram.sv rtl/soc/psram.sv psram x_ack
 set -e
 D=$(cd "$(dirname "$0")" && pwd)
 abs() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
