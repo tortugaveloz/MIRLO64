@@ -45,7 +45,9 @@ typedef enum logic [2:0] { S_INIT, S_IDLE, S_ASYNC, S_AEND, S_GAP } st_t;
 st_t         st;
 logic [2:0]  t;                             // the cycle within an access
 logic        a_cfg;                         // the access is a register's write (else the X port's)
-wire         a_we = a_cfg || x_we;
+// the access is a write: x_we in the cycle that strobes WE# or OE# (the request is held until then), after it the
+// data bus's direction (a write goes on driving it, a read has let it go), so nothing of the X port is read after its ack
+wire         a_we = (t == 3'd1) ? a_cfg || x_we : o_dq_oe;
 logic [1:0]  cfg_n;                         // the registers written so far: BCR die 0, die 1, RCR die 0, die 1
 assign x_rdata = i_dq;
 
