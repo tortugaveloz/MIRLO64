@@ -1,0 +1,7 @@
+// psram (eq.sh): the X port's masters as they are -- a request held until two cycles after its ack (port_apf's ack is a cycle
+// after psram's, the master's next request a cycle after that), random between requests
+static int hv = 0, hwe = 0, hbe = 0, rel = 0; static uint32_t ha = 0, hd = 0;
+if (rel && --rel == 0) hv = 0;
+if (hv && !rel && t->a_x_ack) rel = 3;
+if (hv) { t->x_valid = !rel; t->x_we = hwe; t->x_addr = ha; t->x_wdata = hd; t->x_be = hbe; }
+else if (t->x_valid) { hv = 1; hwe = t->x_we; ha = t->x_addr; hd = t->x_wdata; hbe = t->x_be; }
