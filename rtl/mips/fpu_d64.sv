@@ -131,6 +131,9 @@ wire acc_z = acc == 57'd0;
 // E's one step: +1 (the carry of a sum, or of the rounding), -8 and -1 (a normalisation by 8 and by 1)
 wire [12:0] Ek = st != S_NRM ? {12'd0, acc[56]} : acc[56] ? 13'd1 : a_z8 ? 13'h1FF8 : 13'h1FFF;
 wire [12:0] Ef = E + Ek;
+// (S_PACK's step, E + the carry of the rounding, as Ek is outside S_NRM: its own incrementer, so that the overflow / underflow test and the
+// clearing of acc do not wait for the zero test of acc's top byte that Ek takes for the normalisation)
+wire [12:0] Efp = E + {12'd0, acc[56]};
 
 always_ff @(posedge clk) begin
     if (rst || !live) st <= S_IDLE;
@@ -197,8 +200,8 @@ always_ff @(posedge clk) begin
         end else st <= S_RND;
     S_RND: begin acc <= sum; st <= S_PACK; end
     S_PACK: begin                                      // (an overflow is infinity, an underflow a zero: acc cleared, E all ones or 0)
-        E <= Ef[12] || Ef == 13'd0 ? 13'd0 : Ef >= 13'd2047 ? 13'h7FF : Ef;
-        if (Ef[12] || Ef == 13'd0 || Ef >= 13'd2047) acc <= sum;
+        E <= Efp[12] || Efp == 13'd0 ? 13'd0 : Efp >= 13'd2047 ? 13'h7FF : Efp;
+        if (Efp[12] || Efp == 13'd0 || Efp >= 13'd2047) acc <= sum;
         st <= S_DONE;
     end
     // the product

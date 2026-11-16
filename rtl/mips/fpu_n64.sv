@@ -716,7 +716,7 @@ always_comb begin
             if (is_d) begin wi_e = 1; wi_o = 1; end
             else if (insn[6]) wi_o = 1; else wi_e = 1;
         end
-        if (is_d64 && !d64_cmp) begin widx = insn[10:7]; we_e = 1; we_o = 1; end
+        if (is_d64 && !d64_cmp) begin widx = insn[10:7]; wi_e = 1; wi_o = 1; end
         if (is_arith && kind != K_CMP) begin
             widx = insn[10:7];
             if (dst_l || dst_d) begin wi_e = 1; wi_o = 1; end
