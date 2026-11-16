@@ -80,6 +80,13 @@ Up to four players can play with the controllers connected to the Dock. Each con
 
 With an [Analogizer](https://analogizer-fpga.com) in the Pocket's cartridge slot and an N64 SNAC board connected to it, real Nintendo 64 controllers can be plugged in. The wiring is explained on the Analogizer's own page: <https://analogizer-fpga.com/pages/nintendo-64-snac>.
 
+### The harness
+
+To connect the SNAC board to the Analogizer you need a small harness: two USB 3 boards, six Dupont cables and 18 pins, soldered and wired as the infographic shows.
+
+* [Harness infographic (English)](snac-harness-en.pdf)
+* [Infografía del arnés (español)](snac-harness-es.pdf)
+
 ### Supported
 
 The original Nintendo 64 controllers and all the peripherals tested so far work.
