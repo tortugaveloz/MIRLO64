@@ -62,6 +62,7 @@ module n64_video #(
     input  wire         enable,         // sys: scan out (else black, no DMA)
     input  wire  [25:0] vi_origin,      // sys: the framebuffer's byte address (ORIGIN_MASK: its span)
     input  wire         vi_il,          // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): sent woven
+    input  wire         no_weave,       // sys: send a serrated picture field by field anyway (a 15 kHz analog output cannot show a woven frame)
     output logic        vblank,         // sys
     input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
     input  wire         vi_px32,        // sys: the pixels are 32-bit (VI_STATUS type 3): RGBA8888, a pixel a word
@@ -253,7 +254,7 @@ always_ff @(posedge clk) ann_s <= {ann_s[0], ann};
 // line j, as the VI shows it: the row Y_SCALE's accumulator reaches at the field's line j, from the base, and for the second field
 // one row (the pitch: 320 words of a 640-pixel one, 288 of a 576-pixel one) on, or with WIDTH 1280 one 640-pixel row (320 words).
 // (A serrated 240-row buffer, or another pitch, is not a pair of fields: shown as any picture is.)
-wire         wv_rq  = vi_il && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
+wire         wv_rq  = vi_il && !no_weave && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
 wire  [9:0]  vi_nr2 = {vi_nr, 1'b0};
 logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
 logic [10:0] col;                  // the read's word in its row
