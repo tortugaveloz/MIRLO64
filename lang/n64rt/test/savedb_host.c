@@ -60,6 +60,26 @@ int main(int argc, char **argv)
       memset(big, ' ', sizeof big); memcpy(big + sizeof big - 20, "NBKE eeprom16k", 14); g = n64rt_savedb_lookup(big, sizeof big, (const unsigned char *)"NBKE", 0); if (g != E16) { printf("FAIL tail: %d\n", g); fails++; }
       /* a file that stops in the middle of a token, with no NUL after it (the length is all there is) */
       static const char cut[] = "NBKE eeprom16kXXXX"; g = n64rt_savedb_lookup(cut, 14, (const unsigned char *)"NBKE", 0); if (g != E16) { printf("FAIL cut: %d\n", g); fails++; } }
+    /* the ROM's own homebrew header: "?ED?", the save type in the version byte's high nibble */
+#define HDR(id, rev, want) do { int g = n64rt_savedb_header((const unsigned char *)(id), (rev)); if (g != (want)) { printf("FAIL line %d: header %s 0x%02X: %d, want %d\n", __LINE__, id, (unsigned)(rev), g, want); fails++; } } while (0)
+    HDR("NEDE", 0x20, E16);                                                   /* (Mario Kart 64 Amped Up) */
+    HDR("NEDE", 0x12, E4);                                                    /* the low nibble is flags: RTC, region free, Expansion Pak */
+    HDR("NEDE", 0x2F, E16);
+    HDR("NEDJ", 0x10, E4);
+    HDR("ZEDX", 0x20, E16);                                                   /* any 1st and 4th character */
+    HDR("NEDE", 0x00, N64RT_SAVEDB_NOSAVE);
+    HDR("NEDE", 0x30, N64RT_SAVEDB_SRAM);
+    HDR("NEDE", 0x40, N64RT_SAVEDB_SRAM);
+    HDR("NEDE", 0x50, N64RT_SAVEDB_FLASH);
+    HDR("NEDE", 0x60, N64RT_SAVEDB_SRAM);
+    HDR("NEDE", 0x70, NO);                                                    /* not a type (yet) */
+    HDR("NEDE", 0xF0, NO);
+    HDR("NEDE", 0x120, E16);                                                  /* (only the byte counts) */
+    HDR("NedE", 0x20, NO);                                                    /* "ED" in capitals only */
+    HDR("NSME", 0x20, NO);                                                    /* a retail ID: the file's, not the header's */
+    HDR("NKTE", 0x20, NO);
+    for (unsigned r = 0; r < 256; r++) { unsigned char id[4] = { (unsigned char)r, 'E', 'D', (unsigned char)(255 - r) };
+        int g = n64rt_savedb_header(id, r); if (g < NO || g > N64RT_SAVEDB_NOSAVE) { printf("FAIL header range %u: %d\n", r, g); fails++; } }
     /* random bytes, and random lines of the file's own words */
     srand(1);
     static const char *words[] = { "NBK?", "eeprom16k", "eeprom4k", "sram", "rev=1,2", "rev=", "#", "\n", "\r\n", " ", "\t", "??", "NK4J", "x", "\0" };

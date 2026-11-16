@@ -1,7 +1,8 @@
 /* The save-type database: a text file on the SD card (Assets/n64/common/n64savedb.txt, data.json's slot 4), one
  * line per cartridge -- the cartridge's ID (the four characters at ROM 0x3B..0x3E, "?" for any) and its save type --
- * which the Pocket loads beside the program. This is the lookup, and nothing else: a pure function of the file's
- * bytes, which the runtime calls once at boot (n64rt_io.c) and a host test calls with any bytes (test/savedb_host.c).
+ * which the Pocket loads beside the program. This is the lookup, and the ROM header's own save type (below): pure
+ * functions of their bytes, which the runtime calls once at boot (n64rt_io.c) and a host test calls with any bytes
+ * (test/savedb_host.c).
  *
  *   # comment                         everything from a "#" to the end of the line; blank lines, CR, LF, tabs, spaces
  *   NBK?  eeprom16k  rev=0,1  # ...  ID, type, optionally the versions (the header byte 0x3F) the line is for
@@ -23,5 +24,13 @@ enum {
 
 /* `db`: the file's `len` bytes; `id`: the cartridge's four characters; `rev`: the header's version byte */
 int n64rt_savedb_lookup(const char *db, unsigned len, const unsigned char id[4], unsigned rev);
+
+/* The save type a ROM states in its own header, by the homebrew convention (n64brew, "ROM Header", the advanced
+ * homebrew header; read by ares, mupen64plus, the EverDrive 64 and the SummerCart64): a cartridge ID whose 2nd and 3rd
+ * characters are "ED" has the save type in the high nibble of the version byte -- 0 none, 1 eeprom4k, 2 eeprom16k, 3
+ * sram, 4 sram (768 Kbit), 5 flash, 6 sram (1 Mbit). N64RT_SAVEDB_NONE for any other ID or nibble. Some ROM hacks
+ * (Mario Kart 64 Amped Up) and libdragon games that set a save type carry it in place of a retail ID, so they need no
+ * line of the file (the runtime asks it when no line matches). */
+int n64rt_savedb_header(const unsigned char id[4], unsigned rev);
 
 #endif
