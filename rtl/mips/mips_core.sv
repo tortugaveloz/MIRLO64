@@ -803,7 +803,7 @@ logic [$clog2(RASN):0]   ras_n;              // how many are valid
 logic [29:0] d_jt;
 wire  [1:0]  bh_rd = bh[f_pc[BH+1:2]];
 wire  [29:0] ras_rd = ras[ras_t];
-logic        rp_pend, rp_m;                  // FAST: a load took another line's word: again from its pc -- W's by now, or (rp_m) M's still
+logic        rp_pend;                        // FAST: a load took another line's word: again from its pc (w_pc: M's of the cycle before)
 logic [31:0] d_fill_pa;
 logic [31:0] d_pc, d_insn;
 logic [4:0]  d_fexc_code;
@@ -1555,7 +1555,7 @@ wire d_adv = e_adv && !d_stall;
 wire flush = m_take_int || m_take_exc || (m_commit_e && m_c.eret) || (FAST && rp_pend);
 logic [31:0] flush_pc;
 always_comb begin
-    if (FAST && rp_pend) flush_pc = rp_m ? m_pc : w_pc;
+    if (FAST && rp_pend) flush_pc = w_pc;
     else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
     else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
@@ -1966,8 +1966,9 @@ always_ff @(posedge clk) begin
         // ---------------------------------------------------- M -> W
         w_valid <= FAST ? m_commit_e : m_commit;
         w_lm <= m_lmiss;
+        w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
-            w_c <= m_c; w_pc <= m_pc; w_insn <= m_insn; w_serial <= m_serial;
+            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
             if (m_c.mfc0) w_res <= c0_rd;
             else if (m_c.cop1_gpr) w_res <= fpu_gpr_out[31:0];
             else if (m_c.st == S_SC) w_res <= {31'd0, !m_sc_fail};
@@ -2143,7 +2144,7 @@ always_ff @(posedge clk) begin
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
         rp_pend <= 1'b0;
-        if (FAST && m_lmiss) begin m_valid <= 1'b0; rp_pend <= 1'b1; rp_m <= !m_adv; end
+        if (FAST && m_lmiss) begin m_valid <= 1'b0; rp_pend <= 1'b1; end
         if (FAST && (ms == MS_IDLE || (PGD && ms == MS_XLAT))) d_fill_pa <= m_pa;
         if (flush || m_adv || CK_W == 0) ck_n <= '0;
         else if (m_cache_go && ck_run) ck_n <= ck_n + 1'b1;
