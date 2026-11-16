@@ -101,8 +101,9 @@ module rdp_mem (
     input  wire [1:0]  rd_lmode,
     input  wire [11:0] rd_ldxt,           // LOAD BLOCK: what a 64-bit word adds to its row count (u1.11)
     input  wire        rd_lodd,           // LOAD TILE: an odd row
-    output reg  [9:0]  z_have0, z_have1, c_have0, c_have1,     // (by the request's set: the next row's request is taken while the pixels of this one still
-    output reg         h_done0, h_done1,                       // issue; h_done: the span's hidden words are in)
+    output reg  [9:0]  z_have, c_have,         // (the words in of the request taken last, which is of the set have_set: the next row's request is taken while the pixels of
+    output wire        have_set,               // this one still issue, but only with this one's reads all in, so a row of the other set has them all)
+    output reg         h_done0, h_done1,                       // h_done: the span's hidden words are in, by the request's set)
     output wire        hlbw_we,        // the raw hidden buffers' write port ({set, group mod 128}); like the line buffers' below, from the memory's data in the cycle it arrives
     output wire        hlbw_z,         // ... the depth image's
     output wire [7:0]  hlbw_addr,
@@ -196,6 +197,7 @@ module rdp_mem (
     // the depth span's (from the registered base, when the colour groups are all asked for)
     wire [20:0] r_zw0 = r_zb[20:0] + {12'd0, r_x0[9:1]};
     wire [9:0]  r_zwl = r_zb[9:0] + {1'b0, r_xl[9:1]};
+    assign have_set = r_set;
     assign rd_ready = !r_act;
     assign rd_busy  = r_act;
     // the line buffers' write ports: the memory's word goes into the RAM in the cycle it arrives (the RAM's own input registers hold it; the counts above
@@ -453,7 +455,7 @@ module rdp_mem (
             rf_wr <= 0; rf_rd <= 0; h_ph <= 2'd0;
             h_done0 <= 1'b0; h_done1 <= 1'b0;
             la_v <= 1'b0; l_out <= 1'b0;
-            z_have0 <= 10'd0; c_have0 <= 10'd0; z_have1 <= 10'd0; c_have1 <= 10'd0;
+            z_have <= 10'd0; c_have <= 10'd0;
         end else begin
             // write data out: refill the head from the RAM
             if (!wq_v || wf_pop) begin
@@ -490,7 +492,7 @@ module rdp_mem (
                     r_idx <= rd_f1; q_idx <= rd_f1; r_c32 <= rd_c32; r_x0 <= rd_x0; r_xl <= rd_xl[9:0];
                     r_tog <= 1'b0; q_tog <= 1'b0; r_all <= 1'b0;
                     r_sh <= rd_sh && rd_c && !rd_load; r_shp <= 1'b0; q_shp <= 1'b0; r_f1 <= 1'b1; q_f1 <= 1'b1;
-                    if (rd_set) begin z_have1 <= 10'd0; c_have1 <= 10'd0; end else begin z_have0 <= 10'd0; c_have0 <= 10'd0; end
+                    z_have <= 10'd0; c_have <= 10'd0;
                     r_h <= rd_h && !rd_load; r_hz <= rd_hz && !rd_load;
                     r_hall <= !((rd_h || rd_hz) && !rd_load); q_hin <= (rd_h || rd_hz) && !rd_load;
                     r_hzp <= 1'b0; q_hzp <= 1'b0;
@@ -598,9 +600,9 @@ module rdp_mem (
                     end else begin
                         q_shp <= 1'b0; q_f1 <= 1'b0;
                         if (q_kc) begin
-                            if (r_set) c_have1 <= c_have1 + 10'd1; else c_have0 <= c_have0 + 10'd1;
+                            c_have <= c_have + 10'd1;
                         end
-                        else      begin if (r_set) z_have1 <= z_have1 + 10'd1; else z_have0 <= z_have0 + 10'd1; end
+                        else      z_have <= z_have + 10'd1;
                         q_idx <= q_idx + 10'd1;
                         if (q_idx == q_last) begin
                             if (r_both && !q_tog) begin q_tog <= 1'b1; q_idx <= r_cf; q_f1 <= 1'b1; end

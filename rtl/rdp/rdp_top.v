@@ -424,8 +424,10 @@ module rdp_top (
     // still to be written -- as for the second half of a 32-bit image's wide span, whose first group may be the first half's last
     wire        hz_ok = !(rq_h || rq_hz) || (!(wr_busy && wr_seti == rq_set)
                                   && ((cimg_width[3:0] == 4'd0 && !rq_half) || (!wr_busy && !wq_pend)));
-    wire [9:0]  z_have0, z_have1, c_have0, c_have1;
-    wire [9:0]  z_have = set_cur ? z_have1 : z_have0, c_have = set_cur ? c_have1 : c_have0;      // (the row being drawn's)
+    wire [9:0]  z_have, c_have;
+    wire        have_set;
+    // (the row being drawn's words in: the counts of the request taken last when that is its own; else its reads were all in before the next was taken)
+    wire        have_cur = set_cur == have_set;
     wire        h_done = set_cur ? h_done1 : h_done0;
     wire        rq_cur = rq_pend && rq_set == set_cur;          // the row being drawn's own request is still to be taken
     // a row's results in the new buffers so far, by set -- as the write engine
@@ -441,7 +443,7 @@ module rdp_top (
         .rd_valid(rq_pend && old_hold[rq_set] == 5'd0 && hz_ok), .rd_ready(rd_ready), .rd_load(rq_load), .rd_z(rq_z), .rd_c(rq_c), .rd_h(rq_h), .rd_hz(rq_hz),
         .rd_zbase(rq_zbase), .rd_cbase(rq_cbase), .rd_x0(rq_x0), .rd_x1(rq_x1), .rd_set(rq_set), .rd_c32(cimg32), .rd_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:3] != zimg[22:3]),
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
-        .z_have0(z_have0), .z_have1(z_have1), .c_have0(c_have0), .c_have1(c_have1), .h_done0(h_done0), .h_done1(h_done1), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
+        .z_have(z_have), .c_have(c_have), .have_set(have_set), .h_done0(h_done0), .h_done1(h_done1), .hlbw_we(hl_we), .hlbw_z(hl_z), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_s_we(mw_s_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
         .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set), .wr_sh(shadow_en && cimg_ok && !cimg8 && !cimg32 && cimg[22:3] != zimg[22:3]), .lbr_sdata(snew_rd),
@@ -484,7 +486,7 @@ module rdp_top (
     wire       pxg_ok = 1'b1;
 `endif
     // (the gap is in pix_ok, not pix_slot: with the LOD a pixel not ready in time is a ghost, which keeps the neighbour's perspective divide on time)
-    wire       pix_ok = pxg_ok && !rq_cur && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
+    wire       pix_ok = pxg_ok && !rq_cur && h_done && (!z_cmp || !have_cur || z_have > pix_wi) && (!need_mem || !have_cur || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
     // clock: pix_valid is still up the clock after an issue
 `ifdef RDP_SHARE
