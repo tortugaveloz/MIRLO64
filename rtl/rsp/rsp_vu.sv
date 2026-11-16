@@ -364,12 +364,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         endcase
     end
     for (int i = 0; i < 16; i++)
-        unique case (rsel)
-        2'd0:    o.res[i] = o.acc[i];
-        2'd1:    o.res[i] = accn[16 + i];
-        2'd2:    o.res[i] = NP == 1 ? accn[32 + i] : vs[i];
-        default: o.res[i] = (i == 15) ? c15 : clo;
-        endcase
+        // (as choices of two: the synthesis maps it to fewer LUTs than one of four)
+        o.res[i] = rsel[1] ? (rsel[0] ? ((i == 15) ? c15 : clo) : (NP == 1 ? accn[32 + i] : vs[i])) : (rsel[0] ? accn[16 + i] : o.acc[i]);
     return o;
 endfunction
 
@@ -511,7 +507,14 @@ always_comb begin
     r_clz = 6'd32;
     for (int k = 0; k < 32; k++) if (r_data[k]) r_clz = 6'(31 - k);
 end
-wire  [31:0] r_norm = r_data << r_clz[4:0];
+logic [31:0] r_n0, r_n1, r_n2, r_n3, r_norm;               // (r_data << r_clz as five stages of two: fewer LUTs than the shifter operator)
+always_comb begin
+    r_n0 = r_clz[0] ? r_data << 1 : r_data;
+    r_n1 = r_clz[1] ? r_n0 << 2 : r_n0;
+    r_n2 = r_clz[2] ? r_n1 << 4 : r_n1;
+    r_n3 = r_clz[3] ? r_n2 << 8 : r_n2;
+    r_norm = r_clz[4] ? r_n3 << 16 : r_n3;
+end
 wire  [8:0]  r_idx  = r_norm[30:22];
 assign rom_addr = r_sqrt ? {1'b1, r_idx[8:1], r_clz[0]} : {1'b0, r_idx};
 wire  [31:0] r_val  = {1'b0, 1'b1, rom_q, 14'd0};                          // (0x10000 | rom) << 14
