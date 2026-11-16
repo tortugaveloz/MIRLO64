@@ -563,7 +563,7 @@ always_ff @(posedge clk) begin
             un = isnan(ax) || isnan(ay);
             eq = !un && ((iszero(ax) && iszero(ay)) || (pre_eq && ax.s == ay.s));
             lt = !un && !(iszero(ax) && iszero(ay)) && (ax.s != ay.s ? ax.s : (ax.s ? !pre_lt && !pre_eq : pre_lt));
-            if (sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end
+            if (sel_d && !D64) begin un = dc_un; eq = dc_eq; lt = dc_lt; end   // (D64: a double's compare is fpu_d64's)
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
             st <= S_DONE;
         end
@@ -587,7 +587,7 @@ always_ff @(posedge clk) begin
             un = nx || ny;
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
-            if (sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end
+            if (sel_d && !D64) begin un = dc_un; eq = dc_eq; lt = dc_lt; end   // (D64: a double's compare is fpu_d64's)
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
         end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
