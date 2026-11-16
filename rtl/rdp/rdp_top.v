@@ -769,8 +769,11 @@ module rdp_top (
     wire        dz_s = vs == 4'd15 && vz;            // (Z's own step: its DaDy is zdy; at step 0 of vi = 7 it is W's that arrives)
     wire [31:0] dy_c = dz_s ? zdy : {vgy_hi, vi[0] ? vr_q[31:16] : vr_q[15:0]};
     // (de - de >> 2 - dy + dy >> 2 with 32-bit wrap, as the console's: two terms that each fit, not (de - dy) >> 2)
-    wire [31:0] dq   = (vde & 32'hFFFFFE00) - (dy_c & 32'hFFFFFE00);
-    wire [31:0] dq2  = asr(vde & 32'hFFFFFE00, 5'd2) - asr(dy_c & 32'hFFFFFE00, 5'd2);
+    // (both are multiples of 512, so their quarters are exact: the difference of the quarters is the quarter of the difference, taken
+    // on 33 bits, where the difference itself wraps -- one subtractor for dq and dq2)
+    wire [32:0] dq33 = {vde[31], vde & 32'hFFFFFE00} - {dy_c[31], dy_c & 32'hFFFFFE00};
+    wire [31:0] dq   = dq33[31:0];
+    wire [31:0] dq2  = {dq33[32], dq33[32:2]};
     wire [31:0] dif_d = dq - dq2;
     wire [2:0]  dif_a = dz_s ? 3'd7 : vi - 3'd1;
     wire        dif_w = st == S_VSET && (dz_s || (vs == 4'd0 && vi != 3'd0));
