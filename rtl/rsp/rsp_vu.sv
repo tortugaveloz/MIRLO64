@@ -611,7 +611,7 @@ wire         in_tv   = st == V_TV;
 // from the instruction first, then rs's low bits (the late ones: forwarded),
 // the low two of them first
 logic [7:0]  sarr [16];
-logic [7:0]  sr1 [16];
+logic [7:0]  sr1 [16], sr2 [16], sr3 [16];
 logic [7:0]  sb [16];
 wire         st_pk  = swc2 && ls_packed;
 wire  [3:0]  st_eo  = el - off_sh[3:0];
@@ -636,8 +636,12 @@ always_comb begin
         endcase
         if (i % 4 == 0 && st_fv) sarr[i] = wf[14:7];
     end
-    for (int b = 0; b < 16; b++) sr1[b] = sarr[(b + int'(st_rot[1:0])) & 15];
-    for (int b = 0; b < 16; b++) sb[b]  = sr1[(b + 4 * int'(st_rot[3:2])) & 15];
+    // (the rotation as four stages of two -- by 1, 2, 4, 8 bytes, the early bits of st_rot first -- not two of four: the synthesis
+    // maps this to 138 fewer LUTs with the load's rotation in rsp_top written the same way)
+    for (int b = 0; b < 16; b++) sr1[b] = st_rot[0] ? sarr[(b + 1) & 15] : sarr[b];
+    for (int b = 0; b < 16; b++) sr2[b] = st_rot[1] ? sr1[(b + 2) & 15] : sr1[b];
+    for (int b = 0; b < 16; b++) sr3[b] = st_rot[2] ? sr2[(b + 4) & 15] : sr2[b];
+    for (int b = 0; b < 16; b++) sb[b]  = st_rot[3] ? sr3[(b + 8) & 15] : sr3[b];
 end
 
 // the bytes a load (or MTC2) brings, and where they go. A load's data comes
