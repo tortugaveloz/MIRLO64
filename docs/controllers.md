@@ -105,10 +105,3 @@ The original Nintendo 64 controllers and all the peripherals tested so far work.
 
 * A real controller reports what it has plugged in, and the game talks to it directly, so the accessories in a real controller (Controller Pak, Rumble Pak, Transfer Pak) are the real ones. Their own settings in the core's menu are not used for them.
 * The choice can be changed while a game runs, but a game looks for its controllers when it starts: use **Restart Game** after changing it.
-
-### Not supported
-
-* A SNAC player with nothing plugged in has no controller, as on a console. The Pocket's buttons do nothing for it.
-* With a Game Boy cartridge in the Pocket's slot, the slot belongs to the cartridge and every player is the Dock's. Take the cartridge out and restart the core to use real controllers.
-* SNAC boards for other consoles (NES, SNES, ...). Do not connect one while a player is set to the SNAC.
-* GameCube controllers.
