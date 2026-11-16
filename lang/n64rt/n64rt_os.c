@@ -653,7 +653,7 @@ static int branch_next(n64rt_ctx_t *x, u32 pc, u32 *next);
  * the CPU's tables: this is the exception handler */
 #ifdef N64RT_OWN
 extern n64rt_ctx_t n64rt_mon_ctx;
-/* pc is the runtime's own code: the SDRAM, from a helper the game's code called (n64rt_boot.c, ul_patch: the game's Status
+/* pc is the runtime's own code: the SDRAM, from code of the runtime's that the game called (the game's Status
  * has bit 4 then). Otherwise, while the game runs, 0x2000_0000 - 0x4FFF_FFFF are addresses it maps (mips_core, game_view). */
 static int rt_code(u32 pc) { return (pc >> 28) == 0x4u && (n64rt_mon_ctx.status & 0x10u); }
 #else

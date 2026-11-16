@@ -23,10 +23,12 @@ set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 # The build's Verilog macros: the depth of the RDP's command FIFO in the
-# register block (rtl/soc/mirlo_regs.sv) and the JTAG UART left out
-# (rtl/soc/mirlo_mips.sv).
+# register block (rtl/soc/mirlo_regs.sv), the JTAG UART left out
+# (rtl/soc/mirlo_mips.sv), and the FPU's double-precision add, subtract and
+# multiply (rtl/mips/fpu_d64.sv; docs/mips.md, "FPD64").
 set_global_assignment -name VERILOG_MACRO "CMDQ_AW=12"
 set_global_assignment -name VERILOG_MACRO "MIRLO_NO_JTAG_UART=1"
+set_global_assignment -name VERILOG_MACRO "MIRLO_FPD64=1"
 set_global_assignment -name SAVE_DISK_SPACE OFF
 # The design uses about 97 % of the device's ALMs (projects/fits.json records
 # the fits that closed, with their ALMs), and whether it closes timing
@@ -63,8 +65,12 @@ set_global_assignment -name ALLOW_ANY_ROM_SIZE_FOR_RECOGNITION ON
 # set (docs/mips.md): 17.4-17.5k ALMs (94-95 %); of eight seeds 12, 5, 20, 3, 41 and 27 close (34 by -0.03
 # ns of hold in the fast 0C corner, 9 by -0.08 ns of setup on the CPU's clock). The design has grown since: the
 # fits of today's sources are in projects/fits.json (17,885 to 17,941 ALMs, about 97 %).
+# Physical synthesis at EXTRA (2026-11-16): with the FPD64 unit the CPU's clock is the one that fails, and on the same
+# sources and seeds FAST left every seed 0.1 - 0.6 ns short on it while EXTRA closed seed 13 (17,891 ALMs, no more than FAST's
+# 17,889 - 17,935 here). The router at its maximum timing effort goes with it.
 set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
-set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT FAST
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT EXTRA
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS OFF
 set_global_assignment -name SAFE_STATE_MACHINE ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT ON

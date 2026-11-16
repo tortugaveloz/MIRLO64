@@ -13,7 +13,7 @@ for l in lines[st+4:]:
     c=[x.strip() for x in l.split(';')[1:-1]]
     name=c[0]
     def tv(s):
-        m=re.match(r'([\d.]+) \(([\d.]+)\)',s); return (float(m.group(1)),float(m.group(2))) if m else (float(s),0)
+        m=re.match(r'(-?[\d.]+) \((-?[\d.]+)\)',s); return (float(m.group(1)),float(m.group(2))) if m else (float(s),0)
     alm=tv(c[1]); reg=tv(c[7]); 
     rows.append((name,alm,reg,int(c[10]),int(c[11]),int(c[9])))
 for n,a,r,m,d,b in rows:

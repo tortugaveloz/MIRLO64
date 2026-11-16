@@ -1,0 +1,228 @@
+// Mirlo-N64's FPU, double precision (the CPU's FPD64 level): add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d on the 64 bits
+// of a register pair, exactly (sim/n64/fpd64.h is the model of it, and the host's own doubles check the model).
+//
+// The rules are the single-precision path's (fpu_n64.sv): an input below the normals is a zero of its sign (FCR31.FS), arithmetic
+// rounds to nearest even whatever FCR31's RM is, with an unbounded exponent, and then a result below the normals is a zero of
+// its sign and one above them infinity; a NaN result is 0x7FF7FFFF_FFFFFFFF; no exceptions, no cause or flag bits.
+//
+// An iterative datapath, a few small pieces used over and over rather than an array:
+//  - one 57-bit adder (`sum`): x + y + cin, x the accumulator `acc` (inverted for a subtraction, or zero for a load), y one of the
+//    operands' significands, the DSP's product or the rounding increment. The significands are 56 bits, {1, f, 000}: three
+//    bits below the double's 53 for the guard, round and sticky bits of a round to nearest even.
+//  - one shifter on `acc` (`shv`, one select of four): right by 8 or 1 with the shifted-out bits jammed into bit 0 (the alignment
+//    of the smaller operand, the carry of a sum) and left by 8 or 1 (the normalisation after a cancellation). A cycle per step.
+//  - E has one adder for its steps (`Ef`): +1 for the carry of a sum, -8 and -1 for the normalisation, + the carry of the rounding.
+//  - one 26 x 26 multiplier (a 27 x 27 DSP block, with registers at its inputs and output): the 52-bit fractions' product in
+//    four pieces of 26 bits, the pieces accumulated in `acc` (the hidden bits' terms are two more additions):
+//    A * B = (2^52 + fa)(2^52 + fb) = 2^104 + 2^52 (fa + fb) + fa * fb.
+//
+// add / sub: the smaller operand (by exponent) is loaded into acc and shifted right by the exponent difference (at most 60: all
+// of it is sticky beyond 56), the larger added to it or taken from it (both zero or equal exponents: the sum may be negative,
+// then it is negated and the sign changes), normalised (one right shift on a carry, or left until bit 55 is set), rounded.
+// A zero or a denormal operand is a significand of 0 with exponent 0: the same path gives the other operand, exactly.
+// mul: seven states for the product, then the same normalise and round. Cycles in M (the core waits on `busy`; the result is
+// taken in the cycle after): add / sub 8 + the alignment steps (at most 7 by 8 and 7 by 1) + the normalisation's (a carry: 1,
+// a cancellation: up to 6 by 8 and 7 by 1; none for a sum), mul 13 (a zero or special operand: 3), abs / neg 3, compare 3 or 6.
+//
+// acc, 57 bits: [56] carry, [55] the hidden bit of a normal number, [54:3] the fraction, [2] guard, [1] round, [0] sticky.
+`default_nettype none
+
+module fpu_d64 (
+    input  wire         clk,
+    input  wire         rst,
+    input  wire         go,                // M's instruction is one of ours (add.d, sub.d, mul.d, abs.d, neg.d, c.cond.d)
+    input  wire         live,              // it is live in M (a flushed one is dropped)
+    input  wire         take,              // the core takes the result this cycle
+    input  wire  [5:0]  fn,
+    input  wire  [63:0] a,                 // fs's pair, {odd, even}
+    input  wire  [63:0] b,                 // ft's pair
+    output logic        busy,
+    output logic [63:0] res,
+    output logic        c_un, c_eq, c_lt   // a compare's result
+);
+
+typedef enum logic [4:0] { S_IDLE, S_CLS, S_DEC, S_ALN, S_SUM, S_NEG, S_NRM, S_RND, S_PACK, S_DONE,
+                           S_M2, S_M3, S_M4, S_M5, S_M6, S_M7, S_M8, S_CMP1, S_CMP2, S_CMPF } st_t;
+st_t st;
+
+wire f_mul = fn == 6'h02, f_sub = fn == 6'h01, f_ab = fn == 6'h05 || fn == 6'h07, f_cmp = fn[5:4] == 2'b11;
+
+logic        sa, sb;
+logic [10:0] ea, eb;
+logic [55:0] ma, mb;                                // {hidden, fraction, 000}; 0 for a zero or a denormal
+logic        nx, ny, ix, iy, zx, zy;
+logic [12:0] E;                                     // the result's biased exponent (before the carry), signed
+logic [5:0]  D;                                     // add: the shift still to do
+logic        sw;                                    // ea < eb
+logic        ee;                                    // ea == eb
+logic        rs, seff;                              // the result's sign; the operands' signs differ (after sub's)
+logic [56:0] acc;
+logic        g, stk;                                // mul: the guard bit and the sticky below acc's bit 3
+logic [25:0] mua, mub;
+logic [51:0] mp;
+logic        qn;                                    // the result is the default NaN (its fraction's top bit is 0)
+
+wire [25:0] al = ma[28:3], ah = ma[54:29], bl = mb[28:3], bh = mb[54:29];
+// (free-running: al, bl in CLS, ah, bl in DEC, al, bh in M2, ah, bh from M3 on -- the registers hold the last pair for the states after,
+// which read mp of it; the product is registered a cycle behind)
+always_ff @(posedge clk) begin
+    mua <= (st == S_CLS || st == S_M2) ? al : ah;
+    mub <= (st == S_CLS || st == S_DEC) ? bl : bh;
+    mp <= 52'(mua * mub);                           // (a 26 x 26 unsigned product: one DSP block, its registers the ones around it)
+end
+
+// ---------------------------------------------------------------- the adder
+typedef enum logic [2:0] { Y_0, Y_MA, Y_MB, Y_PR, Y_PRS, Y_K8 } y_t;
+y_t          ysel;
+logic        xz, xinv, cin, inc, mbm;
+logic [56:0] ys;
+always_comb begin
+    case (ysel)
+    Y_MA:    ys = {1'b0, ma};
+    Y_MB:    ys = {1'b0, mb[55] & !mbm, mb[54:3], g, 1'b0, stk};
+    Y_PR:    ys = {2'b00, mp, 3'b000};
+    Y_PRS:   ys = {28'd0, mp[51:26], 3'b000};
+    Y_K8:    ys = {53'd0, inc, 3'b000};
+    default: ys = 57'd0;
+    endcase
+end
+wire [56:0] xs = (xz ? 57'd0 : acc) ^ {57{xinv}};
+wire [56:0] sum = xs + ys + {56'd0, cin};
+
+// the special cases
+wire f_ar     = !f_ab && !f_cmp;                    // add, sub, mul
+wire sp_nan   = f_ab ? nx : f_ar && (nx || ny || (f_mul ? ((ix && zy) || (zx && iy)) : (ix && iy && seff)));
+wire sp_inf   = f_ar && (ix || iy);
+wire sp_zero  = f_ar && f_mul && (zx || zy);
+
+// the adder's operands by state
+always_comb begin
+    ysel = Y_0; xz = 0; xinv = 0; cin = 0; inc = 0; mbm = 0;
+    case (st)
+    S_DEC:  begin xz = 1; xinv = sp_nan; ysel = (sp_nan || sp_inf || sp_zero) ? Y_0 : sw ? Y_MA : Y_MB; end   // acc: the smaller operand (0 or all ones for a special case)
+    S_SUM:  begin ysel = sw ? Y_MB : Y_MA; xinv = seff; cin = seff; end
+    S_NEG:  begin xinv = 1; cin = 1; end
+    S_PACK: xz = 1;
+    S_RND:  begin ysel = Y_K8; inc = acc[2] & (acc[1] | acc[0] | acc[3]); end
+    S_M2:   begin xz = 1; ysel = Y_PRS; end
+    S_M3, S_M4, S_M6: ysel = Y_PR;
+    S_M7:   ysel = Y_MA;
+    S_M8:   begin ysel = Y_MB; mbm = 1; end
+    S_CMP1: begin xz = 1; ysel = Y_MB; end
+    S_CMP2: begin ysel = Y_MA; xinv = 1; cin = 1; end
+    default: ;
+    endcase
+end
+
+// the shifter: right by n with the shifted-out bits jammed into bit 0
+function automatic logic [56:0] rj(input logic [56:0] v, input int n);
+    logic [56:0] o;
+    o = v >> n;
+    o[0] = o[0] | (|(v & ~(57'h1FFFFFFFFFFFFFF << n)));
+    return o;
+endfunction
+wire a_z8 = acc[55:48] == 8'd0;
+// the shifter's result: left (a normalisation: S_NRM without a carry) or right with the jam, by 8 or by 1 (S_ALN: by 8 while D >= 8)
+wire        shl = st == S_NRM && !acc[56];
+wire        shb = st == S_ALN ? D >= 6'd8 : a_z8 && !acc[56];
+wire [56:0] shv = shl ? (shb ? acc << 8 : acc << 1) : (shb ? rj(acc, 8) : rj(acc, 1));
+wire acc_z = acc == 57'd0;
+
+// E's one step: +1 (the carry of a sum, or of the rounding), -8 and -1 (a normalisation by 8 and by 1)
+wire [12:0] Ek = st != S_NRM ? {12'd0, acc[56]} : acc[56] ? 13'd1 : a_z8 ? 13'h1FF8 : 13'h1FFF;
+wire [12:0] Ef = E + Ek;
+// (S_PACK's step, E + the carry of the rounding, as Ek is outside S_NRM: its own incrementer, so that the overflow / underflow test and the
+// clearing of acc do not wait for the zero test of acc's top byte that Ek takes for the normalisation)
+wire [12:0] Efp = E + {12'd0, acc[56]};
+
+always_ff @(posedge clk) begin
+    if (rst || !live) st <= S_IDLE;
+    else case (st)
+    S_IDLE: if (go) begin
+        sa <= a[63]; ea <= a[62:52]; ma <= {|a[62:52], a[51:0], 3'b000};
+        sb <= b[63]; eb <= b[62:52]; mb <= {|b[62:52], b[51:0], 3'b000};
+        if (!(|a[62:52])) ma[54:3] <= 52'd0;                      // (a denormal is a zero: a clear of the register)
+        if (!(|b[62:52])) mb[54:3] <= 52'd0;
+        st <= S_CLS;
+    end
+    S_CLS: begin
+        logic [11:0] dd, dm; logic [12:0] em;
+        nx <= ea == 11'h7FF && ma[54:3] != 52'd0; ix <= ea == 11'h7FF && ma[54:3] == 52'd0; zx <= ea == 11'd0;
+        ny <= eb == 11'h7FF && mb[54:3] != 52'd0; iy <= eb == 11'h7FF && mb[54:3] == 52'd0; zy <= eb == 11'd0;
+        dd = {1'b0, ea} - {1'b0, eb};
+        em = {2'b00, ea} + {2'b00, eb} + 13'd1;        // (- 1023: + 1 on one carry chain, then - 1024)
+        em[12:10] = em[12:10] - 3'd1;
+        sw <= dd[11] || f_ab; ee <= dd == 12'd0;      // (abs, neg: acc takes ea's significand like the add's smaller operand, from the same state)
+        dm = (dd ^ {12{dd[11]}}) + {11'd0, dd[11]};
+        D <= dm >= 12'd60 ? 6'd60 : dm[5:0];
+        E <= f_mul ? em : (dd[11] && !f_ab) ? {2'b00, eb} : {2'b00, ea};
+        seff <= !f_mul && (sa ^ sb ^ f_sub);
+        rs <= f_ab ? fn[1] && !sa : f_mul ? sa ^ sb : dd[11] ? sb ^ f_sub : sa;
+        g <= 0; stk <= 0;
+        st <= S_DEC;
+    end
+    S_DEC: begin
+        // the special cases are the result at once, in acc, E and rs; else the smaller operand is in acc (add), or on to the product
+        acc <= sum;                                   // (add: the smaller operand; a special case: 0, or all ones for the NaN; else not read before it is loaded again)
+        qn <= sp_nan;
+        if (f_ab) begin
+            if (nx) begin E <= 13'h7FF; rs <= 0; end   // (abs, neg of a NaN: the default one; else ea's significand, ea, the sign changed)
+            st <= S_DONE;
+        end else if (f_cmp) begin                      // (a zero or a denormal compares as 0, a NaN is unordered)
+            c_un <= nx || ny; c_eq <= 0; c_lt <= 0;
+            st <= S_DONE;
+            if (nx || ny) ;
+            else if (zx && zy) c_eq <= 1;
+            else if (sa != sb) c_lt <= sa;
+            else if (!ee) c_lt <= sa ? !sw : sw;
+            else st <= S_CMP1;
+        end
+        else if (sp_nan) begin E <= 13'h7FF; rs <= 0; st <= S_DONE; end
+        else if (sp_inf) begin E <= 13'h7FF; st <= S_DONE; end
+        else if (sp_zero) begin E <= 13'd0; st <= S_DONE; end
+        else st <= f_mul ? S_M2 : S_ALN;
+    end
+    // alignment: the smaller operand, in acc, shifted right by the exponent difference
+    S_ALN: begin
+        if (D >= 6'd8) begin D <= D - 6'd8; acc <= shv; end
+        else if (D != 6'd0) begin D <= D - 6'd1; acc <= shv; end
+        else st <= S_SUM;
+    end
+    S_SUM: begin acc <= sum; st <= S_NRM; end
+    S_NEG: begin acc <= sum; rs <= !rs; st <= S_NRM; end
+    S_NRM:
+        if (seff && acc[56]) st <= S_NEG;                          // a negative difference (the operands' exponents were equal)
+        else if (acc[56]) begin acc <= shv; E <= Ef; st <= S_RND; end
+        else if (acc_z) begin E <= 13'd0; rs <= !seff && rs; st <= S_DONE; end
+        else if (!acc[55]) begin
+            if (a_z8) begin acc <= shv; E <= Ef; end
+            else begin acc <= shv; E <= Ef; end
+        end else st <= S_RND;
+    S_RND: begin acc <= sum; st <= S_PACK; end
+    S_PACK: begin                                      // (an overflow is infinity, an underflow a zero: acc cleared, E all ones or 0)
+        E <= Efp[12] || Efp == 13'd0 ? 13'd0 : Efp >= 13'd2047 ? 13'h7FF : Efp;
+        if (Efp[12] || Efp == 13'd0 || Efp >= 13'd2047) acc <= sum;
+        st <= S_DONE;
+    end
+    // the product
+    S_M2: begin acc <= sum; stk <= |mp[25:0]; st <= S_M3; end
+    S_M3: begin acc <= sum; st <= S_M4; end
+    S_M4: begin acc <= sum; st <= S_M5; end
+    S_M5: begin acc <= {26'd0, acc[56:29], 3'b000}; g <= acc[28]; stk <= stk | (|acc[27:3]); st <= S_M6; end
+    S_M6: begin acc <= sum; st <= S_M7; end
+    S_M7: begin acc <= sum; st <= S_M8; end
+    S_M8: begin acc <= sum; st <= S_NRM; end
+    // an exact compare of the significands when the exponents are equal: ma - mb
+    S_CMP1: begin acc <= sum; st <= S_CMP2; end
+    S_CMP2: begin acc <= sum; st <= S_CMPF; end
+    S_CMPF: begin c_eq <= acc_z; c_lt <= sa ? (!acc[56] && !acc_z) : acc[56]; st <= S_DONE; end
+    S_DONE: if (take) st <= S_IDLE;
+    default: st <= S_IDLE;
+    endcase
+end
+
+assign busy = go && st != S_DONE;
+assign res = {rs, E[10:0], acc[54] & !qn, acc[53:3]};
+
+endmodule
+`default_nettype wire

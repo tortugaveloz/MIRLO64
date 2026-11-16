@@ -2,8 +2,9 @@
 # RDP RTL == model: random seeds at three colour-image widths, LFSR+step mode and SDRAM timing, 8-bit and 32-bit images
 set -u
 cd "$(dirname "$0")/../../sim/rdp"
-./build_rtl.sh >/dev/null || exit 1                          # (obj_rdp: the noise LFSR stepping for each pixel with coverage, RDP_LFSR_PIXEL, as the model's)
-VDEFS= OBJ=obj_free ./build_rtl.sh >/dev/null || exit 1      # (obj_free: the default, free-running)
+# (RDP_DEFS="-DRDP_SHARE": the RTL with that macro, e.g. the 2-cycle pixels through one combiner and one blender)
+VDEFS="-DRDP_LFSR_PIXEL ${RDP_DEFS:-}" ./build_rtl.sh >/dev/null || exit 1     # (obj_rdp: the noise LFSR stepping for each pixel with coverage, RDP_LFSR_PIXEL, as the model's)
+VDEFS="${RDP_DEFS:-}" OBJ=obj_free ./build_rtl.sh >/dev/null || exit 1          # (obj_free: the default, free-running)
 fail=0; n=0
 run() { out=$("$@" 2>&1); rc=$?; n=$((n+1)); case "$out" in *"RTL == model"*) [ $rc -eq 0 ] || { echo "FAIL ($rc): $* -> $(echo "$out" | tail -2)"; fail=$((fail+1)); };; *) echo "FAIL: $* -> $(echo "$out" | tail -2)"; fail=$((fail+1));; esac; }
 for cw in 292 296 320; do
