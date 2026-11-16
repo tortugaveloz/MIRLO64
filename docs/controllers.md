@@ -60,14 +60,29 @@ Up to four players can play with the controllers connected to the Dock. Each con
 * **Rumble Pak.** The Dock gives the core no way to make a controller vibrate.
 * A Controller Pak in controllers 2, 3 and 4.
 * A Transfer Pak in controllers 3 and 4.
+* **The joystick of a controller connected by USB.** See [known problems](#known-problems).
 
-<!-- TODO: add the models of controllers that have been tried in the Dock, and which of them work. -->
+### Tested controllers
+
+| Controller | Result |
+|---|---|
+| Nintendo Switch Pro Controller | Works well. |
+| Xbox controller | The two joysticks are swapped. |
+| Nintendo Switch Online N64 controller | The joystick does not work. C-Right and C-Up are unassigned or repeat another button. |
+| 8BitDo 64 controller | C-Right and C-Down repeat another button. |
+
+### Known problems
+
+* **The joystick of any controller works only over Bluetooth.** Over USB, the Dock does not send the four most significant bits of the joystick's X axis, so the joystick cannot work properly. If you need the joystick, connect the controller by Bluetooth; over USB, use the D-pad.
+* All the problems on this page have been reported to Analogue Support.
 
 ## Controllers on the Analogizer
 
 With an [Analogizer](https://analogizer-fpga.com) in the Pocket's cartridge slot and an N64 SNAC board connected to it, real Nintendo 64 controllers can be plugged in. The wiring is explained on the Analogizer's own page: <https://analogizer-fpga.com/pages/nintendo-64-snac>.
 
 ### Supported
+
+The original Nintendo 64 controllers and all the peripherals tested so far work.
 
 * Up to four original Nintendo 64 controllers, one for each port of the SNAC board.
 * Players are chosen one by one with the **Analogizer controllers** option, so the SNAC board can serve all four players or just some of them, and the Dock's controllers the rest:
