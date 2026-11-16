@@ -1346,7 +1346,19 @@ wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_s
 // (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
 // and the upper words' go through this adder: no borrow out of it is "not below", its sign decides operands of one sign)
 wire         m_xsub = m_c.x64 == X_SUB || (FAST && (m_c.x64 == X_SLT || m_c.x64 == X_SLTU));
-wire [32:0]  m_xsum_c = {1'b0, m_xha} + {1'b0, m_xhb ^ {32{m_xsub}}} + 33'(m_xc);
+// (and the logic operations are the adder's too -- the result of the operation as one addend, zero the other and no carry -- so that
+// W's hx chooses among fewer sources)
+wire         m_xlogic = m_c.x64 == X_AND || m_c.x64 == X_OR || m_c.x64 == X_XOR || m_c.x64 == X_NOR;
+logic [31:0] m_xla;
+always_comb case (m_c.x64)
+    X_AND:   m_xla = m_xha & m_xhb;
+    X_OR:    m_xla = m_xha | m_xhb;
+    X_XOR:   m_xla = m_xha ^ m_xhb;
+    default: m_xla = ~(m_xha | m_xhb);
+endcase
+wire [31:0]  m_xa = m_xlogic ? m_xla : m_xha;
+wire [31:0]  m_xb = m_xlogic ? 32'd0 : m_xhb ^ {32{m_xsub}};
+wire [32:0]  m_xsum_c = {1'b0, m_xa} + {1'b0, m_xb} + 33'(m_xc && !m_xlogic);
 wire [31:0]  m_xsum = m_xsum_c[31:0];
 wire         m_xlt = FAST ? (m_c.x64 == X_SLT ? ((m_xha[31] != m_xhb[31]) ? m_xha[31] : m_xsum[31]) : !m_xsum_c[32])
                    : (m_xha != m_xhb) ? (m_c.x64 == X_SLT ? $signed(m_xha) < $signed(m_xhb) : m_xha < m_xhb) : m_xltu;
@@ -1354,11 +1366,7 @@ wire         m_xlt = FAST ? (m_c.x64 == X_SLT ? ((m_xha[31] != m_xhb[31]) ? m_xh
 logic [31:0] m_xhx;
 always_comb begin
     case (m_c.x64)
-    X_ADD, X_SUB: m_xhx = m_xsum ^ {32{m_res[31]}};
-    X_AND:        m_xhx = (m_xha & m_xhb) ^ {32{m_res[31]}};
-    X_OR:         m_xhx = (m_xha | m_xhb) ^ {32{m_res[31]}};
-    X_XOR:        m_xhx = (m_xha ^ m_xhb) ^ {32{m_res[31]}};
-    X_NOR:        m_xhx = ~(m_xha | m_xhb) ^ {32{m_res[31]}};
+    X_ADD, X_SUB, X_AND, X_OR, X_XOR, X_NOR: m_xhx = m_xsum ^ {32{m_res[31]}};
     X_MFHI:       m_xhx = hi_up ^ {32{m_res[31]}};
     X_MFLO:       m_xhx = lo_up ^ {32{m_res[31]}};
     default:      m_xhx = 32'd0;
@@ -1448,6 +1456,8 @@ wire int_pending = int_game || int_mon;
 logic int_pend_r, int_mon_r;
 always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; end
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
+// (the address EPC / ErrorEPC take: the branch's, if M's is in its delay slot -- the word address less the flag, one decrement)
+wire [31:0] m_epc = {m_pc[31:2] - 30'(m_dly), m_pc[1:0]};
 wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
@@ -1989,12 +1999,12 @@ always_ff @(posedge clk) begin
         if (m_take_int || m_take_exc) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
-                c0_errorepc <= m_dly ? m_pc - 32'd4 : m_pc;
+                c0_errorepc <= m_epc;
                 c0_status[2] <= 1'b1;
                 mon_bd <= m_dly; mon_code <= m_take_int ? 5'd31 : m_code;
             end else begin
                 if (!c0_status[1]) begin
-                    c0_epc <= m_dly ? m_pc - 32'd4 : m_pc;
+                    c0_epc <= m_epc;
                     c0_cause[31] <= m_dly;
                 end
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
