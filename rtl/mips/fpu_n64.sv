@@ -500,6 +500,7 @@ function automatic logic iszero(input fbits_t x); return {x.e, x.f} == 31'd0; en
 
 // (FAST) S_PRE's: the operands' magnitudes, ordered and equal
 wire pre_lt = {ax.e, ax.f} < {ay.e, ay.f}, pre_eq = {ax.e, ax.f} == {ay.e, ay.f};
+wire [8:0] ed = {1'b0, ax.e} - {1'b0, ay.e};          // (the exponents' difference, its sign in bit 8)
 
 // c.cond.d compares the doubles' own 64 bits, not their conversions to float (two doubles that differ below a float's
 // precision, or above its range, would be equal: a game that compares 64-bit commands as doubles to find the ones that
@@ -546,7 +547,7 @@ always_ff @(posedge clk) begin
         if (ax.e != 8'hFF && ay.e != 8'hFF && ax.e != 8'd0 && ay.e != 8'd0) begin
             if (fn[5:1] == 5'd0) begin
                 kind <= K_ADD;
-                ad <= ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;
+                ad <= (ed[7:0] ^ {8{ed[8]}}) + {7'd0, ed[8]};       // |ax.e - ay.e|
                 sub_eff <= ax.s != (ay.s ^ fn[0]);
                 st <= S_ADDA;
             end else if (fn == 6'h02) begin
