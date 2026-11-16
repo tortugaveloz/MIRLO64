@@ -60,6 +60,7 @@ Up to four players can play with the controllers connected to the Dock. Each con
 * **Rumble Pak.** The Dock gives the core no way to make a controller vibrate.
 * A Controller Pak in controllers 2, 3 and 4.
 * A Transfer Pak in controllers 3 and 4.
+* **Different settings for each controller.** The same configuration (button mapping, stick, C buttons, Start macro, ...) applies to all the controllers connected. They cannot be configured separately.
 * **The joystick of a controller connected by USB.** See [known problems](#known-problems).
 
 ### Tested controllers
