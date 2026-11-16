@@ -1,35 +1,25 @@
-<p align="center"><img src="docs/mirlo64.png" width="480" alt="MIRLO 64"></p>
+<p align="center"><img src="docs/mirlo64.png" width="240" alt="MIRLO 64"></p>
 
 # MIRLO 64
 
-MIRLO 64 is an N64 core made specifically to fit in the Analogue Pocket. It intends to replicate as best as possible the N64 architecture.
+MIRLO 64 is a Nintendo 64 core made specifically to fit in the Analogue Pocket.
 
-It is written from scratch in SystemVerilog for the Pocket's Cyclone V FPGA and runs the games from their own ROMs. This is **version 0.9** and it is experimental: read [Status](#status) before expecting a particular game to work.
+It currently supports over 99% of the game library, and it aims to provide cycle accuracy with original hardware.
 
-## What is in it
+## Features
 
-* **CPU**: a MIPS of the VR4300 class at 93.75 MHz, with its FPU, caches and 32-entry TLB. Every instruction of the VR4300 the games use, 64-bit ones included, is done by the CPU itself.
-* **RSP and RDP**: both in hardware. The RSP runs the game's own microcode and the RDP draws the game's own command stream.
-* **Video**: the picture the game's video registers describe, in a 640 x 240 frame, NTSC (59.94 Hz) and PAL (50 Hz), following the game and its region, with the N64's anti-alias, divot and dither filters.
-* **Audio**: the game's own audio, at the Pocket's 48 kHz.
-* **Memory**: 8 MiB of RAM, as a console with the Expansion Pak, or 4 MiB with the Pak taken out in the core's settings.
-* **Controllers**: up to four through the Dock, controls are customizable.
-* **Sleep and Memories**: the Pocket's Sleep and its Memories (save states), with every accessory.
-* **Analogizer**: with an Analogizer in the Pocket's cartridge slot, the picture also goes out as RGBS, RGsB, YPbPr, Y/C (NTSC or PAL) or RGBHV, with optional scanlines; the core finds out by itself whether the slot holds the adapter or a Game Boy cartridge; the adapter's SNAC connector can take real N64 controllers on its four ports ([docs/analogizer.md](docs/analogizer.md)).
-* **Accessories and saves**: Controller Pak, Transfer Pak cartridge compatible with physical GB cartridges in the Pocket GB slot, a Transfer Pak SD that runs a Game Boy ROM and its save from the SD card, and EEPROM, SRAM and FlashRAM saves.
+* Controller Pak support.
+* Expansion Pak support.
+* Up to 2 Transfer Paks support. Games can either be connected to the GB cart on the Pocket or loaded from the SD.
+* Save states (Sleep/Wake, Memories) are supported.
+* Game Shark support.
+* Up to 4 players with the Dock.
+* Up to 4 players with original Nintendo 64 controllers with the Analogizer.
+* All save types are supported.
+* All regions (PAL, NTSC) are supported.
+* Full game size (64 MiB) support.
 
-A small runtime, `n64rt.sys`, loads the game and plays the console's part around it: the PIF, the cartridge, the RCP registers that are not a block of the hardware, the video and audio events, the saves and the save states. It emulates no instruction of the CPU. The game runs with its own code, unmodified. No game is included, and games must be in `.z64` format (see [The games' format](#the-games-format)).
-
-## Status
-
-MIRLO 64 is experimental and not every game works. What is known of v0.9:
-
-* ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
-* Rumble Pak is not supported. This is currently a limitation in the Dock.
-* Only controllers 1 and 2 can have a pak, and controller 2's can only be a Transfer Pak SD.
-* The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
-
-## Installing on the Pocket
+## How to install
 
 1. Download `tortuga.Mirlo64_<version>.zip` from the [releases](https://github.com/tortugaveloz/MIRLO64/releases).
 2. Unzip it onto the **root** of the Pocket's SD card, merging with the folders already there. It adds these files:
@@ -43,113 +33,28 @@ MIRLO 64 is experimental and not every game works. What is known of v0.9:
 
    The platform is `n64`: its file and its image are the same ones another core of that platform would bring.
 
-3. Put the games (games in `.z64` format) in `Assets/n64/common/`.
+3. Put the games in `Assets/n64/common/`. ROMs need to be provided in `.z64` format (a `.v64` or `.n64` file is the same game in another byte order, and has to be converted to `.z64` first). No game is included.
 4. On the Pocket: **openFPGA → Console → Nintendo 64**, then pick a game.
 
 Saves (`.sav`) appear in `Saves/n64/common/` when you quit a game. To update the core, unzip a newer release the same way; it replaces the files in `Cores/tortuga.Mirlo64/`.
 
 **Coming from version 0.1**, whose platform was `mirlo`: move your games from `Assets/mirlo/common/` to `Assets/n64/common/` and your saves from `Saves/mirlo/` to `Saves/n64/`; `Assets/mirlo/`, `Platforms/mirlo.json` and `Platforms/_images/mirlo.bin` can then be deleted.
 
-### The games' format
+## Controls
 
-A game must be a `.z64` file: big-endian, starting with the bytes `80 37 12 40`. A `.v64` or `.n64` file is the same game in another byte order, and has to be converted to `.z64` first.
+The Analogue Pocket has 8 buttons and a D-Pad. A typical configuration of the Nintendo 64 controller has 9 buttons and a Joystick / D-Pad. By default, L is mapped to ZL and C-Up is mapped to ZR. If you need to use C-Up, I suggest to alter the default configuration as follows:
 
-## Using the core
+* Set C-Up to "+".
+* In the core options, set Start macro to "C-Down + C-Up".
 
-### Settings
+With this, you will have all buttons accessible. Start can be pressed with the combination C-Down + C-Up, which in that configuration is the "-" and "+" buttons.
 
-The core's own menu on the Pocket. The default of each is in bold.
+For more information about controllers and more controller options, please see [docs/controllers.md](docs/controllers.md).
 
-| Setting | Choices | What it does |
-|---|---|---|
-| Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
-| Crop Right | None, **1 column** | Blanks the picture's last column |
-| Video settings | **Default**, 32-bit color, Deblur, 32-bit color + Deblur | **32-bit color**: no dither (the RDP's, and the VI's dither filter) and 8 bits a channel: a game that draws into a 32-bit image shows all of them, and a 16-bit one shows the low bits the RDP kept in a shadow plane beside its image (where nothing else has changed the pixel; it is costlier: the RDP takes about a third more time, and a 640 x 480 interlaced picture is shown without it). **Deblur**: the VI's anti-alias and divot filters are bypassed, for a sharp picture with jagged edges. Both take effect at once ([docs/video_options.md](docs/video_options.md)) |
-| Expansion Pak/Gameshark | Exp Pak and GameShark, **Exp Pak**, GameShark, None | The Expansion Pak: with it the console has 8 MiB of RAM, without it 4 MiB; takes effect when the game is started again (Restart Game does it). The Gameshark codes: runs the game's GameShark codes, if it has a file in `Assets/n64/common/gameshark/` ([GameShark codes](#gameshark-codes)) |
-| Controller paks | **None**, Controller Pak, Transfer Pak cartridge, Transfer Pak SD, Transfer Pak SD P2, Transfer Pak SD P1P2, TPak cart P1, SD P2 | The accessories in controllers 1 and 2: the first four are controller 1's alone (what the setting "Controller 1 pak" had); **Transfer Pak SD P2** is a Transfer Pak SD in controller 2 alone, **Transfer Pak SD P1P2** one in each, **TPak cart P1, SD P2** the Transfer Pak with the cartridge from the Pocket's slot in controller 1 and a Transfer Pak SD in controller 2. Transfer Pak cartridge is the Transfer Pak with a Game Boy cartridge in the Pocket's slot. **Transfer Pak SD** plays a Game Boy game from the SD card, and needs two steps before the N64 game starts: choose it here, and load the Game Boy game with "Load Transfer Pak 1" (one of the core's Load entries, with "Load Game": a `.gb` or `.gbc`), in either order. The core does not choose the pak for you: with None, Controller Pak or Transfer Pak cartridge a loaded Game Boy game is ignored. It uses that game's own save, `<Game Boy game>.sav` in the Saves folder of the game's platform (`Saves/gbc/common/` for a game in `Assets/gbc/common/`), the file a Game Boy core keeps too (see [Saves](#saves)). Sleep and Memories work with it (its RAM is in the state); the Transfer Pak with a cartridge in the Pocket's slot is unplugged in them, and the game finds it gone when it wakes The Transfer Pak SD of controller 2 is loaded in the same two steps with "Load Transfer Pak 2" and has its own save; it makes controller 2 a pad that is there (with nothing pressed, when the dock has none). With no game loaded the pak has no cartridge. Set it before the game starts, as a game looks for its controllers then. |
-| Stick | None, **D-pad**, L stick, R stick | What moves the N64's analog stick |
-| Stick dead zone | 0 %, **10 %**, 20 % ... 70 % | How far a stick has to move before the N64 sees it, for both sticks |
-| D-pad | **None**, D-pad, L stick, R stick | What moves the N64's D-pad |
-| Z button | None, **L**, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for Z |
-| L button | **None**, L, R, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's L |
-| R button | None, L, **R**, ZL, ZR, A, B, X, Y, Select, Start | The Pocket's button for the N64's R |
-| C buttons | **None**, L stick, R stick | A stick as the C buttons, besides the face buttons |
-| Start button | None, **Start**, Select+Start | The Pocket's button for Start; the Start key it leaves (alone with Select+Start, or with None) is C-up |
-| Modifier | **None**, L, R, ZL, ZR | Held, it turns the face buttons into the four C buttons and it makes the D-pad presses half a joystick press |
-| Analogizer video | **Off**, RGBS, RGsB, YPbPr, Y/C NTSC, Y/C PAL, RGBHV, RGBHV with scanlines 25 %, 50 %, 75 % | The analog picture on an Analogizer in the cartridge slot ([docs/analogizer.md](docs/analogizer.md)); the Pocket's own screen stays on |
-| Analogizer controllers | **Dock: P1P2P3P4**, SNAC: P1P2P3P4, Dock: P1, SNAC: P2P3P4, SNAC: P1, Dock: P2P3P4, SNAC: P1P2, Dock: P3P4, SNAC: P1P2P3, Dock: P4 | Which players are the real N64 controllers on the Analogizer's SNAC connector (the adapter in the cartridge slot) and which are the Dock's (the Pocket's pads and the virtual paks). The SNAC players talk Joybus to the game as a console's PIF does; a SNAC player with nothing plugged in answers nothing, as a console's port does. The setting is independent of the picture. With a Game Boy cartridge in the slot the pins stay the cartridge's and every player is the Dock's. Changing it while a game runs is seen at the game's next poll of its controllers ([docs/analogizer.md](docs/analogizer.md#the-snac-port-as-the-consoles-pif)) |
-| Restart Game | (an action) | Starts the game over, as a console switched off and on, with everything the Pocket loaded as it is (the ROM, the saves, the Transfer Paks' Game Boy games). It is the last entry. For a game that looks at its Transfer Pak only when it starts: load the Game Boy game with Load Transfer Pak 1 (or 2) while the N64 game runs, then choose Restart Game. A game that looks at its pak again at its menus needs no restart. Nothing restarts by itself ([Restart Game](docs/mips.md#restart-game)) |
+## More information
 
-### Saves
-
-The Pocket writes them to `Saves/n64/common/` when you quit the core. A file appears once the game has saved.
-
-| File | What |
-|---|---|
-| `<game>.sav` | The cartridge's save: EEPROM, SRAM or FlashRAM, whichever the game uses |
-| `<game>.mpk` | The Controller Pak, when that setting is on |
-
-The Transfer Pak SD's save is the Game Boy game's own: the file `<Game Boy game>.sav` (the name of the file you loaded, without its extension) in the Saves folder of the game's platform: `Saves/gbc/common/` for a game in `Assets/gbc/common/` (or a `.gbc` anywhere else), `Saves/gb/common/` for one in `Assets/gb/common/` (or a `.gb` anywhere else, or, if it is not there, in `Saves/gbc/common/`, where a Game Boy core that plays both kinds keeps it), so a Game Boy core and the N64 game see the same save. The core reads it when the Transfer Pak SD is chosen and the game is loaded, and writes it back when the game takes the Transfer Pak out of its power (as a game does when it leaves its Game Boy menu), when another Game Boy game is loaded or the setting is changed, and a couple of seconds after the game last wrote to it, and only if the game wrote to it. With no such file the game starts with an empty save, and the first write makes the file, at the size the Game Boy game's cartridge has; a file shorter than the cartridge's RAM is left alone (the game starts empty and nothing is written). Quitting the core does not write it: the Pocket tells the core nothing then, so a save is on the card a couple of seconds after the game makes it. The core lists the `gbc` and `gb` platforms for this (the Pocket opens files only in the platforms' folders a core lists). **Keep a copy of your Game Boy saves the first time.**
-
-### GameShark codes
-
-With the codes on in "Expansion Pak/Gameshark", the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
-is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
-field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
-choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the
-types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The codes are read when the
-game starts. The file `PUT_CODES_HERE.txt` in that folder says it too.
-
-## Building from source
-
-You need Quartus Prime Lite 25.1std (with Cyclone V support), a GCC for MIPS with its binutils (`MIPS_CC` and `MIPS_BIN` name them; `mips-linux-gnu-` by default), Python 3 with meson and ninja, and Verilator for the simulations.
-
-```bash
-git clone --recursive https://github.com/tortugaveloz/MIRLO64.git
-cd MIRLO64
-
-make -C lang/mips -f lib.mk VARIANT=game                    # the C library for the CPU
-make -C lang/mips/boot                                      # the boot ROM
-python3 sim/rsp/make_div_rom.py rtl/rsp/rsp_div_rom.hex     # the RSP's reciprocal ROM
-python3 tools/mips_inits.py                                 # the images the bitstream is built with
-
-(cd projects && quartus_sh --flow compile mirlo)            # the bitstream: see the note below
-python3 tools/package_bitstream.py projects/output_files/mirlo.rbf mirlo.rev
-
-make -C lang/n64rt && cp lang/n64rt/build/n64rt.bin n64rt.sys      # the runtime
-python3 tools/make_release.py mirlo.rev n64rt.sys tortuga.Mirlo64_0.9.zip
-```
-
-**The fitter's seed matters.** The design fills about 97 % of the FPGA's logic (the ALMs of each recorded fit are in `projects/fits.json`) and its timing is tight, so whether a compile closes timing depends on the seed (`SEED` in `projects/mirlo.qsf`). `tools/area2/fit.sh <tag> <seed>` compiles a copy of the tree with a seed, and `tools/area2/closure.py` gives the worst slack: a bitstream is good only if no analysis is negative. The seeds that close for the hardware's sources as they are in the tree are recorded in `projects/fits.json`, best first (`tools/fits.py seed` prints the first; `tools/fits.py record <projects directory>...` writes the file after a sweep). A change to the hardware asks for a new sweep: `tools/fits.py check` tells whether the record is of these sources.
-
-### Nightly builds
-
-Every night at 00:00 (Europe/Madrid) the default branch is built with the recorded seed and, if that compile closes timing, published as an artifact of the [Nightly workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/nightly.yml), kept for two weeks: a zip to unpack onto the SD card's root, like a release. `tools/nightly.sh` is that build, and it can be run by hand. It can also be run by hand on any branch (Actions > Nightly > Run workflow), for instance to check that a pull request's `projects/fits.json` closes. A nightly is the tree of that day: it has not been tried on a Pocket the way a release has.
-
-### Simulation checks
-
-The [Simulation workflow](https://github.com/tortugaveloz/MIRLO64/actions/workflows/sim.yml) runs on every pull request and every push to `main` (and by hand, Actions > Simulation > Run workflow), on Ubuntu with Verilator 5.052, no Quartus and no hardware. It builds the C library, the boot ROM, the runtime and the SoC's test programs, runs the test programs on the whole SoC (`sim/mips_soc`) and fails if one of them prints `FAIL` or no `PASS` (`vi_test` and `pi2_test` are run but not gated: the first gives no verdict in its 30 Mcycles, the second has a known failure), runs the RSP against its model on a random program with every kind of instruction and the RSP's DMA bench, and runs `tools/area2/rdp_regress.sh`. The outputs are kept as an artifact when it fails. Changes to the docs alone do not run it. It is one job of about 15 runner minutes; about 25 when its caches (Verilator, built from source, and the C library) are cold.
-
-## Repository layout
-
-| Directory | Contents |
-|---|---|
-| `rtl/` | The hardware: the CPU (`mips/`), the RSP (`rsp/`), the RDP (`rdp/`) and the rest of the system (`soc/`) |
-| `target/pocket/`, `platform/pocket/` | The Pocket's side: top level, clocks, the bridge to the Pocket's firmware |
-| `projects/` | The Quartus project |
-| `lang/n64rt/` | The runtime that becomes `n64rt.sys` |
-| `lang/mips/` | The toolchain's settings, the C library, the boot ROM and the CPU's tests |
-| `sim/` | Simulations (Verilator) |
-| `tools/` | Generators, packaging and the fit scripts |
-| `pkg/pocket/` | What goes on the SD card: the core's definition, the platform and the save-type list |
-| `docs/` | Design notes |
-
-## Documentation
-
-* [docs/mips.md](docs/mips.md): the system: memory map, CPU, runtime, saves, controllers, timing and area.
-* [docs/rsp.md](docs/rsp.md) and [docs/rdp.md](docs/rdp.md): the RSP and the RDP, and how each is verified.
-* [docs/resolution.md](docs/resolution.md): the video output.
-* [docs/control.md](docs/control.md): the registers.
+* [Settings, saves and cheats](docs/usage.md)
+* [Contributing and building from source](CONTRIBUTING.md)
 
 ## License
 
