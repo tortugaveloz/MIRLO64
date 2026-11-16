@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/mirlo64.png" width="480" alt="MIRLO 64"></p>
+<p align="center"><img src="docs/mirlo64.png" width="240" alt="MIRLO 64"></p>
 
 # MIRLO 64
 
