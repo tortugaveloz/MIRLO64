@@ -2488,7 +2488,6 @@ always_ff @(posedge clk) begin
         // too, four products of the operands' halves and their sum (see md_ma). The rest a
         // bit a cycle, restoring, on the magnitudes: div(u) and ddiv(u) on the divider of the declarations (XDIV), or (no
         // XDIV) div(u) on md_acc and one adder.
-        if (XMD && !md_dm) md_ac <= '0;                           // (the sum's start, with no wait for M)
         if (m_commit_e && m_is_md && m_c.md != MD_MTHI && m_c.md != MD_MTLO) begin
             logic sgn, w;
             w = XDIV && (m_c.md == MD_DDIV || m_c.md == MD_DDIVU);
@@ -2587,6 +2586,8 @@ always_ff @(posedge clk) begin
                 lo_wide <= 1'b0; hi_wide <= 1'b0;
             end
         end
+        // (the sum's start, with no wait for M: the last word of the block, as a clear)
+        if (XMD && !md_dm) md_ac <= '0;
     end
 end
 
