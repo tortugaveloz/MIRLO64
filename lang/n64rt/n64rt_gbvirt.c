@@ -18,7 +18,7 @@
  * The RAM lives in memory (LAYOUT_GBSAVE, LAYOUT_GBSAVE2) and is read from the file when a ROM is new to the pak (n64rt_gbv_field, a video field after
  * the Pocket has loaded it: the cartridge is not there for the game before): with no file it is 0xFF and the file is made by the first write back. It is
  * written back (flush) only if the game has written to it, when the game powers the cartridge off, when the ROM is replaced or gone, and a couple
- * of seconds after its last write (a state carries the RAM, so a state loaded writes it). Every command to the Pocket is made from n64rt_gbv_field
+ * of seconds after its last write. Every command to the Pocket is made from n64rt_gbv_field
  * (the video field's context, where the GameShark's file is read too), never from the game's accesses to the pak.
  *
  * Powering the cartridge on (the Transfer Pak's 0xB000) resets the mapper's registers, as a real cartridge's reset does:
@@ -390,32 +390,6 @@ static void rom_new(const u8 *h, u32 size, u32 id)
     trace_crcs("made", g.rom_bytes);
 }
 u32 n64rt_gbv_id(int n) { sel(n); return g.id; }
-
-/* a save state: the RAM and the clock's footer, as many bytes as the cartridge has, rounded to the words the state's tokens are. The file is not
- * written now: the Pocket answers no target command while it makes the state (the RAM, dirty or not, is in the state), and it is written at the next quiet moment */
-u32 n64rt_gbv_state_bytes(int n)
-{
-    sel(n);
-    if (!g.in) return 0;
-    rtc_tick(); rtc_store();
-    return (g.ram_bytes + (g.timer ? RTC_FOOT : 0u) + 15u) & ~15u;
-}
-/* after a state is put back (the cartridge's registers and RAM are in it): the clock, which counts the SoC's cycles, goes on from where it was; and the
- * ROM, which the Pocket loads as for any launch, must be the same file: with none, or another, the cartridge is not in */
-void n64rt_gbv_resume(int n, u64 delta)
-{
-    sel(n);
-    if (!g.in) return;
-    g.dirty = 1; g.wcount++;                    /* (the state's RAM is not the file's: it is written at the next quiet moment) */
-    g.t0 += delta;
-    u32 size = n64rt_slot_size(n ? LAYOUT_GBROM2_SLOT : LAYOUT_GBROM_SLOT, 0);
-    if (size > LAYOUT_GBROM_MAX) size = LAYOUT_GBROM_MAX;
-    if (size < 0x150u) { g.in = 0; return; }
-    u8 h[0x50];
-    flush_cpu_dcache_range((const void *)(ROM_MEM + 0x100), sizeof h);
-    for (u32 i = 0; i < sizeof h; i++) h[i] = ROM_MEM[0x100u + i];
-    if (crc32(h, sizeof h) != g.id || size != g.rom_bytes) g.in = 0;
-}
 
 /* the cartridge's reset */
 void n64rt_gbv_power(int n, int on)
