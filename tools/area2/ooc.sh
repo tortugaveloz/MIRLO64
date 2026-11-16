@@ -1,5 +1,5 @@
 #!/bin/bash
-# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), rdp (rdp_top), rsp (rsp_top),
+# ooc.sh <tag> <unit> [tree]: Analysis & Synthesis of one unit alone -- cpu (mips_sys), fpd (fpu_d64), rdp (rdp_top), rsp (rsp_top),
 # video (n64_video), regs (mirlo_regs), and the SoC's smaller blocks -- soc (mirlo_mips whole: its entity table), glue
 # (mirlo_mips with the three cores as stubs), ai, si, vi
 # (rcp_ai, rcp_si, rcp_vi), arb (sdr_arb, six ports), sdr (sdr_ctrl), dpc (rdp_dpc with rcp_dpc_view), cport (cpu_port),
@@ -12,7 +12,7 @@
 # whole design's synthesis moves a unit that was not touched by tens of ALUTs (rsp_vu by a hundred) from one run to
 # the next; a unit alone gives the same count for the same source. Prints its ALUTs, registers, memory ALUTs, DSPs.
 # The RSP and the video are instantiated as rtl/soc/mirlo_mips.sv does (MIRLO_RSP_LANES lanes with MULW; the
-# video's 24-bit origin mask). In the Quartus container: QUARTUS=/opt/intelFPGA_lite/23.1/quartus/bin.
+# video's 24-bit origin mask). EXTRA_MACROS="A=1 B=2" adds MIRLO_A=1 ... (fit.sh's). In the Quartus container: QUARTUS=/opt/intelFPGA_lite/23.1/quartus/bin.
 set -e
 W=$(cd "$(dirname "$0")/../.." && pwd)
 tag=$1; unit=$2; T=${3:-$W}
@@ -50,21 +50,18 @@ module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:
     input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, input wire [11:0] vi_ys, input wire [10:0] vi_nw,
     output wire m_valid, output wire [23:0] m_addr, output wire m_urgent, input wire m_ready, m_rvalid, input wire [31:0] m_rdata, output wire vi_line, vi_frame, vi_latch,
     output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip);
-    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .no_weave(1'b0), .fps_en(1'b0), .osd_val('0), .*);
+    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .fps_en(1'b0), .osd_val('0), .*);
 endmodule
 SV
 ;;
 rdp)  top=rdp_top ;;
 rdpw) cat > top.sv <<SV
-module ooc_rdpw (input wire clk, rst, dither_off, shadow_en, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
+module ooc_rdpw (input wire clk, rst, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
     output wire m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,
     output wire m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we,
-    input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy,
-    output wire sr_valid, input wire sr_ready, output wire [19:0] sr_addr, output wire [8:0] sr_len, input wire sr_rvalid, input wire [31:0] sr_rdata,
-    output wire sw_valid, input wire sw_ready, output wire [19:0] sw_addr, output wire [31:0] sw_data, output wire [3:0] sw_be, output wire sw_last);
+    input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy);
     wire [31:0] rdp_addr;
-    rdp_top rdp (.clk, .rst, .dither_off, .shadow_en, .sr_valid, .sr_ready, .sr_addr, .sr_len, .sr_rvalid, .sr_rdata,
-        .sw_valid, .sw_ready, .sw_addr, .sw_data, .sw_be, .sw_last, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
+    rdp_top rdp (.clk, .rst, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
         .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we, .m_rdata_valid, .m_rdata,
         .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(), .unknown_ops(), .idle(rdp_idle), .tmem_busy(rdp_tmem_busy));
     // (rtl/soc/mirlo_mips.sv: the address bits it reads, the hidden plane's remap; the load and unknown counters are not read)
@@ -110,7 +107,8 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rdpw rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+fpd) top=fpu_d64 ;;      # the double unit alone (the FPD64 level's fpu_d64)
+*) echo "unit: cpu fpd rdp rdpw rsp video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
@@ -118,9 +116,11 @@ esac
   echo "set_global_assignment -name NUM_PARALLEL_PROCESSORS 2"
   echo "set_global_assignment -name SEARCH_PATH rtl/soc"
   echo "set_global_assignment -name QIP_FILE rtl/mips.qip"
-  for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9; do
+  for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9 ${EXTRA_MACROS:-}; do
     echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\""; done
+  for m in ${OOC_DEFS:-}; do echo "set_global_assignment -name VERILOG_MACRO \"$m\""; done       # (OOC_DEFS="RDP_SHARE": more macros)
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
+  [ $unit = fpd ] && echo 'set_global_assignment -name MUX_RESTRUCTURE OFF'      # (as mips_sys, which holds it, has it)
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"
@@ -131,7 +131,7 @@ for c in clk clk_vid clk_c; do echo "if {[get_collection_size [get_ports -nowarn
 echo 'PROJECT_REVISION = "ooc"' > ooc.qpf
 ${QUARTUS:-$HOME/altera/25.1std/quartus/bin}/quartus_map ooc > map.log 2>&1 || { grep "Error (" map.log | head -5; exit 1; }
 f() { grep -h "$1" out/ooc.map.rpt | head -1 | awk -F';' '{gsub(/ /,"",$3); print $3}'; }
-echo "$tag [$unit]: ALMs(est) $(f 'Estimate of Logic utilization'), ALUTs $(f 'Combinational ALUT usage for logic'), registers $(f 'Dedicated logic registers'), memory ALUTs $(f 'Memory ALUT usage'), DSP $(f 'Total DSP Blocks'), block memory bits $(f 'Total block memory bits')"
+echo "$tag [$unit]: ALUTs $(f 'Combinational ALUT usage for logic'), registers $(f 'Dedicated logic registers'), memory ALUTs $(f 'Memory ALUT usage'), DSP $(f 'Total DSP Blocks'), block memory bits $(f 'Total block memory bits')"
 # FIT="<seeds>": the unit placed alone, once a seed
 [ -n "${FIT:-}" ] || exit 0
 cp ooc.qsf ooc.map.qsf
