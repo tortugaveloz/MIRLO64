@@ -38,7 +38,7 @@ The default of each is in bold.
 | Option | Choices | What it does |
 |---|---|---|
 | Stick | None, **D-pad**, L stick, R stick | What moves the Nintendo 64's joystick. With D-pad, the directions are the joystick at full deflection |
-| Stick dead zone | 0 % to 70 %, in steps of 10 % | How far a stick has to move before the game notices it, for both sticks |
+| Stick dead zone | 0 %, **10 %**, 20 % ... 70 % | How far a stick has to move before the game notices it, for both sticks |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the Nintendo 64's own D-pad |
 | C buttons | **None**, D-pad, L stick, R stick | Lets a stick (or the D-pad) press the C buttons too, besides the face buttons |
 | Start macro | **None**, C-Down + C-Up, C-Left + C-Right, C-Down + C-Left, C-Down + C-Right, C-Up + C-Left, C-Up + C-Right | Pressing those two buttons together is Start. The Start button alone then becomes C-Up |
@@ -90,5 +90,3 @@ With an [Analogizer](https://analogizer-fpga.com) in the Pocket's cartridge slot
 * With a Game Boy cartridge in the Pocket's slot, the slot belongs to the cartridge and every player is the Dock's. Take the cartridge out and restart the core to use real controllers.
 * SNAC boards for other consoles (NES, SNES, ...). Do not connect one while a player is set to the SNAC.
 * GameCube controllers.
-
-The Analogizer's video options are in [analogizer.md](analogizer.md).

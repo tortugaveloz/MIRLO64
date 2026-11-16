@@ -54,7 +54,7 @@ For more information about controllers and more controller options, please see [
 ## More information
 
 * [Settings, saves and cheats](docs/usage.md)
-* [Building from source](docs/building.md)
+* [Contributing and building from source](CONTRIBUTING.md)
 
 ## License
 

@@ -1,4 +1,8 @@
-# Building from source
+# Contributing
+
+This page is for people who want to build MIRLO 64 or work on it. To use the core, see the [README](README.md).
+
+## Building from source
 
 You need Quartus Prime Lite 25.1std (with Cyclone V support), a GCC for MIPS with its binutils (`MIPS_CC` and `MIPS_BIN` name them; `mips-linux-gnu-` by default), Python 3 with meson and ninja, and Verilator for the simulations.
 
@@ -44,7 +48,9 @@ The [Simulation workflow](https://github.com/tortugaveloz/MIRLO64/actions/workfl
 
 ## Design notes
 
-* [mips.md](mips.md): the system: memory map, CPU, runtime, saves, controllers, timing and area.
-* [rsp.md](rsp.md) and [rdp.md](rdp.md): the RSP and the RDP, and how each is verified.
-* [resolution.md](resolution.md): the video output.
-* [control.md](control.md): the registers.
+The design is documented in `docs/`:
+
+* [mips.md](docs/mips.md): the system: memory map, CPU, runtime, saves, controllers, timing and area.
+* [rsp.md](docs/rsp.md) and [rdp.md](docs/rdp.md): the RSP and the RDP, and how each is verified.
+* [resolution.md](docs/resolution.md): the video output.
+* [control.md](docs/control.md): the registers.
