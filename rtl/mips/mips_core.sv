@@ -1131,6 +1131,19 @@ always_comb begin
 end
 // ldl, ldr, sdl, sdr (XUA): a doubleword access at any address -- no alignment requirement, and its first read is the doubleword's first word
 wire e_ua = XUA && (e_c.ld == M_LDL || e_c.ld == M_LDR || e_c.st == S_SDL || e_c.st == S_SDR);
+// W's selects (see m_s_c0): the chains' conditions on E's instruction, in their priority
+wire e_ldw = e_c.ld != M_NONE && !e_ua;                                           // (m_ldw)
+wire e_xsh = XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);   // (m_xshift)
+wire e_xcm = XALU && (e_c.x64 == X_SLT || e_c.x64 == X_SLTU);                     // (m_xcmp)
+wire e_cp  = e_c.mfc0 || e_c.cop1_gpr || e_c.st == S_SC;
+wire e_s_c0 = e_c.mfc0, e_s_fp = !e_c.mfc0 && e_c.cop1_gpr, e_s_sc = !e_c.mfc0 && !e_c.cop1_gpr && e_c.st == S_SC;
+wire e_s_ld = !e_cp && e_ldw, e_s_xc = !e_cp && !e_ldw && e_xcm, e_s_sh = !e_cp && !e_ldw && !e_xcm && XALU && e_xsh;
+wire e_s_res = !e_cp && !e_ldw && !e_xcm && !(XALU && e_xsh);
+wire e_h_lwu = e_ldw && e_c.ld == M_LWU, e_h_ld = e_ldw && e_c.ld == M_LD;
+wire e_h_c1 = !e_ldw && e_c.cop1_64, e_h_sh = !e_ldw && !e_c.cop1_64 && XALU && e_xsh;
+wire e_h_x = !e_ldw && !e_c.cop1_64 && !(XALU && e_xsh) && XALU && e_c.x64 != X_NONE && !e_xcm;
+wire e_h_al = e_h_x && (e_c.x64 == X_ADD || e_c.x64 == X_SUB || e_c.x64 == X_AND || e_c.x64 == X_OR || e_c.x64 == X_XOR || e_c.x64 == X_NOR);
+wire e_h_hi = e_h_x && e_c.x64 == X_MFHI, e_h_lo = e_h_x && e_c.x64 == X_MFLO;
 wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e_ea[2:0] != 0);
 // N64WIN: the game touching what is not RDRAM (Mirlo's runtime emulates it)
 // (MI: the MI's and PI_STATUS' word accesses, in KSEG0 or KSEG1, are the device port's. The address error they would
@@ -1390,6 +1403,20 @@ wire        ua_go  = !m_k_ua || !m_ld || ua_rdy;
 wire        ua_sel = m_ld && (ua_u[3] ^ !m_insn[26]);
 wire  [7:0] ua_feed = ua_sel ? ms_data[8 * (3'd7 - ua_u[2:0]) +: 8] : sh_r[63:56];
 wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
+
+// (FAST) W's result and hx by one-hot selects, found as the instruction leaves E (the priority of the chains below, resolved there:
+// registered flags, not a decode of m_c behind every bit's choice)
+logic m_s_c0, m_s_fp, m_s_sc, m_s_ld, m_s_xc, m_s_sh, m_s_res;       // w_res: mfc0, mfc1 / cfc1 / dmfc1, sc, a load, a 64-bit compare, a d-shift, E's result
+logic m_h_lwu, m_h_ld, m_h_c1, m_h_sh, m_h_al, m_h_hi, m_h_lo;       // w_hx: lwu, ld, dmfc1, a d-shift, dadd / dsub / and / or / xor / nor, mfhi, mflo
+logic [31:0] m_wres_d, m_whx_d;
+always_comb begin
+    m_wres_d = ({32{m_s_c0}} & c0_rd) | ({32{m_s_fp}} & fpu_gpr_out[31:0]) | ({32{m_s_ld}} & m_ld_val) | ({32{m_s_sh}} & sh_r[31:0]) | ({32{m_s_res}} & m_res);
+    m_wres_d[0] = m_wres_d[0] | (m_s_sc & ll_bit) | (m_s_xc & m_xlt);
+    // (hx is the upper word XOR the lower word's sign: the upper word and the sign are chosen, then the one XOR)
+    m_whx_d = ({32{m_h_ld}} & m_w64[63:32]) | ({32{m_h_c1}} & fpu_gpr_out_hi) | ({32{m_h_sh}} & sh_r[63:32]) | ({32{m_h_al}} & m_xsum)
+            | ({32{m_h_hi}} & hi_up) | ({32{m_h_lo}} & lo_up);
+    m_whx_d = m_whx_d ^ {32{(m_h_lwu & m_word[31]) | (m_h_ld & m_w64[31]) | (m_h_c1 & fpu_gpr_out[31]) | (m_h_sh & sh_r[31]) | ((m_h_al | m_h_hi | m_h_lo) & m_res[31])}};
+end
 
 // stores: data and strobes of the word at m_addr (lane 3 - k is N64 byte k);
 // sd's by which of its two words is being written
@@ -1979,19 +2006,24 @@ always_ff @(posedge clk) begin
         w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
             w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
+            if (FAST) begin
+                w_res <= m_wres_d;
+                w_hx <= W64 ? m_whx_d : 32'd0;
+            end else begin
             if (m_c.mfc0) w_res <= c0_rd;
             else if (m_c.cop1_gpr) w_res <= fpu_gpr_out[31:0];
             else if (m_c.st == S_SC) w_res <= {31'd0, !m_sc_fail};
-            else if (FAST ? m_ldw : m_ld) w_res <= m_ld_val;
+            else if (m_ld) w_res <= m_ld_val;
             else if (XALU && m_xcmp) w_res <= {31'd0, m_xlt};
             else if (XALU && m_xshift) w_res <= sh_r[31:0];                 // (ldl, ldr: the doubleword as rotated and merged)
             else w_res <= m_res;
             w_hx <= 32'd0;
             if (W64) begin
-                if (FAST ? m_ldw : m_ld) w_hx <= m_ld_hx;
+                if (m_ld) w_hx <= m_ld_hx;
                 else if (m_c.cop1_64) w_hx <= fpu_gpr_out_hi ^ {32{fpu_gpr_out[31]}};   // dmfc1
                 else if (XALU && m_xshift) w_hx <= hx32(sh_r);
                 else if (XALU && m_c.x64 != X_NONE && !m_xcmp) w_hx <= m_xhx;
+            end
             end
         end
 
@@ -2144,6 +2176,8 @@ always_ff @(posedge clk) begin
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == {e_ea[DW+1:3], e_ea[2] && !e_ua};   // (it is behind the store that is at M now; its read, dc_raddr's)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
+                m_s_c0 <= e_s_c0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
+                m_h_lwu <= e_h_lwu; m_h_ld <= e_h_ld; m_h_c1 <= e_h_c1; m_h_sh <= e_h_sh; m_h_al <= e_h_al; m_h_hi <= e_h_hi; m_h_lo <= e_h_lo;
             end
             m_st_lo <= FAST ? e_sdata : e_b;        // (FAST: a store's word in its lanes already)
             m_a_lo <= e_a;
