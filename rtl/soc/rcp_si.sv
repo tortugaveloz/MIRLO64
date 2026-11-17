@@ -67,8 +67,8 @@ module rcp_si (
     input  wire  [31:0] rdata
 );
 
-localparam logic [17:0] WR_WAIT = 18'd3830;   // (a WR64B's 4,065 to the interrupt, less the ~235 the move takes here)
-typedef enum logic [1:0] { S_IDLE, S_WAIT, S_A, S_REQ } st_t;
+localparam logic [11:0] WR_WAIT = 12'd3830;   // (a WR64B's 4,065 to the interrupt: the ~235 the move takes here, then this)
+typedef enum logic [2:0] { S_IDLE, S_WAIT, S_A, S_REQ, S_TAIL } st_t;
 st_t         st;
 logic        dir_rd;                    // the DMA under way is PIF RAM -> RDRAM
 logic [3:0]  idx;                       // the word
@@ -76,7 +76,10 @@ logic [21:0] dram;                      // DRAM_ADDR [23:2]: the RDRAM's word th
 logic        polled;                    // the PIF has run its commands for this RD64B
 logic        io_busy, err, irq_f, joy;
 logic        wr_org, fresh;             // the PIF's run in progress began at the end of a WR64B; its replies are there for the next RD64B, not yet read
-logic [17:0] pif_n;                     // the console's PIF (or WR64B) time still to go
+logic [17:0] pif_n;                     // the console's PIF time still to go
+logic [11:0] wt_n;                      // a WR64B's time still to go to its interrupt. The console's SI takes the 64 bytes from the RDRAM when it starts, and the
+                                        // game may write the buffer again as soon as it sees an interrupt (a stale one, from a read it did not wait for: Turok's
+                                        // pad polling): the move is at the start, the interrupt 4,065 cycles after it
 wire         busy = st == S_A || st == S_REQ;       // the DMA owns the PIF RAM
 assign c_busy = busy;
 assign clr = wr_s && a == 3'd6;
@@ -118,10 +121,10 @@ always_ff @(posedge clk) begin
     irq <= 1'b0; ev <= 1'b0;
     if (rst) begin
         st <= S_IDLE; io_busy <= 1'b0; err <= 1'b0; irq_f <= 1'b0; joy <= 1'b0; polled <= 1'b0; wr_org <= 1'b0; fresh <= 1'b0; dram <= '0; dir_rd <= 1'b0; idx <= '0;
-        pif_n <= '0;
+        pif_n <= '0; wt_n <= '0;
     end else begin
         if (pif_n != 18'd0) pif_n <= pif_n - 18'd1;
-        if (done_we) begin io_busy <= 1'b0; pif_n <= done_wd; if (wr_org && st == S_IDLE) fresh <= 1'b1; end
+        if (done_we) begin io_busy <= 1'b0; pif_n <= done_wd; if (wr_org && (st == S_IDLE || st == S_TAIL)) fresh <= 1'b1; end
         if (clr) begin irq_f <= 1'b0; err <= 1'b0; end
         if (wr_s && a == 3'd0 && st == S_IDLE) dram <= {wd[23:3], 1'b0};       // (the DMA owns it while it is under way)
         // the CPU's word 15 with the run flag: the block holds commands
@@ -132,22 +135,26 @@ always_ff @(posedge clk) begin
             if (st != S_IDLE) err <= 1'b1;
             else begin
                 dir_rd <= start_rd; polled <= io_busy || (start_rd && fresh); fresh <= 1'b0; st <= S_WAIT;    // (the PIF is running its commands, or has just run them: that run is the read's)
-                if (start_wr && !io_busy) pif_n <= WR_WAIT;
+                if (start_wr && !io_busy) begin pif_n <= 18'd0; wt_n <= WR_WAIT; end
             end
         end
         case (st)
         S_WAIT: if (!io_busy) begin
             if (dir_rd && joy && !polled) begin polled <= 1'b1; io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b0; end   // the commands run again, then the read
-            else if (pif_n == 18'd0) begin idx <= 4'd0; st <= S_A; end
+            else if (pif_n == 18'd0 || wt_n != 12'd0) begin idx <= 4'd0; st <= S_A; end      // (a WR64B that began with the PIF idle moves at once)
         end
         S_A: st <= S_REQ;
         S_REQ: if (ack) begin
             dram <= dram + 22'd1;
             if (!dir_rd && idx == 4'd15 && rdata[0]) joy <= 1'b1;
             if (!dir_rd && idx == 4'd15 && rdata[1:0] != 2'd0) begin io_busy <= 1'b1; ev <= 1'b1; wr_org <= 1'b1; end
-            if (idx == 4'd15) begin st <= S_IDLE; irq <= 1'b1; irq_f <= 1'b1; end
+            if (idx == 4'd15) begin
+                if (!dir_rd && wt_n != 12'd0) st <= S_TAIL;
+                else begin st <= S_IDLE; irq <= 1'b1; irq_f <= 1'b1; end
+            end
             else begin idx <= idx + 4'd1; st <= S_A; end
         end
+        S_TAIL: if (wt_n == 12'd0) begin st <= S_IDLE; irq <= 1'b1; irq_f <= 1'b1; end else wt_n <= wt_n - 12'd1;
         default: ;
         endcase
     end
