@@ -23,7 +23,7 @@ int main()
         bool pal = mode == 5;
         Scanout s(pal); so = &s;
         t = new Van_out;
-        t->rst = 1; t->mode = mode; t->scanlines = 0; t->woven = 0; t->rgb = 0; clk(); clk(); t->rst = 0;
+        t->rst = 1; t->mode = mode; t->woven = 0; t->rgb = 0; clk(); clk(); t->rst = 0;
         long hs_fall = 0, vs_fall = 0, act = 0, blk_ok = 0, blk_n = 0;
         int ph = 0, pv = 0;
         for (long i = 0; i < 2 * 210000 * 2 + 4000; i++) {

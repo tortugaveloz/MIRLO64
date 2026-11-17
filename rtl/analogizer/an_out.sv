@@ -15,7 +15,6 @@ module an_out (
     input  wire         clk,
     input  wire         rst,
     input  wire  [2:0]  mode,           // 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV
-    input  wire  [1:0]  scanlines,      // RGBHV: 0 off, 1..3 the odd lines 25, 50, 75 % darker
     input  wire         woven,          // the frame is a woven 480-line one (31 kHz): RGBHV passes it as it is
     input  wire  [23:0] rgb,            // the scan-out's pads: 8:8:8, hs and vs high pulses, de, skip
     input  wire         hs, vs, de, skip,
@@ -38,7 +37,7 @@ wire         cs_ypbpr = csync_n;
 wire  [23:0] sd_rgb;
 wire         sd_hs_n, sd_vs_n, sd_de;
 an_scandbl scandbl (.clk(clk), .rst(rst), .woven(woven || mode != 3'd6), .rgb(rgb), .hs(hs), .vs(vs), .de(de), .skip(skip),
-                    .scanlines(scanlines), .rgb_o(sd_rgb), .hs_o(sd_hs_n), .vs_o(sd_vs_n), .de_o(sd_de));
+                    .rgb_o(sd_rgb), .hs_o(sd_hs_n), .vs_o(sd_vs_n), .de_o(sd_de));
 
 // ---- the pins, by mode
 logic [5:0] r6, g6, b6;

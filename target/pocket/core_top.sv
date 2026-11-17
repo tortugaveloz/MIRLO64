@@ -253,15 +253,12 @@ module core_top (
   // direction for all its bits): docs/analogizer.md, "The SNAC port as the console's PIF".
   wire        an_own;
   wire [2:0]  an_mode;
-  wire [1:0]  an_scan;
   wire [7:0]  an_bank3, an_bank2;
   wire [4:0]  an_bank1_b;
   wire        an_vid_woven_s;         // (the scan-out's, clk_vid)
   logic       an_vid_woven;
   always_ff @(posedge clk_vid) an_vid_woven <= an_vid_woven_s;
   // the settings are the SoC's (clk_sys) and hardly ever change: two flip-flops into the video clock
-  logic [1:0] an_scan_s1, an_scan_s2;
-  always_ff @(posedge clk_vid) begin an_scan_s1 <= an_scan; an_scan_s2 <= an_scan_s1; end
   logic [2:0] an_mode_s1, an_mode_s2;
   always_ff @(posedge clk_vid) begin an_mode_s1 <= an_mode; an_mode_s2 <= an_mode_s1; end
   wire        an_en = an_own && an_mode != 3'd0;      // (the adapter drives banks 1-3; sys-side level: it changes with the settings only)
@@ -1080,7 +1077,7 @@ module core_top (
       .vga_de(de),
       .vga_skip(skip),
       .vga_woven(an_vid_woven_s),
-      .an_mode(an_mode), .an_scan(an_scan), .an_own(an_own),
+      .an_mode(an_mode), .an_own(an_own),
 
       .use_jtag(use_jtag_s),
 
@@ -1206,7 +1203,7 @@ module core_top (
   // The Analogizer's video (rtl/analogizer/an_out.sv): the scan-out's pads in the mode of the setting, on the cartridge port's banks 1-3
   an_out an_video (
       .clk(clk_vid), .rst(1'b0),
-      .mode(an_mode_s2), .scanlines(an_scan_s2), .woven(an_vid_woven),
+      .mode(an_mode_s2), .woven(an_vid_woven),
       .rgb(rgb_delay), .hs(hs_delay), .vs(vs_delay), .de(de_delay), .skip(skip_delay),
       .bank3(an_bank3), .bank2(an_bank2), .bank1_b(an_bank1_b)
   );

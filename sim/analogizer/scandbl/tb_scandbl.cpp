@@ -145,14 +145,14 @@ int main(int argc, char** argv) {
     std::vector<In> in; std::vector<Out> out;
     size_t cap = 600000ull * (modes.size() + 2); in.reserve(cap); out.reserve(cap);
     auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
-    d->rst = 1; d->woven = 0; d->scanlines = 0; d->rgb = 0; d->hs = 0; d->vs = 0; d->de = 0; d->skip = 0;
+    d->rst = 1; d->woven = 0; d->rgb = 0; d->hs = 0; d->vs = 0; d->de = 0; d->skip = 0;
     tick(); tick(); tick(); d->rst = 0;
     srand(1 + (argc > 2 ? atoi(argv[2]) : 0));
     for (int i = 0; i < noise; i++) {        // garbage in: random pins, with long runs (a line's worth of one level)
         static int hold = 0, hs_v = 0, vs_v = 0, de_v = 0, wv_v = 0;
         if (hold-- <= 0) { hold = rand() % 1700; hs_v = rand() & 1; vs_v = rand() & 1; de_v = rand() & 1; wv_v = rand() & 1; }
         d->rgb = rand() & 0xFFFFFF; d->hs = hs_v ^ (rand() % 97 == 0); d->vs = vs_v; d->de = de_v; d->skip = rand() & 1;
-        d->woven = wv_v; d->scanlines = rand() & 3;
+        d->woven = wv_v;
         tick();
     }
     long limit = 0;
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
         Mode m = g.cur();
         // the cycle's inputs: the generator's pads
         d->rgb = g.vga_pix; d->hs = g.vga_hs; d->vs = g.vga_vs; d->de = g.vga_de; d->skip = g.skip;
-        d->woven = g.wv_v; d->scanlines = m.sl;
+        d->woven = g.wv_v;
         uint8_t f = g.vga_de | g.vga_hs << 1 | g.vga_vs << 2 | g.skip << 3 | g.wv_v << 4 | g.pal_v << 5;
         in.push_back({g.vga_pix, f});
         if (g.vga_de && !g.skip) {
@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
         if (l.wv) { exp.push_back(l.px); expin.push_back(l.start); }
         else {
             std::vector<uint32_t> a, b;
-            for (auto p : l.px) { a.push_back(expect_px(p, 0)); b.push_back(expect_px(p, l.sl)); }
+            for (auto p : l.px) { a.push_back(expect_px(p, 0)); b.push_back(expect_px(p, 0)); }
             exp.push_back(a); expin.push_back(l.start); exp.push_back(b); expin.push_back(l.start);
         }
     }

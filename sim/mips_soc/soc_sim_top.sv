@@ -195,7 +195,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .serial_rx(1'b1), .serial_tx(), .use_jtag(1'b0),
     .gb_on, .gb_a_dir, .gb_a_oe, .gb_a, .gb_d_o, .gb_d_dir, .gb_d_oe, .gb_d_i, .gb_phi, .gb_wr_n, .gb_rd_n, .gb_cs_n,
     .sn_en, .sn_p30_dir, .sn_p30_oe, .sn_p31_dir, .sn_p31_oe, .sn_b0_dir, .sn_b0_oe, .sn_b0_o, .sn_dq(sn_wire),
-    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_scan(), .an_own(an_own),
+    .vga_b, .vga_de, .vga_g, .vga_hsync, .vga_r, .vga_skip, .vga_vsync, .vga_woven(), .an_mode(an_mode), .an_own(an_own),
     .wishbone_ack(1'b0), .wishbone_adr(), .wishbone_bte(), .wishbone_cti(), .wishbone_cyc(), .wishbone_dat_r(32'd0),
     .wishbone_dat_w(), .wishbone_err(1'b0),
     .wishbone_master_ack(wbm_ack), .wishbone_master_adr(wbm_adr), .wishbone_master_bte(2'd0), .wishbone_master_cti(3'd0),

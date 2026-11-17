@@ -8,7 +8,7 @@
 //    a frame (it changes in the vertical blanking).
 // Output: VGA 640 x 480 timing, 25 MHz pixel clock, 31.6 kHz: the same clock, a pixel a clock.
 //  - woven = 1: the input as it is -- the pixels (all 24 bits), de, the sync positions -- one clock later, hs / vs with the
-//    output polarity (parameters), the colour forced to 0 outside DE. No scanlines (they are for the 240p input only).
+//    output polarity (parameters), the colour forced to 0 outside DE.
 //  - woven = 0: each input line comes out twice. The pixels of a line are written into a line buffer at the input rate (one
 //    every two clocks) and read at one a clock, so the two copies are `OL` clocks long (790, PAL 800) and fill the input
 //    line's 1580 / 1600 clocks (the lines of the field's vertical blanking that are shorter than the others by 4 clocks (NTSC),
@@ -36,8 +36,6 @@
 // Colour: the line buffer keeps the CB top bits of each channel (default 6: the Analogizer's DAC has six; a pixel is
 // 18 bits, two M10K), and the output replicates them into the low bits (111111 -> 255). CB = 8 stores all 24 bits (3 M10K).
 //
-// scanlines (240p input only), on every second output line (the second copy of each input line): 0 off, 1 25 % dimmed
-// (v - v/4), 2 50 % (v/2), 3 75 % (v/4), on the CB-bit value, truncating.
 `default_nettype none
 
 module an_scandbl #(
@@ -56,7 +54,6 @@ module an_scandbl #(
     input  wire         vs,                  // active high
     input  wire         de,
     input  wire         skip,                // the second clock of a 240p pixel
-    input  wire  [1:0]  scanlines,           // 0 off, 1 25 %, 2 50 %, 3 75 %
     output logic [23:0] rgb_o,
     output logic        hs_o,
     output logic        vs_o,
@@ -132,30 +129,19 @@ always_ff @(posedge clk) begin
 end
 
 // stage 1 (the RAM's data is q): the sync and the copy, a clock behind oc
-logic de1, hs1, vs1, pass1;
+logic de1, hs1, vs1;
 always_ff @(posedge clk) begin
     de1 <= act && oc < 10'd640;
     hs1 <= oc >= 10'd656 && oc < 10'd704;
     vs1 <= vs_f;
-    pass1 <= pass;
 end
 
-// scanline dimming of a CB-bit channel
-function automatic logic [CB-1:0] dim(input logic [CB-1:0] v, input logic [1:0] m);
-    case (m)
-    2'd1:    return v - (v >> 2);
-    2'd2:    return v >> 1;
-    2'd3:    return v >> 2;
-    default: return v;
-    endcase
-endfunction
 // the CB-bit value as eight bits, the top bits repeated below
 function automatic logic [7:0] ex(input logic [CB-1:0] c);
     logic [15:0] t;
     t = 16'({c, c});
     return t[2*CB-1 -: 8];
 endfunction
-wire [1:0]    dm = pass1 ? scanlines : 2'd0;
 wire [CB-1:0] qr = q[3*CB-1 -: CB], qg = q[2*CB-1 -: CB], qb = q[CB-1:0];
 
 // stage 2: the pads
@@ -166,7 +152,7 @@ always_ff @(posedge clk) begin
         hs_o  <= hs ^ HS_ACTIVE_LOW;
         vs_o  <= vs ^ VS_ACTIVE_LOW;
     end else begin
-        rgb_o <= de1 ? {ex(dim(qr, dm)), ex(dim(qg, dm)), ex(dim(qb, dm))} : 24'd0;
+        rgb_o <= de1 ? {ex(qr), ex(qg), ex(qb)} : 24'd0;
         de_o  <= de1;
         hs_o  <= hs1 ^ HS_ACTIVE_LOW;
         vs_o  <= vs1 ^ VS_ACTIVE_LOW;
