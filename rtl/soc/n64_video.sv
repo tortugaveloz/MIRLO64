@@ -62,6 +62,7 @@ module n64_video #(
     input  wire         enable,         // sys: scan out (else black, no DMA)
     input  wire  [25:0] vi_origin,      // sys: the framebuffer's byte address (ORIGIN_MASK: its span)
     input  wire         vi_il,          // sys: the picture is serrated (VI_CTRL's SERRATE, a hi-res picture): sent woven
+    input  wire         no_weave,       // sys: send a serrated picture field by field anyway (a 15 kHz analog output cannot show a woven frame)
     output logic        vblank,         // sys
     input  wire  [11:0] vi_width,       // sys: VI_WIDTH, the rows' pitch in pixels (even; 512 or more: a hi-res picture, no filters)
     input  wire         vi_px32,        // sys: the pixels are 32-bit (VI_STATUS type 3): RGBA8888, a pixel a word
@@ -72,6 +73,8 @@ module n64_video #(
     input  wire         vi_aa,          // sys: the VI's anti-alias filter (VI_CTRL's AA_MODE 0 or 1; MIRLO_VI_AA)
     input  wire         vi_divot,       // sys: and its divot filter (VI_CTRL bit 4)
     input  wire         vi_dedither,    // sys: and its dither filter (VI_CTRL bit 16)
+    input  wire         vi_deblur,      // sys: the core's "Video settings" option "Deblur": the anti-alias and divot filters are bypassed (docs/video_options.md)
+    input  wire         vi_out32,       // sys: the core's "Video settings" option "32-bit": no dedither, 8 bits a channel (full range, and a 32-bit picture's own low bits)
     input  wire  [4:0]  crop_v,         // sys: the core's "Crop Vertical": lines of the picture blanked at its top and its
                                         //      bottom
     input  wire  [1:0]  crop_l,         // sys: and its pixels blanked at the picture's left edge
@@ -251,7 +254,7 @@ always_ff @(posedge clk) ann_s <= {ann_s[0], ann};
 // line j, as the VI shows it: the row Y_SCALE's accumulator reaches at the field's line j, from the base, and for the second field
 // one row (the pitch: 320 words of a 640-pixel one, 288 of a 576-pixel one) on, or with WIDTH 1280 one 640-pixel row (320 words).
 // (A serrated 240-row buffer, or another pitch, is not a pair of fields: shown as any picture is.)
-wire         wv_rq  = vi_il && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
+wire         wv_rq  = vi_il && !no_weave && (vi_width[11:1] == 11'd640 || ((vi_width[11:1] == 11'd320 || vi_width[11:1] == 11'd288) && vi_ys >= 12'h600));
 wire  [9:0]  vi_nr2 = {vi_nr, 1'b0};
 logic        hid_f;                // the hidden coverage plane is wanted (a filter is on)
 logic [10:0] col;                  // the read's word in its row
@@ -286,15 +289,42 @@ wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // row's start), and a tag a read tells the words back apart: the hidden
 // word is held, a colour word takes its pair's four bits (the even pixel's in
 // [1:0]). The FIFO word: {epoch, row start, the pair's hidden bits, the two pixels}.
-localparam int FW = 38;
+// The 32-bit output option (vi_out32) with a 16-bit picture (docs/video_options.md): the RDP's shadow plane (2 MiB at SDRAM 0x0320_0000,
+// the image's address folded into it and its bank the other of the colour word's), a byte for each pixel of the colour image,
+// {R[2:1], G[2:1], B[2] of the low three bits of its channels, the 3-bit check of its 5551 word}: a word of it serves two colour words,
+// and is read before the first of each pair (and before a row's first word, if that is the second of its pair). A pixel whose byte's
+// check is its word's CRC-3 takes the shadow's low bits (the bit missing repeats the one above it), else the top three bits of each
+// channel again (the plain expansion). The 18 bits (a pixel's nine) ride in the FIFO word, above the hidden bits. Not for a woven frame (a
+// serrated 640 x 480 picture): its 307,200 words a frame would be more than the scan-out is sure of; it is shown as a 16-bit picture is
+// without the plane.
+localparam int FW = 56;
+logic        sh_f;                  // the frame's pictures has its shadow words read
+logic        s_next;                // the next read is a shadow word (after the group's hidden word)
+logic [31:0] sreg;                  // the shadow word that came back last
+function automatic logic [2:0] sh_crc(input logic [15:0] w);            // lang/c/rdp/rdp.c sh_crc
+    logic [2:0] c;
+    logic fb;
+    c = 3'd0;
+    for (int i = 15; i >= 0; i--) begin
+        fb = c[2] ^ w[i];
+        c = {c[1:0], 1'b0};
+        if (fb) c = c ^ 3'd3;
+    end
+    return c;
+endfunction
+// a pixel's nine low bits: the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
+function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [7:0] s);
+    return (s[2:0] == sh_crc(c)) ? {s[7], s[6], s[6], s[5], s[4], s[4], s[3], s[3], s[3]} : {c[15:13], c[10:8], c[5:3]};
+endfunction
 logic        h_next;                // the next read is the group's hidden word
 logic [31:0] hreg;
-logic [4:0]  tq [0:31];             // the reads in flight: {row start, hidden, the colour word's place in its group}
+logic [5:0]  tq [0:31];             // the reads in flight: {shadow, row start, hidden, the colour word's place in its group}
 logic [4:0]  tq_w, tq_r;
 wire  [5:0]  tq_n = 6'(tq_w - tq_r);
-wire  [4:0]  tq_h = tq[tq_r];
+wire  [5:0]  tq_h = tq[tq_r];
 wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
+wire         m_shd = !h_next && s_next;
 always_ff @(posedge clk) begin
     if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
                    col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; wv_f <= 0; end
@@ -316,16 +346,22 @@ always_ff @(posedge clk) begin
             px32_f <= px32_n;
             // (a 32-bit picture's coverage is in its own words: no hidden plane)
             hid_f <= vi_aa && !hires && N64FB && !px32_n;
+            sh_f <= vi_out32 && N64FB && !px32_n && !wv_rq;
             issued <= 0; got <= 0; col <= 0;
             drop <= issued - got - 10'(m_rvalid);
             h_next <= vi_aa && !hires && N64FB && !px32_n;
+            s_next <= vi_out32 && N64FB && !px32_n && !wv_rq;
         end else begin
             if (m_valid && m_ready && m_hid) begin
                 issued <= issued + 10'd1;
                 h_next <= 1'b0;
+            end else if (m_valid && m_ready && m_shd) begin
+                issued <= issued + 10'd1;
+                s_next <= 1'b0;
             end else if (m_valid && m_ready) begin
                 issued <= issued + 10'd1;
                 rs_next <= 1'b0;
+                s_next <= sh_f && raddr[0];                  // (the next word is a pair's first)
                 raddr <= raddr + 24'd1;
                 if (col == nwm1_f) begin                  // a row's last word: the next row
                     col <= 0;
@@ -333,7 +369,7 @@ always_ff @(posedge clk) begin
                     if (w2nd) wodd <= 1'b1;               // (the second field's line)
                     else begin rowp <= rowp_n; yacc <= yan[9:0]; wodd <= 1'b0; end
                     orow <= orow + 9'd1; all <= orow == nrm1;
-                    rs_next <= 1'b1; h_next <= hid_f;
+                    rs_next <= 1'b1; h_next <= hid_f; s_next <= sh_f;
                 end else begin
                     col <= col + 11'd1;
                     if (raddr[2:0] == 3'd7) h_next <= hid_f;   // the next word starts a group
@@ -348,15 +384,20 @@ end
 always_ff @(posedge clk) begin
     if (rst) begin tq_w <= 0; tq_r <= 0; end
     else begin
-        if (m_valid && m_ready) begin tq[tq_w] <= {rs_next, m_hid, raddr[2:0]}; tq_w <= tq_w + 5'd1; end
+        if (m_valid && m_ready) begin tq[tq_w] <= {m_shd, rs_next, m_hid, raddr[2:0]}; tq_w <= tq_w + 5'd1; end
         if (m_rvalid) tq_r <= tq_r + 5'd1;
     end
     if (m_rvalid && tq_h[3]) hreg <= m_rdata;
+    if (m_rvalid && tq_h[5]) sreg <= m_rdata;
 end
 // (a registered stage in front of the FIFO, with the epoch of the word's arrival)
 logic        f_we, f_ep;
-logic [36:0] f_wd;
-always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3]; f_wd <= {tq_h[4], h_nib, rd_w}; f_ep <= epoch_sys; end
+logic [54:0] f_wd;
+// (the colour word's pixels, the left one in rd_w's low half, and its bytes of the shadow word: the pair's first word's are the upper two,
+// the left pixel's first)
+wire  [15:0] f_sb = tq_h[0] ? sreg[15:0] : sreg[31:16];
+wire  [17:0] f_lo = {sh_lo(rd_w[31:16], f_sb[7:0]), sh_lo(rd_w[15:0], f_sb[15:8])};
+always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3] && !tq_h[5]; f_wd <= {tq_h[4], f_lo, h_nib, rd_w}; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
@@ -372,7 +413,10 @@ always_ff @(posedge clk) low <= (16'(wlevel) + inflight) < 16'(1 << (FAW - 2));
 assign m_urgent = low;
 assign m_valid  = running && !fb_sys && drop == 0 && room
                   && !all && tq_n < 6'd30;
-assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : raddr;   // (the plane: SDRAM 0x0370_0000)
+// (the hidden plane: SDRAM 0x0370_0000; the shadow plane's word: rtl/soc/mirlo_mips.sv's fold of the RDP's address)
+wire  [19:0] sh_n = raddr[20:1];
+wire  [18:0] sh_w = {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
+assign m_addr   = m_hid ? 24'hDC_0000 + {6'd0, raddr[20:3]} : m_shd ? 24'hC8_0000 + {5'd0, sh_w} : raddr;
 
 // ------------------------------------------------------------------ the FIFO
 logic        f_rd, f_empty;
@@ -384,8 +428,8 @@ afifo #(.W(FW), .AW(FAW)) fifo (
 
 // --------------------------------------------------------------- vid: the picture
 // the frame's parameters (static: latched by sys at the boundary)
-logic [51:0] win_s;
-always_ff @(posedge clk_vid) win_s <= {px32_f, nofilt_f, nr, y0_f, px0_f, pw_f, xs_f};
+logic [52:0] win_s;
+always_ff @(posedge clk_vid) win_s <= {sh_f, px32_f, nofilt_f, nr, y0_f, px0_f, pw_f, xs_f};
 wire  [10:0] xs_v    = win_s[10:0];
 wire  [9:0]  pw_v    = win_s[20:11];
 wire  [9:0]  px0_v   = win_s[30:21];
@@ -393,6 +437,7 @@ wire  [9:0]  py0_v   = {1'b0, win_s[39:31]};
 wire  [9:0]  nr_v    = {1'b0, win_s[48:40]};
 wire         nofilt_v = win_s[49];
 wire         px32_v   = win_s[50];
+wire         sh_v     = win_s[51];          // the picture's shadow words came with it
 // the window's rows (the fetch lines: vcount py0 .. py0 + nr - 1; line d shows the row of line d - 1: the filters' row below
 // is the one just fetched), by line, from the priming on: nv this line fetches a row, cv the one before did (and is shown
 // now), av the one before that (the filters' row above)
@@ -426,6 +471,7 @@ wire         pop_ev  = adv && !flush && nv && (wpos || px32_v) && hd_ok;   // (a
 always_comb f_rd = ce && (stale || rs_drop || pop_ev);
 logic [15:0] pix;
 logic [1:0]  phid;                 // its hidden coverage bits (MIRLO_VI_AA)
+logic [8:0]  plo;                  // a 32-bit picture's low three bits of R, G, B (with the 32-bit output option; else 0)
 logic        pv;                   // pix is the picture's (else black)
 logic        lwe;                  // pix is to be written to the line buffers
 always_ff @(posedge clk_vid) if (ce) begin
@@ -440,29 +486,40 @@ end
 // the hidden two
 wire [15:0] p32_hi = {f_q[15:11], f_q[7:3], f_q[31:27], f_q[23]};
 wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : px32_v ? p32_hi : wpos ? f_q[31:16] : f_q[15:0];
+// (the core's 32-bit output option, vid side: a 32-bit picture keeps the low three bits of each channel; the others are filled out below)
+logic [1:0] dbl_s, o32_s;
+always_ff @(posedge clk_vid) begin dbl_s <= {dbl_s[0], vi_deblur}; o32_s <= {o32_s[0], vi_out32}; end
+wire [8:0]  nx_lo  = !(nv && hd_ok) || flush || !o32_s[1] ? 9'd0 : px32_v ? {f_q[10:8], f_q[2:0], f_q[26:24]}
+                   : sh_v ? (wpos ? f_q[53:45] : f_q[44:36]) : 9'd0;
 wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : px32_v ? f_q[22:21] : wpos ? f_q[35:34] : f_q[33:32];
 wire        nx_pv  = nv && hd_ok && !flush;
 
 // the filters' line buffers and windows (the column of the slot, and its two rows above)
 logic       aa_on, dd_on, dv_on;
-(* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb1 [0:1023];
+// lb1 (the row the filters centre on) keeps a 32-bit picture's three low bits of each channel with the pixel (the core's 32-bit
+// output option; else they are 0): {R, G, B low bits, the 19-bit pixel}
+(* ramstyle = "M10K, no_rw_check" *) logic [27:0] lb1 [0:1023];
 (* ramstyle = "M10K, no_rw_check" *) logic [18:0] lb2 [0:1023];
-logic [18:0] lq1r, lq2r;           // the line buffers' reads
+logic [27:0] lq1r;
+logic [18:0] lq2r;                 // the line buffers' reads
 logic        lq_c, lq_a;           // ... that were of rows in the window
-wire  [18:0] lq1 = lq_c ? lq1r : 19'd0, lq2 = lq_a ? lq2r : 19'd0;
+wire  [27:0] lq1 = lq_c ? lq1r : 28'd0;
+wire  [18:0] lq2 = lq_a ? lq2r : 19'd0;
 logic [9:0]  lwa;
 // the window: {valid, hidden 2, RGBA5551} (the coverage: {bit 0, hidden})
 logic [18:0] wa [0:3], wc [0:4], wb [0:3];
+logic [8:0]  wl [0:2];             // the centre's (wc[2]) low bits, along the same steps
 integer wi;
 always_ff @(posedge clk_vid) if (ce && adv) begin
     // the pixel this step loads
-    pix <= nx_pix; phid <= nx_hid; pv <= nx_pv; lwe <= nx_pv;
+    pix <= nx_pix; phid <= nx_hid; pv <= nx_pv; lwe <= nx_pv; plo <= nx_lo;
     lq1r <= lb1[sx]; lq2r <= lb2[sx];
     lq_c <= !flush && cv; lq_a <= !flush && av;
     lwa <= sx;
     // the column the last step loaded: written to the line buffers and into the windows
-    if (lwe) begin lb1[lwa] <= {pv, phid, pix}; lb2[lwa] <= lq1; end
-    wa[0] <= lq2; wc[0] <= lq1; wb[0] <= {pv, phid, pix};
+    if (lwe) begin lb1[lwa] <= {plo, pv, phid, pix}; lb2[lwa] <= lq1[18:0]; end
+    wa[0] <= lq2; wc[0] <= lq1[18:0]; wb[0] <= {pv, phid, pix};
+    wl[0] <= lq1[27:19]; wl[1] <= wl[0]; wl[2] <= wl[1];
     for (wi = 1; wi < 4; wi = wi + 1) begin wa[wi] <= wa[wi - 1]; wb[wi] <= wb[wi - 1]; end
     for (wi = 1; wi < 5; wi = wi + 1) wc[wi] <= wc[wi - 1];
 end
@@ -490,8 +547,8 @@ end
 logic [1:0]  aa_s, dv_s, dd_s;
 always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], vi_divot}; dd_s <= {dd_s[0], vi_dedither}; end
 // (a hi-res picture: the filters are off; its pixels go through the line buffers all the same -- 1024 slots: a 640-pixel line and the priming's)
-assign aa_on = aa_s[1] && N64FB && !nofilt_v;
-assign dd_on = dd_s[1] && N64FB && !nofilt_v;
+assign aa_on = aa_s[1] && N64FB && !nofilt_v && !dbl_s[1];     // (Deblur: no anti-alias, no divot -- dv_on follows aa_on)
+assign dd_on = dd_s[1] && N64FB && !nofilt_v && !o32_s[1];     // (32-bit: no dedither)
 assign dv_on = dv_s[1] && aa_on;
 function automatic logic one6(input logic [5:0] x);               // exactly one of six
     return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
@@ -520,14 +577,14 @@ function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
     end
     return {lo, hi};
 endfunction
-function automatic logic [7:0] pen(input logic [4:0] c, input logic [9:0] m, input logic [2:0] w);
+function automatic logic [7:0] pen(input logic [4:0] c, input logic [2:0] lo, input logic [9:0] m, input logic [2:0] w);
     logic [4:0] mn, mx;
     logic signed [6:0] d;
     logic signed [10:0] o;
     mn = m[9:5] < c ? m[9:5] : c;
     mx = m[4:0] > c ? m[4:0] : c;
     d = $signed({2'b0, mn}) + $signed({2'b0, mx}) - $signed({1'b0, c, 1'b0});
-    o = $signed({3'b0, c, 3'b0}) + d * $signed({1'b0, w});
+    o = $signed({3'b0, c, lo}) + d * $signed({1'b0, w});
     return o[7:0];
 endfunction
 function automatic logic complete(input logic [18:0] t);   // coverage 7
@@ -538,6 +595,7 @@ function automatic logic [14:0] tap(input logic [18:0] t, input logic [18:0] ctr
     return (t[18] && complete(t)) ? t[15:1] : ctr[15:1];
 endfunction
 wire [18:0] ctr = wc[2];
+wire [8:0]  clo = wl[2];
 wire [2:0]  cw  = ~{ctr[0], ctr[17:16]};        // 7 - the coverage
 wire [14:0] n0 = tap(wa[1], ctr), n1 = tap(wa[3], ctr), n2 = tap(wc[0], ctr),
             n3 = tap(wc[4], ctr), n4 = tap(wb[1], ctr), n5 = tap(wb[3], ctr);
@@ -551,8 +609,8 @@ wire        aa_px = aa_on && ctr[18] && !complete(ctr);
 // must match its dedithered and anti-aliased neighbours (with the top bits
 // again below, a partial pixel among complete ones came out c >> 2 brighter).
 // A 565 picture (not the N64's): the top bits again below.
-function automatic logic [23:0] rgb8(input logic [15:0] p);
-    if (N64FB) return {p[15:11], 3'd0, p[10:6], 3'd0, p[5:1], 3'd0};
+function automatic logic [23:0] rgb8(input logic [15:0] p, input logic [8:0] lo);
+    if (N64FB) return {p[15:11], lo[8:6], p[10:6], lo[5:3], p[5:1], lo[2:0]};
     else       return {p[15:11], p[15:13], p[10:5], p[10:9], p[4:0], p[4:2]};
 endfunction
 // the dedither of one channel (bits [hi:hi-4] of the 5551 word): a ring tap
@@ -576,8 +634,8 @@ wire [23:0] dd8 = {ddch(ctr[15:11], `DDN(15), rv), ddch(ctr[10:6], `DDN(10), rv)
 logic [23:0] fa0, fa1, fa2;
 logic [2:0]  fe, fv;                   // [0] the newest
 always_ff @(posedge clk_vid) if (ce && adv) begin
-    fa0 <= !ctr[18] ? 24'd0 : aa_px ? {pen(ctr[15:11], mr, cw), pen(ctr[10:6], mg, cw), pen(ctr[5:1], mb, cw)}
-         : dd_on ? dd8 : rgb8(ctr[15:0]);
+    fa0 <= !ctr[18] ? 24'd0 : aa_px ? {pen(ctr[15:11], clo[8:6], mr, cw), pen(ctr[10:6], clo[5:3], mg, cw), pen(ctr[5:1], clo[2:0], mb, cw)}
+         : dd_on ? dd8 : rgb8(ctr[15:0], clo);
     fe[0] <= aa_px; fv[0] <= ctr[18];
     fa1 <= fa0; fa2 <= fa1; fe[2:1] <= fe[1:0]; fv[2:1] <= fv[1:0];
 end
@@ -592,6 +650,16 @@ wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);
 logic [23:0] pq;
 always_ff @(posedge clk_vid) if (ce && adv)
     pq <= dv_px ? {med3(dl[23:16], fa1[23:16], dr[23:16]), med3(dl[15:8], fa1[15:8], dr[15:8]), med3(dl[7:0], fa1[7:0], dr[7:0])} : fa1;
+// The 32-bit output option, for a 16-bit picture: its channels are the 5551 ones on eight bits (c << 3, white 248, as the console's VI
+// has them) plus the filters' fraction; taken to the full range -- v + (v >> 5), which is {c, c[4:2]} for a plain pixel (white 255) --
+// before the gamma table. A 32-bit picture's channels already are eight bits (their own low three bits).
+function automatic logic [7:0] fullrange(input logic [7:0] v);
+    logic [8:0] x;
+    x = {1'b0, v} + {6'd0, v[7:5]};
+    return x[8] ? 8'hFF : x[7:0];
+endfunction
+wire        xp_on = o32_s[1] && N64FB && !px32_v && !sh_v;
+wire [23:0] pqx   = xp_on ? {fullrange(pq[23:16]), fullrange(pq[15:8]), fullrange(pq[7:0])} : pq;
 
 // ---- the output's window and crop
 // the VI's window (slow-changing, from sys): black while H_START is 0 --
@@ -650,8 +718,8 @@ wire  [7:0]  o_b = gam_s[1] ? gq_b : pix_d[7:0];
 always_ff @(posedge clk_vid) begin
     if (ce) begin
         de_d <= de; hs_d <= hsync; vs_d <= vsync; cr_d <= crop;
-        pix_d <= pq;
-        gq_r <= gtab[pq[23:16]]; gq_g <= gtab[pq[15:8]]; gq_b <= gtab[pq[7:0]];
+        pix_d <= pqx;
+        gq_r <= gtab[pqx[23:16]]; gq_g <= gtab[pqx[15:8]]; gq_b <= gtab[pqx[7:0]];
         vga_de <= de_d; vga_hsync <= hs_d; vga_vsync <= vs_d;
         vga_r <= !de_d || cr_d ? 8'd0 : o_r;
         vga_g <= !de_d ? (vs_d ? 8'd0 : {1'b0, slot_v, 5'd0}) : cr_d ? 8'd0 : o_g;

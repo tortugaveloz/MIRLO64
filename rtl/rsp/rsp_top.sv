@@ -198,12 +198,14 @@ logic [3:0]  x_rot;
 rsp_dpram dmem (.clk, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), .a_dat_w(x_wd), .a_dat_r(q16),
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
-// byte m of the result is byte (m + x_rot) mod 16 of the line: by words, then bytes
-logic [127:0] q_w;
+// byte m of the result is byte (m + x_rot) mod 16 of the line: by 1, 2, 4, 8 bytes (four stages of two, as the vector unit's store: fewer LUTs than two of four)
+logic [127:0] q_w, q_x, q_y;
 (* keep *) logic [127:0] x_rd;
 always_comb begin
-    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = q16[127 - 8 * ((m + 4 * int'(x_rot[3:2])) & 15) -: 8];
-    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = q_w[127 - 8 * ((m + int'(x_rot[1:0])) & 15) -: 8];
+    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = x_rot[0] ? q16[127 - 8 * ((m + 1) & 15) -: 8] : q16[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) q_x[127 - 8 * m -: 8] = x_rot[1] ? q_w[127 - 8 * ((m + 2) & 15) -: 8] : q_w[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) q_y[127 - 8 * m -: 8] = x_rot[2] ? q_x[127 - 8 * ((m + 4) & 15) -: 8] : q_x[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = x_rot[3] ? q_y[127 - 8 * ((m + 8) & 15) -: 8] : q_y[127 - 8 * m -: 8];
 end
 assign m_rdata   = x_rd[127:96];
 assign m_rdata16 = x_rd;
