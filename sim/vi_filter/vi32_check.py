@@ -2,10 +2,16 @@
 """lang/mips/test/vi32_test.c's 32-bit picture against a frame the pads sent (sim/mips_soc VGA=1: vNNNNNN.ppm, 640 x 240:
 each of the 320 pixels two clocks). The scan-out shows a 32-bit picture as its 16-bit view -- each channel's top five
 bits, the alpha byte's top three bits as the coverage (rtl/soc/n64_video.sv) -- through the VI's anti-alias and divot
-filters, by tb_vi.cpp's model of them. Pure Python.   vi32_check.py <pads frame .ppm> [out.png]"""
+filters, by tb_vi.cpp's model of them. Pure Python.   vi32_check.py <pads frame .ppm> [out.png] [--deblur] [--out32]
+--deblur, --out32 (the core's "Picture" options, INTERACT=0x10000144:<1 32-bit, 2 Deblur, 3 both>: docs/video_options.md): with
+--deblur the anti-alias and divot filters are bypassed; with --out32 the picture keeps the channels' low three bits (also in the
+anti-alias filter's centre)."""
 import sys, zlib, struct
 
 W, H = 320, 240
+DEBLUR = '--deblur' in sys.argv
+OUT32 = '--out32' in sys.argv
+sys.argv = [a for a in sys.argv if not a.startswith('--')]
 
 
 def cvg(x, y):
@@ -42,12 +48,16 @@ def intap(x, j):
 
 
 def complete(x, j):
-    return cv(x, j) == 7
+    return DEBLUR or cv(x, j) == 7
+
+
+def low(x, j, k):                     # the channel's low three bits, kept by the 32-bit output
+    return ((word(x, j) >> (24 - 8 * k)) & 7) if OUT32 else 0
 
 
 def aa_px(x, j):
     if complete(x, j):
-        return [ch5(x, j, k) << 3 for k in range(3)]
+        return [ch5(x, j, k) << 3 | low(x, j, k) for k in range(3)]
     out = []
     taps = [(-1, -1), (1, -1), (-2, 0), (2, 0), (-1, 1), (1, 1)]
     for k in range(3):
@@ -56,13 +66,13 @@ def aa_px(x, j):
         s = sorted(v)
         mn, mx = min(s[1], c), max(s[4], c)
         w = 7 - cv(x, j)
-        out.append((c << 3) + (((mn << 3) + (mx << 3) - 2 * (c << 3)) * w + 4) // 8)
+        out.append((c << 3 | low(x, j, k)) + (((mn << 3) + (mx << 3) - 2 * (c << 3)) * w + 4) // 8)
     return out
 
 
 def model(x, j):
     e = aa_px(x, j)
-    if not complete(x, j) or (x > 0 and not complete(x - 1, j)) or not complete(x + 1, j):
+    if not DEBLUR and (not complete(x, j) or (x > 0 and not complete(x - 1, j)) or not complete(x + 1, j)):
         l = aa_px(x - 1, j) if x > 0 else e
         r = aa_px(x + 1, j)
         e = [sorted([l[k], e[k], r[k]])[1] for k in range(3)]

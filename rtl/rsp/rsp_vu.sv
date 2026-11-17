@@ -364,12 +364,8 @@ function automatic lane_t lane_ex(input logic [5:0] f, input logic [2:0] am, inp
         endcase
     end
     for (int i = 0; i < 16; i++)
-        unique case (rsel)
-        2'd0:    o.res[i] = o.acc[i];
-        2'd1:    o.res[i] = accn[16 + i];
-        2'd2:    o.res[i] = NP == 1 ? accn[32 + i] : vs[i];
-        default: o.res[i] = (i == 15) ? c15 : clo;
-        endcase
+        // (as choices of two: the synthesis maps it to fewer LUTs than one of four)
+        o.res[i] = rsel[1] ? (rsel[0] ? ((i == 15) ? c15 : clo) : (NP == 1 ? accn[32 + i] : vs[i])) : (rsel[0] ? accn[16 + i] : o.acc[i]);
     return o;
 endfunction
 
@@ -511,7 +507,14 @@ always_comb begin
     r_clz = 6'd32;
     for (int k = 0; k < 32; k++) if (r_data[k]) r_clz = 6'(31 - k);
 end
-wire  [31:0] r_norm = r_data << r_clz[4:0];
+logic [31:0] r_n0, r_n1, r_n2, r_n3, r_norm;               // (r_data << r_clz as five stages of two: fewer LUTs than the shifter operator)
+always_comb begin
+    r_n0 = r_clz[0] ? r_data << 1 : r_data;
+    r_n1 = r_clz[1] ? r_n0 << 2 : r_n0;
+    r_n2 = r_clz[2] ? r_n1 << 4 : r_n1;
+    r_n3 = r_clz[3] ? r_n2 << 8 : r_n2;
+    r_norm = r_clz[4] ? r_n3 << 16 : r_n3;
+end
 wire  [8:0]  r_idx  = r_norm[30:22];
 assign rom_addr = r_sqrt ? {1'b1, r_idx[8:1], r_clz[0]} : {1'b0, r_idx};
 wire  [31:0] r_val  = {1'b0, 1'b1, rom_q, 14'd0};                          // (0x10000 | rom) << 14
@@ -611,7 +614,7 @@ wire         in_tv   = st == V_TV;
 // from the instruction first, then rs's low bits (the late ones: forwarded),
 // the low two of them first
 logic [7:0]  sarr [16];
-logic [7:0]  sr1 [16];
+logic [7:0]  sr1 [16], sr2 [16], sr3 [16];
 logic [7:0]  sb [16];
 wire         st_pk  = swc2 && ls_packed;
 wire  [3:0]  st_eo  = el - off_sh[3:0];
@@ -636,8 +639,12 @@ always_comb begin
         endcase
         if (i % 4 == 0 && st_fv) sarr[i] = wf[14:7];
     end
-    for (int b = 0; b < 16; b++) sr1[b] = sarr[(b + int'(st_rot[1:0])) & 15];
-    for (int b = 0; b < 16; b++) sb[b]  = sr1[(b + 4 * int'(st_rot[3:2])) & 15];
+    // (the rotation as four stages of two -- by 1, 2, 4, 8 bytes, the early bits of st_rot first -- not two of four: the synthesis
+    // maps this to 138 fewer LUTs with the load's rotation in rsp_top written the same way)
+    for (int b = 0; b < 16; b++) sr1[b] = st_rot[0] ? sarr[(b + 1) & 15] : sarr[b];
+    for (int b = 0; b < 16; b++) sr2[b] = st_rot[1] ? sr1[(b + 2) & 15] : sr1[b];
+    for (int b = 0; b < 16; b++) sr3[b] = st_rot[2] ? sr2[(b + 4) & 15] : sr2[b];
+    for (int b = 0; b < 16; b++) sb[b]  = st_rot[3] ? sr3[(b + 8) & 15] : sr3[b];
 end
 
 // the bytes a load (or MTC2) brings, and where they go. A load's data comes
