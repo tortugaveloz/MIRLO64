@@ -15,10 +15,14 @@
  *
  * The 54 hardware timings of large rectangles are what the memory terms below are fitted to; the model reproduces them to a
  * geometric mean of 4 % (worst 11 %). A triangle's own setup, a texture load, a fill's memory, the copy mode's memory and
- * a SYNC FULL have no console measurement anywhere (marked EST below). One more caveat, from the previous agent's note on
- * a game's scene: in sim/mips_soc a real game (Donkey Kong 64's jungle) was run by the console at 2.94 fields a frame while
- * the RTL's own RDP time was longer than these rates charge for the same commands, so a heavy 3D scene may take the console
- * longer than this model says: the rectangle timings do not contain a textured triangle's rate. */
+ * a SYNC FULL have no console measurement anywhere (marked EST below). One more caveat, from the commit message of the
+ * earlier rdp-pace branch (not reproduced here: it needs a save state of the game): a real game (Donkey Kong 64's jungle) was
+ * run by the console at 2.94 fields a frame, and the RTL's own RDP time there was longer than these rates charge for the
+ * same commands, so a heavy 3D scene may take the console longer than this model says: the rectangle timings do not
+ * contain a textured triangle's rate.
+ *
+ * rtl/rdp/rdp_top.v holds the RTL to these rules a pixel at a time (its eighths of a clock, `pk`) where this model charges
+ * a 16-byte group: the same for a row of whole groups, within a group's transfer for a short span. */
 #include "rdp_time.h"
 #include <stdlib.h>
 #include <string.h>
