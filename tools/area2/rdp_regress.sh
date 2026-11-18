@@ -62,7 +62,7 @@ for s in 142 143; do TB_SDRAM=1 TB_CPU=50 TB_LOD=1 TB_RECT=1 run ./obj_rdp/tb_rd
 # the combiner's arithmetic: random streams that make it visible (TB_CC), and the functions on their own
 for s in 51 52 53 54 55 56 57 58 59 60 61 62; do TB_CC=1 run ./obj_rdp/tb_rdp -r $s 200; done
 ./cc_unit.sh | grep -q " 0 mismatches" || { echo "FAIL: cc_unit"; fail=$((fail+1)); }; n=$((n+1))
-# the RDP's time against the console's: hardware timings of large rectangles in every depth / image-read mode (PACE)
+# the RDP's time against the console's: hardware timings of large rectangles in every depth / image-read mode (the pixel pace of rdp_top)
 hw=$(mktemp -d); python3 -I hw_timing/hw_rects.py gen $hw && python3 -I hw_timing/hw_rects.py check $hw ./obj_rdp/tb_rdp > $hw/out.txt \
   || { echo "FAIL: hw_timing ($(tail -1 $hw/out.txt))"; fail=$((fail+1)); }; n=$((n+1)); rm -rf $hw
 echo "rdp_regress: $n runs, $fail failed"
