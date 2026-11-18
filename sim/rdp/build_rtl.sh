@@ -37,6 +37,6 @@ fi
     -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-BLKSEQ -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL \
     --top-module rdp_top ${VDEFS:-} --Mdir "$OBJ" \
     "$R/rdp_top.v" "$R/rdp_pix.v" "$R/rdp_mem.v" "$R/rdp_tmem.v" "$M/rdp_sdpram.v" "$M/rdp_rcp_rom.v" \
-    tb_rdp.cpp "$HERE/../rsp/rsp.c" "$MD/rdp.c" \
+    tb_rdp.cpp "$HERE/../rsp/rsp.c" "$MD/rdp.c" "$HERE/rdp_time.c" \
     -CFLAGS "-O2 -I$HERE -I$HERE/../rsp -I$MD $CD ${TB_CFLAGS:-}" -o tb_rdp > "$OBJ.log" 2>&1 || { grep -E "%Error|error" "$OBJ.log" | head -30; tail -5 "$OBJ.log"; exit 1; }
 echo "OK -> $HERE/$OBJ/tb_rdp"

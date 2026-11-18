@@ -7,6 +7,8 @@
  *   rdp_task [-o out_prefix] [-n] task_gfx_*.bin ...
  *     -n  no drawing: only count the commands by opcode
  *     -v  the commands, as they come
+ *     -t  the task's time on the console by rdp_time.c (the cycles of the RDP's 62.5 MHz clock, by kind of command:
+ *         the pipeline's own, and with the RDRAM's transfers)
  *   RDP_WATCH=<hex address>: the commands that write that word of RDRAM
  *   RDP_RAW=1: and the colour image as it is (prefix_N.raw)
  * It counts the pixels that took the texture LOD (docs/lod.md) by level.
@@ -18,6 +20,7 @@
 #include <string.h>
 #include "rsp.h"
 #include "rdp.h"
+#include "rdp_time.h"
 
 #define RDRAM_SIZE (8u << 20)
 #define MEM_SIZE (16u << 20)                 /* and the hidden plane at 8 MiB (rdp.h, RDP_HID_BASE) */
@@ -30,9 +33,14 @@ static uint16_t rd16(void *c, uint32_t a) { (void)c; a &= MEM_SIZE - 2; return (
 static rdp_t rdp;
 static uint32_t watch = ~0u, cur_w[8], cur_n;
 static unsigned long cur_i;
+static int timing;                       /* -t */
+static rdp_time_t ctt;
+static void ct_span(const rdp_t *r, int y, int x0, int x1) { (void)r; rdp_time_span(&ctt, y, x0, x1); }
+static uint64_t ct_cyc[6][2], ct_n[6];   /* by kind (below): the pipeline's own, with memory */
 static void wr16(void *c, uint32_t a, uint16_t v)
 {
     (void)c; a &= MEM_SIZE - 2;
+    if (timing && a < RDRAM_SIZE) rdp_time_write(&ctt, a);
     if (a == watch) {
         printf("  %06x <- %04x by command %lu:", a, v, cur_i);
         for (uint32_t i = 0; i < cur_n && i < 8; i++) printf(" %08x", cur_w[i]);
@@ -81,7 +89,14 @@ static void on_rdp(void *user, const uint32_t *w, int n)
         for (int i = 0; i < 6; i++) printf(" %04x", rd16(0, a + 2 * i));
         printf("\n");
     }
+    if (timing) rdp_time_begin(&ctt);
     if (!skip) for (int i = 0; i < 2 * n; i++) rdp_push(&rdp, w[i]);
+    if (timing && !skip) {
+        int k = (op >= 8 && op <= 15) ? 0 : (op == 0x24 || op == 0x25) ? 1 : op == 0x36 ? 2 : (op == 0x30 || op == 0x33 || op == 0x34) ? 3 : (op >= 0x26 && op <= 0x29) ? 4 : 5;
+        ct_cyc[k][0] += rdp_time_cmd(&ctt, &rdp, w, (unsigned)(2 * n), 0);
+        ct_cyc[k][1] += rdp_time_cmd(&ctt, &rdp, w, (unsigned)(2 * n), 1);
+        ct_n[k]++;
+    }
     else { /* a draw skipped: the state it would have set (the primitive's tile) is not needed */ }
     if (trace) {   /* RDP_TRACE=<file>: every command, all its words, and the pixels it drew */
         fprintf(trace, "%02x %d", op, 2 * n);
@@ -99,7 +114,8 @@ int main(int argc, char **argv)
         if (!strcmp(argv[ai], "-o") && ai + 1 < argc) prefix = argv[++ai];
         else if (!strcmp(argv[ai], "-n")) draw = 0;
         else if (!strcmp(argv[ai], "-v")) verbose = 1;
-        else { fprintf(stderr, "usage: rdp_task [-o out_prefix] [-n] [-v] task.bin ...\n"); return 2; }
+        else if (!strcmp(argv[ai], "-t")) { timing = 1; rdp_time_init(&ctt); rdp_span_hook = ct_span; }
+        else { fprintf(stderr, "usage: rdp_task [-o out_prefix] [-n] [-v] [-t] task.bin ...\n"); return 2; }
     }
     static rsp_t s;
     if (getenv("RDP_WATCH")) watch = (uint32_t)strtoul(getenv("RDP_WATCH"), 0, 16) & (MEM_SIZE - 2);
@@ -117,7 +133,7 @@ int main(int argc, char **argv)
         memset(ram + RDRAM_SIZE, 0xFF, MEM_SIZE - RDRAM_SIZE);      /* (the plane: all ones, as the runtime sets it) */
         s.rdp_cmd = on_rdp;
         rdp_init(&rdp, 0, rd16, wr16);
-        memset(ops, 0, sizeof ops);
+        memset(ops, 0, sizeof ops); memset(ct_cyc, 0, sizeof ct_cyc); memset(ct_n, 0, sizeof ct_n);
         last_cimg = 0; last_width = 320; last_size = 2;
         uint8_t task[64];
         if (getenv("RDP_CLEARFB")) { /* RDP_CLEARFB=addr[,addr]: the colour buffers start black (not the last frame's) */
@@ -135,6 +151,17 @@ int main(int argc, char **argv)
                (unsigned long long)s.rdp_cmds, (unsigned long long)rdp.pixels_drawn, rdp.unknown_ops);
         for (int i = 0; i < 64; i++) if (ops[i]) printf(" %02x:%llu", i, (unsigned long long)ops[i]);
         printf("\n");
+        if (timing) {
+            static const char *kn[6] = { "triangles", "texture rectangles", "fill rectangles", "loads", "syncs", "other" };
+            uint64_t a = 0, b = 0;
+            printf("  console time (rdp_time.c)         commands   pipeline alone   with the RDRAM\n");
+            for (int i = 0; i < 6; i++) {
+                if (!ct_n[i]) continue;
+                printf("    %-26s %8llu %16llu %16llu\n", kn[i], (unsigned long long)ct_n[i], (unsigned long long)ct_cyc[i][0], (unsigned long long)ct_cyc[i][1]);
+                a += ct_cyc[i][0]; b += ct_cyc[i][1];
+            }
+            printf("    %-26s %8s %16llu %16llu  (%.2f ms with the RDRAM at 62.5 MHz)\n", "total", "", (unsigned long long)a, (unsigned long long)b, (double)b / 62500.0);
+        }
         /* what of the frame took the texture LOD (docs/lod.md) */
         printf("  LOD: %llu pixels (2-cycle, TEX_LOD), %llu magnified, %llu at the far level; by level:", (unsigned long long)rdp.lod_px,
                (unsigned long long)rdp.lod_mag, (unsigned long long)rdp.lod_far);

@@ -191,6 +191,9 @@ static inline void x_pt(int32_t *o, const int32_t *b, int m, const int32_t *d)
 
 /* ---- init / state ------------------------------------------------------- */
 
+#ifdef RDP_CTIME
+void (*rdp_span_hook)(const rdp_t *r, int y, int x0, int x1);
+#endif
 void rdp_init(rdp_t *r, void *ctx, rdp_rd16_t rd16, rdp_wr16_t wr16)
 {
     memset(r, 0, sizeof *r);
@@ -1920,6 +1923,9 @@ static void draw_triangle_aa(rdp_t *r, const prim_t *pr, int aa_en, int lft, int
         if (!any || !sc_row(r, y)) continue;
         if (xmax > sc_x1(r) - 1) xmax = sc_x1(r) - 1;      /* (the pixel at the scissor's end never has a sample) */
         if (xmin > xmax) continue;
+#ifdef RDP_CTIME
+        if (rdp_span_hook) rdp_span_hook(r, y, xmin, xmax);
+#endif
         int32_t dx0 = (int32_t)((uint32_t)xmin << 16) - exh;
         int32_t cur[NATTR];
         for (int i = 0; i < NATTR; i++) {
@@ -2411,6 +2417,9 @@ static void draw_texrect(rdp_t *r, const uint32_t *w, int flip)
 #endif
     for (int y = ya; y < yb; y++)
         for (int x = xa; x < xb && sc_row(r, y); x++) {
+#ifdef RDP_CTIME
+            if (x == xa && rdp_span_hook) rdp_span_hook(r, y, xa, xb - 1);
+#endif
             int32_t at[NATTR] = { 0 };
             int32_t cq = q ? 4 * x - xh : x - x0;     /* columns from XH: quarters, or whole ones */
             int cs = q ? 2 : 0;
@@ -2464,8 +2473,12 @@ static void fill_rect(rdp_t *r, const uint32_t *w)
     int ya = y0 > sc_y0(r) ? y0 : sc_y0(r), yb = y1 < sc_y1(r) ? y1 : sc_y1(r);
     int32_t at[NATTR] = { 0 };
     for (int y = ya; y < yb; y++)
-        for (int x = xa; x < xb && sc_row(r, y); x++)
+        for (int x = xa; x < xb && sc_row(r, y); x++) {
+#ifdef RDP_CTIME
+            if (x == xa && rdp_span_hook) rdp_span_hook(r, y, xa, xb - 1);
+#endif
             draw_pixel(r, &pr, x, y, at, 0xFFu);
+        }
 }
 
 /* ---- texture loads ---------------------------------------------------------- */
