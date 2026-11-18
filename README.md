@@ -10,7 +10,7 @@ It currently supports over 99% of the game library, and it aims to provide cycle
 
 * Controller Pak support.
 * Expansion Pak support.
-* Up to 2 Transfer Paks support. Games can either be connected to the GB cart on the Pocket or loaded from the SD.
+* Up to 2 Transfer Paks support. Games can either be connected to the GB cart slot on the Pocket or loaded from the SD.
 * Save states (Sleep/Wake, Memories) are supported.
 * Game Shark support.
 * Up to 4 players with the Dock.

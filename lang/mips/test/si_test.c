@@ -433,11 +433,13 @@ int main(void)
     for (int i = 0; i < 16; i++) PIF[i] = 0x55555555u;
     SI[0] = A1; SI[4] = 0;
     {
-        uint32_t newv = RD(A1)[7], r = 0, bad = 0, k;  /* (the words move some 3,800 cycles in: phase 10) */
+        uint32_t newv = RD(A1)[7], r = 0, bad = 0, k;  /* (the words move when the DMA starts, its interrupt and its end are some 4,000 cycles later) */
         for (k = 0; k < 20000u && (r = PIF[7]) != newv; k++) if (r != 0x55555555u) bad++;
         check("a CPU read of the PIF RAM during the DMA: the old word or the new one", bad, 0u);
-        check("... and the DMA's end is waited for: a read gets the new word", r, newv);
-        check("... the DMA is done by then", SI[6] & ST_BUSY, 0u);
+        check("... and a read gets the new word", r, newv);
+        check("... the DMA is still under way until its interrupt", SI[6] & ST_BUSY, ST_BUSY);
+        si_idle(1000000u);
+        check("... and then it is done, the interrupt up", SI[6] & (ST_BUSY | ST_IRQ), ST_IRQ);
     }
     SI[6] = 0;
 
