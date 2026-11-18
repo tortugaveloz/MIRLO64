@@ -41,7 +41,7 @@ The default of each is in bold.
 | Stick dead zone | 0 %, **10 %**, 20 % ... 70 % | How far a stick has to move before the game notices it, for both sticks |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the Nintendo 64's own D-pad |
 | C buttons | **None**, D-pad, L stick, R stick | Lets a stick (or the D-pad) press the C buttons too, besides the face buttons |
-| Start macro | **None**, C-Down + C-Up, C-Left + C-Right, C-Down + C-Left, C-Down + C-Right, C-Up + C-Left, C-Up + C-Right | Pressing those two buttons together is Start. The Start button alone then becomes C-Up |
+| Start macro | **None**, C-Down + C-Up, C-Left + C-Right, C-Down + C-Left, C-Down + C-Right, C-Up + C-Left, C-Up + C-Right | Pressing those two buttons together is Start |
 | R as modifier | **None**, Face C buttons, Joystick half press | While R is held: **Face C buttons** turns X, B, Y and A into C-Up, C-Down, C-Left and C-Right; **Joystick half press** makes the D-Pad move the joystick only 60 % of the way. R does not reach the game while it is a modifier |
 
 ## Controllers in the Dock
