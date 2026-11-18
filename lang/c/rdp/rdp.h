@@ -306,4 +306,10 @@ rdp_lod_t rdp_lod(uint32_t other_h, unsigned min_level, unsigned max_level, unsi
                     const int32_t s[3], const int32_t t[3], int oob);
 #endif
 
+#ifdef RDP_CTIME
+/* (sim/rdp/tb_rdp's console timing estimate) each span a primitive draws: its row and its first and last pixel,
+ * before any pixel of it is drawn */
+extern void (*rdp_span_hook)(const rdp_t *r, int y, int x0, int x1);
+#endif
+
 #endif

@@ -327,7 +327,7 @@ static void psram_step(bool neg)
 // (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
 static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
 static bool o_cstat, o_ctrace, o_excstat, o_pcprof, o_cmodel;
-static long o_pcprof_from, o_rcpstat;
+static long o_pcprof_from, o_rcpstat; static bool o_rdpstat;
 static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
 static bool o_pad_load = true;          // PAD.., PAD_MASH are to be read (at the start, and again by a run from a checkpoint)
@@ -347,6 +347,7 @@ static void opts_load()
     o_pctop = getenv("PCTOP") ? atol(getenv("PCTOP")) : 0;
     o_pcprof = getenv("PCPROF") != nullptr; o_pcprof_from = getenv("PCPROF_FROM") ? atol(getenv("PCPROF_FROM")) : 0;
     o_rcpstat = getenv("RCPSTAT") ? atol(getenv("RCPSTAT")) : 0;
+    o_rdpstat = getenv("RDPSTAT") != nullptr;
     o_rcp_ilo = o_rcp_ihi = 0;
     if (ck_run) { o_pad_load = true; o_ailog = nullptr; o_ailog_load = true; }
     if (const char *e = getenv("RCPSTAT_IDLE")) { o_rcp_ilo = strtoul(e, 0, 0); o_rcp_ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : o_rcp_ilo + 8; }
@@ -1451,15 +1452,36 @@ int main(int argc, char **argv)
             // time the RDP was not idle (a command under way or waiting), the RDP's full syncs (a frame each), and the CPU's
             // time outside the game's idle loop (the range of its pc)
             if (o_rcpstat) {
-                static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
+                static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last; static long rdp_cls[6], rdp_chg, rdp_pw;
                 n_cyc++;
                 if (t->rsp_stat & 1) rsp_run++;
                 if (!t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle) rdp_busy++;
+#ifndef NO_RDPSTAT      // (a build with the pace off, rdp_top PACE=0, has no debt to count)
+                if (o_rdpstat) {
+                    // RDPSTAT=1 (with RCPSTAT): what the RDP did in the window, by class of the command under way, and the console's
+                    // pace (rdp_top PACE): the clocks charged, the clocks a command or the SYNC FULL waited for the debt
+                    auto &r = *t->rootp;
+                    const unsigned op = (r.soc_sim_top__DOT__soc__DOT__rdp__DOT__w0 >> 24) & 63;
+                    const int c = (op >= 8 && op <= 15) ? 0 : (op == 0x24 || op == 0x25) ? 1 : op == 0x36 ? 2
+                                : (op == 0x30 || op == 0x33 || op == 0x34) ? 3 : (op >= 0x26 && op <= 0x29) ? 4 : 5;
+                    if (r.soc_sim_top__DOT__soc__DOT__rdp__DOT__busy_exec) rdp_cls[c]++;
+                    rdp_chg += r.soc_sim_top__DOT__soc__DOT__rdp__DOT__pace_c + (r.soc_sim_top__DOT__soc__DOT__rdp__DOT__pace_rv ? r.soc_sim_top__DOT__soc__DOT__rdp__DOT__pace_r : 0);
+                    if (r.soc_sim_top__DOT__soc__DOT__rdp__DOT__pace_d > 0 || r.soc_sim_top__DOT__soc__DOT__rdp__DOT__pace_rv) {
+                        const unsigned st = r.soc_sim_top__DOT__soc__DOT__rdp__DOT__st;
+                        if ((st == 0 && r.soc_sim_top__DOT__soc__DOT__rdp__DOT__exec_go) || st == 14 || (st == 7 && r.soc_sim_top__DOT__soc__DOT__rdp__DOT__exec_go)) rdp_pw++;
+                    }
+                }
+#endif
                 if (o_rcp_ihi && t->cpu_pc >= o_rcp_ilo && t->cpu_pc < o_rcp_ihi) cpu_idle++;
                 if (frames != f_last && frames % o_rcpstat == 0) {
                     if (f_last >= 0)
                         printf("[rcpstat field %ld: %.2f ms; RSP running %.2f ms, RDP busy %.2f ms, %u full syncs, CPU busy %.2f ms]\n", frames, n_cyc / TB_SYS_KHZ,
                                rsp_run / TB_SYS_KHZ, rdp_busy / TB_SYS_KHZ, (unsigned)(t->rdp_sync - sync_last), (n_cyc - cpu_idle) / TB_SYS_KHZ);
+                    if (o_rdpstat && f_last >= 0)
+                        printf("[rdpstat field %ld: RDP clocks by the command under way: triangles %ld, texture rectangles %ld, fill rectangles %ld, loads %ld, syncs %ld, others %ld; the pace charged %ld, waited %ld]\n",
+                               frames, rdp_cls[0], rdp_cls[1], rdp_cls[2], rdp_cls[3], rdp_cls[4], rdp_cls[5], rdp_chg, rdp_pw);
+                    for (long &x : rdp_cls) x = 0;
+                    rdp_chg = rdp_pw = 0;
                     rsp_run = rdp_busy = cpu_idle = n_cyc = 0; sync_last = t->rdp_sync;
                 }
                 f_last = frames;
