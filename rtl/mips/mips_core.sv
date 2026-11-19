@@ -135,7 +135,10 @@
 
 // (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
 // and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
-(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
+// (and the multiplexers restructured, the whole CPU's: the project holds MUX_RESTRUCTURE off at mips_sys, for the CPU's clock -- the paths of the
+// pipeline's advance, the fetch's address and the forwarding did not close with it -- and an attribute of the module is the more specific assignment.
+// One attribute string: only the last of several is taken)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module mips_core #(
     parameter int TLB_N = 32,               // the VR4300's; in a RAM, so the count costs no logic
     // 0: no TLB -- as if it never held a valid entry: a mapped access takes
