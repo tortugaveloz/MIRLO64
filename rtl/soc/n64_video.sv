@@ -294,10 +294,11 @@ wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // {R[2:1], G[2:1], B[2] of the low three bits of its channels, the 3-bit check of its 5551 word}: a word of it serves two colour words,
 // and is read before the first of each pair (and before a row's first word, if that is the second of its pair). A pixel whose byte's
 // check is its word's CRC-3 takes the shadow's low bits (the bit missing repeats the one above it), else the top three bits of each
-// channel again (the plain expansion). The 18 bits (a pixel's nine) ride in the FIFO word, above the hidden bits. Not for a woven frame (a
+// channel again (the plain expansion). A pixel's six bits -- whether its byte's check is its word's, and the byte's five others -- ride in the
+// FIFO word, above the hidden bits; the vid side forms the nine. Not for a woven frame (a
 // serrated 640 x 480 picture): its 307,200 words a frame would be more than the scan-out is sure of; it is shown as a 16-bit picture is
 // without the plane.
-localparam int FW = 56;
+localparam int FW = 50;
 logic        sh_f;                  // the frame's pictures has its shadow words read
 logic        s_next;                // the next read is a shadow word (after the group's hidden word)
 logic [31:0] sreg;                  // the shadow word that came back last
@@ -312,9 +313,13 @@ function automatic logic [2:0] sh_crc(input logic [15:0] w);            // lang/
     end
     return c;
 endfunction
-// a pixel's nine low bits: the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
-function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [7:0] s);
-    return (s[2:0] == sh_crc(c)) ? {s[7], s[6], s[6], s[5], s[4], s[4], s[3], s[3], s[3]} : {c[15:13], c[10:8], c[5:3]};
+// a pixel's shadow bits as the FIFO carries them: whether the byte's check is the colour's, and the byte's other five bits
+function automatic logic [5:0] sh_ok(input logic [15:0] c, input logic [7:0] s);
+    return {s[2:0] == sh_crc(c), s[7:3]};
+endfunction
+// ... and the pixel's nine low bits (vid side): the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
+function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [5:0] q);
+    return q[5] ? {q[4], q[3], q[3], q[2], q[1], q[1], q[0], q[0], q[0]} : {c[15:13], c[10:8], c[5:3]};
 endfunction
 logic        h_next;                // the next read is the group's hidden word
 logic [31:0] hreg;
@@ -389,11 +394,11 @@ always_ff @(posedge clk) begin
 end
 // (a registered stage in front of the FIFO, with the epoch of the word's arrival)
 logic        f_we, f_ep;
-logic [54:0] f_wd;
+logic [48:0] f_wd;
 // (the colour word's pixels, the left one in rd_w's low half, and its bytes of the shadow word: the pair's first word's are the upper two,
 // the left pixel's first)
 wire  [15:0] f_sb = tq_h[0] ? sreg[15:0] : sreg[31:16];
-wire  [17:0] f_lo = {sh_lo(rd_w[31:16], f_sb[7:0]), sh_lo(rd_w[15:0], f_sb[15:8])};
+wire  [11:0] f_lo = {sh_ok(rd_w[31:16], f_sb[7:0]), sh_ok(rd_w[15:0], f_sb[15:8])};
 always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3] && !tq_h[5]; f_wd <= {tq_h[4], f_lo, h_nib, rd_w}; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
@@ -487,7 +492,7 @@ wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : px32_v ? p32_hi : wpos ? 
 logic [1:0] dbl_s, o32_s;
 always_ff @(posedge clk_vid) begin dbl_s <= {dbl_s[0], vi_deblur}; o32_s <= {o32_s[0], vi_out32}; end
 wire [8:0]  nx_lo  = !(nv && hd_ok) || flush || !o32_s[1] ? 9'd0 : px32_v ? {f_q[10:8], f_q[2:0], f_q[26:24]}
-                   : sh_v ? (wpos ? f_q[53:45] : f_q[44:36]) : 9'd0;
+                   : sh_v ? (wpos ? sh_lo(f_q[31:16], f_q[47:42]) : sh_lo(f_q[15:0], f_q[41:36])) : 9'd0;
 wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : px32_v ? f_q[22:21] : wpos ? f_q[35:34] : f_q[33:32];
 wire        nx_pv  = nv && hd_ok && !flush;
 
