@@ -624,8 +624,10 @@ function automatic logic [7:0] med3(input logic [7:0] a, b, c);
     ba = b < a; ca = c < a; cb = c < b;
     return ({8{ba ^ ca}} & a) | ({8{!ba ^ cb}} & b) | ({8{ca ^ cb}} & c);
 endfunction
-wire [23:0] dl = fv[2] ? fa2 : fa1, dr = fv[0] ? fa0 : fa1;
-wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);
+// (a neighbour that is not in the picture counts as the centre, and the median of the centre twice and any value is the centre: such a pixel
+// is left as it is, with no choice in front of the median)
+wire [23:0] dl = fa2, dr = fa0;
+wire        dv_px = dv_on && fv[0] && fv[1] && fv[2] && (fe[0] || fe[1] || fe[2]);
 logic [23:0] pq;
 always_ff @(posedge clk_vid) if (ce && adv)
     pq <= dv_px ? {med3(dl[23:16], fa1[23:16], dr[23:16]), med3(dl[15:8], fa1[15:8], dr[15:8]), med3(dl[7:0], fa1[7:0], dr[7:0])} : fa1;
