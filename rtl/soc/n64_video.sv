@@ -603,7 +603,7 @@ function automatic logic [7:0] ddch(input logic [4:0] c, input logic [39:0] n, i
         dn = dn + {3'd0, v[i] && n[5*i +: 5] < c};
     end
     o = {2'b0, c, 3'b0} + {6'd0, up} - {6'd0, dn};
-    return o[8] ? 8'hFF : o[7:0];                 // (above 255: 255; never below 0)
+    return o[7:0];                                // (8 c + up - dn is 0..248: up is 0 at c = 31, and 8 c + 8 at most below; dn is 0 at c = 0 and 8 at most above)
 endfunction
 wire [7:0]  rv = {wa[3][18], wa[2][18], wa[1][18], wc[3][18], wc[1][18], wb[3][18], wb[2][18], wb[1][18]};
 `define DDN(h) {wa[3][h -: 5], wa[2][h -: 5], wa[1][h -: 5], wc[3][h -: 5], wc[1][h -: 5], wb[3][h -: 5], wb[2][h -: 5], wb[1][h -: 5]}
