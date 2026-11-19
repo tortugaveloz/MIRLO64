@@ -46,7 +46,7 @@ int main(void)
 {
     uint32_t sr;
     __asm__ volatile("mfc0 %0, $12" : "=r"(sr));
-    sr |= 0x20000000u;                                   /* CU1 */
+    sr = (sr | 0x20000000u) & ~0x04000000u;             /* CU1, FR clear (a double is a pair of registers) */
     __asm__ volatile("mtc0 %0, $12; nop; nop" :: "r"(sr));
     for (unsigned i = 0; i < sizeof vec / sizeof vec[0]; i++) {
         uint64_t in[3] __attribute__((aligned(8))) = { vec[i].x, vec[i].y, 0 };

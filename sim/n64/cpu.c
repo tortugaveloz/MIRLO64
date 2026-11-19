@@ -85,12 +85,18 @@ static void f2d(float v, uint32_t *lo, uint32_t *hi)   /* float -> a double's bi
     *lo = m << 29;
 }
 
+/* Status.FR (bit 26) set: 32 registers of 64 bits -- a double is one register, in any number, its upper word in fh[]; the lower words
+ * are the same f[] as FR=0's (mfc1, mtc1, lwc1, swc1 and the singles do not see the bit). Clear: the 16 even / odd pairs. A double's
+ * words, wherever they are: dw_lo / dw_hi give the places of register i's lower and upper word */
+#define FR1(c) (((c)->cop0[C0_STATUS] >> 26) & 1u)
+static uint32_t *dw_lo(n64_cpu_t *c, int i) { return FR1(c) ? &c->f[i] : &c->f[i & ~1]; }
+static uint32_t *dw_hi(n64_cpu_t *c, int i) { return FR1(c) ? &c->fh[i] : &c->f[i | 1]; }
 static float fs_get(n64_cpu_t *c, int i) { fu_t u = { .u = c->f[i] }; return u.f; }
 static void  fs_set(n64_cpu_t *c, int i, float v) { fu_t u = { .f = v }; c->f[i] = u.u; }
-static float fpd_get(n64_cpu_t *c, int i) { i &= ~1; return d2f(c->f[i], c->f[i + 1]); }
-static void  fpd_set(n64_cpu_t *c, int i, float v) { i &= ~1; f2d(v, &c->f[i], &c->f[i + 1]); }
-static int64_t fl_get(n64_cpu_t *c, int i) { i &= ~1; return (int64_t)((uint64_t)c->f[i + 1] << 32 | c->f[i]); }
-static void    fl_set(n64_cpu_t *c, int i, int64_t v) { i &= ~1; c->f[i] = (uint32_t)v; c->f[i + 1] = (uint32_t)((uint64_t)v >> 32); }
+static float fpd_get(n64_cpu_t *c, int i) { return d2f(*dw_lo(c, i), *dw_hi(c, i)); }
+static void  fpd_set(n64_cpu_t *c, int i, float v) { f2d(v, dw_lo(c, i), dw_hi(c, i)); }
+static int64_t fl_get(n64_cpu_t *c, int i) { return (int64_t)((uint64_t)*dw_hi(c, i) << 32 | *dw_lo(c, i)); }
+static void    fl_set(n64_cpu_t *c, int i, int64_t v) { *dw_lo(c, i) = (uint32_t)v; *dw_hi(c, i) = (uint32_t)((uint64_t)v >> 32); }
 
 static float fround(float x, int rm)   /* FCR31 rounding modes */
 {
@@ -261,10 +267,10 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
             int dbl = fmt == 0x11;
             if (dbl && n64_fpd64) {                                                 /* (the doubles fpd64.h does: raw pairs, no float) */
                 uint32_t fn = insn & 63;
-                uint64_t dx = (uint64_t)c->f[fs | 1] << 32 | c->f[fs & ~1], dy = (uint64_t)c->f[ft | 1] << 32 | c->f[ft & ~1], dr;
+                uint64_t dx = (uint64_t)fl_get(c, fs), dy = (uint64_t)fl_get(c, ft), dr;
                 if (fn <= 2 || fn == 5 || fn == 7) {
                     dr = fn == 0 ? fpd_add(dx, dy, 0) : fn == 1 ? fpd_add(dx, dy, 1) : fn == 2 ? fpd_mul(dx, dy) : fn == 5 ? fpd_abs(dx) : fpd_neg(dx);
-                    c->f[fd & ~1] = (uint32_t)dr; c->f[fd | 1] = (uint32_t)(dr >> 32);
+                    fl_set(c, fd, (int64_t)dr);
                     break;
                 }
                 if (fn >= 0x30) {
@@ -293,7 +299,7 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
             case 0x04: res = fres(sqrtf(x), sqrt((double)x)); break;
             case 0x05: res = canon(fabsf(x)); break;
             case 0x06:                                                              /* mov: raw (.d: the pair) */
-                if (dbl) { c->f[fd & ~1] = c->f[fs & ~1]; c->f[fd | 1] = c->f[fs | 1]; }
+                if (dbl) { uint32_t l = *dw_lo(c, fs), h = *dw_hi(c, fs); *dw_lo(c, fd) = l; *dw_hi(c, fd) = h; }
                 else c->f[fd] = c->f[fs];
                 goto fpu_done;
             case 0x07: res = canon(-x); break;
@@ -313,7 +319,7 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
                 if (f >= 0x30) {                                                    /* c.cond */
                     int un, eq, lt;
                     if (dbl) {                                                      /* the doubles' own 64 bits */
-                        uint64_t xb = (uint64_t)c->f[(fs & ~1) + 1] << 32 | c->f[fs & ~1], yb = (uint64_t)c->f[(ft & ~1) + 1] << 32 | c->f[ft & ~1];
+                        uint64_t xb = (uint64_t)fl_get(c, fs), yb = (uint64_t)fl_get(c, ft);
                         double dx, dy;
                         memcpy(&dx, &xb, 8); memcpy(&dy, &yb, 8);
                         un = dx != dx || dy != dy; eq = dx == dy; lt = dx < dy;

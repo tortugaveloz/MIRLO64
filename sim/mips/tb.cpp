@@ -255,6 +255,7 @@ int main(int argc, char **argv)
         uint64_t tval = top->tr_val;
         int fwe_e = top->tr_fwe_even, fwe_o = top->tr_fwe_odd, fk = top->tr_fwidx;
         uint32_t fwd_e = top->tr_fweven, fwd_o = top->tr_fwodd, fcr = top->tr_fcr31;
+        int fwe_h = top->tr_fwe_hi, fkh = top->tr_fwidx_hi; uint32_t fwd_h = top->tr_fwhi;
 #ifdef TB_RTL_TLB
         static const bool ulog = getenv("TB_UTLBLOG") != nullptr;      // TB_UTLBLOG=1: the TLB's writes and the micro-TLBs' changes, by cycle
         int u_we = top->rootp->mips_core__DOT__tlb_we, u_wa = top->rootp->mips_core__DOT__tlb_waddr, u_inv = top->rootp->mips_core__DOT__tlb_inval;
@@ -293,10 +294,10 @@ int main(int argc, char **argv)
             // the FPU's writes (the trace is registered with the write, so it is this retire's)
             {
                 int k = fk;
-                if ((fwe_e && fwd_e != B.cpu.f[2 * k]) || (fwe_o && fwd_o != B.cpu.f[2 * k + 1]) || fcr != B.cpu.fcr31) {
-                    char w[160];
-                    snprintf(w, sizeof w, "FPU: f%d %08x/%08x f%d %08x/%08x fcr31 %08x/%08x (RTL/model; %08x: %08x)",
-                             2 * k, fwd_e, B.cpu.f[2 * k], 2 * k + 1, fwd_o, B.cpu.f[2 * k + 1],
+                if ((fwe_e && fwd_e != B.cpu.f[2 * k]) || (fwe_o && fwd_o != B.cpu.f[2 * k + 1]) || (fwe_h && fwd_h != B.cpu.fh[fkh]) || fcr != B.cpu.fcr31) {
+                    char w[200];
+                    snprintf(w, sizeof w, "FPU: f%d %08x/%08x f%d %08x/%08x upper f%d %08x/%08x fcr31 %08x/%08x (RTL/model; %08x: %08x)",
+                             2 * k, fwd_e, B.cpu.f[2 * k], 2 * k + 1, fwd_o, B.cpu.f[2 * k + 1], fkh, fwd_h, B.cpu.fh[fkh],
                              fcr, B.cpu.fcr31, tpc, tinsn);
                     bad = check_fail(w);
                     break;
