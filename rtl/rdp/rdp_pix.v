@@ -419,19 +419,20 @@ module rdp_pix (
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [3:0]  sb_wa;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
-    (* ramstyle = "M10K, no_rw_check" *) reg [71:0] sb_ram [0:15];
-    reg  [71:0] sb_q;
+    // (the shade's channels are bytes -- sh_x saturates them -- so their ninth bits are not kept)
+    (* ramstyle = "M10K, no_rw_check" *) reg [67:0] sb_ram [0:15];
+    reg  [67:0] sb_q;
     always @(posedge clk) begin
-        sb_ram[sb_wa] <= {hp0, x0, bs0, shade0, depth_c, cvg0, y0};
+        sb_ram[sb_wa] <= {hp0, x0, bs0, shade0[34:27], shade0[25:18], shade0[16:9], shade0[7:0], depth_c, cvg0, y0};
         sb_q <= sb_ram[sb_ra];
         sb_wa <= sb_wa + 4'd1;
     end
-    wire [9:0]  x8b     = sb_q[70:61];
-    wire        hp8b    = sb_q[71];
+    wire [9:0]  x8b     = sb_q[66:57];
+    wire        hp8b    = sb_q[67];
     // (the row's odd halfword, along with the pixel to the dither: the column is x - hp)
     reg         hp9, hp10a, hp10, hp11a, hp11, hp11b, hp12a, hp12, hp13a, hp13b;
-    wire        bs8b    = sb_q[60];
-    wire [35:0] shade8b = sb_q[59:24];
+    wire        bs8b    = sb_q[56];
+    wire [35:0] shade8b = {1'b0, sb_q[55:48], 1'b0, sb_q[47:40], 1'b0, sb_q[39:32], 1'b0, sb_q[31:24]};
     wire [17:0] depth8b = sb_q[23:6];
     wire [3:0]  cvg8b   = sb_q[5:2];
     wire [1:0]  y8b     = sb_q[1:0];
