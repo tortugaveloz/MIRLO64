@@ -38,7 +38,9 @@
 
 // (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
 // and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
-(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
+// (and the multiplexers restructured, the double unit's with it: the datapath takes an operation a state at a time and its registers one of several
+// sources; the project holds MUX_RESTRUCTURE off for the CPU's clock. One attribute string: only the last of several is taken)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module fpu_n64 #(
     parameter bit FAST = 0,
     parameter bit D64 = 0               // (FAST) add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d at double precision: fpu_d64
