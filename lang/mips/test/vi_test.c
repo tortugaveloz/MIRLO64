@@ -13,6 +13,8 @@
  *   3  V_INTR: the interrupt (MI_INTR's VI, Cause.IP2) reaches the game's handler once a field, at the half-line
  *      V_INTR names (the handler reads CURRENT: V_INTR/2 plus the latency), 8 fields in as many field periods
  *   4  a write to VI_CURRENT clears the interrupt (MI_INTR's VI bit, at once), and it comes back the next field
+ *   13 the console's lines are all as long: libultra's V_INTR 2 (the line 1) comes a line after CURRENT wraps to 0, not three
+ *      (osViInit waits for CURRENT to be 10 or less, and its caller has that long to register for the retrace)
  *   6  the TV system (rtl/soc/n64_video.sv, rcp_vi.sv): the scan-out's field is NTSC (59.94 Hz, 264 lines of the scan-out, the
  *      half-line counter's 262 lines) or PAL (50 Hz, 313 lines, 312). It starts as the CSR says (VIDEO_FRAMEBUFFER_WIDTH's bit
  *      18, the runtime's choice from the ROM's region), and once the game writes V_SYNC with a value that names a system (525:
@@ -168,6 +170,23 @@ __attribute__((section("migame"), noinline, used, optimize("O1", "no-jump-tables
         for (n = 0; n < 4000000u && !(mi[2] & 8u); n++) { }
         res[5] = mi[2];                             /* and back with the next field */
         vi[4] = 0;
+        mi[3] = 0x40;
+    } else if (phase == 13) {                       /* V_INTR = res[1] (2): Count from the wrap of CURRENT to the handler's run, res[2] times (res[100 + k]) */
+        vi[3] = res[1];
+        vi[4] = 0;
+        mi[3] = 0x80;
+        uint32_t st, k;
+        __asm__ volatile("mfc0 %0, $12" : "=r"(st));
+        __asm__ volatile("mtc0 %0, $12" :: "r"(st | 0x401u));
+        for (k = 0; k < res[2]; k++) {
+            uint32_t t0, n0 = res[35];
+            while ((vi[4] >> 1) <= 100u) { }                                  /* (past the middle of the field) */
+            while ((vi[4] >> 1) > 4u) { }                                     /* the wrap: the line 0 */
+            __asm__ volatile("mfc0 %0, $9" : "=r"(t0));
+            for (n = 0; n < 4000000u && res[35] == n0; n++) { }
+            res[100 + k] = res[80 + (n0 & 15u)] - t0;                         /* (the handler's Count, from this run's slot) */
+        }
+        __asm__ volatile("mtc0 %0, $12" :: "r"(st));
         mi[3] = 0x40;
     } else if (phase == 12) {                       /* V_SYNC = res[1] */
         vi[6] = res[1];
@@ -350,6 +369,17 @@ int main(void)
     check("VI cleared by the store to VI_CURRENT, at once", RES[3] & 8u, 0u);
     check("Cause.IP2 down", (RES[4] >> 10) & 1u, 0u);
     check("VI back with the next field", RES[5] & 8u, 8u);
+
+    /* 4b: V_INTR 2, the line 1, comes a line (63.6 us, 2979 Count ticks) after the counter wraps to the line 0 */
+    for (int i = 32; i < 128; i++) RES[i] = 0;
+    game(13, 2u, 6u);
+    {
+        uint32_t lo = ~0u, hi = 0;
+        for (uint32_t k = 0; k < 6; k++) { uint32_t d = RES[100 + k]; if (d < lo) lo = d; if (d > hi) hi = d; }
+        puts_("the wrap to the line 1's interrupt: Count ticks "); puthex(lo); puts_(".."); puthex(hi); puts_("\n");
+        check_range("V_INTR 2: a line after the wrap (one line is 2979 ticks), not three", lo, 2400u, 3600u);
+        check_range("... every time", hi, 2400u, 3600u);
+    }
 
     /* 5: ORIGIN and a hi-res pair, for the bench's VITRACE (no self-check: the scan-out's base is not a register) */
     game(9, 0, 0);
