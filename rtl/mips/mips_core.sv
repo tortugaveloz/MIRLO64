@@ -133,6 +133,9 @@
 //    Nothing the caches' tags say reaches the pipeline's advance.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
 module mips_core #(
     parameter int TLB_N = 32,               // the VR4300's; in a RAM, so the count costs no logic
     // 0: no TLB -- as if it never held a valid entry: a mapped access takes

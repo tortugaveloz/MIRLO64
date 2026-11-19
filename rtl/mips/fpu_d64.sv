@@ -27,6 +27,9 @@
 // acc, 57 bits: [56] carry, [55] the hidden bit of a normal number, [54:3] the fraction, [2] guard, [1] round, [0] sticky.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
 module fpu_d64 (
     input  wire         clk,
     input  wire         rst,

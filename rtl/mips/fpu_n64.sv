@@ -36,6 +36,9 @@
 // to an integer round a cycle after they shift.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
 module fpu_n64 #(
     parameter bit FAST = 0,
     parameter bit D64 = 0               // (FAST) add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d at double precision: fpu_d64
