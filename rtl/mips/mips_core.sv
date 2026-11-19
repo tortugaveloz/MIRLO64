@@ -1231,7 +1231,6 @@ wire [65:0]  dv_t   = {1'b0, dv_x} + dv_y + 66'(!dv_neg);
 wire         dv_ok  = !dv_t[65];                             // the remainder so far has the divisor in it
 wire         dv_nneg = md_ph == DV_Q ? md_nr ^ dv_neg : md_nr;
 wire [63:0]  dv_nin = md_ph == DV_R ? md_r : {md_ah, md_ma};
-wire [63:0]  dv_n   = (dv_nin ^ {64{dv_nneg}}) + 64'(dv_nneg);
 // which words of HI and LO are not 32-bit values (the upper word is not the lower word's sign)
 wire         lo_isw = lo_up != {32{lo_r[31]}}, hi_isw = hi_up != {32{hi_r[31]}}, mt_isw = md_ah != {32{md_ma[31]}};
 // =============================================================== M
@@ -1353,7 +1352,10 @@ wire         dv_32  = XDIV && (m_c.md == MD_DIV || m_c.md == MD_DIVU);
 wire         dv_s32 = m_c.md == MD_DIV;
 wire [63:0]  dv_a   = dv_32 ? {{32{dv_s32 && m_a_lo[31]}}, m_a_lo} : m_a64;
 wire         dv_as  = (m_c.md == MD_DIV || m_c.md == MD_DDIV) && dv_a[63];     // the dividend is negative
-wire [63:0]  dv_an  = (dv_a ^ {64{dv_as}}) + 64'(dv_as);
+// (one negator: the dividend's magnitude as a divide starts is taken while no divide is under way (md_dvon clear), the quotient's and the
+// remainder's sign changes while one is: the two never meet)
+wire [63:0]  dv_n   = ((md_dvon ? dv_nin : dv_a) ^ {64{md_dvon ? dv_nneg : dv_as}}) + 64'(md_dvon ? dv_nneg : dv_as);
+wire [63:0]  dv_an  = dv_n;
 wire [31:0]  m_xha = m_a_hx ^ {32{m_a_lo[31]}};
 wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_st_hx ^ {32{m_st_lo[31]}};
 // (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
