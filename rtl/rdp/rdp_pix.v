@@ -876,10 +876,15 @@ module rdp_pix (
         input [5:0] ws, wt;
         reg signed [9:0]  e1, e2;
         reg signed [16:0] acc;
+        reg signed [19:0] r;
         begin
             e1 = e1v; e2 = e2v;
             acc = e1 * $signed({1'b0, ws}) + e2 * $signed({1'b0, wt}) + 17'sd16;
-            tri3 = clamp8($signed({12'd0, x}) + (acc >>> 5));
+            // (no clamp: where the filter's result is taken, ws + wt <= 32 -- the weights are those of the triangle the fractions are in -- so it is
+            // a rounded mean of three bytes, x (32 - ws - wt) + A ws + B wt over 32, within 0..255; where it is not taken -- the point and the
+            // converted passes -- it is not used)
+            r = $signed({12'd0, x}) + (acc >>> 5);
+            tri3 = r[7:0];
         end
     endfunction
     wire [31:0] filt9 = { tri3(ta8b[31:24], e1v8b[39:30], e2v8b[39:30], ws8b, wt8b),
