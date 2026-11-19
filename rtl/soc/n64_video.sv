@@ -550,33 +550,7 @@ always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], v
 assign aa_on = aa_s[1] && N64FB && !nofilt_v && !dbl_s[1];     // (Deblur: no anti-alias, no divot -- dv_on follows aa_on)
 assign dd_on = dd_s[1] && N64FB && !nofilt_v && !o32_s[1];     // (32-bit: no dedither)
 assign dv_on = dv_s[1] && aa_on;
-function automatic logic one6(input logic [5:0] x);               // exactly one of six
-    return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
-endfunction
-// second smallest and second largest of six, by rank: each pair compared once (15 compares; equal values in the order
-// of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one
-function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
-    logic [4:0] v [6];
-    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
-    logic [4:0] lo, hi;
-    v[0] = a; v[1] = b; v[2] = c; v[3] = d; v[4] = e; v[5] = f;
-    for (int i = 0; i < 6; i++) begin
-        bf[i] = 6'd0;
-        for (int j = i + 1; j < 6; j++) bf[i][j] = v[j] < v[i];
-    end
-    for (int i = 0; i < 6; i++)
-        for (int j = 0; j < i; j++) bf[i][j] = !bf[j][i];
-    for (int i = 0; i < 6; i++) begin
-        af[i] = ~bf[i];
-        af[i][i] = 1'b0;
-    end
-    lo = 5'd0; hi = 5'd0;
-    for (int i = 0; i < 6; i++) begin
-        if (one6(bf[i])) lo = lo | v[i];
-        if (one6(af[i])) hi = hi | v[i];
-    end
-    return {lo, hi};
-endfunction
+// second smallest and second largest of six: vi_mm2 (below)
 function automatic logic [7:0] pen(input logic [4:0] c, input logic [2:0] lo, input logic [9:0] m, input logic [2:0] w);
     logic [4:0] mn, mx;
     logic signed [6:0] d;
@@ -599,9 +573,10 @@ wire [8:0]  clo = wl[2];
 wire [2:0]  cw  = ~{ctr[0], ctr[17:16]};        // 7 - the coverage
 wire [14:0] n0 = tap(wa[1], ctr), n1 = tap(wa[3], ctr), n2 = tap(wc[0], ctr),
             n3 = tap(wc[4], ctr), n4 = tap(wb[1], ctr), n5 = tap(wb[3], ctr);
-wire [9:0]  mr = mm2(n0[14:10], n1[14:10], n2[14:10], n3[14:10], n4[14:10], n5[14:10]);
-wire [9:0]  mg = mm2(n0[9:5],   n1[9:5],   n2[9:5],   n3[9:5],   n4[9:5],   n5[9:5]);
-wire [9:0]  mb = mm2(n0[4:0],   n1[4:0],   n2[4:0],   n3[4:0],   n4[4:0],   n5[4:0]);
+wire [9:0]  mr, mg, mb;
+vi_mm2 mm_r (.a(n0[14:10]), .b(n1[14:10]), .c(n2[14:10]), .d(n3[14:10]), .e(n4[14:10]), .f(n5[14:10]), .r(mr));
+vi_mm2 mm_g (.a(n0[9:5]),   .b(n1[9:5]),   .c(n2[9:5]),   .d(n3[9:5]),   .e(n4[9:5]),   .f(n5[9:5]),   .r(mg));
+vi_mm2 mm_b (.a(n0[4:0]),   .b(n1[4:0]),   .c(n2[4:0]),   .d(n3[4:0]),   .e(n4[4:0]),   .f(n5[4:0]),   .r(mb));
 wire        aa_px = aa_on && ctr[18] && !complete(ctr);
 // a 5551 / 565 pixel as R8 G8 B8. The N64's VI takes a 5551 channel as its
 // five bits << 3 (the console's VI_lineProcess, angrylion's & 0xf8: white is
@@ -730,5 +705,53 @@ always_ff @(posedge clk_vid) begin
     vga_woven <= wv_v;
 end
 
+endmodule
+
+// The second smallest and the second largest of six 5-bit values {lo, hi}, by rank: each pair compared once (15 compares; equal values
+// in the order of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one.
+// A compare is two LUTs, the low three bits' (a six-input LUT, kept as a node of its own) and that with the top two: left to the
+// synthesis a `<` of five bits took four (a carry chain's, or two four-input LUTs and a third).
+module vi_mm2 (
+    input  wire [4:0] a, b, c, d, e, f,
+    output wire [9:0] r
+);
+    wire [4:0] v [6];
+    assign v[0] = a; assign v[1] = b; assign v[2] = c; assign v[3] = d; assign v[4] = e; assign v[5] = f;
+    (* keep *) wire [14:0] lw;                      // the compare (i, j), j > i: v[j] < v[i] on the low three bits
+    wire [14:0] lt;                                 // ... and on all five
+    function automatic int cx(input int i, input int j);     // the pair (i, j)'s place, j > i
+        return i * 6 - i * (i + 1) / 2 + (j - i - 1);
+    endfunction
+    genvar gi, gj;
+    generate for (gi = 0; gi < 6; gi++) begin : ci
+        for (gj = gi + 1; gj < 6; gj++) begin : cj
+            wire [4:0] x = v[gj], y = v[gi];
+            assign lw[cx(gi, gj)] = (~x[2] & y[2]) | (~(x[2] ^ y[2]) & ((~x[1] & y[1]) | (~(x[1] ^ y[1]) & ~x[0] & y[0])));
+            assign lt[cx(gi, gj)] = (x[4:3] < y[4:3]) | ((x[4:3] == y[4:3]) & lw[cx(gi, gj)]);
+        end
+    end endgenerate
+    function automatic logic one6(input logic [5:0] x);               // exactly one of six
+        return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
+    endfunction
+    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
+    logic [4:0] lo, hi;
+    always_comb begin
+        for (int i = 0; i < 6; i++) begin
+            bf[i] = 6'd0;
+            for (int j = i + 1; j < 6; j++) bf[i][j] = lt[cx(i, j)];
+        end
+        for (int i = 0; i < 6; i++)
+            for (int j = 0; j < i; j++) bf[i][j] = !bf[j][i];
+        for (int i = 0; i < 6; i++) begin
+            af[i] = ~bf[i];
+            af[i][i] = 1'b0;
+        end
+        lo = 5'd0; hi = 5'd0;
+        for (int i = 0; i < 6; i++) begin
+            if (one6(bf[i])) lo = lo | v[i];
+            if (one6(af[i])) hi = hi | v[i];
+        end
+    end
+    assign r = {lo, hi};
 endmodule
 `default_nettype wire
