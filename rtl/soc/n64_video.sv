@@ -552,12 +552,14 @@ assign dd_on = dd_s[1] && N64FB && !nofilt_v && !o32_s[1];     // (32-bit: no de
 assign dv_on = dv_s[1] && aa_on;
 // second smallest and second largest of six: vi_mm2 (below)
 function automatic logic [7:0] pen(input logic [4:0] c, input logic [2:0] lo, input logic [9:0] m, input logic [2:0] w);
-    logic [4:0] mn, mx;
+    logic signed [5:0] d1, d2;
     logic signed [6:0] d;
     logic signed [10:0] o;
-    mn = m[9:5] < c ? m[9:5] : c;
-    mx = m[4:0] > c ? m[4:0] : c;
-    d = $signed({2'b0, mn}) + $signed({2'b0, mx}) - $signed({1'b0, c, 1'b0});
+    // (mn + mx - 2c, mn = min(m[9:5], c) and mx = max(m[4:0], c): each one's step from c, taken where it is a step down / up, the sign of
+    // its difference from c -- one subtraction in place of a compare and a choice)
+    d1 = $signed({1'b0, m[9:5]}) - $signed({1'b0, c});
+    d2 = $signed({1'b0, m[4:0]}) - $signed({1'b0, c});
+    d = (d1[5] ? {d1[5], d1} : 7'sd0) + (d2[5] ? 7'sd0 : {1'b0, d2});
     o = $signed({3'b0, c, lo}) + d * $signed({1'b0, w});
     return o[7:0];
 endfunction
