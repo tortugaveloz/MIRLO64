@@ -234,7 +234,7 @@ always_ff @(posedge clk) begin vi_line <= s_line[2] ^ s_line[1]; vi_frame <= s_f
 
 // ------------------------------------------------------------------ sys: DMA
 logic        epoch_sys, running;
-logic [9:0]  issued, got;          // (the reads in flight are their difference)
+logic [9:0]  infl;                 // the reads in flight (issued less come back kept: a count of its own, not their two counts' difference)
 // the picture, latched at the boundary: its rows, their pitch, the steps from one to the next, and what the vid side
 // draws it with (the window and the X_SCALE: static for the frame)
 logic        all;
@@ -326,7 +326,7 @@ wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
 wire         m_shd = !h_next && s_next;
 always_ff @(posedge clk) begin
-    if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
+    if (rst) begin epoch_sys <= 0; running <= 0; infl <= 0; drop <= 0;
                    col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; wv_f <= 0; end
     else begin
         if (fb_sys) begin
@@ -347,19 +347,16 @@ always_ff @(posedge clk) begin
             // (a 32-bit picture's coverage is in its own words: no hidden plane)
             hid_f <= vi_aa && !hires && N64FB && !px32_n;
             sh_f <= vi_out32 && N64FB && !px32_n && !wv_rq;
-            issued <= 0; got <= 0; col <= 0;
-            drop <= issued - got - 10'(m_rvalid);
+            infl <= 0; col <= 0;
+            drop <= infl - 10'(m_rvalid);
             h_next <= vi_aa && !hires && N64FB && !px32_n;
             s_next <= vi_out32 && N64FB && !px32_n && !wv_rq;
         end else begin
             if (m_valid && m_ready && m_hid) begin
-                issued <= issued + 10'd1;
                 h_next <= 1'b0;
             end else if (m_valid && m_ready && m_shd) begin
-                issued <= issued + 10'd1;
                 s_next <= 1'b0;
             end else if (m_valid && m_ready) begin
-                issued <= issued + 10'd1;
                 rs_next <= 1'b0;
                 s_next <= sh_f && raddr[0];                  // (the next word is a pair's first)
                 raddr <= raddr + 24'd1;
@@ -375,7 +372,7 @@ always_ff @(posedge clk) begin
                     if (raddr[2:0] == 3'd7) h_next <= hid_f;   // the next word starts a group
                 end
             end
-            if (keep) got <= got + 10'd1;
+            infl <= infl + 10'(m_valid && m_ready) - 10'(keep);
             if (m_rvalid && drop != 0) drop <= drop - 10'd1;
         end
     end
@@ -402,7 +399,7 @@ always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3] && !tq_h[5]; f_w
 // (room and urgency registered: the FIFO's level must not reach the
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
 // the margin to 512 covers)
-wire [15:0] inflight = 16'(issued - got);                // (below 1024)
+wire [15:0] inflight = 16'(infl);                        // (below 1024)
 logic       room, low;
 always_ff @(posedge clk) room <= (16'(wlevel) + inflight) < 16'((1 << FAW) - 64);
 // urgent below a quarter of the FIFO -- at every frame's start, and wherever the other ports have left it behind: the CPU's and the
