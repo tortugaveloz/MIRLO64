@@ -1970,6 +1970,11 @@ always_ff @(posedge clk) begin
     end
 end
 
+// D -> E: the registers' upper words, cleared when the register is in flight (rf_ah, rf_bh: the register file's word, or zero)
+wire e_ld_d = !rst && !flush && e_adv;
+mips_ldr #(32) e_rah (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah), .q(e_ra_hx));
+mips_ldr #(32) e_rbh (.clk, .en(e_ld_d), .clr(!W64 || d_rt == 0 || inflight_rt), .d(rfq_bh), .q(e_rb_hx));
+
 // =============================================================== COP0's registers that only take values (mips_c0r, below)
 // Count, Compare, EntryHi, EntryLo0/1, Context, PageMask, EPC, ErrorEPC, BadVAddr and the monitor level's BadVAddr (COP0 22): what writes
 // them is found here, as enables in the order of precedence of the sequential block they were written in -- an exception's, mtc0's (it
@@ -2212,7 +2217,6 @@ always_ff @(posedge clk) begin
                 e_fb_m <= !d_c.b_imm && !(JT && d_c.br == B_JR) && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
                 e_fb_w <= !d_c.b_imm && !(JT && d_c.br == B_JR) && m_wr && m_c.rd == d_rt && d_rt != 0;
             end
-            e_ra_hx <= rf_ah; e_rb_hx <= rf_bh;
             e_aw <= rf_aw;
             e_hxeq <= (rf_aw && rf_bw) ? rfq_ah == rfq_bh : !rf_aw && !rf_bw;     // (a masked hx is zero)
             e_fexc <= d_fexc; e_fexc_code <= d_fexc_code;
@@ -2653,5 +2657,16 @@ always_ff @(posedge clk) begin
         end
     end
 end
+endmodule
+
+// A register with a clock enable and a synchronous clear: a stage's operand that is zeroed when its source is not the register file's
+// (MUX_RESTRUCTURE is on for this module alone of the core's: the clear is the register's own, not a gate on each bit's data)
+(* altera_attribute = "-name MUX_RESTRUCTURE ON" *)
+module mips_ldr #(parameter int W = 32) (
+    input  wire         clk, en, clr,
+    input  wire [W-1:0] d,
+    output logic [W-1:0] q
+);
+always_ff @(posedge clk) if (en) q <= clr ? '0 : d;
 endmodule
 `default_nettype wire
