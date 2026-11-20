@@ -15,6 +15,8 @@
  *      libultra's osFlash* drive it: the silicon ID by DMA (osFlashReadId), the status (osFlashReadStatus), a chip erase,
  *      a page written (osFlashWriteBuffer: the RDRAM into the page buffer by DMA; osFlashWriteArray; the program at
  *      osFlashClearStatus), read back by DMA (osFlashReadArray: devAddr page * 64), a sector erase
+ *      the PI's write latch (phase 5): a write to the ROM's bus, a read while it goes on returns its word, a second write is ignored,
+ *      and the ROM is read again when it is over
  *   5  the game's own lw / sw (from the RDRAM, MCTL.GAME, the pass-through on): no entry into the monitor for the ROM's and
  *      domain 2's words; an entry for the FlashRAM's command register (the runtime's) and for a half-word load (lh)
  * The source data is a pseudo-random pattern (lcg). */
@@ -128,6 +130,15 @@ __attribute__((section("pi2game"), noinline, used, optimize("O1"))) void pi2_gam
     __asm__ volatile("lh %0, 2(%1)" : "+r"(h) : "r"(0xB0000000u) : "memory");   /* a half-word: the monitor's */
     res[6] = h;
     *(volatile uint32_t *)0xA8010000u = 0xF0000000u;            /* the FlashRAM's command register: the monitor's */
+    /* the PI's write latch: a write to the cartridge's bus (the ROM ignores it) is asynchronous; while it goes on a read, of any
+     * address, returns its word and a second write is ignored */
+    res[11] = *(volatile uint32_t *)0xB0000004u;
+    *(volatile uint32_t *)0xB0000010u = 0xCAFEF00Du;
+    res[8] = *(volatile uint32_t *)0xB0000004u;
+    *(volatile uint32_t *)0xB0000020u = 0x11111111u;
+    res[9] = *(volatile uint32_t *)0xB0000008u;
+    for (volatile int i = 0; i < 400; i++) { }                  /* (the write is over) */
+    res[10] = *(volatile uint32_t *)0xB0000004u;
     res[7] = 1u;
 }
 extern const uint32_t __start_pi2game[], __stop_pi2game[];
@@ -347,6 +358,9 @@ int main(void)
         check("game: domain 2 written and read", RES[4], 0x12345678u);
         check("game: domain 2, KSEG0", RES[5], *(volatile uint32_t *)(uintptr_t)(LAYOUT_SAVE + 0x44u));
         check("game: the half-word load was the monitor's (rt left)", RES[6], 0xDEADu);
+        check("game: a read while a write to the cartridge goes on is its word", RES[8], 0xCAFEF00Du);
+        check("... a second write is ignored: the read after it is still the first's word", RES[9], 0xCAFEF00Du);
+        check("... and after it, the ROM's word again", RES[10], RES[11]);
         check("game: ran to its end", RES[7], 1u);
         check("monitor entries: the lh and the command", mr[2], 2u);
         check("... a load", mr[3], 1u);

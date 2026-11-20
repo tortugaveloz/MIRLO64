@@ -16,7 +16,7 @@ int main(void)
     int fails = 0;
     uint32_t sr;
     __asm__ volatile("mfc0 %0, $12" : "=r"(sr));
-    sr |= 0x20000000u;                                   /* CU1 */
+    sr = (sr | 0x20000000u) & ~0x04000000u;             /* CU1, FR clear (a double is a pair of registers) */
     __asm__ volatile("mtc0 %0, $12; nop; nop" :: "r"(sr));
     for (unsigned i = 0; i < sizeof vec / sizeof vec[0]; i++) {
         uint32_t lo, hi, f, in[2] = { vec[i].h, vec[i].l };

@@ -262,7 +262,7 @@ wire x_dpcr  = !x_addr[30] && x_addr[28:4] == 25'h41_0000;
 wire x_audio = 1'b0;
 wire x_tcm   = 1'b0;
 wire x_grom  = 1'b0;
-typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART } xst_t;
+typedef enum logic [4:0] { X_IDLE, X_REGS, X_REGD, X_AUDIO, X_TCM, X_TCMD, X_ACK, X_RSP, X_MON, X_MOND, X_MIW1, X_MIW2, X_VIR, X_VIW, X_PIF, X_PIFR, X_CART, X_PIR } xst_t;
 // the monitor level's memory (MIRLO_MON: mon_ram.sv): 2 KiB at 0xFFFF_8000
 wire x_mon = x_addr[31:11] == 21'h1FFFF0;
 logic [31:0] mon_rd;
@@ -290,6 +290,14 @@ wire x_psw = x_addr[31:26] == 6'b001100;
 wire x_psh = x_addr[31:21] == 11'h1a0;  // runtime-only raw access to save storage in PSRAM
 wire io_ps = x_psh || x_d2 || x_addr[25:20] < 6'd30;
 logic        d2_flash, io_ack;
+// The PI's write latch. A CPU write to the cartridge's bus is asynchronous: the PI latches the word and lets the CPU go on (the ROM
+// ignores the write), and while it lasts a further write is ignored and a read, of any address, returns the word being written.
+// It lasts a latency, two pulses and two releases of the bus's domain 1 (the ROM header's usual 64, 18 and 3 of the RCP's clock: 112
+// clocks, 1.8 us here).
+wire         x_rom_pi = x_rom && !x_psw && !x_psh;
+(* ramstyle = "M10K, no_rw_check" *) logic [31:0] pi_mem [0:1];      // (the word is in a block RAM, which the logic has no room for)
+logic [31:0] pi_q;
+logic [6:0]  pi_busy;
 logic [31:0] pa_dat_r /*verilator public_flat_rd*/;      // (the bridge's port's read data: below)
 wire  [23:0] io_adr = x_psh ? {5'd0, x_addr[20:2]} : (x_rom || x_psw) ? {x_addr[25:20] + (x_addr[25:20] < 6'd30 ? 6'd2 : 6'd35), x_addr[19:2]} : d2_flash ? 24'h05_8040 : {9'h00a, x_addr[16:2]};
 logic [31:0] mi_w_rd;
@@ -352,7 +360,11 @@ always_ff @(posedge clk) begin
         else if (x_ai) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_si) begin if (x_we) xs <= X_MIW1; else x_ack <= 1; end
         else if (x_pif) xs <= X_PIF;
-        else if (x_d2 || x_rom || x_psw || x_psh) begin if (x_we && ((x_rom && !x_psw && !x_psh) || (x_d2 && d2_flash) || (x_psw && !io_ps))) x_ack <= 1; else xs <= X_CART; end
+        else if (x_d2 || x_rom || x_psw || x_psh) begin
+            if (x_we && ((x_rom && !x_psw && !x_psh) || (x_d2 && d2_flash) || (x_psw && !io_ps))) x_ack <= 1;
+            else if (!x_we && x_rom_pi && pi_busy != 7'd0) xs <= X_PIR;           // (a read while a write goes on: its word, from the block RAM)
+            else xs <= X_CART;
+        end
         else if (x_grom) x_ack <= 1;
         else if (x_rsp || x_spr || x_sppc || x_dpcr) begin
             rx_wdata <= x_wdata; rx_we <= x_we; xs <= X_RSP;
@@ -370,6 +382,7 @@ always_ff @(posedge clk) begin
     X_PIF:  if (!si_busy) xs <= x_we ? X_MIW2 : X_PIFR;          // (the write is done in this cycle: rcp_si.sv's c_wr_s)
     X_PIFR: begin x_ack <= 1; xs <= X_IDLE; end
     X_CART: if (io_ack) begin x_ack <= 1; xs <= X_IDLE; end
+    X_PIR:  begin x_ack <= 1; xs <= X_IDLE; end
     X_VIW: xs <= X_MIW1;                            // (the write is done in this cycle: rcp_vi.sv's wr_s)
     X_MIW1: xs <= X_MIW2;
     X_MIW2: begin x_ack <= 1; xs <= X_IDLE; end
@@ -378,6 +391,12 @@ always_ff @(posedge clk) begin
     X_RSP:  if (rsp_x_go) begin x_ack <= 1; xs <= X_IDLE; end
     default: xs <= X_IDLE;
     endcase
+end
+always_ff @(posedge clk) begin
+    if (pi_busy != 7'd0) pi_busy <= pi_busy - 7'd1;
+    if (xs == X_IDLE && x_req && !x_ack && x_rom_pi && x_we && pi_busy == 7'd0) begin pi_mem[0] <= x_wdata; pi_busy <= 7'd111; end
+    pi_q <= pi_mem[0];
+    if (rst) pi_busy <= 7'd0;
 end
 // The read data, x_ack's: cpu_port takes it only with the ack, and only for a read (a store's ack carries nothing), so it is
 // loaded at every cycle with what the state answers -- the device's word in a read's last state, 0 where a read is answered
@@ -389,6 +408,7 @@ always_ff @(posedge clk)
     X_VIR:   x_rdata <= vi_rd;
     X_PIFR:  x_rdata <= si_q;
     X_CART:  x_rdata <= pa_dat_r;
+    X_PIR:   x_rdata <= pi_q;
     X_RSP:   x_rdata <= rsp_x_rdata;
     default: x_rdata <= r_rdata;                    // X_REGD's (X_AUDIO and X_TCMD are not reached: no audio core, no TCM)
     endcase

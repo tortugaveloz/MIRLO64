@@ -93,6 +93,8 @@ localparam bit CPU_FPD64 = 1'b1;
 `else
 localparam bit CPU_FPD64 = 1'b0;
 `endif
+// FR1: Status.FR as the VR4300 has it -- 32 FPU registers of 64 bits when it is set (mips_core's FR1: a bank of 32 upper words)
+localparam bit CPU_FR1 = 1'b1;
 // MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: the caches' lines (the VR4300's are 512
 // and 512: 16 KiB and 8 KiB; more are block RAM only: mips_core)
 // MIRLO_MON: mips_core's MON -- the monitor level and the game's own exception vector, for a game that
@@ -124,7 +126,7 @@ localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
 `ifndef MIRLO_CPU_DC_LOG2
 `define MIRLO_CPU_DC_LOG2 9
 `endif
-mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JT(1), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FPD64(CPU_FPD64), .FAST(CPU_FAST),
+mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JT(1), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FPD64(CPU_FPD64), .FR1(CPU_FR1), .FAST(CPU_FAST),
             .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
     .clk, .rst, .reset_pc(32'hBFC0_0000),
     .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_wrun(s_wrun),
@@ -132,7 +134,7 @@ mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .irq_rcp(irq), .irq_mon(irq_mon), .sn_t, .sn_line, .sn_hold,
     .tr_retire(), .tr_pc(), .tr_insn(), .tr_wr(), .tr_rd(), .tr_val(), .tr_exc(), .tr_exc_int(), .tr_exc_pc(),
-    .tr_exc_code(), .tr_fwe_even(), .tr_fwe_odd(), .tr_fwidx(), .tr_fweven(), .tr_fwodd(), .tr_fcr31(),
+    .tr_exc_code(), .tr_fwe_lo(), .tr_fwe_hi(), .tr_fwidx(), .tr_fwlo(), .tr_fwhi(), .tr_fcr31(),
     .dbg_pc, .dbg_cause, .dbg_status, .dbg_epc, .hwx_on
 );
 

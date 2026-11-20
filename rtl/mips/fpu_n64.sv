@@ -10,6 +10,11 @@
 //    exactly; a NaN result is 0x7FBFFFFF; arithmetic rounds to
 //    nearest even with an unbounded exponent, then flushes.
 //  - cvt.w / round / trunc / ceil / floor .w saturate (NaN: INT32_MAX).
+//  - The registers are 32 of 64 bits, a lower and an upper word each. FR1, with Status.FR set (COP0 register 12's bit 26): a
+//    double in fN is {upper[N], lower[N]}, any register; a single in fN is its lower word (mfc1, mtc1, lwc1, swc1 and the singles
+//    do not see the bit); a game compiled for it uses the odd registers for doubles, and its loads of a double's halves into a pair
+//    of registers (FR=0's idiom) are not a double here, as on the console. Status.FR clear: f[2k] is the lower word of register 2k
+//    and f[2k+1] its upper word, the pairs (a double is in an even register).
 //  - dmfc1 / dmtc1 move a 64-bit register through an even/odd pair; cvt.s.l /
 //    cvt.d.l convert the pair's 64-bit integer exactly (a word's by cvt.s.w's
 //    path, another by a shift of a bit a cycle); the conversions to .l are the
@@ -43,10 +48,12 @@
 (* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module fpu_n64 #(
     parameter bit FAST = 0,
-    parameter bit D64 = 0               // (FAST) add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d at double precision: fpu_d64
+    parameter bit D64 = 0,              // (FAST) add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d at double precision: fpu_d64
+    parameter bit FR1 = 0               // Status.FR set: 32 registers of 64 bits (a double in any register); clear: the pairs
 ) (
     input  wire         clk,
     input  wire         rst,
+    input  wire         fr,                 // (FR1) Status.FR
     input  wire  [31:0] insn_next,          // M's instruction next cycle (register read address)
     input  wire  [31:0] insn,               // M's instruction
     input  wire  [31:0] insn_e,             // (FAST) the instruction behind it, which M takes when adv
@@ -63,61 +70,71 @@ module fpu_n64 #(
     output logic        cond,               // FCR31.C after the instruction
     output logic        busy,
     // what the completing instruction wrote (co-simulation trace)
-    output logic        tr_we_even, tr_we_odd,
-    output logic [3:0]  tr_widx,
-    output logic [31:0] tr_weven, tr_wodd,
+    output logic        tr_we_lo, tr_we_hi,                  // the words of register tr_widx it wrote (FR clear: the even register's)
+    output logic [4:0]  tr_widx,
+    output logic [31:0] tr_wlo, tr_whi,
     output logic [31:0] tr_fcr31
 );
 
 // ============================================================ registers
-logic [31:0] fe0 [16], fe1 [16], fo0 [16], fo1 [16];   // even / odd banks, one copy per read port
-initial for (int i = 0; i < 16; i++) begin fe0[i] = 0; fe1[i] = 0; fo0[i] = 0; fo1[i] = 0; end
-logic [31:0] qxe, qxo, qye, qyo;                       // pair fs>>1 (port x), pair ft>>1 (port y)
-logic        we_e, we_o; logic [3:0] widx; logic [31:0] wd_e, wd_o;
-logic        wi_e, wi_o;                               // the halves the instruction writes (we_*, when it completes)
-logic        lw_e, lw_o; logic [3:0] lw_idx; logic [31:0] lw_de, lw_do;
-logic        l2_e, l2_o; logic [3:0] l2_idx; logic [31:0] l2_de, l2_do;       // (FAST)
+// The VR4300's FPU registers, as the two words of each of 32 registers of 64 bits: the lower words (fl) and the upper words (fh), 32 each,
+// each in two read copies (one a port). With Status.FR set a register is {fh[N], fl[N]}, a single in it its lower word; clear, f[2k] is the
+// lower word of register 2k and f[2k+1] its upper word (a double in f[2k] is the register: the pair), so a register is read and written
+// at {N[4:1], N[0] & FR}, one index for both of its words (FR clear: the even register's), and a single in f[2k+1] is a read of fh.
+logic [31:0] fl0 [32], fl1 [32], fh0 [32], fh1 [32];
+initial for (int i = 0; i < 32; i++) begin fl0[i] = 0; fl1[i] = 0; fh0[i] = 0; fh1[i] = 0; end
+wire frm = FR1 && fr;                                  // Status.FR (a build without FR1 has the pairs only)
+logic [31:0] qxl, qxh, qyl, qyh;                       // registers fs (port x) and ft (port y), as read
+logic        we_l, we_h; logic [4:0] widx; logic [31:0] wd_l, wd_h;
+logic        wi_l, wi_h;                               // the words the instruction writes (we_*, when it completes)
+logic        lw_l, lw_h; logic [4:0] lw_idx; logic [31:0] lw_dl, lw_dh;
+logic        l2_l, l2_h; logic [4:0] l2_idx; logic [31:0] l2_dl, l2_dh;       // (FAST)
+wire  [4:0]  rx_n = {insn_next[15:12], insn_next[11] & frm}, ry_n = {insn_next[20:17], insn_next[16] & frm};
+wire  [4:0]  rx_m = {insn[15:12], insn[11] & frm}, ry_m = {insn[20:17], insn[16] & frm};
+wire  [4:0]  rx_e = {insn_e[15:12], insn_e[11] & frm}, ry_e = {insn_e[20:17], insn_e[16] & frm};
 generate if (!FAST) begin : g_rf
     always_ff @(posedge clk) begin
-        qxe <= fe0[insn_next[15:12]]; qye <= fe1[insn_next[20:17]];
-        qxo <= fo0[insn_next[15:12]]; qyo <= fo1[insn_next[20:17]];
-        if (we_e) begin fe0[widx] <= wd_e; fe1[widx] <= wd_e; end
-        if (we_o) begin fo0[widx] <= wd_o; fo1[widx] <= wd_o; end
-        lw_e <= we_e; lw_o <= we_o; lw_idx <= widx; lw_de <= wd_e; lw_do <= wd_o;
+        qxl <= fl0[rx_n]; qyl <= fl1[ry_n];
+        qxh <= fh0[rx_n]; qyh <= fh1[ry_n];
+        if (we_l) begin fl0[widx] <= wd_l; fl1[widx] <= wd_l; end
+        if (we_h) begin fh0[widx] <= wd_h; fh1[widx] <= wd_h; end
+        lw_l <= we_l; lw_h <= we_h; lw_idx <= widx; lw_dl <= wd_l; lw_dh <= wd_h;
     end
 end else begin : g_rff
     // the write from lw_*, a cycle late: what a read may have missed is in
     // lw_* still, or went in at the read's own edge (l2_*)
     always_ff @(posedge clk) begin
-        qxe <= fe0[insn_next[15:12]]; qye <= fe1[insn_next[20:17]];
-        qxo <= fo0[insn_next[15:12]]; qyo <= fo1[insn_next[20:17]];
-        if (lw_e && !cancel) begin fe0[lw_idx] <= lw_de; fe1[lw_idx] <= lw_de; end
-        if (lw_o && !cancel) begin fo0[lw_idx] <= lw_do; fo1[lw_idx] <= lw_do; end
-        lw_e <= we_e; lw_o <= we_o; lw_idx <= widx; lw_de <= wd_e; lw_do <= wd_o;
-        l2_e <= lw_e && !cancel; l2_o <= lw_o && !cancel; l2_idx <= lw_idx; l2_de <= lw_de; l2_do <= lw_do;
+        qxl <= fl0[rx_n]; qyl <= fl1[ry_n];
+        qxh <= fh0[rx_n]; qyh <= fh1[ry_n];
+        if (lw_l && !cancel) begin fl0[lw_idx] <= lw_dl; fl1[lw_idx] <= lw_dl; end
+        if (lw_h && !cancel) begin fh0[lw_idx] <= lw_dh; fh1[lw_idx] <= lw_dh; end
+        lw_l <= we_l; lw_h <= we_h; lw_idx <= widx; lw_dl <= wd_l; lw_dh <= wd_h;
+        l2_l <= lw_l && !cancel; l2_h <= lw_h && !cancel; l2_idx <= lw_idx; l2_dl <= lw_dl; l2_dh <= lw_dh;
     end
 end endgenerate
-// the pairs M's instruction reads, with the write of the edge that read them
+// the registers M's instruction reads, with the write of the edge that read them
 // (FAST: whether the write in lw_* / l2_* is of the register M's instruction reads, found a cycle ahead -- against the
 // instruction that M takes at this edge, insn_e if it advances, insn if not: the one the read address just took -- and
 // registered, so that the bypass is a select by flip-flops, not a compare of two indexes)
-logic hx_e, hx_o, hy_e, hy_o, gx_e, gx_o, gy_e, gy_o;
+logic hx_l, hx_h, hy_l, hy_h, gx_l, gx_h, gy_l, gy_h;
 always_ff @(posedge clk) begin
-    hx_e <= valid && wi_e && (adv ? widx == insn_e[15:12] : widx == insn[15:12]);
-    hx_o <= valid && wi_o && (adv ? widx == insn_e[15:12] : widx == insn[15:12]);
-    hy_e <= valid && wi_e && (adv ? widx == insn_e[20:17] : widx == insn[20:17]);
-    hy_o <= valid && wi_o && (adv ? widx == insn_e[20:17] : widx == insn[20:17]);
-    gx_e <= lw_e && !cancel && (adv ? lw_idx == insn_e[15:12] : lw_idx == insn[15:12]);
-    gx_o <= lw_o && !cancel && (adv ? lw_idx == insn_e[15:12] : lw_idx == insn[15:12]);
-    gy_e <= lw_e && !cancel && (adv ? lw_idx == insn_e[20:17] : lw_idx == insn[20:17]);
-    gy_o <= lw_o && !cancel && (adv ? lw_idx == insn_e[20:17] : lw_idx == insn[20:17]);
+    hx_l <= valid && wi_l && (adv ? widx == rx_e : widx == rx_m);
+    hx_h <= valid && wi_h && (adv ? widx == rx_e : widx == rx_m);
+    hy_l <= valid && wi_l && (adv ? widx == ry_e : widx == ry_m);
+    hy_h <= valid && wi_h && (adv ? widx == ry_e : widx == ry_m);
+    gx_l <= lw_l && !cancel && (adv ? lw_idx == rx_e : lw_idx == rx_m);
+    gx_h <= lw_h && !cancel && (adv ? lw_idx == rx_e : lw_idx == rx_m);
+    gy_l <= lw_l && !cancel && (adv ? lw_idx == ry_e : lw_idx == ry_m);
+    gy_h <= lw_h && !cancel && (adv ? lw_idx == ry_e : lw_idx == ry_m);
 end
-wire [31:0] xe = FAST ? (hx_e ? lw_de : gx_e ? l2_de : qxe) : (lw_e && lw_idx == insn[15:12]) ? lw_de : qxe;
-wire [31:0] xo = FAST ? (hx_o ? lw_do : gx_o ? l2_do : qxo) : (lw_o && lw_idx == insn[15:12]) ? lw_do : qxo;
-wire [31:0] ye = FAST ? (hy_e ? lw_de : gy_e ? l2_de : qye) : (lw_e && lw_idx == insn[20:17]) ? lw_de : qye;
-wire [31:0] yo = FAST ? (hy_o ? lw_do : gy_o ? l2_do : qyo) : (lw_o && lw_idx == insn[20:17]) ? lw_do : qyo;
-wire [31:0] rfs = insn[11] ? xo : xe;                   // f[fs]
-wire [31:0] rft = insn[16] ? yo : ye;                   // f[ft]
+// a double as it is read, {upper, lower}: register fs (ft) in the two words, the pair's FR clear; and a single, the lower word or, in an odd
+// register with FR clear, the upper
+wire [31:0] xl_ = FAST ? (hx_l ? lw_dl : gx_l ? l2_dl : qxl) : (lw_l && lw_idx == rx_m) ? lw_dl : qxl;
+wire [31:0] xh_ = FAST ? (hx_h ? lw_dh : gx_h ? l2_dh : qxh) : (lw_h && lw_idx == rx_m) ? lw_dh : qxh;
+wire [31:0] yl_ = FAST ? (hy_l ? lw_dl : gy_l ? l2_dl : qyl) : (lw_l && lw_idx == ry_m) ? lw_dl : qyl;
+wire [31:0] yh_ = FAST ? (hy_h ? lw_dh : gy_h ? l2_dh : qyh) : (lw_h && lw_idx == ry_m) ? lw_dh : qyh;
+wire [31:0] rfs = !frm && insn[11] ? xh_ : xl_;         // f[fs]
+wire [31:0] rft = !frm && insn[16] ? yh_ : yl_;         // f[ft]
 
 logic [31:0] fcr31;                                     // RM, C (bit 23), FS and the enables (as written)
 
@@ -198,8 +215,8 @@ wire         upy = st == S_UNPY;
 // half in zmag; ft in ay, its upper half in ir)
 fbits_t up_raw;
 assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
-wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
-wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
+wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? yl_ : xl_;
+wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yh_ : xh_;
 fbits_t up;
 // (a single's compare takes its operands as they are: the VR4300 orders a denormal exactly there, and does not trap on
 // it -- software tests a pointer kept in a float register against 0.0, and KSEG0's below 8 MiB are all denormals)
@@ -230,7 +247,7 @@ wire sel_d = FAST ? isd_q : is_d, sel_w = FAST ? isw_q : is_w, sel_l = FAST ? is
 logic d64_busy; logic [63:0] d64_res; logic d64_un, d64_eq, d64_lt;
 assign busy = (FAST ? ar_q && st != S_DONE : live && is_arith && st != S_DONE) || (D64 && d64_busy);
 generate if (D64) begin : g_d64
-    fpu_d64 u (.clk, .rst, .go(d64_q), .live, .take(valid), .fn, .a({xo, xe}), .b({yo, ye}),
+    fpu_d64 u (.clk, .rst, .go(d64_q), .live, .take(valid), .fn, .a({xh_, xl_}), .b({yh_, yl_}),
                .busy(d64_busy), .res(d64_res), .c_un(d64_un), .c_eq(d64_eq), .c_lt(d64_lt));
 end else begin : g_nd64
     assign d64_busy = 1'b0; assign d64_res = 64'd0; assign d64_un = 1'b0; assign d64_eq = 1'b0; assign d64_lt = 1'b0;
@@ -309,7 +326,7 @@ wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
 // The data registers below (zmag, ir, res, zexp) are written whether or not the instruction is live (a flushed one starts again from
 // S_IDLE, which loads or clears what its operation reads): the core's flush does not enter their enables.
 // zmag's next value: one-hot selects (z_*) of the sources AND-ORed, written when any is selected (or cleared: z_clr)
-//   xo     S_IDLE: cvt.s.l's upper word, a double's upper half
+//   xh_    S_IDLE: cvt.s.l's upper word, a double's upper half
 //   ax     S_DECIDE, cvt.s.l of an unsigned word
 //   za     the adder's sum: the add (S_ADD2), an integer's magnitude (S_DECIDE), the upper word's (S_LNEG2)
 //   sh     the align shifter's output, with the sticky in bit 0 for the add (S_ADDA), as it is for to-int (S_F2W)
@@ -339,7 +356,7 @@ always_comb begin
     endcase
 end
 wire [31:0] zm_nf = (kind == K_MUL ? mprod[47:16] : zmag);
-wire [31:0] zmag_d = ({32{z_xo}} & xo) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
+wire [31:0] zmag_d = ({32{z_xo}} & xh_) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
                    | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | (st == S_ADDA && (sh_o[2] | sh_o[1] | sh_o[0]))})
                    | ({32{z_zsh}} & zsh) | ({32{z_mp}} & (mprod[47] ? mprod[47:16] : {mprod[46:16], 1'b0})) | ({32{z_ir}} & ir) | ({32{z_nf}} & (zm_nf << lzc32(zm_nf)));
 always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mp || z_ir || z_nf || z_clr) zmag <= zmag_d;
@@ -373,7 +390,7 @@ wire [11:0] zexp_d = ({12{x_158}} & 12'd158) | ({12{x_190}} & 12'd190) | ({12{x_
 always_ff @(posedge clk) if (x_158 || x_md || x_sq || x_a1 || x_190 || x_dec || x_nf) zexp <= zexp_d;
 
 // ir's next value, likewise
-//   yo     (FAST) S_IDLE: a double's upper half (ft's)
+//   yh_    (FAST) S_IDLE: a double's upper half (ft's)
 //   ax     S_DECIDE, cvt.s.l of 64 bits: the lower word
 //   dv     div's dividend, {1, fraction} (S_DECIDE of div; the special cases do not read it)
 //   it     the iteration's remainder (div: shifted left by one)
@@ -395,7 +412,7 @@ always_comb begin
     endcase
 end
 wire [31:0] ir_sel = it_ge ? it_d[31:0] : it_a;
-wire [31:0] ir_d = ({32{i_yo}} & yo) | ({32{i_ax}} & ax) | ({32{i_dv}} & {8'd0, 1'b1, ax.f})
+wire [31:0] ir_d = ({32{i_yo}} & yh_) | ({32{i_ax}} & ax) | ({32{i_dv}} & {8'd0, 1'b1, ax.f})
                  | ({32{i_it}} & (kind == K_DIV ? {ir_sel[30:0], 1'b0} : ir_sel)) | ({32{i_za}} & za_s) | ({32{i_sh}} & {ir[30:0], 1'b0});
 always_ff @(posedge clk) if (i_yo || i_ax || i_dv || i_it || i_za || i_sh || i_clr) ir <= ir_d;
 
@@ -527,11 +544,11 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
-        rxl <= xe; rxh <= xo; ryl <= ye; ryh <= yo;
+        rxl <= xl_; rxh <= xh_; ryl <= yl_; ryh <= yh_;
         if (FAST) begin
             // a double's operands are unpacked (d2f) in S_UNPX and S_UNPY; the others' are only flushed (a compare's and an integer's
             // are not), as they are read
-            ax <= (isd_q || isl_q) ? xe : (isw_q || cmp_s) ? rfs : ftz(rfs); ay <= isd_q ? ye : (isw_q || cmp_s) ? rft : ftz(rft);
+            ax <= (isd_q || isl_q) ? xl_ : (isw_q || cmp_s) ? rfs : ftz(rfs); ay <= isd_q ? yl_ : (isw_q || cmp_s) ? rft : ftz(rft);
             st <= isd_q ? S_UNPX : S_PRE;
         end
         dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
@@ -702,52 +719,45 @@ end
 // ============================================================ outputs, writes
 logic [63:0] res_d;
 logic [31:0] ld_lo;
+logic        wr_, dbl_; logic [4:0] n_;                  // (the instruction writes a register; a double; its number)
 always_comb res_d = f2d(res);
 always_comb begin
-    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000A00 : 32'd0);
-    gpr_out_hi = xo;
-    mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
+    gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xl_ : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000A00 : 32'd0);
+    gpr_out_hi = xh_;
+    mem_out = is_sdc1 ? {yh_, yl_} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : (is_d64 && d64_cmp) ? d64_rcond : fcr31[23];
 
-    // which register, and which halves, from M's instruction (and the datapath's state) alone: `valid`, which comes late, only
-    // enables the write (and the bypass flags above), it is not in the address
-    wi_e = 0; wi_o = 0; widx = 0;
-    begin
-        if (is_mtc1) begin widx = insn[15:12]; if (insn[11]) wi_o = 1; else wi_e = 1; end
-        if (is_dmtc1) begin widx = insn[15:12]; wi_e = 1; wi_o = 1; end   // (FR=0: the pair)
-        if (is_lwc1) begin widx = insn[20:17]; if (insn[16]) wi_o = 1; else wi_e = 1; end
-        if (is_ldc1) begin widx = insn[20:17]; wi_e = 1; wi_o = 1; end
-        if (is_mov) begin
-            widx = insn[10:7];
-            if (is_d) begin wi_e = 1; wi_o = 1; end
-            else if (insn[6]) wi_o = 1; else wi_e = 1;
-        end
-        if (is_d64 && !d64_cmp) begin widx = insn[10:7]; wi_e = 1; wi_o = 1; end
-        if (is_arith && kind != K_CMP) begin
-            widx = insn[10:7];
-            if (dst_l || dst_d) begin wi_e = 1; wi_o = 1; end
-            else if (insn[6]) wi_o = 1; else wi_e = 1;
-        end
-    end
-    we_e = valid && wi_e; we_o = valid && wi_o;
-    // the data of the registers written (what the others hold is not used: the write goes by we_e / we_o; the trace is read by
-    // them too). A load of a word is mtc1's data or lwc1's, one selection for the even and the odd register
+    // which register, and which words, from M's instruction (and the datapath's state) alone: `valid`, which comes late, only
+    // enables the write (and the bypass flags above), it is not in the address. A double goes to both words of its register; a single
+    // to the lower word, or, FR clear and an odd register, to the upper word of the even one
+    wr_ = 0; dbl_ = 0; n_ = insn[15:11];
+    if (is_mtc1 || is_dmtc1) begin wr_ = 1; dbl_ = is_dmtc1; end
+    if (is_lwc1 || is_ldc1) begin wr_ = 1; dbl_ = is_ldc1; n_ = insn[20:16]; end
+    if (is_mov) begin wr_ = 1; dbl_ = is_d; n_ = insn[10:6]; end
+    if (is_d64 && !d64_cmp) begin wr_ = 1; dbl_ = 1; n_ = insn[10:6]; end
+    if (is_arith && kind != K_CMP) begin wr_ = 1; dbl_ = dst_l || dst_d; n_ = insn[10:6]; end
+    widx = {n_[4:1], n_[0] & frm};
+    wi_l = wr_ && (dbl_ || frm || !n_[0]);
+    wi_h = wr_ && (dbl_ || (!frm && n_[0]));
+    we_l = valid && wi_l; we_h = valid && wi_h;
+    // the data of the words written (what the others hold is not used: the write goes by we_l / we_h; the trace is read by
+    // them too). A load of a word is mtc1's data or lwc1's, one selection for the lower and the upper word
     ld_lo = (is_lwc1 || is_ldc1) ? mem_in[31:0] : gpr_in;
-    if (is_mtc1 || is_dmtc1 || is_lwc1 || is_ldc1) wd_e = ld_lo;
-    else if (is_mov) wd_e = (is_d || !insn[11]) ? xe : xo;
-    else if (is_d64) wd_e = d64_res[31:0];                 // (the pair: the even register the lower half)
-    else wd_e = dst_d ? res_d[63:32] : res;
-    if (is_mtc1 || is_lwc1) wd_o = ld_lo;
-    else if (is_dmtc1) wd_o = gpr_in_hi;
-    else if (is_ldc1) wd_o = mem_in[63:32];
-    else if (is_mov) wd_o = (is_d || insn[11]) ? xo : xe;
-    else if (is_d64) wd_o = d64_res[63:32];
-    else wd_o = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
+    if (is_mtc1 || is_dmtc1 || is_lwc1 || is_ldc1) wd_l = ld_lo;
+    else if (is_mov) wd_l = is_d ? xl_ : rfs;
+    else if (is_d64) wd_l = d64_res[31:0];                 // (the pair: the even register the lower half)
+    else wd_l = dst_d ? res_d[63:32] : res;
+    if (is_mtc1 || is_lwc1) wd_h = ld_lo;
+    else if (is_dmtc1) wd_h = gpr_in_hi;
+    else if (is_ldc1) wd_h = mem_in[63:32];
+    else if (is_mov) wd_h = is_d ? xh_ : rfs;
+    else if (is_d64) wd_h = d64_res[63:32];
+    else wd_h = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
 end
 
 // the trace: registered with the write, so it lines up with the core's retire (W)
 always_ff @(posedge clk) begin
-    tr_we_even <= we_e; tr_we_odd <= we_o; tr_widx <= widx; tr_weven <= wd_e; tr_wodd <= wd_o;
+    tr_we_lo <= we_l; tr_we_hi <= we_h; tr_widx <= widx; tr_wlo <= wd_l; tr_whi <= wd_h;
     tr_fcr31 <= (valid && is_ctc1 && insn[15:11] == 5'd31) ? gpr_in & 32'h0183FFFF
               : (valid && is_arith && kind == K_CMP) ? {fcr31[31:24], rcond, fcr31[22:0]}
               : (valid && is_d64 && d64_cmp) ? {fcr31[31:24], d64_rcond, fcr31[22:0]} : fcr31;

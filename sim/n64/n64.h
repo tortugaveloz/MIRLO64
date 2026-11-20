@@ -87,7 +87,8 @@ typedef struct {
     uint32_t pc;
     uint32_t next_pc;                     /* the delay slot's successor */
     int      in_delay;                    /* executing a branch's delay slot */
-    uint32_t f[32];                       /* FPU: 32 32-bit registers (FR=0 pairs) */
+    uint32_t f[32];                       /* FPU: 32 registers of 64 bits, the lower words (FR=0: the odd f[] are not used, see cpu.c) */
+    uint32_t fh[32];                      /* ... and the upper words (a double in fN is {fh[N], f[N]}; FR=0: f[2k + 1] is fh[2k]) */
     uint32_t fcr31;
     uint32_t cop0[32];
     uint64_t cycles;                      /* instructions retired (1 CPU cycle each) */

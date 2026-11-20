@@ -24,7 +24,7 @@ int main(void)
 {
     uint32_t sr, o[2] __attribute__((aligned(8)));
     __asm__ volatile("mfc0 %0, $12" : "=r"(sr));
-    sr |= 0x20000000u;
+    sr = (sr | 0x20000000u) & ~0x04000000u;            /* CU1, FR clear: a double is a pair of registers */
     __asm__ volatile("mtc0 %0, $12; nop; nop" :: "r"(sr));
     for (unsigned i = 0; i < 5; i++) {                   /* dmtc1 / dmfc1 */
         __asm__ volatile(".set push; .set mips3; .set noreorder\n"

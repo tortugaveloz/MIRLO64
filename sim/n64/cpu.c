@@ -9,8 +9,8 @@
  * are sign-extended; the 64-bit ones are rare (counted by -p) and in the
  * hardware may take a few cycles more on a 32-bit datapath.
  *
- * The FPU keeps the FR=0 layout (32 32-bit registers, a double in an
- * even/odd pair) and computes doubles as floats (owner rule).
+ * The FPU has 32 registers of 64 bits (Status.FR set: a double in any register; clear: a double in an even register, the pair's odd
+ * register its upper word) and computes doubles as floats (owner rule).
  *
  * COP0 is what libultra touches: Status/Cause/EPC/Count/Compare, eret; the
  * TLB answers "no entry"; cache operations do nothing. See n64.h for the
@@ -85,12 +85,20 @@ static void f2d(float v, uint32_t *lo, uint32_t *hi)   /* float -> a double's bi
     *lo = m << 29;
 }
 
-static float fs_get(n64_cpu_t *c, int i) { fu_t u = { .u = c->f[i] }; return u.f; }
-static void  fs_set(n64_cpu_t *c, int i, float v) { fu_t u = { .f = v }; c->f[i] = u.u; }
-static float fpd_get(n64_cpu_t *c, int i) { i &= ~1; return d2f(c->f[i], c->f[i + 1]); }
-static void  fpd_set(n64_cpu_t *c, int i, float v) { i &= ~1; f2d(v, &c->f[i], &c->f[i + 1]); }
-static int64_t fl_get(n64_cpu_t *c, int i) { i &= ~1; return (int64_t)((uint64_t)c->f[i + 1] << 32 | c->f[i]); }
-static void    fl_set(n64_cpu_t *c, int i, int64_t v) { i &= ~1; c->f[i] = (uint32_t)v; c->f[i + 1] = (uint32_t)((uint64_t)v >> 32); }
+/* The registers are 32 of 64 bits: f[i] a register's lower word, fh[i] its upper word. Status.FR (bit 26) set: a double in register i is
+ * {fh[i], f[i]}, any i, and a single in register i is f[i] (mfc1, mtc1, lwc1, swc1 and the singles do not see the bit). Clear: the 16
+ * even / odd pairs, a single in an even register i is f[i], in an odd one the upper word of the register before it (fh[i - 1]), and a
+ * double is the even register's two words. dw_lo / dw_hi give the places of a double's lower and upper word, sw a single's */
+#define FR1(c) (((c)->cop0[C0_STATUS] >> 26) & 1u)
+static uint32_t *dw_lo(n64_cpu_t *c, int i) { return FR1(c) ? &c->f[i] : &c->f[i & ~1]; }
+static uint32_t *dw_hi(n64_cpu_t *c, int i) { return FR1(c) ? &c->fh[i] : &c->fh[i & ~1]; }
+static uint32_t *sw(n64_cpu_t *c, int i) { return FR1(c) || !(i & 1) ? &c->f[i] : &c->fh[i & ~1]; }
+static float fs_get(n64_cpu_t *c, int i) { fu_t u = { .u = *sw(c, i) }; return u.f; }
+static void  fs_set(n64_cpu_t *c, int i, float v) { fu_t u = { .f = v }; *sw(c, i) = u.u; }
+static float fpd_get(n64_cpu_t *c, int i) { return d2f(*dw_lo(c, i), *dw_hi(c, i)); }
+static void  fpd_set(n64_cpu_t *c, int i, float v) { f2d(v, dw_lo(c, i), dw_hi(c, i)); }
+static int64_t fl_get(n64_cpu_t *c, int i) { return (int64_t)((uint64_t)*dw_hi(c, i) << 32 | *dw_lo(c, i)); }
+static void    fl_set(n64_cpu_t *c, int i, int64_t v) { *dw_lo(c, i) = (uint32_t)v; *dw_hi(c, i) = (uint32_t)((uint64_t)v >> 32); }
 
 static float fround(float x, int rm)   /* FCR31 rounding modes */
 {
@@ -251,20 +259,20 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
         uint32_t fmt = RS(insn);
         int fs = RD(insn), ft = RT(insn), fd = SA(insn);
         switch (fmt) {
-        case 0x00: *gpr_out = SX(c->f[fs]); return 1;                               /* mfc1 */
+        case 0x00: *gpr_out = SX(*sw(c, fs)); return 1;                               /* mfc1 */
         case 0x01: if (n64_no64 > 0) return -1; *gpr_out = (uint64_t)fl_get(c, fs); return 1;   /* dmfc1: the pair */
         case 0x02: *gpr_out = SX(fs == 31 ? c->fcr31 : fs == 0 ? 0x00000A00u : 0); return 1;   /* cfc1 */
-        case 0x04: c->f[fs] = rt32; break;                                          /* mtc1 */
+        case 0x04: *sw(c, fs) = rt32; break;                                          /* mtc1 */
         case 0x05: if (n64_no64 > 0) return -1; fl_set(c, fs, (int64_t)rt); break;  /* dmtc1 */
         case 0x06: if (fs == 31) c->fcr31 = rt32 & 0x0183FFFFu; break;              /* ctc1 */
         case 0x10: case 0x11: {                                                     /* .s / .d */
             int dbl = fmt == 0x11;
             if (dbl && n64_fpd64) {                                                 /* (the doubles fpd64.h does: raw pairs, no float) */
                 uint32_t fn = insn & 63;
-                uint64_t dx = (uint64_t)c->f[fs | 1] << 32 | c->f[fs & ~1], dy = (uint64_t)c->f[ft | 1] << 32 | c->f[ft & ~1], dr;
+                uint64_t dx = (uint64_t)fl_get(c, fs), dy = (uint64_t)fl_get(c, ft), dr;
                 if (fn <= 2 || fn == 5 || fn == 7) {
                     dr = fn == 0 ? fpd_add(dx, dy, 0) : fn == 1 ? fpd_add(dx, dy, 1) : fn == 2 ? fpd_mul(dx, dy) : fn == 5 ? fpd_abs(dx) : fpd_neg(dx);
-                    c->f[fd & ~1] = (uint32_t)dr; c->f[fd | 1] = (uint32_t)(dr >> 32);
+                    fl_set(c, fd, (int64_t)dr);
                     break;
                 }
                 if (fn >= 0x30) {
@@ -293,27 +301,27 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
             case 0x04: res = fres(sqrtf(x), sqrt((double)x)); break;
             case 0x05: res = canon(fabsf(x)); break;
             case 0x06:                                                              /* mov: raw (.d: the pair) */
-                if (dbl) { c->f[fd & ~1] = c->f[fs & ~1]; c->f[fd | 1] = c->f[fs | 1]; }
-                else c->f[fd] = c->f[fs];
+                if (dbl) { uint32_t l = *dw_lo(c, fs), h = *dw_hi(c, fs); *dw_lo(c, fd) = l; *dw_hi(c, fd) = h; }
+                else *sw(c, fd) = *sw(c, fs);
                 goto fpu_done;
             case 0x07: res = canon(-x); break;
             case 0x08: fl_set(c, fd, f2l(fround(x, 0))); goto fpu_done;             /* round.l */
             case 0x09: fl_set(c, fd, f2l(truncf(x))); goto fpu_done;
             case 0x0A: fl_set(c, fd, f2l(ceilf(x))); goto fpu_done;
             case 0x0B: fl_set(c, fd, f2l(floorf(x))); goto fpu_done;
-            case 0x0C: c->f[fd] = (uint32_t)f2w(fround(x, 0)); goto fpu_done;       /* round.w */
-            case 0x0D: c->f[fd] = (uint32_t)f2w(truncf(x)); goto fpu_done;
-            case 0x0E: c->f[fd] = (uint32_t)f2w(ceilf(x)); goto fpu_done;
-            case 0x0F: c->f[fd] = (uint32_t)f2w(floorf(x)); goto fpu_done;
+            case 0x0C: *sw(c, fd) = (uint32_t)f2w(fround(x, 0)); goto fpu_done;       /* round.w */
+            case 0x0D: *sw(c, fd) = (uint32_t)f2w(truncf(x)); goto fpu_done;
+            case 0x0E: *sw(c, fd) = (uint32_t)f2w(ceilf(x)); goto fpu_done;
+            case 0x0F: *sw(c, fd) = (uint32_t)f2w(floorf(x)); goto fpu_done;
             case 0x20: fs_set(c, fd, canon(x)); goto fpu_done;                      /* cvt.s.d */
             case 0x21: fpd_set(c, fd, canon(x)); goto fpu_done;                     /* cvt.d.s */
-            case 0x24: c->f[fd] = (uint32_t)f2w(fround(x, c->fcr31 & 3)); goto fpu_done;   /* cvt.w */
+            case 0x24: *sw(c, fd) = (uint32_t)f2w(fround(x, c->fcr31 & 3)); goto fpu_done;   /* cvt.w */
             case 0x25: fl_set(c, fd, f2l(fround(x, c->fcr31 & 3))); goto fpu_done;         /* cvt.l */
             default:
                 if (f >= 0x30) {                                                    /* c.cond */
                     int un, eq, lt;
                     if (dbl) {                                                      /* the doubles' own 64 bits */
-                        uint64_t xb = (uint64_t)c->f[(fs & ~1) + 1] << 32 | c->f[fs & ~1], yb = (uint64_t)c->f[(ft & ~1) + 1] << 32 | c->f[ft & ~1];
+                        uint64_t xb = (uint64_t)fl_get(c, fs), yb = (uint64_t)fl_get(c, ft);
                         double dx, dy;
                         memcpy(&dx, &xb, 8); memcpy(&dy, &yb, 8);
                         un = dx != dx || dy != dy; eq = dx == dy; lt = dx < dy;
@@ -341,7 +349,7 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
         }
         case 0x14: case 0x15: {                                                     /* .w / .l -> s, d */
             if (fmt == 0x15 && n64_no64 > 0) return -1;
-            float x = fmt == 0x14 ? (float)(int32_t)c->f[fs] : (float)fl_get(c, fs);
+            float x = fmt == 0x14 ? (float)(int32_t)*sw(c, fs) : (float)fl_get(c, fs);
             uint32_t f = insn & 63;
             if (f == 0x20) fs_set(c, fd, x);
             else if (f == 0x21) fpd_set(c, fd, x);
@@ -698,7 +706,7 @@ void n64_cpu_step(n64_t *n)
     case 0x2F: break;                                                              /* cache */
     case 0x30: if (!load(n, pc, dly, a, 4, &v)) { WR(rti, SX(v)); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;   /* ll */
     case 0x31: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (lwc1: CpU, see COP1) */
-        if (!load(n, pc, dly, a, 4, &v)) c->f[rti] = (uint32_t)v; break;              /* lwc1 */
+        if (!load(n, pc, dly, a, 4, &v)) *sw(c, rti) = (uint32_t)v; break;             /* lwc1 */
     case 0x34: if (!load(n, pc, dly, a, 8, &v)) { OP64(N64_OP64_MEM); WR(rti, v); c->ll_bit = 1; c->cop0[C0_LLADDR] = n64_xlat_pa(n, a) >> 4; } break;  /* lld */
     case 0x35: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (ldc1: CpU, see COP1) */
         if (!load(n, pc, dly, a, 8, &v)) fl_set(c, rti, (int64_t)v); break;          /* ldc1 */
@@ -708,7 +716,7 @@ void n64_cpu_step(n64_t *n)
         else if (!sc_fault(n, pc, dly, a, 4)) WR(rti, 0);
         break;
     case 0x39: if (!(c->cop0[C0_STATUS] & 0x20000000u)) { exception(n, pc, dly, EXC_CPU, 1); break; }   /* (swc1: CpU, see COP1) */
-        store(n, pc, dly, a, 4, c->f[rti]); break;                          /* swc1 */
+        store(n, pc, dly, a, 4, *sw(c, rti)); break;                        /* swc1 */
     case 0x3C:                                                                     /* scd */
         OP64(N64_OP64_MEM);
         if (c->ll_bit) { if (!store(n, pc, dly, a, 8, rt)) { WR(rti, 1); c->ll_bit = 0; } }

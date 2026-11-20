@@ -7,7 +7,7 @@
 // Every register but CURRENT reads back what was written (a block RAM of 16 words: no flip-flop of its own). What the
 // hardware itself does with them:
 //   CURRENT  read: a half-line counter, {nl[8:0], field}: the line (0..261) of the N64's field, which the scan-out's
-//            line pulses count (264 lines of the scan-out, so the N64's line 0 is held for three of them), bit 0 the
+//            line pulses count (264 lines of the scan-out, so the N64's last line is held for three of them), bit 0 the
 //            interlace field (0 unless STATUS' SERRATE, bit 6, is set: the field alternates every 264 lines). The line
 //            18 is the scan-out's frame boundary (the latch of its base, `sc_latch`): VI_V_START's first line, where
 //            the VI takes its ORIGIN. A write clears the VI interrupt (vi_clr).
@@ -137,11 +137,14 @@ wire        chg_now = wr_s && ((a == 4'd2 && |dx[11:0]) || (a == 4'd10 && |(dx &
 always_ff @(posedge clk) chg <= !rst && chg_now;
 
 // ---------------------------------------------------------------- the half-line counter
-// The scan-out's field is 264 lines; the N64's 262. nl counts the line pulses, wraps at 261 and holds the line 0 for
-// three of them (a field of 264: 235, 236, 237 are the line 0, the line 1 at 238, the line 18 at 255, the latch). The
-// latch sets the counter, so what the two clocks of a size change do to the count is made good in a frame.
-// PAL: a field of 313 lines of the scan-out, the N64's 312: nl wraps at 311, the line 0 is held for two (the line 1 at 282, the line
-// 47, the latch, at 304; the half-line 95 of libultra's PAL modes).
+// The scan-out's field is 264 lines; the N64's 262. nl counts the line pulses, wraps at 261 and holds the last line for
+// three of them (a field of 264: 234, 235, 236 are the line 261, the line 0 at 237, the line 1 at 238, the line 18 at 255, the
+// latch). The latch sets the counter, so what the two clocks of a size change do to the count is made good in a frame. The two
+// extra lines are put before the wrap, not after it: the line 0 and the line 1 are a line apart, as the console's are -- libultra's
+// osViInit waits for CURRENT to come to 10 or less, and a game's first retrace (V_INTR 2, the line 1) is then a line behind
+// that point, not three, which is as much code as the game has run by then.
+// PAL: a field of 313 lines of the scan-out, the N64's 312: nl wraps at 311, the line 311 is held for two (the line 0 at 281, the
+// line 1 at 282, the latch, the line 47, at 304; the half-line 95 of libultra's PAL modes).
 localparam logic [8:0] NL_LATCH_N = 9'd18, NL_LATCH_P = 9'd47;
 localparam logic [8:0] NL_LAST_N = 9'd261, NL_LAST_P = 9'd311;
 wire [8:0]  NL_LATCH = tv_pal ? NL_LATCH_P : NL_LATCH_N;
@@ -156,7 +159,8 @@ always_ff @(posedge clk) begin
         if (sc_latch) hold <= 2'd0;
         else if (sc_line) begin
             if (hold != 2'd0) hold <= hold - 2'd1;
-            else if (nl == NL_LAST) begin hold <= tv_pal ? 2'd1 : 2'd2; field <= ~field; end
+            else if (nl == NL_LAST - 9'd1) hold <= tv_pal ? 2'd1 : 2'd2;
+            else if (nl == NL_LAST) field <= ~field;
         end
         if (wr_s && a == 4'd14) field <= wd[31];         // (a save state's field, put back)
         irq <= nl_n != nl && nl_n == vint;
