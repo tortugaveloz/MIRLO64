@@ -122,6 +122,7 @@ esac
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = fpd ] && echo 'set_global_assignment -name MUX_RESTRUCTURE OFF'      # (as mips_sys, which holds it, has it)
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
+  [ -n "${OOC_QSF:-}" ] && printf '%s\n' "$OOC_QSF"                          # (OOC_QSF='set_global_assignment -name X Y': more assignments, newline-separated)
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"
   # (FIT: its pins virtual -- an assignment synthesis takes -- and a 16 ns clock for each of its clocks)
