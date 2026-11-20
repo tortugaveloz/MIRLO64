@@ -19,7 +19,7 @@ runtime (TB_NO64) cannot run them.
 "irq" turns the VI's interrupt on, every line (some 6,000 instructions), so that it comes in the middle of an FPU operation (the
 model is told when the core takes it).
 "fr1" runs with Status.FR set: 32 registers of 64 bits (a double in any register, loaded by ldc1 or dmtc1, its halves not a pair
-of registers; the FPU's lower words as FR=0's). Without it Status.FR is clear (the pairs), whatever the IPL left in it.
+of registers). Without it Status.FR is clear (the pairs), whatever the IPL left in it.
 "d64" is for the core's FPD64 level (add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d exact doubles; TB_FPD64=1): most of the
 arithmetic and compares are on doubles that are loaded just before, a second operand made to cancel, tie, reach the first's exponent
 or its rounding boundary, with the exponents near the smallest and the largest normal as well as the middle.

@@ -1,8 +1,8 @@
 /* Status.FR as the VR4300 has it. FR set: 32 FPU registers of 64 bits -- a double in any register, the odd ones too, its
- * halves not a pair of registers (mfc1 of an odd register is that register's own lower word) -- the singles' storage the same as
- * FR clear's (the lower words). FR clear: the 16 even / odd pairs. Code compiled for one is wrong in the other: a loop that
+ * halves not a pair of registers (mfc1 of an odd register is that register's own lower word). FR clear: the 16 even / odd pairs,
+ * the odd register of a pair its even one's upper word. Code compiled for one is wrong in the other: a loop that
  * compares a double in f0 with one in f1 ("c.le.d f0, f1": 1.0 against 0.5) never ends if the two are the same pair. Prints PASS or
- * the failures on the UART, then a 0x04.
+ * the failures on the UART, then a 0x04. Also: a register is the same 64 bits in both modes.
  * ROM=<any file> obj/tb_soc build/fr1_test.bin -c 30. */
 #include <stdint.h>
 #include <generated/csr.h>
@@ -171,6 +171,38 @@ int main(void)
         ".word 0xAD4C0000  /* sw $12, 0($10) */\n"
         ".set pop\n" :: "r"(o), "r"(one), "r"(half), "r"(pat) : "$8", "$9", "$10", "$11", "$12", "$13", "$14", "memory");
     check("FR=0: c.le.d f2, f4 (1.0 <= 0.5)", 0, o[0], 0, 0x00000000);
+    /* the registers are the same 64 bits in both modes (the pair's odd register is the even one's upper word): a double loaded with FR clear
+     * is a register with FR set, and one loaded with FR set is a pair with it clear */
+    memset_o();
+    __asm__ volatile(".set push; .set noreorder; .set mips3\n"
+        "move $10, %0\n move $11, %1\n"
+        ".word 0xD5660000  /* ldc1 f6, 0($11) */\n"
+        ".set pop\n" :: "r"(o), "r"(pat) : "$10", "$11", "memory");
+    status(1);
+    __asm__ volatile(".set push; .set noreorder; .set mips3\n"
+        "move $10, %0\n"
+        ".word 0x442C3000  /* dmfc1 $12, f6 */\n"
+        ".word 0xFD4C0000  /* sd $12, 0($10) */\n"
+        ".word 0x440C3000  /* mfc1 $12, f6 */\n"
+        ".word 0xAD4C0008  /* sw $12, 8($10) */\n"
+        ".set pop\n" :: "r"(o) : "$10", "$12", "memory");
+    check("ldc1 f6 with FR=0; dmfc1 f6 and mfc1 f6 with FR=1", o[0], o[1], 0x3FE00000, 0x12345678);
+    check("ldc1 f6 with FR=0; dmfc1 f6 and mfc1 f6 with FR=1", 0, o[2], 0, 0x12345678);
+    memset_o();
+    __asm__ volatile(".set push; .set noreorder; .set mips3\n"
+        "move $10, %0\n move $11, %1\n"
+        ".word 0xD5680000  /* ldc1 f8, 0($11) */\n"
+        ".set pop\n" :: "r"(o), "r"(pat) : "$10", "$11", "memory");
+    status(0);
+    __asm__ volatile(".set push; .set noreorder; .set mips3\n"
+        "move $10, %0\n"
+        ".word 0x440C4800  /* mfc1 $12, f9 */\n"
+        ".word 0xAD4C0000  /* sw $12, 0($10) */\n"
+        ".word 0x440C4000  /* mfc1 $12, f8 */\n"
+        ".word 0xAD4C0004  /* sw $12, 4($10) */\n"
+        ".set pop\n" :: "r"(o) : "$10", "$12", "memory");
+    check("ldc1 f8 with FR=1; mfc1 f9 and f8 with FR=0: the upper and the lower word", 0, o[0], 0, 0x3FE00000);
+    check("ldc1 f8 with FR=1; mfc1 f9 and f8 with FR=0: the upper and the lower word", 0, o[1], 0, 0x12345678);
     status(1);
     puts_(fails ? "FAILED\n" : "PASS\n");
     putc_(4);

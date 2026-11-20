@@ -134,7 +134,7 @@ mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .irq_rcp(irq), .irq_mon(irq_mon), .sn_t, .sn_line, .sn_hold,
     .tr_retire(), .tr_pc(), .tr_insn(), .tr_wr(), .tr_rd(), .tr_val(), .tr_exc(), .tr_exc_int(), .tr_exc_pc(),
-    .tr_exc_code(), .tr_fwe_even(), .tr_fwe_odd(), .tr_fwidx(), .tr_fweven(), .tr_fwodd(), .tr_fwe_hi(), .tr_fwidx_hi(), .tr_fwhi(), .tr_fcr31(),
+    .tr_exc_code(), .tr_fwe_lo(), .tr_fwe_hi(), .tr_fwidx(), .tr_fwlo(), .tr_fwhi(), .tr_fcr31(),
     .dbg_pc, .dbg_cause, .dbg_status, .dbg_epc, .hwx_on
 );
 

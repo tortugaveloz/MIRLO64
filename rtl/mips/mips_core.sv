@@ -219,9 +219,9 @@ module mips_core #(
     // FPD64 (with FAST): add.d, sub.d, mul.d, abs.d, neg.d and the compares of doubles exact, at 53 bits, in fpu_d64 (a few cycles each, on
     // an adder, a shifter and a DSP block); div.d, sqrt.d and the conversions stay on the FPU's single-precision datapath. COP0 register 7's bit 26.
     parameter bit FPD64 = 0,
-    // FR1: the FPU's 32 registers of 64 bits with Status.FR set (the VR4300's FR=1: a double in any register, the upper words in a bank of
-    // their own, 32 x 32 bits and two read copies); Status.FR clear, the 16 even / odd pairs. A game that sets the bit in its threads'
-    // status compiles its doubles into the odd registers too
+    // FR1: the FPU's 32 registers of 64 bits with Status.FR set (the VR4300's FR=1: a double in any register); Status.FR clear, the 16
+    // even / odd pairs (the odd register the upper word of the even one). A game that sets the bit in its threads' status compiles its
+    // doubles into the odd registers too
     parameter bit FR1 = 0,
     // for a clock half as fast again (docs/mips.md): what the caches hold is
     // used before its tag is looked at, and a branch's compare no longer
@@ -296,12 +296,9 @@ module mips_core #(
     output logic        tr_exc_int,
     output logic [31:0] tr_exc_pc,
     output logic [4:0]  tr_exc_code,
-    output logic        tr_fwe_even, tr_fwe_odd,    // the FPU registers it wrote (pair tr_fwidx)
-    output logic [3:0]  tr_fwidx,
-    output logic [31:0] tr_fweven, tr_fwodd,
-    output logic        tr_fwe_hi,                  // (FR1) ... and the upper word it wrote, of register tr_fwidx_hi
-    output logic [4:0]  tr_fwidx_hi,
-    output logic [31:0] tr_fwhi,
+    output logic        tr_fwe_lo, tr_fwe_hi,       // the FPU register it wrote: its lower and upper words (FR clear: the even register's)
+    output logic [4:0]  tr_fwidx,
+    output logic [31:0] tr_fwlo, tr_fwhi,
     output logic [31:0] tr_fcr31,
     // debug (Mirlo-N64's on-screen display)
     output logic [31:0] dbg_pc, dbg_cause, dbg_status, dbg_epc,
@@ -1971,8 +1968,7 @@ fpu_n64 #(.FAST(FAST), .D64(XFPD), .FR1(FR1)) fpu (
     .live((FAST ? m_valid : m_live) && m_fpu), .valid(fpu_valid),      // (FAST: an instruction taken out by an exception is not in M the next cycle; the flush is not in the FPU's state)
     .cancel(FAST && w_lm), .gpr_in(m_st_lo), .gpr_in_hi(m_st_hx ^ {32{m_st_lo[31]}}), .mem_in(m_wide ? m_w64 : {32'd0, m_word}),
     .gpr_out(fpu_gpr_out), .gpr_out_hi(fpu_gpr_out_hi), .mem_out(fpu_mem_out), .cond(fpu_cond), .busy(fpu_busy),
-    .tr_we_even(tr_fwe_even), .tr_we_odd(tr_fwe_odd), .tr_widx(tr_fwidx),
-    .tr_weven(tr_fweven), .tr_wodd(tr_fwodd), .tr_we_hi(tr_fwe_hi), .tr_widx_hi(tr_fwidx_hi), .tr_whi(tr_fwhi), .tr_fcr31(tr_fcr31)
+    .tr_we_lo(tr_fwe_lo), .tr_we_hi(tr_fwe_hi), .tr_widx(tr_fwidx), .tr_wlo(tr_fwlo), .tr_whi(tr_fwhi), .tr_fcr31(tr_fcr31)
 );
 assign fpu_valid = (FAST ? m_commit_e : m_commit) && m_fpu;    // (FAST: a load's write is taken back with w_lm)
 
