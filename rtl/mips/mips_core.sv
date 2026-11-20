@@ -2102,11 +2102,11 @@ always_ff @(posedge clk) begin
         end
 
         // ---------------------------------------------------- M: completing
-        sb_valid <= 0;
+        // (the store buffer is a one-cycle pulse: sb_valid is set for the cycle after a store's completion, and its address, word and strobes are
+        // read only then -- they are the store's if they are loaded every cycle, with no enable behind the completion's whole cone)
+        sb_valid <= st_sb_we;
+        sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
         tk_valid <= dct_we && !dct_wdata[16]; tk_idx <= dct_waddr;
-        if (st_sb_we) begin
-            sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
-        end
         if (m_commit_e) begin
             if (m_c.ld == M_LL && !m_lmiss) ll_bit <= 1'b1;
             if (m_c.st == S_SC) ll_bit <= 1'b0;
