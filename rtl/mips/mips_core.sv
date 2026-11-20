@@ -1615,11 +1615,14 @@ mips_dchit #(.DC_LOG2(DC_LOG2)) dchit (
 wire m_adv = !m_stall;
 wire e_adv = m_adv;
 wire d_adv = e_adv && !d_stall;
-wire flush = m_take_int || m_take_exc || (m_commit_e && m_c.eret) || (FAST && rp_pend);
+// (an eret completes at once -- FAST: it is no access, no FPU or multiply operation, no cache op and no shift, the flags the rest of m_done
+// waits on, so only the refill that M's state machine may be in holds it: not m_done's whole cone in front of the fetch's redirect)
+wire m_eret_go = FAST ? m_live && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_commit_e && m_c.eret;
+wire flush = m_take_int || m_take_exc || m_eret_go || (FAST && rp_pend);
 logic [31:0] flush_pc;
 always_comb begin
     if (FAST && rp_pend) flush_pc = w_pc;
-    else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
+    else if (m_eret_go) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
     else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
 end
