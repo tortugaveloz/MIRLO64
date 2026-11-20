@@ -1,8 +1,8 @@
-# (Not the LOD logic: docs/rdp_exact.md rule 9.) 2-cycle, no TEX_LOD, a trilinear combiner ((TEXEL1 - TEXEL0) * LOD_FRACTION +
-# TEXEL0, then COMBINED) on a texture of a level count of 0, whose next tile (tile 1, blue) was set apart: the oracle computes
-# the LOD fraction because the combiner reads it, all ones for a level count of 0, so its pixels are TEXEL1, tile 1's blue; the
-# console shows TEXEL0, the primitive's own tile (tile 0: the 4-texel ramp, red, black, black, green), as the model's fraction,
-# 0 without TEX_LOD, gives. (A game draws a figure with such a combiner and never sets tile 1.)
+# (The LOD logic as the oracle's: docs/rdp_exact.md rule 9.) 2-cycle, no TEX_LOD, a trilinear combiner ((TEXEL1 - TEXEL0) *
+# LOD_FRACTION + TEXEL0, then COMBINED) on a texture of a level count of 0, drawn smaller than its texels (a step of 32 in S, a texel:
+# the LOD's far side), whose next tile (tile 1, blue) was set apart: the console draws TEXEL1, tile 1's blue, with the fraction of all
+# ones the LOD gives at a level count of 0, as the oracle does (a picture of two textures blended by the distance: a ring of light
+# whose rays come from the second). Without TEX_LOD the fraction was read as 0 for any pixel, and it drew TEXEL0 instead.
 rdram zero
 mem 200000 f8010001000107c1003f003f003f003f
 cmd 3f10013f 00100000
