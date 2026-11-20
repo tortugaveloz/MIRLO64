@@ -419,19 +419,20 @@ module rdp_pix (
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [3:0]  sb_wa;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
-    (* ramstyle = "M10K, no_rw_check" *) reg [71:0] sb_ram [0:15];
-    reg  [71:0] sb_q;
+    // (the shade's channels are bytes -- sh_x saturates them -- so their ninth bits are not kept)
+    (* ramstyle = "M10K, no_rw_check" *) reg [67:0] sb_ram [0:15];
+    reg  [67:0] sb_q;
     always @(posedge clk) begin
-        sb_ram[sb_wa] <= {hp0, x0, bs0, shade0, depth_c, cvg0, y0};
+        sb_ram[sb_wa] <= {hp0, x0, bs0, shade0[34:27], shade0[25:18], shade0[16:9], shade0[7:0], depth_c, cvg0, y0};
         sb_q <= sb_ram[sb_ra];
         sb_wa <= sb_wa + 4'd1;
     end
-    wire [9:0]  x8b     = sb_q[70:61];
-    wire        hp8b    = sb_q[71];
+    wire [9:0]  x8b     = sb_q[66:57];
+    wire        hp8b    = sb_q[67];
     // (the row's odd halfword, along with the pixel to the dither: the column is x - hp)
     reg         hp9, hp10a, hp10, hp11a, hp11, hp11b, hp12a, hp12, hp13a, hp13b;
-    wire        bs8b    = sb_q[60];
-    wire [35:0] shade8b = sb_q[59:24];
+    wire        bs8b    = sb_q[56];
+    wire [35:0] shade8b = {1'b0, sb_q[55:48], 1'b0, sb_q[47:40], 1'b0, sb_q[39:32], 1'b0, sb_q[31:24]};
     wire [17:0] depth8b = sb_q[23:6];
     wire [3:0]  cvg8b   = sb_q[5:2];
     wire [1:0]  y8b     = sb_q[1:0];
@@ -732,50 +733,12 @@ module rdp_pix (
         m5r <= m4r;
     end
 
-    // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction
-    task automatic tc_axis;
-        input  signed [23:0] v;
-        input  [11:0] lo, hi;
-        input  clampbit, mirror;
-        input  [3:0] mask;
-        input        cpy;              // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped,
-        input  [2:0] cm;               // its mask at most 10 bits
-        output [10:0] c0, c1;
-        output [4:0]  fr;
-        reg signed [18:0] i, j, mx, m;
-        reg [4:0] f;
-        reg [3:0] mq;
-        begin
-            i = v >>> 5;
-            f = v[4:0];
-            mq = (cpy && mask > 4'd10) ? 4'd10 : mask;
-            if (cpy) begin i = i + $signed({16'd0, cm}); f = 5'd0; end
-            j = cpy ? i : i + 19'sd1;
-            if (!cpy && (clampbit || mask == 4'd0)) begin
-                mx = ($signed({7'd0, hi}) - $signed({7'd0, lo})) >>> 2;
-                if (i < 0) begin i = 0; j = 0; f = 0; end
-                else if (i >= mx) begin i = mx; j = mx; f = 0; end
-            end
-            if (mask != 4'd0) begin
-                m = (19'sd1 <<< mq) - 19'sd1;
-                if (mirror && ((i >>> mq) & 19'sd1)) i = ~i;
-                if (mirror && ((j >>> mq) & 19'sd1)) j = ~j;
-                i = i & m;
-                j = j & m;
-            end
-            c0 = i[10:0];
-            c1 = j[10:0];
-            fr = f;
-        end
-    endtask
-
+    // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction (rdp_tcaxis, below)
     wire       cpy5 = cyc == 2'd2 && p_direct && p_tex;
-    reg [10:0] s0c, s1c, t0c, t1c;
-    reg [4:0]  fsc, ftc;
-    always @(*) begin
-        tc_axis(vs5r, u5_uls, u5_lrs, u5_cs, u5_ms, u5_masks, cpy5, m5r, s0c, s1c, fsc);
-        tc_axis(vt5r, u5_ult, u5_lrt, u5_ct, u5_mt, u5_maskt, cpy5, 3'd0, t0c, t1c, ftc);
-    end
+    wire [10:0] s0c, s1c, t0c, t1c;
+    wire [4:0]  fsc, ftc;
+    rdp_tcaxis tcs (.v(vs5r), .lo(u5_uls), .hi(u5_lrs), .clampbit(u5_cs), .mirror(u5_ms), .mask(u5_masks), .cpy(cpy5), .cm(m5r), .c0(s0c), .c1(s1c), .fr(fsc));
+    rdp_tcaxis tct (.v(vt5r), .lo(u5_ult), .hi(u5_lrt), .clampbit(u5_ct), .mirror(u5_mt), .mask(u5_maskt), .cpy(cpy5), .cm(3'd0), .c0(t0c), .c1(t1c), .fr(ftc));
     reg        v6;
     reg [10:0] s06, s16, t06, t16;
     reg [4:0]  fs6, ft6;
@@ -913,10 +876,15 @@ module rdp_pix (
         input [5:0] ws, wt;
         reg signed [9:0]  e1, e2;
         reg signed [16:0] acc;
+        reg signed [19:0] r;
         begin
             e1 = e1v; e2 = e2v;
             acc = e1 * $signed({1'b0, ws}) + e2 * $signed({1'b0, wt}) + 17'sd16;
-            tri3 = clamp8($signed({12'd0, x}) + (acc >>> 5));
+            // (no clamp: where the filter's result is taken, ws + wt <= 32 -- the weights are those of the triangle the fractions are in -- so it is
+            // a rounded mean of three bytes, x (32 - ws - wt) + A ws + B wt over 32, within 0..255; where it is not taken -- the point and the
+            // converted passes -- it is not used)
+            r = $signed({12'd0, x}) + (acc >>> 5);
+            tri3 = r[7:0];
         end
     endfunction
     wire [31:0] filt9 = { tri3(ta8b[31:24], e1v8b[39:30], e2v8b[39:30], ws8b, wt8b),
@@ -1890,4 +1858,40 @@ module rdp_div_rom (
     end
     assign point = e[24:10];
     assign slope = e[9:0];
+endmodule
+
+// One axis of the texture coordinate's clamp, mirror and mask (the model's tc_axis): the texel (v >> 5) and its neighbour (+ 1) in the tile
+// -- c0, c1, the wrapped coordinates -- and the fraction fr. The two are chosen first (0 below the tile's start, the tile's last texel
+// from there up, where the tile clamps), then each is masked (a mirror turns a texel in an odd repeat) by the mask's thermometer.
+module rdp_tcaxis (
+    input  wire signed [23:0] v,
+    input  wire [11:0]        lo, hi,
+    input  wire               clampbit, mirror,
+    input  wire [3:0]         mask,
+    input  wire               cpy,           // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped, its mask at most 10 bits
+    input  wire [2:0]         cm,
+    output wire [10:0]        c0, c1,
+    output wire [4:0]         fr
+);
+    wire [18:0] i0 = v[23:5];
+    wire [18:0] ia = i0 + {16'd0, cpy ? cm : 3'd0};
+    wire [18:0] ja = cpy ? ia : ia + 19'd1;
+    // the tile's last texel: (hi - lo) >> 2, signed
+    wire signed [12:0] df = $signed({1'b0, hi}) - $signed({1'b0, lo});
+    wire signed [10:0] mx = df[12:2];
+    wire        ce = !cpy && (clampbit || mask == 4'd0);          // clamped
+    wire        ng = ce && ia[18];                                 // below the start: 0
+    wire        gx = ce && !ia[18] && ($signed(ia) >= $signed({{8{mx[10]}}, mx}));   // at or past the end: the last
+    wire [3:0]  mq = (cpy && mask > 4'd10) ? 4'd10 : mask;
+    wire [15:0] t0 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ia[15:0];
+    wire [15:0] t1 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ja[15:0];
+    wire        m0 = mirror && mask != 4'd0 && t0[mq];
+    wire        m1 = mirror && mask != 4'd0 && t1[mq];
+    genvar b;
+    generate for (b = 0; b < 11; b = b + 1) begin : bb
+        wire mb = mask == 4'd0 || b < mq;
+        assign c0[b] = mb & (t0[b] ^ m0);
+        assign c1[b] = mb & (t1[b] ^ m1);
+    end endgenerate
+    assign fr = (cpy || ng || gx) ? 5'd0 : v[4:0];
 endmodule

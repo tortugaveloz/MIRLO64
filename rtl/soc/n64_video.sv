@@ -234,7 +234,7 @@ always_ff @(posedge clk) begin vi_line <= s_line[2] ^ s_line[1]; vi_frame <= s_f
 
 // ------------------------------------------------------------------ sys: DMA
 logic        epoch_sys, running;
-logic [9:0]  issued, got;          // (the reads in flight are their difference)
+logic [9:0]  infl;                 // the reads in flight (issued less come back kept: a count of its own, not their two counts' difference)
 // the picture, latched at the boundary: its rows, their pitch, the steps from one to the next, and what the vid side
 // draws it with (the window and the X_SCALE: static for the frame)
 logic        all;
@@ -294,10 +294,11 @@ wire  [31:0] rd_w = N64FB ? {m_rdata[15:0], m_rdata[31:16]} : m_rdata;
 // {R[2:1], G[2:1], B[2] of the low three bits of its channels, the 3-bit check of its 5551 word}: a word of it serves two colour words,
 // and is read before the first of each pair (and before a row's first word, if that is the second of its pair). A pixel whose byte's
 // check is its word's CRC-3 takes the shadow's low bits (the bit missing repeats the one above it), else the top three bits of each
-// channel again (the plain expansion). The 18 bits (a pixel's nine) ride in the FIFO word, above the hidden bits. Not for a woven frame (a
+// channel again (the plain expansion). A pixel's six bits -- whether its byte's check is its word's, and the byte's five others -- ride in the
+// FIFO word, above the hidden bits; the vid side forms the nine. Not for a woven frame (a
 // serrated 640 x 480 picture): its 307,200 words a frame would be more than the scan-out is sure of; it is shown as a 16-bit picture is
 // without the plane.
-localparam int FW = 56;
+localparam int FW = 50;
 logic        sh_f;                  // the frame's pictures has its shadow words read
 logic        s_next;                // the next read is a shadow word (after the group's hidden word)
 logic [31:0] sreg;                  // the shadow word that came back last
@@ -312,9 +313,13 @@ function automatic logic [2:0] sh_crc(input logic [15:0] w);            // lang/
     end
     return c;
 endfunction
-// a pixel's nine low bits: the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
-function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [7:0] s);
-    return (s[2:0] == sh_crc(c)) ? {s[7], s[6], s[6], s[5], s[4], s[4], s[3], s[3], s[3]} : {c[15:13], c[10:8], c[5:3]};
+// a pixel's shadow bits as the FIFO carries them: whether the byte's check is the colour's, and the byte's other five bits
+function automatic logic [5:0] sh_ok(input logic [15:0] c, input logic [7:0] s);
+    return {s[2:0] == sh_crc(c), s[7:3]};
+endfunction
+// ... and the pixel's nine low bits (vid side): the shadow byte's where it is that pixel's, else the colour's top three bits of each channel
+function automatic logic [8:0] sh_lo(input logic [15:0] c, input logic [5:0] q);
+    return q[5] ? {q[4], q[3], q[3], q[2], q[1], q[1], q[0], q[0], q[0]} : {c[15:13], c[10:8], c[5:3]};
 endfunction
 logic        h_next;                // the next read is the group's hidden word
 logic [31:0] hreg;
@@ -326,7 +331,7 @@ wire  [3:0]  h_nib = hreg[{tq_h[2:0], 2'b00} +: 4];
 wire         m_hid = h_next;
 wire         m_shd = !h_next && s_next;
 always_ff @(posedge clk) begin
-    if (rst) begin epoch_sys <= 0; running <= 0; issued <= 0; got <= 0; drop <= 0;
+    if (rst) begin epoch_sys <= 0; running <= 0; infl <= 0; drop <= 0;
                    col <= 0; raddr <= 0; all <= 1; tv_pal <= 0; h_next <= 0; wv_f <= 0; end
     else begin
         if (fb_sys) begin
@@ -347,19 +352,16 @@ always_ff @(posedge clk) begin
             // (a 32-bit picture's coverage is in its own words: no hidden plane)
             hid_f <= vi_aa && !hires && N64FB && !px32_n;
             sh_f <= vi_out32 && N64FB && !px32_n && !wv_rq;
-            issued <= 0; got <= 0; col <= 0;
-            drop <= issued - got - 10'(m_rvalid);
+            infl <= 0; col <= 0;
+            drop <= infl - 10'(m_rvalid);
             h_next <= vi_aa && !hires && N64FB && !px32_n;
             s_next <= vi_out32 && N64FB && !px32_n && !wv_rq;
         end else begin
             if (m_valid && m_ready && m_hid) begin
-                issued <= issued + 10'd1;
                 h_next <= 1'b0;
             end else if (m_valid && m_ready && m_shd) begin
-                issued <= issued + 10'd1;
                 s_next <= 1'b0;
             end else if (m_valid && m_ready) begin
-                issued <= issued + 10'd1;
                 rs_next <= 1'b0;
                 s_next <= sh_f && raddr[0];                  // (the next word is a pair's first)
                 raddr <= raddr + 24'd1;
@@ -375,7 +377,7 @@ always_ff @(posedge clk) begin
                     if (raddr[2:0] == 3'd7) h_next <= hid_f;   // the next word starts a group
                 end
             end
-            if (keep) got <= got + 10'd1;
+            infl <= infl + 10'(m_valid && m_ready) - 10'(keep);
             if (m_rvalid && drop != 0) drop <= drop - 10'd1;
         end
     end
@@ -392,17 +394,17 @@ always_ff @(posedge clk) begin
 end
 // (a registered stage in front of the FIFO, with the epoch of the word's arrival)
 logic        f_we, f_ep;
-logic [54:0] f_wd;
+logic [48:0] f_wd;
 // (the colour word's pixels, the left one in rd_w's low half, and its bytes of the shadow word: the pair's first word's are the upper two,
 // the left pixel's first)
 wire  [15:0] f_sb = tq_h[0] ? sreg[15:0] : sreg[31:16];
-wire  [17:0] f_lo = {sh_lo(rd_w[31:16], f_sb[7:0]), sh_lo(rd_w[15:0], f_sb[15:8])};
+wire  [11:0] f_lo = {sh_ok(rd_w[31:16], f_sb[7:0]), sh_ok(rd_w[15:0], f_sb[15:8])};
 always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3] && !tq_h[5]; f_wd <= {tq_h[4], f_lo, h_nib, rd_w}; f_ep <= epoch_sys; end
 // ask while the frame is not all asked for and the FIFO has room for what is in flight
 // (room and urgency registered: the FIFO's level must not reach the
 // arbiter's grant combinationally; the level is a few cycles late anyway, and
 // the margin to 512 covers)
-wire [15:0] inflight = 16'(issued - got);                // (below 1024)
+wire [15:0] inflight = 16'(infl);                        // (below 1024)
 logic       room, low;
 always_ff @(posedge clk) room <= (16'(wlevel) + inflight) < 16'((1 << FAW) - 64);
 // urgent below a quarter of the FIFO -- at every frame's start, and wherever the other ports have left it behind: the CPU's and the
@@ -490,7 +492,7 @@ wire [15:0] nx_pix = !(nv && hd_ok) || flush ? 16'd0 : px32_v ? p32_hi : wpos ? 
 logic [1:0] dbl_s, o32_s;
 always_ff @(posedge clk_vid) begin dbl_s <= {dbl_s[0], vi_deblur}; o32_s <= {o32_s[0], vi_out32}; end
 wire [8:0]  nx_lo  = !(nv && hd_ok) || flush || !o32_s[1] ? 9'd0 : px32_v ? {f_q[10:8], f_q[2:0], f_q[26:24]}
-                   : sh_v ? (wpos ? f_q[53:45] : f_q[44:36]) : 9'd0;
+                   : sh_v ? (wpos ? sh_lo(f_q[31:16], f_q[47:42]) : sh_lo(f_q[15:0], f_q[41:36])) : 9'd0;
 wire [1:0]  nx_hid = !(nv && hd_ok) || flush ? 2'd0 : px32_v ? f_q[22:21] : wpos ? f_q[35:34] : f_q[33:32];
 wire        nx_pv  = nv && hd_ok && !flush;
 
@@ -550,40 +552,16 @@ always_ff @(posedge clk_vid) begin aa_s <= {aa_s[0], vi_aa}; dv_s <= {dv_s[0], v
 assign aa_on = aa_s[1] && N64FB && !nofilt_v && !dbl_s[1];     // (Deblur: no anti-alias, no divot -- dv_on follows aa_on)
 assign dd_on = dd_s[1] && N64FB && !nofilt_v && !o32_s[1];     // (32-bit: no dedither)
 assign dv_on = dv_s[1] && aa_on;
-function automatic logic one6(input logic [5:0] x);               // exactly one of six
-    return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
-endfunction
-// second smallest and second largest of six, by rank: each pair compared once (15 compares; equal values in the order
-// of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one
-function automatic logic [9:0] mm2(input logic [4:0] a, b, c, d, e, f);
-    logic [4:0] v [6];
-    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
-    logic [4:0] lo, hi;
-    v[0] = a; v[1] = b; v[2] = c; v[3] = d; v[4] = e; v[5] = f;
-    for (int i = 0; i < 6; i++) begin
-        bf[i] = 6'd0;
-        for (int j = i + 1; j < 6; j++) bf[i][j] = v[j] < v[i];
-    end
-    for (int i = 0; i < 6; i++)
-        for (int j = 0; j < i; j++) bf[i][j] = !bf[j][i];
-    for (int i = 0; i < 6; i++) begin
-        af[i] = ~bf[i];
-        af[i][i] = 1'b0;
-    end
-    lo = 5'd0; hi = 5'd0;
-    for (int i = 0; i < 6; i++) begin
-        if (one6(bf[i])) lo = lo | v[i];
-        if (one6(af[i])) hi = hi | v[i];
-    end
-    return {lo, hi};
-endfunction
+// second smallest and second largest of six: vi_mm2 (below)
 function automatic logic [7:0] pen(input logic [4:0] c, input logic [2:0] lo, input logic [9:0] m, input logic [2:0] w);
-    logic [4:0] mn, mx;
+    logic signed [5:0] d1, d2;
     logic signed [6:0] d;
     logic signed [10:0] o;
-    mn = m[9:5] < c ? m[9:5] : c;
-    mx = m[4:0] > c ? m[4:0] : c;
-    d = $signed({2'b0, mn}) + $signed({2'b0, mx}) - $signed({1'b0, c, 1'b0});
+    // (mn + mx - 2c, mn = min(m[9:5], c) and mx = max(m[4:0], c): each one's step from c, taken where it is a step down / up, the sign of
+    // its difference from c -- one subtraction in place of a compare and a choice)
+    d1 = $signed({1'b0, m[9:5]}) - $signed({1'b0, c});
+    d2 = $signed({1'b0, m[4:0]}) - $signed({1'b0, c});
+    d = (d1[5] ? {d1[5], d1} : 7'sd0) + (d2[5] ? 7'sd0 : {1'b0, d2});
     o = $signed({3'b0, c, lo}) + d * $signed({1'b0, w});
     return o[7:0];
 endfunction
@@ -599,9 +577,10 @@ wire [8:0]  clo = wl[2];
 wire [2:0]  cw  = ~{ctr[0], ctr[17:16]};        // 7 - the coverage
 wire [14:0] n0 = tap(wa[1], ctr), n1 = tap(wa[3], ctr), n2 = tap(wc[0], ctr),
             n3 = tap(wc[4], ctr), n4 = tap(wb[1], ctr), n5 = tap(wb[3], ctr);
-wire [9:0]  mr = mm2(n0[14:10], n1[14:10], n2[14:10], n3[14:10], n4[14:10], n5[14:10]);
-wire [9:0]  mg = mm2(n0[9:5],   n1[9:5],   n2[9:5],   n3[9:5],   n4[9:5],   n5[9:5]);
-wire [9:0]  mb = mm2(n0[4:0],   n1[4:0],   n2[4:0],   n3[4:0],   n4[4:0],   n5[4:0]);
+wire [9:0]  mr, mg, mb;
+vi_mm2 mm_r (.a(n0[14:10]), .b(n1[14:10]), .c(n2[14:10]), .d(n3[14:10]), .e(n4[14:10]), .f(n5[14:10]), .r(mr));
+vi_mm2 mm_g (.a(n0[9:5]),   .b(n1[9:5]),   .c(n2[9:5]),   .d(n3[9:5]),   .e(n4[9:5]),   .f(n5[9:5]),   .r(mg));
+vi_mm2 mm_b (.a(n0[4:0]),   .b(n1[4:0]),   .c(n2[4:0]),   .d(n3[4:0]),   .e(n4[4:0]),   .f(n5[4:0]),   .r(mb));
 wire        aa_px = aa_on && ctr[18] && !complete(ctr);
 // a 5551 / 565 pixel as R8 G8 B8. The N64's VI takes a 5551 channel as its
 // five bits << 3 (the console's VI_lineProcess, angrylion's & 0xf8: white is
@@ -624,7 +603,7 @@ function automatic logic [7:0] ddch(input logic [4:0] c, input logic [39:0] n, i
         dn = dn + {3'd0, v[i] && n[5*i +: 5] < c};
     end
     o = {2'b0, c, 3'b0} + {6'd0, up} - {6'd0, dn};
-    return o[8] ? 8'hFF : o[7:0];                 // (above 255: 255; never below 0)
+    return o[7:0];                                // (8 c + up - dn is 0..248: up is 0 at c = 31, and 8 c + 8 at most below; dn is 0 at c = 0 and 8 at most above)
 endfunction
 wire [7:0]  rv = {wa[3][18], wa[2][18], wa[1][18], wc[3][18], wc[1][18], wb[3][18], wb[2][18], wb[1][18]};
 `define DDN(h) {wa[3][h -: 5], wa[2][h -: 5], wa[1][h -: 5], wc[3][h -: 5], wc[1][h -: 5], wb[3][h -: 5], wb[2][h -: 5], wb[1][h -: 5]}
@@ -645,8 +624,10 @@ function automatic logic [7:0] med3(input logic [7:0] a, b, c);
     ba = b < a; ca = c < a; cb = c < b;
     return ({8{ba ^ ca}} & a) | ({8{!ba ^ cb}} & b) | ({8{ca ^ cb}} & c);
 endfunction
-wire [23:0] dl = fv[2] ? fa2 : fa1, dr = fv[0] ? fa0 : fa1;
-wire        dv_px = dv_on && fv[1] && (fe[0] || fe[1] || fe[2]);
+// (a neighbour that is not in the picture counts as the centre, and the median of the centre twice and any value is the centre: such a pixel
+// is left as it is, with no choice in front of the median)
+wire [23:0] dl = fa2, dr = fa0;
+wire        dv_px = dv_on && fv[0] && fv[1] && fv[2] && (fe[0] || fe[1] || fe[2]);
 logic [23:0] pq;
 always_ff @(posedge clk_vid) if (ce && adv)
     pq <= dv_px ? {med3(dl[23:16], fa1[23:16], dr[23:16]), med3(dl[15:8], fa1[15:8], dr[15:8]), med3(dl[7:0], fa1[7:0], dr[7:0])} : fa1;
@@ -730,5 +711,53 @@ always_ff @(posedge clk_vid) begin
     vga_woven <= wv_v;
 end
 
+endmodule
+
+// The second smallest and the second largest of six 5-bit values {lo, hi}, by rank: each pair compared once (15 compares; equal values
+// in the order of their numbers), then the value that exactly one of the others comes before, and the one that comes before exactly one.
+// A compare is two LUTs, the low three bits' (a six-input LUT, kept as a node of its own) and that with the top two: left to the
+// synthesis a `<` of five bits took four (a carry chain's, or two four-input LUTs and a third).
+module vi_mm2 (
+    input  wire [4:0] a, b, c, d, e, f,
+    output wire [9:0] r
+);
+    wire [4:0] v [6];
+    assign v[0] = a; assign v[1] = b; assign v[2] = c; assign v[3] = d; assign v[4] = e; assign v[5] = f;
+    (* keep *) wire [14:0] lw;                      // the compare (i, j), j > i: v[j] < v[i] on the low three bits
+    wire [14:0] lt;                                 // ... and on all five
+    function automatic int cx(input int i, input int j);     // the pair (i, j)'s place, j > i
+        return i * 6 - i * (i + 1) / 2 + (j - i - 1);
+    endfunction
+    genvar gi, gj;
+    generate for (gi = 0; gi < 6; gi++) begin : ci
+        for (gj = gi + 1; gj < 6; gj++) begin : cj
+            wire [4:0] x = v[gj], y = v[gi];
+            assign lw[cx(gi, gj)] = (~x[2] & y[2]) | (~(x[2] ^ y[2]) & ((~x[1] & y[1]) | (~(x[1] ^ y[1]) & ~x[0] & y[0])));
+            assign lt[cx(gi, gj)] = (x[4:3] < y[4:3]) | ((x[4:3] == y[4:3]) & lw[cx(gi, gj)]);
+        end
+    end endgenerate
+    function automatic logic one6(input logic [5:0] x);               // exactly one of six
+        return x == 6'b000001 || x == 6'b000010 || x == 6'b000100 || x == 6'b001000 || x == 6'b010000 || x == 6'b100000;
+    endfunction
+    logic [5:0] bf [6], af [6];                     // bf[i][j]: v[j] comes before v[i]; af[i][j]: after it
+    logic [4:0] lo, hi;
+    always_comb begin
+        for (int i = 0; i < 6; i++) begin
+            bf[i] = 6'd0;
+            for (int j = i + 1; j < 6; j++) bf[i][j] = lt[cx(i, j)];
+        end
+        for (int i = 0; i < 6; i++)
+            for (int j = 0; j < i; j++) bf[i][j] = !bf[j][i];
+        for (int i = 0; i < 6; i++) begin
+            af[i] = ~bf[i];
+            af[i][i] = 1'b0;
+        end
+        lo = 5'd0; hi = 5'd0;
+        for (int i = 0; i < 6; i++) begin
+            if (one6(bf[i])) lo = lo | v[i];
+            if (one6(af[i])) hi = hi | v[i];
+        end
+    end
+    assign r = {lo, hi};
 endmodule
 `default_nettype wire

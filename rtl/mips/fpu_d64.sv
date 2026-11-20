@@ -27,6 +27,12 @@
 // acc, 57 bits: [56] carry, [55] the hidden bit of a normal number, [54:3] the fraction, [2] guard, [1] round, [0] sticky.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+// (and the multiplexers restructured: the unit is a few states that take a result or the next of a few operands in turn, a few cycles at a time, and
+// nothing in it is in a path of the pipeline's advance but busy, a register; the project holds MUX_RESTRUCTURE off for the CPU's clock. One attribute
+// string: only the last of several is taken)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module fpu_d64 (
     input  wire         clk,
     input  wire         rst,

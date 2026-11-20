@@ -133,6 +133,9 @@
 //    Nothing the caches' tags say reaches the pipeline's advance.
 `default_nettype none
 
+// (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
+// and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
 module mips_core #(
     parameter int TLB_N = 32,               // the VR4300's; in a RAM, so the count costs no logic
     // 0: no TLB -- as if it never held a valid entry: a mapped access takes
@@ -584,8 +587,10 @@ wire         game_view = MAP_HI && mon_klo && mon_game && !c0_status[2] && !c0_s
 function automatic logic [31:0] hx32(input logic [63:0] v); return v[63:32] ^ {32{v[31]}}; endfunction
 function automatic logic [63:0] v64(input logic [31:0] hx, input logic [31:0] lo); return {hx ^ {32{lo[31]}}, lo}; endfunction
 
-logic [31:0] c0_index, c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_wired, c0_badvaddr,
-             c0_count, c0_entryhi, c0_compare, c0_cause, c0_epc, c0_config, c0_errorepc;
+logic [31:0] c0_index, c0_wired, c0_cause, c0_config;
+// (the others -- Count, Compare, EntryHi, EntryLo0/1, Context, PageMask, EPC, ErrorEPC, BadVAddr, and the monitor level's mon_badv -- are the
+// registers of mips_c0r, below the core: they are written from here by the enables that the sequential block ends with)
+wire  [31:0] c0_entrylo0, c0_entrylo1, c0_context, c0_pagemask, c0_badvaddr, c0_count, c0_entryhi, c0_compare, c0_epc, c0_errorepc;
 // (no LLAddr, WatchLo, WatchHi, TagLo: they only store what mtc0 gives them -- LL's address, the watch of an access that no exception follows
 // here, a cache tag -- and no game reads them back; mfc0 finds 0 there and mtc0 does nothing)
 logic        count_frac;
@@ -681,7 +686,7 @@ typedef struct packed {
     logic [16:0] pfn;                        // pa[28:12]
 } tre_t;
 logic        tr_lastf;                       // the last TLB exception was a fetch's
-logic [31:0] mon_badv;                       // (MON) the address of the last translation fault taken by the monitor level: COP0 22
+wire  [31:0] mon_badv;                       // (MON) the address of the last translation fault taken by the monitor level: COP0 22
 logic [8:0]  tr_raddr, tr_waddr;
 logic        tr_we_d, tr_we_i;
 tre_t        tr_wdata, tr_qd, tr_qi;
@@ -1231,7 +1236,6 @@ wire [65:0]  dv_t   = {1'b0, dv_x} + dv_y + 66'(!dv_neg);
 wire         dv_ok  = !dv_t[65];                             // the remainder so far has the divisor in it
 wire         dv_nneg = md_ph == DV_Q ? md_nr ^ dv_neg : md_nr;
 wire [63:0]  dv_nin = md_ph == DV_R ? md_r : {md_ah, md_ma};
-wire [63:0]  dv_n   = (dv_nin ^ {64{dv_nneg}}) + 64'(dv_nneg);
 // which words of HI and LO are not 32-bit values (the upper word is not the lower word's sign)
 wire         lo_isw = lo_up != {32{lo_r[31]}}, hi_isw = hi_up != {32{hi_r[31]}}, mt_isw = md_ah != {32{md_ma[31]}};
 // =============================================================== M
@@ -1353,7 +1357,10 @@ wire         dv_32  = XDIV && (m_c.md == MD_DIV || m_c.md == MD_DIVU);
 wire         dv_s32 = m_c.md == MD_DIV;
 wire [63:0]  dv_a   = dv_32 ? {{32{dv_s32 && m_a_lo[31]}}, m_a_lo} : m_a64;
 wire         dv_as  = (m_c.md == MD_DIV || m_c.md == MD_DDIV) && dv_a[63];     // the dividend is negative
-wire [63:0]  dv_an  = (dv_a ^ {64{dv_as}}) + 64'(dv_as);
+// (one negator: the dividend's magnitude as a divide starts is taken while no divide is under way (md_dvon clear), the quotient's and the
+// remainder's sign changes while one is: the two never meet)
+wire [63:0]  dv_n   = ((md_dvon ? dv_nin : dv_a) ^ {64{md_dvon ? dv_nneg : dv_as}}) + 64'(md_dvon ? dv_nneg : dv_as);
+wire [63:0]  dv_an  = dv_n;
 wire [31:0]  m_xha = m_a_hx ^ {32{m_a_lo[31]}};
 wire [31:0]  m_xhb = m_c.b_imm ? (m_c.imm_zero ? 32'd0 : {32{m_insn[15]}}) : m_st_hx ^ {32{m_st_lo[31]}};
 // (FAST: a compare is the 64-bit subtraction too -- E's adder subtracts the lower words for it (e_k_sub), its carry is m_xc,
@@ -1966,15 +1973,50 @@ always_ff @(posedge clk) begin
     end
 end
 
+// D -> E: the registers' upper words, cleared when the register is in flight (rf_ah, rf_bh: the register file's word, or zero)
+wire e_ld_d = !rst && !flush && e_adv;
+mips_ldr #(32) e_rah (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah), .q(e_ra_hx));
+mips_ldr #(32) e_rbh (.clk, .en(e_ld_d), .clr(!W64 || d_rt == 0 || inflight_rt), .d(rfq_bh), .q(e_rb_hx));
+
+// =============================================================== COP0's registers that only take values (mips_c0r, below)
+// Count, Compare, EntryHi, EntryLo0/1, Context, PageMask, EPC, ErrorEPC, BadVAddr and the monitor level's BadVAddr (COP0 22): what writes
+// them is found here, as enables in the order of precedence of the sequential block they were written in -- an exception's, mtc0's (it
+// wins over the exception's: the two do not happen together) and tlbr's, the last.
+// (a translation fault the monitor level takes -- TLB_RAM -- leaves the game's BadVAddr and EntryHi as they are; a device access of
+// the game's, in the monitor, leaves BadVAddr alone: the runtime works the address out; TLB_RAM: a fetch's too -- its page's entry
+// is the runtime's to fill; TLB_EN, a device behind a mapped page: the monitor level reads the page's physical address)
+wire c0_step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
+wire c0_cnt_hit;
+wire c0_mtw = m_commit_e && m_c.mtc0;
+mips_c0r c0r (
+    .clk, .rst, .step(c0_step), .count_frac,
+    .m_st_lo, .m_epc, .m_badv, .m_addr, .m_exc_v, .m_page(m_tlbq[31:12]),
+    .e_mask(sc_e.mask), .e_vpn(sc_e.vpn), .e_asid(sc_e.asid), .e_lo0(sc_e.lo0), .e_lo1(sc_e.lo1), .e_g(sc_e.g),
+    .w_count(c0_mtw && m_insn[15:11] == 5'd9), .w_compare(c0_mtw && m_insn[15:11] == 5'd11),
+    .w_epc_mt(c0_mtw && m_insn[15:11] == 5'd14), .w_eepc_mt(c0_mtw && m_insn[15:11] == 5'd30),
+    .w_bv_mt(c0_mtw && m_insn[15:11] == 5'd8 && (TLB_RAM || TLB_EN) && MON && c0_status[2]),
+    .w_ctx_hi(c0_mtw && m_insn[15:11] == 5'd4), .w_ctx_lo(c0_mtw && m_insn[15:11] == 5'd4 && MON && c0_status[2]),
+    .w_el0(c0_mtw && m_insn[15:11] == 5'd2), .w_el1(c0_mtw && m_insn[15:11] == 5'd3),
+    .w_pm(c0_mtw && m_insn[15:11] == 5'd5), .w_eh(c0_mtw && m_insn[15:11] == 5'd10),
+    .x_eepc((m_take_int || m_take_exc) && m_to_mon), .x_epc((m_take_int || m_take_exc) && !m_to_mon && !c0_status[1]),
+    .x_bv(m_take_exc && m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon),
+    .x_eh_r(m_take_exc && TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon),
+    .x_mbv_r(m_take_exc && m_tr_mon), .x_mbv_t(m_take_exc && m_tdev),
+    .x_ma(m_take_exc && !TLB_EN && !m_exc_v && !m_tr_mon), .x_ctx_ma(m_take_exc && !TLB_EN && !m_exc_v && !m_tr_mon && !TLB_RAM),
+    .x_tlbx(m_take_exc && m_tlbx),
+    .w_tlbr(sc == SC_RUN && sc_mode == SCM_READ),
+    .count(c0_count), .compare(c0_compare), .entryhi(c0_entryhi), .entrylo0(c0_entrylo0), .entrylo1(c0_entrylo1), .ctx(c0_context),
+    .pagemask(c0_pagemask), .badvaddr(c0_badvaddr), .epc(c0_epc), .errorepc(c0_errorepc), .mon_badv, .cnt_hit(c0_cnt_hit)
+);
+
 // =============================================================== sequential
 integer k;
 always_ff @(posedge clk) begin
     if (rst) begin
         f_pc <= reset_pc; f_ok <= 0; fs <= FS_RUN; ds_next <= 0; rd_pend <= 0; f_discard <= 0;
         d_valid <= 0; e_valid <= 0; m_valid <= 0; w_valid <= 0;
-        c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0; c0_count <= 0; c0_compare <= 0;
-        c0_wired <= 0; c0_index <= 0; c0_entryhi <= 0; c0_entrylo0 <= 0; c0_entrylo1 <= 0; c0_pagemask <= 0;
-        c0_context <= 0; c0_epc <= 0; c0_errorepc <= 0; c0_badvaddr <= 0;
+        c0_status <= 32'h34000000; c0_config <= 32'h7006E463; c0_cause <= 0;
+        c0_wired <= 0; c0_index <= 0;
         count_frac <= 0; c0_random <= 5'd31; ll_bit <= 0; fcc <= 0;
         hi_r <= 0; lo_r <= 0; hi_up <= 0; lo_up <= 0; hi_wide <= 0; lo_wide <= 0; m_ph <= 0; sh_on <= 0; m_shwait <= 0; m_xshift <= 0;
         hilo_soft <= 0; tr_lastf <= 0; mon_game <= 0; mon_mi <= 0; mon_bd <= 0; mon_code <= 0; mon_mem4 <= 0; mon_klo <= 0; mon_sp <= 0;
@@ -1987,15 +2029,10 @@ always_ff @(posedge clk) begin
     end else begin
         // ---------------------------------------------------- Count / Compare
         begin
-            logic step;
-            step = SIM_COUNT_RETIRE ? (m_commit || m_take_exc) : 1'b1;
-            if (step) begin
+            if (c0_step) begin
                 c0_random <= rnd_dec;
                 count_frac <= !count_frac;
-                if (count_frac) begin
-                    c0_count <= c0_count + 32'd1;
-                    if (c0_count + 32'd1 == c0_compare) c0_cause[15] <= 1'b1;
-                end
+                if (c0_cnt_hit) c0_cause[15] <= 1'b1;
             end
         end
         c0_cause[10] <= irq_rcp;
@@ -2031,38 +2068,16 @@ always_ff @(posedge clk) begin
         if (m_take_int || m_take_exc) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
-                c0_errorepc <= m_epc;
                 c0_status[2] <= 1'b1;
                 mon_bd <= m_dly; mon_code <= m_take_int ? 5'd31 : m_code;
             end else begin
-                if (!c0_status[1]) begin
-                    c0_epc <= m_epc;
-                    c0_cause[31] <= m_dly;
-                end
+                if (!c0_status[1]) c0_cause[31] <= m_dly;
                 c0_cause[6:2] <= m_take_int ? 5'd0 : m_ccode;
                 c0_cause[29:28] <= (!m_take_int && m_exc_v && m_code == 5'd11) ? 2'd1 : 2'd0;   // CE: COP1
                 c0_status[1] <= 1'b1;
             end
             if (m_take_exc) begin
-                // (TLB_RAM: a fetch's too -- its page's entry is the runtime's to fill; a device access of the
-                // game's, in the monitor, leaves BadVAddr alone: the runtime works the address out)
-                if (m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon) c0_badvaddr <= m_badv;
                 if (TLB_RAM && m_code >= 5'd1 && m_code <= 5'd3) tr_lastf <= m_exc_v;
-                if (TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon) c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                // (the monitor level's: the game's BadVAddr and EntryHi stay as they are)
-                if (m_tr_mon) mon_badv <= m_exc_v ? m_badv : m_addr;
-                // (TLB_EN, a device behind a mapped page: the monitor level reads the page's physical address)
-                if (m_tdev) mon_badv <= {m_tlbq[31:12], m_addr[11:0]};
-                if (!TLB_EN && !m_exc_v && !m_tr_mon) begin         // a TLB fault
-                    c0_badvaddr <= m_addr;
-                    if (!TLB_RAM) c0_context <= (c0_context & 32'hFF800000) | ((m_addr >> 13) << 4);
-                    c0_entryhi <= (m_addr & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                end
-                if (m_tlbx) begin                                   // a TLB exception: BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address
-                    c0_badvaddr <= m_badv;
-                    c0_context <= (c0_context & 32'hFF800000) | ((m_badv >> 13) << 4);
-                    c0_entryhi <= (m_badv & 32'hFFFFE000) | (c0_entryhi & 32'hFF);
-                end
             end
         end
 
@@ -2083,30 +2098,22 @@ always_ff @(posedge clk) begin
             if (m_c.mtc0) begin
                 case (m_insn[15:11])
                 5'd1, 5'd15: ;                                      // Random, PRId: read-only
-                5'd9:  begin c0_count <= m_st_lo; count_frac <= 1'b0; end   // (a write starts Count's half-rate phase again, as the VR4300's)
-                5'd11: begin c0_compare <= m_st_lo; c0_cause[15] <= 1'b0; end
+                5'd9:  count_frac <= 1'b0;   // (a write starts Count's half-rate phase again, as the VR4300's)
+                5'd11: c0_cause[15] <= 1'b0;
                 5'd13: begin c0_cause[9:8] <= m_st_lo[9:8];
                              // (the monitor level delivers a TLB exception to the game: its BD and ExcCode are its to set)
                              if (MON && c0_status[2]) begin c0_cause[31] <= m_st_lo[31]; c0_cause[6:2] <= m_st_lo[6:2]; end end
                 // the VR4300's writable bits (the constant rest is not stored; BadVAddr,
                 // XContext, TagHi and the reserved registers take no write)
                 // (BadVAddr: the monitor level's, for the TLB exception it delivers to the game -- and to put the game's back, a state loaded)
-                5'd8:  if ((TLB_RAM || TLB_EN) && MON && c0_status[2]) c0_badvaddr <= m_st_lo;
                 5'd0:  begin c0_index[5:0] <= m_st_lo[5:0]; c0_index[31] <= m_st_lo[31]; end   // (P is writable, as the VR4300's)
-                5'd2:  c0_entrylo0 <= m_st_lo & 32'h3FFFFFFF; 5'd3: c0_entrylo1 <= m_st_lo & 32'h3FFFFFFF;
-                5'd4:  begin c0_context[31:23] <= m_st_lo[31:23];
-                             // (likewise its BadVPN2: the tables' faults do not set it)
-                             if (MON && c0_status[2]) c0_context[22:4] <= m_st_lo[22:4]; end
-                5'd5:  c0_pagemask <= m_st_lo & 32'h01FFE000;
                 5'd6:  begin c0_wired <= m_st_lo & 32'h3F; c0_random <= 5'd31; end
                 5'd7:  begin hilo_soft <= W64 && !XMD && m_st_lo[0]; if (MON) mon_game <= m_st_lo[1]; if (MON && MI && m_st_lo[9]) mon_mi <= m_st_lo[8];
                              if (MON && m_st_lo[11]) mon_mem4 <= m_st_lo[10];          // (bit 11: the write is of bit 10)
                              if (MAP_HI && m_st_lo[13]) mon_klo <= m_st_lo[12];        // (bit 13: of bit 12)
                              if (SPW && m_st_lo[15]) mon_sp <= m_st_lo[14]; end        // (bit 15: of bit 14)
-                5'd10: c0_entryhi <= m_st_lo & 32'hFFFFE0FF;  5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
-                5'd14: c0_epc <= m_st_lo;
+                5'd12: c0_status <= m_st_lo & 32'hFFF7FFFF;   // (Status bit 19 is not writable)
                 5'd16: c0_config <= (c0_config & ~32'h0F00800F) | (m_st_lo & 32'h0F00800F);
-                5'd30: c0_errorepc <= m_st_lo;
                 default: ;
                 endcase
             end
@@ -2213,7 +2220,6 @@ always_ff @(posedge clk) begin
                 e_fb_m <= !d_c.b_imm && !(JT && d_c.br == B_JR) && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
                 e_fb_w <= !d_c.b_imm && !(JT && d_c.br == B_JR) && m_wr && m_c.rd == d_rt && d_rt != 0;
             end
-            e_ra_hx <= rf_ah; e_rb_hx <= rf_bh;
             e_aw <= rf_aw;
             e_hxeq <= (rf_aw && rf_bw) ? rfq_ah == rfq_bh : !rf_aw && !rf_bw;     // (a masked hx is zero)
             e_fexc <= d_fexc; e_fexc_code <= d_fexc_code;
@@ -2445,10 +2451,6 @@ always_ff @(posedge clk) begin
             sc_idx <= sc_k; sc_x <= tlb_xlat(tlb_q, sc_va);
             if (sc_mode == SCM_READ) begin              // tlbr: the registers take the entry (tlbr waits in M for this)
                 sc <= SC_DONE;
-                c0_pagemask <= {7'd0, sc_e.mask, 13'd0};
-                c0_entryhi  <= {sc_e.vpn, 5'd0, sc_e.asid};
-                c0_entrylo0 <= {sc_e.lo0, sc_e.g};
-                c0_entrylo1 <= {sc_e.lo1, sc_e.g};
             end
             else if (sc_match) begin sc_hit <= 1; sc <= SC_DONE; end
             else if (!TLB_EN || sc_k == 5'(TLB_N - 1)) begin sc_hit <= 0; sc <= SC_DONE; end
@@ -2591,5 +2593,83 @@ always_ff @(posedge clk) begin
     end
 end
 
+endmodule
+
+// COP0's registers that only take values: written, never decided on, so their muxes are not on any path of the pipeline's advance
+// (MUX_RESTRUCTURE is on for this module alone of the core's, which holds it off for its clock: the 32-bit registers with two or three
+// sources become clock-enabled registers with a synchronous load, ~200 ALUTs fewer)
+(* altera_attribute = "-name MUX_RESTRUCTURE ON" *)
+module mips_c0r (
+    input  wire         clk, rst,
+    input  wire         step, count_frac,              // Count counts on every second step
+    input  wire  [31:0] m_st_lo, m_epc, m_badv, m_addr,
+    input  wire         m_exc_v,
+    input  wire  [19:0] m_page,                        // the physical page a mapped access went to (mon_badv)
+    input  wire  [11:0] e_mask, input wire [18:0] e_vpn, input wire [7:0] e_asid, input wire [30:0] e_lo0, e_lo1, input wire e_g,    // tlbr's entry
+    // mtc0 to ...
+    input  wire         w_count, w_compare, w_epc_mt, w_eepc_mt, w_bv_mt, w_ctx_hi, w_ctx_lo, w_el0, w_el1, w_pm, w_eh,
+    // an exception: EPC / ErrorEPC; BadVAddr; EntryHi (the tables' fault); mon_badv (the tables' fault, a device behind a mapped page);
+    // a fault with no TLB (BadVAddr, Context's BadVPN2, EntryHi); a TLB exception (the same three)
+    input  wire         x_eepc, x_epc, x_bv, x_eh_r, x_mbv_r, x_mbv_t, x_ma, x_ctx_ma, x_tlbx,
+    input  wire         w_tlbr,
+    output logic [31:0] count, compare, entryhi, entrylo0, entrylo1, ctx, pagemask, badvaddr, epc, errorepc, mon_badv,
+    output wire         cnt_hit                        // Count + 1 is Compare, as Count counts
+);
+assign cnt_hit = count_frac && (count + 32'd1 == compare);
+always_ff @(posedge clk) begin
+    if (rst) begin
+        count <= 0; compare <= 0; entryhi <= 0; entrylo0 <= 0; entrylo1 <= 0; pagemask <= 0; ctx <= 0; epc <= 0; errorepc <= 0; badvaddr <= 0;
+    end else begin
+        if (step && count_frac) count <= count + 32'd1;
+        // an exception
+        if (x_eepc) errorepc <= m_epc;
+        if (x_epc) epc <= m_epc;
+        if (x_bv) badvaddr <= m_badv;
+        if (x_eh_r) entryhi <= (m_badv & 32'hFFFFE000) | (entryhi & 32'hFF);
+        if (x_mbv_r) mon_badv <= m_exc_v ? m_badv : m_addr;
+        if (x_mbv_t) mon_badv <= {m_page, m_addr[11:0]};
+        if (x_ma) begin
+            badvaddr <= m_addr;
+            if (x_ctx_ma) ctx <= (ctx & 32'hFF800000) | ((m_addr >> 13) << 4);
+            entryhi <= (m_addr & 32'hFFFFE000) | (entryhi & 32'hFF);
+        end
+        if (x_tlbx) begin                              // BadVAddr, Context's BadVPN2 and EntryHi's VPN2 take the address
+            badvaddr <= m_badv;
+            ctx <= (ctx & 32'hFF800000) | ((m_badv >> 13) << 4);
+            entryhi <= (m_badv & 32'hFFFFE000) | (entryhi & 32'hFF);
+        end
+        // mtc0 (the VR4300's writable bits: the constant rest is not stored; BadVAddr is the monitor level's, for the TLB exception it
+        // delivers to the game -- and to put the game's back, a state loaded; likewise Context's BadVPN2: the tables' faults do not set it)
+        if (w_count) count <= m_st_lo;
+        if (w_compare) compare <= m_st_lo;
+        if (w_bv_mt) badvaddr <= m_st_lo;
+        if (w_el0) entrylo0 <= m_st_lo & 32'h3FFFFFFF;
+        if (w_el1) entrylo1 <= m_st_lo & 32'h3FFFFFFF;
+        if (w_ctx_hi) ctx[31:23] <= m_st_lo[31:23];
+        if (w_ctx_lo) ctx[22:4] <= m_st_lo[22:4];
+        if (w_pm) pagemask <= m_st_lo & 32'h01FFE000;
+        if (w_eh) entryhi <= m_st_lo & 32'hFFFFE0FF;
+        if (w_epc_mt) epc <= m_st_lo;
+        if (w_eepc_mt) errorepc <= m_st_lo;
+        // tlbr: the registers take the entry (tlbr waits in M for this)
+        if (w_tlbr) begin
+            pagemask <= {7'd0, e_mask, 13'd0};
+            entryhi  <= {e_vpn, 5'd0, e_asid};
+            entrylo0 <= {e_lo0, e_g};
+            entrylo1 <= {e_lo1, e_g};
+        end
+    end
+end
+endmodule
+
+// A register with a clock enable and a synchronous clear: a stage's operand that is zeroed when its source is not the register file's
+// (MUX_RESTRUCTURE is on for this module alone of the core's: the clear is the register's own, not a gate on each bit's data)
+(* altera_attribute = "-name MUX_RESTRUCTURE ON" *)
+module mips_ldr #(parameter int W = 32) (
+    input  wire         clk, en, clr,
+    input  wire [W-1:0] d,
+    output logic [W-1:0] q
+);
+always_ff @(posedge clk) if (en) q <= clr ? '0 : d;
 endmodule
 `default_nettype wire
