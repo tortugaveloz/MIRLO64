@@ -56,5 +56,5 @@ clean:
 .PHONY: all clean
 
 # rdp_task (sim/rdp) built here: a task dump's RDP commands, for task2rdps.sh
-$(B)/rdp_task: ../rdp/rdp_task.c ../rsp/rsp.c $(M)/rdp.c $(M)/rdp.h | $(B)
-	$(CC) -O2 -DRDP_N64 -I../rsp -I$(M) ../rdp/rdp_task.c ../rsp/rsp.c $(M)/rdp.c -o $@
+$(B)/rdp_task: ../rdp/rdp_task.c ../rdp/rdp_time.c ../rdp/rdp_time.h ../rsp/rsp.c $(M)/rdp.c $(M)/rdp.h | $(B)
+	$(CC) -O2 -DRDP_N64 -DRDP_CTIME -I../rsp -I../rdp -I$(M) ../rdp/rdp_task.c ../rdp/rdp_time.c ../rsp/rsp.c $(M)/rdp.c -o $@
