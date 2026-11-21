@@ -1572,8 +1572,16 @@ wire  [CK_W:0] ck_last = ck_dalias ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw ? (C
 wire m_wbsel = !m_cl && !(m_c.tlbp || m_c.tlbr) && m_st && (m_cw || (!m_needs_slow && !m_sc_fail));      // (a store whose completion waits for the buffer)
 wire m_done_b = m_cw ? m_ph : (m_ld && m_cached) ? (ms == MS_DONE || (ms == MS_IDLE && m_lhit)) : m_needs_slow ? ms == MS_DONE : 1'b1;
 wire m_done_x = (m_c.tlbp || m_c.tlbr) ? ms == MS_DONE : m_cl ? ms == MS_DONE : (m_mapped && (ms == MS_IDLE || ms == MS_WALK)) ? 1'b0 : m_done_b;
+// (FAST: the same from what is found as the cache op enters M -- an index op, a hit op on the D-cache at a mapped address, a hit op on the I-cache,
+// each only for a cache op -- and the one thing that moves while it is there, ic_alias: ck_run is not a decode of m_insn and m_kseg in front of ck_n's
+// compare, in front of m_done, the stall, and every enable of the pipeline)
+logic m_ck_ni, m_ck_d, m_ck_w; logic [CK_W:0] m_ck_c;
+wire           ck_isw_f = PG && ic_alias && m_ck_w;
+wire           ck_run_f = m_ck_ni || ck_isw_f || m_ck_d;
+wire  [CK_W:0] ck_last_f = m_ck_d ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw_f ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) : m_ck_c;
+wire m_ck_more = FAST ? ck_run_f && ck_n != ck_last_f : m_c.cache && ck_run && ck_n != ck_last;
 wire m_done_z = (m_k_fpu && fpu_busy) || (m_is_md && md_busy) || ms == MS_REFILL || ms == MS_REREAD || m_shwait ||
-                (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last);
+                (CK_W != 0 && m_ck_more);
 wire m_done_f = !m_valid || (m_done_x && !m_done_z && !(m_wbsel && wb_full));
 logic m_done;
 always_comb begin
@@ -2211,6 +2219,10 @@ always_ff @(posedge clk) begin
             m_addr <= e_ea;
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
+                m_ck_ni <= e_c.cache && !e_insn[20];
+                m_ck_d <= e_c.cache && (e_insn[20:16] == 5'h11 || e_insn[20:16] == 5'h15) && !kseg01(e_ea, game_view);
+                m_ck_w <= e_c.cache && e_insn[17:16] == 2'd0 && e_insn[20];
+                m_ck_c <= (CK_W + 1)'((e_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 9))) - 1);
                 m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_ldw <= e_c.ld != M_NONE && !e_ua; m_k_sc <= e_c.st == S_SC;
                 m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD)) || e_ua;
                 m_k_cach <= cacheable(e_ea, game_view); m_k_mapped <= e_mem && !kseg01(e_ea, game_view);
