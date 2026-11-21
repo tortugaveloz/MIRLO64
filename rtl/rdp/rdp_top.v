@@ -544,7 +544,9 @@ module rdp_top (
     reg         aa_lo;
     wire [31:0] aa_xa = ax_h, aa_xb = aa_lo ? ax_m : ax_l;
     // (each edge in eighths with its sticky bit, then left / right)
-    wire signed [18:0] aa_a8 = {aa_xa[31:14], |aa_xa[13:1]}, aa_b8 = {aa_xb[31:14], |aa_xb[13:1]};
+    // (the sticky bit of each edge, the OR of its bits 13:1, is a register found as the edge is stepped: ax_*_s)
+    reg         ax_h_s, ax_m_s, ax_l_s;
+    wire signed [18:0] aa_a8 = {aa_xa[31:14], ax_h_s}, aa_b8 = aa_lo ? {ax_m[31:14], ax_m_s} : {ax_l[31:14], ax_l_s};
     wire signed [18:0] aa_l8 = t_lft ? aa_a8 : aa_b8, aa_r8 = t_lft ? aa_b8 : aa_a8;
     wire        aa_cross = $signed(aa_r8[18:1]) < $signed(aa_l8[18:1]);
     wire [12:0] aa_cxh = {sc_xh, 1'b0}, aa_cxl = {sc_xl, 1'b0};
@@ -748,11 +750,14 @@ module rdp_top (
     wire        ax_stp = st == S_AASUB && !aa_j[2];
     wire        ex_ld  = st == S_TRI_INIT && mi == 5'd2;
     wire        ex_stp = st == S_NEXT && (!kind_tri || es_done);
+    wire [31:0] ax_h_n = (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
+    wire [31:0] ax_m_n = (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
+    wire [31:0] ax_l_n = (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
     integer ci;
     always @(posedge clk) begin
-        if (ax_ldh || ax_stp) ax_h <= (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
-        if (ax_ldm || ax_stp) ax_m <= (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
-        if (ax_ldl || ax_stp) ax_l <= (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
+        if (ax_ldh || ax_stp) begin ax_h <= ax_h_n; ax_h_s <= |ax_h_n[13:1]; end
+        if (ax_ldm || ax_stp) begin ax_m <= ax_m_n; ax_m_s <= |ax_m_n[13:1]; end
+        if (ax_ldl || ax_stp) begin ax_l <= ax_l_n; ax_l_s <= |ax_l_n[13:1]; end
         if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
