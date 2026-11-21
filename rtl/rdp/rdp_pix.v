@@ -1243,9 +1243,15 @@ module rdp_pix (
         mem10b <= mem10; zold10b <= zold10; memb10b <= memb10; hid10b <= hid10;
         lf10b <= lf10; nz10b <= nz10;
     end
-    wire         u_e = v9x && cyc == 2'd1;
+    // (cyc is the primitive's, steady while its pixels are in the pipe: its test is a register, and the choice between the first cycle's
+    // operands and the second's -- 300 bits of multiplexers in front of the subtractions -- is a register too: u_e is v9x && 2-cycle,
+    // made a stage ahead. other_h -> o11a was -0.24 to -0.41 ns at 10.667 ns)
+    reg          cyc1_q;
+    always @(posedge clk) cyc1_q <= cyc == 2'd1;
+    reg          u_e;
+    always @(posedge clk) u_e <= v9 & ~rst & cyc1_q;
     reg  [35:0]  cm_r;                                  // the first cycle's result, 9 raw bits a channel (cc_eval1), held
-    wire [35:0]  cm10 = (cyc == 2'd1) ? cm_r : 36'd0;   // COMBINED for the second cycle (0 in the other modes)
+    wire [35:0]  cm10 = cyc1_q ? cm_r : 36'd0;   // COMBINED for the second cycle (0 in the other modes)
     wire [155:0] o1_w = cc_sel(!u_e, u_e ? tex9x : tex1_10b, u_e ? tex19x : tex10b, u_e ? shade9x : shade10b,
                                u_e ? 36'd0 : cm10, u_e ? lf9x : lf10b, u_e ? nz9x : nz10b);
     reg         v11a, ue11a;
@@ -1589,7 +1595,8 @@ module rdp_pix (
         comb12b <= comb12; mem12b <= mem12; pa12b <= pa12; sha12b <= sha12; mcvg12b <= mcvg12;
         depth12b <= depth12; pass12b <= pass12; ben12b <= ben12; ovf12b <= ovf12; cv312b <= cv312;
     end
-    wire       bu_e = v11b && cyc == 2'd1;
+    reg        bu_e;
+    always @(posedge clk) bu_e <= v11 & ~rst & cyc1_q;
     reg [23:0] b0_r;                         // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
     wire [63:0] bo1_w = bl_sel(!bu_e && cyc == 2'd1, bu_e ? comb11b : (cyc == 2'd1) ? { b0_r, comb12b[7:0] } : comb12b,
                                bu_e ? mem11b : mem12b, bu_e ? pa11b : pa12b, bu_e ? sha11b : sha12b, bu_e ? mcvg11b : mcvg12b, shb);
