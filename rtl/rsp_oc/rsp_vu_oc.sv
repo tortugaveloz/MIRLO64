@@ -493,17 +493,18 @@ endfunction
 // busy with s and t.
 // A computation that reads the register another is writing waits for its write.
 // vt's element broadcast, for every lane at once: lane i takes the register's lane ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]),
-// {i[2:1], ve[0]} (ve[1]) or i. Which lane it takes is a function of ve alone, a register: it is made while the memory is read (tvi),
-// and each lane is then a four-way choice in each half of the register and the choice of the halves -- two levels after the read, with
+// {i[2:1], ve[0]} (ve[1]) or i. Which lane it takes is a function of ve alone: it is made with the instruction's decode (tvi, a register
+// of the lane, as `cd` is), and each lane is then a four-way choice in each half of the register and the choice of the halves -- two levels after the read, with
 // no shared broadcast stage (an eight-way, a four-way, a two-way choice and the lane's pick among them) in front of the lane
 logic [15:0] tv [8];
 logic [2:0]  tvi [8];
-always_comb begin
-    for (int i = 0; i < 8; i++) begin
-        tvi[i] = ve[3] ? ve[2:0] : ve[2] ? {i[2], ve[1:0]} : ve[1] ? {i[2:1], ve[0]} : 3'(i);
-        tv[i]  = tvi[i][2] ? qc[{1'b1, tvi[i][1:0]}] : qc[{1'b0, tvi[i][1:0]}];
-    end
-end
+function automatic logic [2:0] tv_lane(input logic [3:0] e, input int i);
+    return e[3] ? e[2:0] : e[2] ? {i[2], e[1:0]} : e[1] ? {i[2:1], e[0]} : 3'(i);
+endfunction
+always_ff @(posedge clk) if (adv) for (int i = 0; i < 8; i++) tvi[i] <= tv_lane(ins_n[24:21], i);    // (registered with the instruction)
+always_comb
+    for (int i = 0; i < 8; i++)
+        tv[i] = tvi[i][2] ? qc[{1'b1, tvi[i][1:0]}] : qc[{1'b0, tvi[i][1:0]}];
 wire  fn_ch = cd.ch;
 
 logic [15:0]        s_n [LANES], t_n [LANES];
