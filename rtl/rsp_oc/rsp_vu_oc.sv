@@ -47,7 +47,11 @@ module rsp_vu_oc #(
     input  wire  [31:0] ins_n,
     input  wire  [31:0] lins_n,
     input  wire         adv,
-    input  wire  [31:0] a,              // rs: the base of a load / store
+    input  wire  [11:0] la_m,           // rs's low 12 bits, the base of a load / store, from each source -- the scalar unit's writer in M, the one in W, the register file's --
+    input  wire  [11:0] la_w,           // ... and the choice (la_fm, la_fw; else the file's): the address is made from each and chosen
+    input  wire  [11:0] la_r,
+    input  wire         la_fm,
+    input  wire         la_fw,
     input  wire         l_valid,        // (LPAIR) a load, store or move paired with the computation on ins
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     // the registers' read addresses, from the scalar unit: of the slot E holds next cycle -- the computation's vs and
@@ -175,7 +179,6 @@ wire       ctc2 = ld.ctc2;
 // (the load or store: l_ins, alone or a pair's load)
 wire       lp   = LPAIR && l_valid;
 wire [31:0] li  = l_ins;
-wire [31:0] la  = a;
 wire       lwc2 = ld.lwc2;
 wire       swc2 = ld.swc2;
 wire [4:0] lsop = li[15:11];
@@ -621,8 +624,9 @@ logic [11:0] off_sh, off_sh16;              // ... and 16 more: registered with 
 always_ff @(posedge clk) if (adv) begin off_sh <= offs(lins_n); off_sh16 <= offs(lins_n) + 12'd16; end
 // (the offset scaled first, so that the address is one adder after rs: the
 // store's rotation hangs off its low bits)
-wire  [11:0] ls_addr = la[11:0] + off_sh;
-wire  [11:0] ls_addr16 = la[11:0] + off_sh16;
+wire  [11:0] lsa_m = la_m + off_sh, lsa_w = la_w + off_sh, lsa_r = la_r + off_sh;
+wire  [11:0] lsb_m = la_m + off_sh16, lsb_w = la_w + off_sh16, lsb_r = la_r + off_sh16;
+wire  [11:0] ls_addr   = la_fm ? lsa_m : la_fw ? lsa_w : lsa_r;
 wire  ls_packed = ld.packed_;
 wire  ls_tv     = ld.tv;                                           // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
@@ -631,11 +635,13 @@ wire  st_fv     = ld.fv;
 wire  ls_known  = ld.known;
 wire  [3:0]  o    = ls_addr[3:0];
 wire  [4:0]  size = 5'd1 << lsop[1:0];
-// the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV)
-// the 8-byte block's
-wire  [1:0]  win_w  = lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ls_addr[3], 1'b0} : ls_addr[3:2];
-wire  [11:0] ls_win = {ls_addr[11:4], win_w, 2'b00};
-wire  [11:0] ls_win16 = {ls_addr16[11:4], win_w, 2'b00};
+// the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV) the 8-byte block's. Its address, and its next line's, are
+// made from each source of the base and chosen (m_addr, m_addr16 below): the window's low bits are not behind the choice of the sum
+function automatic logic [1:0] win_of(input logic [3:2] ab);
+    return lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ab[3], 1'b0} : ab[3:2];
+endfunction
+wire  [11:0] lw_m = {lsa_m[11:4], win_of(lsa_m[3:2]), 2'b00}, lw_w = {lsa_w[11:4], win_of(lsa_w[3:2]), 2'b00}, lw_r = {lsa_r[11:4], win_of(lsa_r[3:2]), 2'b00};
+wire  [11:0] lh_m = {lsb_m[11:4], win_of(lsa_m[3:2]), 2'b00}, lh_w = {lsb_w[11:4], win_of(lsa_w[3:2]), 2'b00}, lh_r = {lsb_r[11:4], win_of(lsa_r[3:2]), 2'b00};
 // a load's register bytes: a run of the register's sixteen from e on -- its size's; to the 16-byte block's end
 // (LQV); or (LRV) from where the block's start comes, the bytes before the address, to the register's end
 function automatic logic [15:0] ld_mask_f(input logic [3:0] o_, input logic [3:0] el_, input logic [4:0] op_);
@@ -697,7 +703,7 @@ wire         in_tv   = st == V_TV;
 logic [7:0]  sarr [16];
 wire         st_pk  = swc2 && ls_packed;
 wire  [3:0]  st_eo  = el - off_sh[3:0];
-wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - a[3:0] : el;
+wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - (la_fm ? la_m[3:0] : la_fw ? la_w[3:0] : la_r[3:0]) : el;
 // (byte i one of four, by a select the bytes share -- st_sel[0] for the first eight, [1] for the others: 0 its byte, 1 SHV's,
 // 2 the packed top 8 bits, 3 the packed bits 14..7; SFV's bytes are only the four i a multiple of 4, the others no matter)
 logic [1:0]  st_sel [2];
@@ -871,8 +877,8 @@ always_comb begin
     // DMEM
     m_valid = (start_nc && ls_go) || (in_tv && !m_stall);
     m_we    = swc2;
-    m_addr  = in_tv ? tv_addr : ls_win;
-    m_addr16 = in_tv ? tv_addr16 : ls_win16;
+    m_addr  = in_tv ? tv_addr : la_fm ? lw_m : la_fw ? lw_w : lw_r;
+    m_addr16 = in_tv ? tv_addr16 : la_fm ? lh_m : la_fw ? lh_w : lh_r;
     m_be    = in_tv ? 16'd1 << tv_addr[3:0] : st_be;
     m_rot   = in_tv ? tv_addr[3:0] - tv_n : o - el;
     for (int i = 0; i < 16; i++) m_wpre[127 - 8 * i -: 8] = sarr[i];

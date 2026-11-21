@@ -79,6 +79,13 @@ module rsp_su_oc #(
     output logic        m_we,
     output logic [11:0] m_addr,
     output logic [11:0] m_addr16,       // ... and the address + 16 (the next line's: made in parallel)
+    // ... and each of them in two parts, the sources that are not the register file's (m_addr_e, m_addr16_e: ORed, a zero where the file is the
+    // source) and the file's (m_addr_r, m_addr16_r, when m_sel_r), for rsp_top_oc's choice among the units' addresses
+    output logic [11:0] m_addr_e,
+    output logic [11:0] m_addr16_e,
+    output logic [11:0] m_addr_r,
+    output logic [11:0] m_addr16_r,
+    output logic        m_sel_r,
     output logic [1:0]  m_n,            // bytes - 1 (0, 1 or 3)
     output logic [31:0] m_wdata,
     input  wire  [31:0] m_rdata,
@@ -89,6 +96,13 @@ module rsp_su_oc #(
     output logic        c_valid,
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
+    // ... and its low 12 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
+    // else the file's), for the vector unit's load and store addresses, made from each source as the scalar unit's own are
+    output logic [11:0] c_bm,
+    output logic [11:0] c_bw,
+    output logic [11:0] c_br,
+    output logic        c_fm,
+    output logic        c_fw,
     output logic [31:0] c_b,            // rt
     output logic        c_pr,           // E holds a pair: the computation on c_ins, the scalar unit's own on c_lins
     output logic [31:0] c_lins,         // E's own instruction (c_ins but for a pair's computation)
@@ -429,6 +443,11 @@ assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
 assign m_addr = addr_v[11:0];
 assign m_addr16 = fa_m ? adh_m : fa_w ? adh_w : adh_r;
+assign m_addr_e   = ({12{fa_m}} & ad_m)  | ({12{fa_w}} & ad_w);
+assign m_addr16_e = ({12{fa_m}} & adh_m) | ({12{fa_w}} & adh_w);
+assign m_addr_r   = ad_r;
+assign m_addr16_r = adh_r;
+assign m_sel_r    = !(fa_m | fa_w);
 assign m_n = e_c.size;
 assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
 
@@ -445,6 +464,11 @@ logic e_vls;
 always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
 assign c_vls = e_vls;
 assign c_a = ea;
+assign c_bm = m_res[11:0];
+assign c_bw = w_res[11:0];
+assign c_br = rf_qam[11:0];
+assign c_fm = fa_m;
+assign c_fw = fa_w;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
     return (i[31:26] == 6'h12 && i[25:24] == 2'b00 && i[22:21] == 2'b00) ? i[15:11] : i[20:16];
