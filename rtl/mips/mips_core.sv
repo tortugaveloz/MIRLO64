@@ -500,6 +500,24 @@ function automatic ctl_t decode(input logic [31:0] i);
     return c;
 endfunction
 
+// {wr, rd} of decode(i), from the word's fields in parallel (FAST's F -> D, where the I-cache's word is a few levels in front of them): which of the
+// three the register is -- the word's rd field (SPECIAL's), its rt field, 31 (jal, a link), or none -- is a function of the op, of the function field for
+// SPECIAL's and of rs for COP0 and COP1; each is found by decode of the word with rd and rt nonzero where it matters, so that it cannot differ from it, and
+// the zero test that clears wr is of the field itself, beside it, not of the register that the chain of cases has made
+function automatic logic [5:0] dec_wr_rd(input logic [31:0] i);
+    logic [5:0] op, fn; logic [4:0] rs, rt, rd;
+    ctl_t k_sp, k_op; logic sp_f, sp_w, op_t, sf, sr, s31;
+    op = i[31:26]; fn = i[5:0]; rs = i[25:21]; rt = i[20:16]; rd = i[15:11];
+    k_sp = decode({6'd0, 15'd2, 5'd0, fn}); k_op = decode({op, 5'd0, 5'd1, 5'd2, 5'd0, 6'd0});
+    sp_f = k_sp.rd == 5'd2;                                           // SPECIAL: rd is the field's (not a case that decode clears, the 64-bit and
+    sp_w = k_sp.wr;                                                   // multiply ones of a core without them), and whether it writes
+    op_t = k_op.rd == 5'd1;                                           // the other ops, rt's (COP0 and COP1 by rs: below)
+    sf = op == 6'h00 && sp_f;
+    sr = op == 6'h10 ? (rs == 5'd0 || (W64 && rs == 5'd1)) : op == 6'h11 ? rs <= 5'd2 : op_t;
+    s31 = op == 6'h03 || (op == 6'h01 && rt[4]);
+    return {(sf && sp_w && (|rd)) || (sr && (|rt)) || s31, ({5{sf}} & rd) | ({5{sr}} & rt) | {5{s31}}};
+endfunction
+
 // =============================================================== helpers
 function automatic logic [31:0] sx8 (input logic [7:0]  v); return {{24{v[7]}},  v}; endfunction
 function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}}, v}; endfunction
@@ -2341,6 +2359,7 @@ always_ff @(posedge clk) begin
                     ctl_t fc;
                     fc = decode(f_fault ? 32'd0 : f_insn);
                     d_c_r <= fc;
+                    {d_c_r.wr, d_c_r.rd} <= dec_wr_rd(f_fault ? 32'd0 : f_insn);
                     d_k_cti <= fc.br != B_NONE;
                     // (JRP: a register jump whose register nothing in D or E -- in E and M when it is in D -- is to write)
                     d_k_pred <= guess(fc, f_insn) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
