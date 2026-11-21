@@ -259,7 +259,13 @@ always_comb begin
     for (int m = 0; m < 16; m++) q_y[127 - 8 * m -: 8] = x_rot[2] ? q_x[127 - 8 * ((m + 4) & 15) -: 8] : q_x[127 - 8 * m -: 8];
     for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = x_rot[3] ? q_y[127 - 8 * ((m + 8) & 15) -: 8] : q_y[127 - 8 * m -: 8];
 end
-assign m_rdata   = x_rd[127:96];
+// the scalar unit's word is the line's bytes x_rot .. x_rot + 3: the two words they lie in (by x_rot[3:2]) and then the four bytes (by
+// x_rot[1:0]), two LUTs of a choice of four, where the rotation of the whole line (for the vector unit) is four stages
+logic [63:0] q_s;
+always_comb begin
+    for (int w = 0; w < 2; w++) q_s[63 - 32 * w -: 32] = q16[127 - 32 * ((int'(x_rot[3:2]) + w) & 3) -: 32];
+    for (int j = 0; j < 4; j++) m_rdata[31 - 8 * j -: 8] = q_s[63 - 8 * (j + int'(x_rot[1:0])) -: 8];
+end
 assign m_rdata16 = x_rd;
 
 // ------------------------------------------------------------ registers --

@@ -455,15 +455,18 @@ assign stall_e = e_valid && (hazard || ((e_c.cop || v_e) && !c_done) || s_mwait)
 assign brk = e_go && e_c.brk;
 
 // ---- M
-logic [31:0] ld;
-always_comb begin
-    unique case (m_c.size)
-    2'd0:    ld = m_c.lu ? {24'h0, m_rdata[31:24]} : {{24{m_rdata[31]}}, m_rdata[31:24]};
-    2'd1:    ld = m_c.lu ? {16'h0, m_rdata[31:16]} : {{16{m_rdata[31]}}, m_rdata[31:16]};
-    default: ld = m_rdata;
-    endcase
-end
-wire [31:0] m_out = m_c.load ? ld : m_c.cf ? c_res_l : m_res;
+// A load's value is picked out of the word DMEM's read brings (m_rdata: the bytes from the address on, the first in [31:24]) by its size
+// -- a byte or a half-word is sign- or zero-extended, from the word's top bit -- and what M holds otherwise (CFC2's word, or the
+// result) is the other term: an AND-OR of the word's bits with selects that are decodes of M's registers, not the size's case and
+// the choice of the source behind it, so that the word goes through one LUT, not two
+wire        l_w  = m_c.load && m_c.size[1];                           // a word
+wire        l_h  = m_c.load && m_c.size == 2'd1;                      // a half-word
+wire        l_b  = m_c.load && m_c.size == 2'd0;                      // a byte
+wire        l_e  = (l_h || l_b) && !m_c.lu;                           // ... extended by its sign
+wire [31:0] m_nl = m_c.cf ? c_res_l : m_res;
+wire [31:0] m_out = {({16{l_w}} & m_rdata[31:16]) | {16{l_e & m_rdata[31]}} | ({16{!m_c.load}} & m_nl[31:16]),
+                     ({8{l_w}} & m_rdata[15:8]) | ({8{l_h}} & m_rdata[31:24]) | {8{l_b & l_e & m_rdata[31]}} | ({8{!m_c.load}} & m_nl[15:8]),
+                     ({8{l_w}} & m_rdata[7:0]) | ({8{l_h}} & m_rdata[23:16]) | ({8{l_b}} & m_rdata[31:24]) | ({8{!m_c.load}} & m_nl[7:0])};
 
 // ---- sequencing
 // (the fetch pointer's next words are kept: pf1 = pc_f's word + 1, pf2 = + 2, dp1 = D's word + 1, so that the address is a
