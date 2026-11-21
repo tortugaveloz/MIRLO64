@@ -1590,6 +1590,14 @@ wire           ck_dalias = (m_insn[20:16] == 5'h11 || m_insn[20:16] == 5'h15) &&
 wire           ck_run = !m_insn[20] || ck_isw || ck_dalias;
 wire  [CK_W:0] ck_last = ck_dalias ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) :
                          (CK_W + 1)'((m_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 9))) - 1);
+// (FAST: the same, with what comes latest -- the write buffer's full, the FPU's and the multiplier's busy, a shift on -- ANDed last, not as
+// the overrides of a chain: m_done is a few levels of M's registers, wb_full and the busy flags entering the last)
+wire m_wbsel = !m_cl && !(m_c.tlbp || m_c.tlbr) && m_st && (m_cw || (!m_needs_slow && !m_sc_fail));      // (a store whose completion waits for the buffer)
+wire m_done_b = m_cw ? m_ph : (m_ld && m_cached) ? (ms == MS_DONE || (ms == MS_IDLE && m_lhit)) : m_needs_slow ? ms == MS_DONE : 1'b1;
+wire m_done_x = (m_c.tlbp || m_c.tlbr) ? ms == MS_DONE : m_cl ? ms == MS_DONE : (m_mapped && (ms == MS_IDLE || ms == MS_WALK)) ? 1'b0 : m_done_b;
+wire m_done_z = (m_k_fpu && fpu_busy) || (m_is_md && md_busy) || ms == MS_REFILL || ms == MS_REREAD || m_shwait ||
+                (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last);
+wire m_done_f = !m_valid || (m_done_x && !m_done_z && !(m_wbsel && wb_full));
 logic m_done;
 always_comb begin
     m_done = 1'b1;
@@ -1611,6 +1619,7 @@ always_comb begin
         if (m_shwait) m_done = 1'b0;                                // (a d-shift: still shifting)
         if (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last) m_done = 1'b0;
     end
+    if (FAST) m_done = m_done_f;
 end
 wire m_stall = (FAST ? m_valid : m_live) && !m_done;
 wire m_cache_go = m_live && m_c.cache && !(FAST && (ms == MS_REFILL || ms == MS_REREAD));
