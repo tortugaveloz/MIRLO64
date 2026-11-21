@@ -766,19 +766,27 @@ module rdp_top (
     always @(posedge clk) begin cur_ld <= cur_ldc; cur_ldq <= cur_ldv; end
     // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
     // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
-    wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
+    // (the start value, X + the multiplier's product, is a register (aa_initq) and the loads are a clock after the product: the DSP
+    // block's output through aa_init's adder and the edge's own adder was one path, -0.2 to -0.3 ns at 10.667 ns in 0 C; S_AAINIT is a
+    // clock longer, and exh is loaded a clock after its product, long before its first use)
+    reg  [31:0] aa_initq;
+    reg         ax_ldh, ax_ldm, ax_ldl, ex_ld;
     wire        ax_stp = st == S_AASUB && !aa_j[2];
-    wire        ex_ld  = st == S_TRI_INIT && mi == 5'd2;
     wire        ex_stp = st == S_NEXT && (!kind_tri || es_done);
-    wire [31:0] ax_h_n = (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_init : aq_h);
-    wire [31:0] ax_m_n = (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_init : aq_m);
-    wire [31:0] ax_l_n = (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_init : aq_l);
+    always @(posedge clk) begin
+        aa_initq <= aa_init;
+        ax_ldh <= st == S_AAINIT && mi == 5'd2; ax_ldm <= st == S_AAINIT && mi == 5'd3; ax_ldl <= st == S_AAINIT && mi == 5'd4;
+        ex_ld <= st == S_TRI_INIT && mi == 5'd2;
+    end
+    wire [31:0] ax_h_n = (ax_ldh ? 32'd0 : ax_h) + (ax_ldh ? aa_initq : aq_h);
+    wire [31:0] ax_m_n = (ax_ldm ? 32'd0 : ax_m) + (ax_ldm ? aa_initq : aq_m);
+    wire [31:0] ax_l_n = (ax_ldl ? 32'd0 : ax_l) + (ax_ldl ? aa_initq : aq_l);
     integer ci;
     always @(posedge clk) begin
         if (ax_ldh || ax_stp) begin ax_h <= ax_h_n; ax_h_s <= |ax_h_n[13:1]; end
         if (ax_ldm || ax_stp) begin ax_m <= ax_m_n; ax_m_s <= |ax_m_n[13:1]; end
         if (ax_ldl || ax_stp) begin ax_l <= ax_l_n; ax_l_s <= |ax_l_n[13:1]; end
-        if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
+        if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_initq : t_dxh);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
                 cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldq : adx[ci]);
@@ -1066,6 +1074,7 @@ module rdp_top (
                 case (mi)
                     5'd0, 5'd1: ;
                     5'd2, 5'd3: ;
+                    5'd4: ;
                     default: st <= S_ROW;
                 endcase
                 mi <= mi + 5'd1;
