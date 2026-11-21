@@ -563,8 +563,10 @@ module rdp_top (
         input [12:0] lo, hi;
         reg signed [18:0] t;
         begin
+            // (max(v, lo) then min(., hi), the two compares in parallel: v against lo and against hi, and lo against hi for the case
+            // lo > hi, where the result is hi as when the clamp were done in two steps)
             t = (v < $signed({6'd0, lo})) ? $signed({6'd0, lo}) : v;
-            aa_clamp = (t > $signed({6'd0, hi})) ? hi : t[12:0];
+            aa_clamp = ((v < $signed({6'd0, lo})) ? (lo > hi) : (v > $signed({6'd0, hi}))) ? hi : t[12:0];
         end
     endfunction
     wire        aa_vj = !aa_cross && aa_yq >= yh_s && aa_yq < yl_s
