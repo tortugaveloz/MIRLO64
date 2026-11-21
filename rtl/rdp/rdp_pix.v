@@ -1145,7 +1145,32 @@ module rdp_pix (
         zfl11a <= zold10[15:13] == 3'd0 ? 7'h7F : zold10[15:13] == 3'd1 ? 7'h3F : zold10[15:13] == 3'd2 ? 7'h1F : 7'h00;
         memb11a <= memb10; c0a11a <= cc_clamp(c010[8:0]); c0f11a <= cc_a256(c010[8:0]); hid11a <= hid10;
     end
+    // P11m: the second cycle's arithmetic (the combiner's multipliers and adders) in a register of its own; the clamp, the
+    // choice and the rest of the stage's work come after it (the two together did not fit a clock of 10.667 ns)
     wire [35:0] c1_w = cc_arith1(o11a);
+    reg         v11m, bs11m;
+    reg [9:0]   x11m;
+    reg [35:0]  c1m;
+    reg [31:0]  tex11m, mem11m;
+    reg [35:0]  shade11m;
+    reg [17:0]  depth11m, zold11m, dlo11m, dhi11m;
+    reg         memb11m;
+    reg [1:0]   hid11m;
+    reg [7:0]   c0a11m;
+    reg         c0f11m;
+    // the tolerance: the primitive's step (16-bit units: its two low bits set) and no less than what the memory's word has lost
+    wire [17:0] ztol11a = {z_tol, 2'b11} | {11'd0, zfl11a};
+    wire [18:0] dsum11a = {1'b0, depth11a} + {1'b0, ztol11a};
+    wire [18:0] ddif11a = {1'b0, depth11a} - {1'b0, ztol11a};     // (the borrow: the depth is below the tolerance)
+    always @(posedge clk) begin
+        v11m <= v11a & ~rst; x11m <= x11a; bs11m <= bs11a;
+        c1m <= c1_w;
+        tex11m <= tex11a; shade11m <= shade11a; depth11m <= depth11a;
+        dlo11m <= ddif11a[18] ? 18'd0 : ddif11a[17:0];
+        dhi11m <= (dsum11a[18]) ? 18'h3FFFF : dsum11a[17:0];
+        zold11m <= zold11a; mem11m <= mem11a;
+        memb11m <= memb11a; c0a11m <= c0a11a; c0f11m <= c0f11a; hid11m <= hid11a;
+    end
     reg        v11;
     reg [9:0]  x11;
     reg [31:0] comb11;
@@ -1153,29 +1178,24 @@ module rdp_pix (
     reg        af11;                // the combined alpha counts 256 for the coverage multiply (CVG_X_ALPHA)
     reg [17:0] depth11, zold11;
     reg [17:0] dlo11, dhi11;       // the depth less and plus the decal tolerance
-    // the tolerance: the primitive's step (16-bit units: its two low bits set) and no less than what the memory's word has lost
-    wire [17:0] ztol11a = {z_tol, 2'b11} | {11'd0, zfl11a};
-    wire [18:0] dsum11a = {1'b0, depth11a} + {1'b0, ztol11a};
-    wire [18:0] ddif11a = {1'b0, depth11a} - {1'b0, ztol11a};     // (the borrow: the depth is below the tolerance)
     reg [31:0] mem11;
     always @(posedge clk) begin
-        v11 <= v11a & ~rst; x11 <= x11a; bs11 <= bs11a;
-        comb11 <= (cyc == 2'd2) ? tex11a : { cc_clamp(c1_w[35:27]), cc_clamp(c1_w[26:18]), cc_clamp(c1_w[17:9]), cc_clamp(c1_w[8:0]) };
-        af11 <= (cyc != 2'd2) && cc_a256(c1_w[8:0]);
-        shade11 <= shade11a; depth11 <= depth11a;
-        dlo11 <= ddif11a[18] ? 18'd0 : ddif11a[17:0];
-        dhi11 <= (dsum11a[18]) ? 18'h3FFFF : dsum11a[17:0];
-        zold11 <= zold11a; mem11 <= mem11a;
-        memb11 <= memb11a; c0a11 <= c0a11a; c0f11 <= c0f11a; hid11 <= hid11a;
+        v11 <= v11m & ~rst; x11 <= x11m; bs11 <= bs11m;
+        comb11 <= (cyc == 2'd2) ? tex11m : { cc_clamp(c1m[35:27]), cc_clamp(c1m[26:18]), cc_clamp(c1m[17:9]), cc_clamp(c1m[8:0]) };
+        af11 <= (cyc != 2'd2) && cc_a256(c1m[8:0]);
+        shade11 <= shade11m; depth11 <= depth11m;
+        dlo11 <= dlo11m; dhi11 <= dhi11m;
+        zold11 <= zold11m; mem11 <= mem11m;
+        memb11 <= memb11m; c0a11 <= c0a11m; c0f11 <= c0f11m; hid11 <= hid11m;
     end
     // The coverage and the row's low bits (a row's last pixels are still in
     // the pipe when the next row's y is issued), out of sb_ram at P8b, on to
     // P11 (the coverage, the alpha dither) and P13b (the RGB dither)
-    reg [3:0] cv9, cv10a, cv10, cv11a, cv11;
-    reg [1:0] y9, y10a, y10, y11a, y11, y11b, y12a, y12, y13a, y13b;
+    reg [3:0] cv9, cv10a, cv10, cv11a, cv11m, cv11;
+    reg [1:0] y9, y10a, y10, y11a, y11m, y11, y11b, y12a, y12, y13a, y13b;
     always @(posedge clk) begin
-        cv9 <= cvg8c; cv10a <= cv9; cv10 <= cv10a; cv11a <= cv10; cv11 <= cv11a;
-        y9 <= y8c; y10a <= y9; y10 <= y10a; y11a <= y10; y11 <= y11a;
+        cv9 <= cvg8c; cv10a <= cv9; cv10 <= cv10a; cv11a <= cv10; cv11m <= cv11a; cv11 <= cv11m;
+        y9 <= y8c; y10a <= y9; y10 <= y10a; y11a <= y10; y11m <= y11a; y11 <= y11m;
         y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
     end
     wire [3:0] cvg11 = cv11;
@@ -1549,7 +1569,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v10a | v10 | v11a | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no
