@@ -732,11 +732,16 @@ module rdp_top (
     wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
     wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
     wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
-    wire [7:0]  cur_ld;
+    // (the value, e + the product, and which attribute it is for are registered, and the attribute is loaded the clock after: the
+    // value's adder and the attribute's own were one path of 30 levels at 10.667 ns; S_SETUP's last step is a clock later)
+    wire [7:0]  cur_ldc;
+    reg  [7:0]  cur_ld;
+    reg  [31:0] cur_ldq;
     genvar cg;
     generate for (cg = 0; cg < 8; cg = cg + 1) begin : cur_ldg
-        assign cur_ld[cg] = st == S_SETUP && (kind_tri ? mi == cg + 2 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
+        assign cur_ldc[cg] = st == S_SETUP && (kind_tri ? mi == cg + 2 : (cg == 4 && mi == 5'd2) || (cg == 5 && mi == 5'd3));     // (e[ea] with ea = mi - 2)
     end endgenerate
+    always @(posedge clk) begin cur_ld <= cur_ldc; cur_ldq <= cur_ldv; end
     // The AA edges (ax_*: their start in S_AAINIT, a subscanline's step in S_AASUB) and the major edge's x at the row's top
     // (exh: its start in S_TRI_INIT, a row's step in S_NEXT) the same way: the start is 0 + it in place of x + the step.
     wire        ax_ldh = st == S_AAINIT && mi == 5'd2, ax_ldm = st == S_AAINIT && mi == 5'd3, ax_ldl = st == S_AAINIT && mi >= 5'd4;
@@ -751,7 +756,7 @@ module rdp_top (
         if (ex_ld || ex_stp)  exh  <= (ex_ld ? 32'd0 : exh) + (ex_ld ? aa_init : t_dxh);
         for (ci = 0; ci < 8; ci = ci + 1) begin
             if (cur_ld[ci] || cur_stp)
-                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldv : adx[ci]);
+                cur[ci] <= (cur_ld[ci] ? 32'd0 : cur[ci]) + (cur_ld[ci] ? cur_ldq : adx[ci]);
         end
     end
 
@@ -1097,7 +1102,7 @@ module rdp_top (
             S_SETUP: begin
                 if (kind_tri) begin
                     mi <= mi + 5'd1;
-                    if (mi == 5'd9) begin
+                    if (mi == 5'd10) begin
                         st <= S_PIX;
                         es <= 4'd0;                 // e[] no longer needed this row: step it
                     end
@@ -1108,7 +1113,7 @@ module rdp_top (
                         adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
                         adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
-                        if (mi == 5'd3) st <= S_PIX;
+                        if (mi == 5'd4) st <= S_PIX;
                     end
                 end
                 px_cnt <= 10'd0;
