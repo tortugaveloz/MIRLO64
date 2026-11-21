@@ -500,6 +500,24 @@ function automatic ctl_t decode(input logic [31:0] i);
     return c;
 endfunction
 
+// {wr, rd} of decode(i), from the word's fields in parallel (FAST's F -> D, where the I-cache's word is a few levels in front of them): which of the
+// three the register is -- the word's rd field (SPECIAL's), its rt field, 31 (jal, a link), or none -- is a function of the op, of the function field for
+// SPECIAL's and of rs for COP0 and COP1; each is found by decode of the word with rd and rt nonzero where it matters, so that it cannot differ from it, and
+// the zero test that clears wr is of the field itself, beside it, not of the register that the chain of cases has made
+function automatic logic [5:0] dec_wr_rd(input logic [31:0] i);
+    logic [5:0] op, fn; logic [4:0] rs, rt, rd;
+    ctl_t k_sp, k_op; logic sp_f, sp_w, op_t, sf, sr, s31;
+    op = i[31:26]; fn = i[5:0]; rs = i[25:21]; rt = i[20:16]; rd = i[15:11];
+    k_sp = decode({6'd0, 15'd2, 5'd0, fn}); k_op = decode({op, 5'd0, 5'd1, 5'd2, 5'd0, 6'd0});
+    sp_f = k_sp.rd == 5'd2;                                           // SPECIAL: rd is the field's (not a case that decode clears, the 64-bit and
+    sp_w = k_sp.wr;                                                   // multiply ones of a core without them), and whether it writes
+    op_t = k_op.rd == 5'd1;                                           // the other ops, rt's (COP0 and COP1 by rs: below)
+    sf = op == 6'h00 && sp_f;
+    sr = op == 6'h10 ? (rs == 5'd0 || (W64 && rs == 5'd1)) : op == 6'h11 ? rs <= 5'd2 : op_t;
+    s31 = op == 6'h03 || (op == 6'h01 && rt[4]);
+    return {(sf && sp_w && (|rd)) || (sr && (|rt)) || s31, ({5{sf}} & rd) | ({5{sr}} & rt) | {5{s31}}};
+endfunction
+
 // =============================================================== helpers
 function automatic logic [31:0] sx8 (input logic [7:0]  v); return {{24{v[7]}},  v}; endfunction
 function automatic logic [31:0] sx16(input logic [15:0] v); return {{16{v[15]}}, v}; endfunction
@@ -656,6 +674,12 @@ endfunction
 // {hit, valid, dirty, pa}
 function automatic logic [34:0] utlb_res(input tlbx_t x, input logic [31:0] va);
     return {1'b1, x.v, x.d, {x.pfn, 12'd0} | {7'd0, va[24:0] & {x.om, 12'hFFF}}};
+endfunction
+// {bad, hi, bit 22} of a translation (m_tq_*), for an access that stores (st) or loads
+function automatic logic [2:0] tq_flags(input logic [34:0] q, input logic st);
+    logic ok;
+    ok = q[34] && q[33] && !(st && !q[32]);
+    return {!ok, ok && q[31:23] != 9'd0, ok && q[22]};
 endfunction
 
 typedef enum logic [1:0] { SC_IDLE, SC_RUN, SC_DONE } sc_t;
@@ -839,8 +863,10 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 function automatic logic wideprod(input ctl_t c);
     return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
-wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
-wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
+// (FAST: wideprod of M's and W's instruction, registered as it enters them -- a function of M's control bits is two levels in front of the hazard)
+logic m_k_wprod, w_k_wprod;
+wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && (FAST ? m_k_wprod : wideprod(m_c));
+wire w_wp = w_valid && w_c.wr && (FAST ? w_k_wprod : wideprod(w_c)), x_wp = rf_xv && rf_xw;
 wire inflight_rs = (e_live && e_c.wr && e_c.rd == d_rs) || (m_valid && m_c.wr && m_c.rd == d_rs) || w_rs || x_rs;
 wire inflight_rt = (e_live && e_c.wr && e_c.rd == d_rt) || (m_valid && m_c.wr && m_c.rd == d_rt) || w_rt || x_rt;
 wire [31:0] rf_ah = (!W64 || d_rs == 0 || inflight_rs) ? 32'd0 : rfq_ah;
@@ -948,6 +974,10 @@ wire [31:0] d_ptarget = (JRP && d_c.br == B_JR) ? rf_a : d_c.br == B_J ? {d_pc[3
 // (FAST: which of them, known as the instruction leaves D -- M and W then
 // hold what E and M hold now -- and an immediate in e_rb, as an operand)
 logic e_fa_m, e_fa_w, e_fb_m, e_fb_w;
+// (FAST: the same selects one-hot -- M's result, W's where M's is not, else the register file's -- for the operand multiplexers of mips_ealu:
+// each bit is then one AND-OR of six inputs, not a chain of two multiplexers. Kept with e_f?_?: set as the instruction leaves D, and W's
+// dropped when E waits)
+logic e_sa_w, e_sa_r, e_sb_w, e_sb_r;
 wire e_m_a = FAST ? e_fa_m : m_wr && !m_c.late && m_c.rd == e_rs && e_rs != 0;
 wire e_m_b = FAST ? e_fb_m : m_wr && !m_c.late && m_c.rd == e_rt && e_rt != 0;
 wire e_w_a = FAST ? e_fa_w : w_wr && w_c.rd == e_rs && e_rs != 0;
@@ -958,7 +988,7 @@ wire [31:0] ea_a, ea_b, ea_res; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
 logic       e_k_shv, e_k_sub; logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 wire e_sl = e_c.alu == A_SLL;
 mips_ealu ealu (
-    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .fa_m(e_fa_m), .fa_w(e_fa_w), .fb_m(e_fb_m), .fb_w(e_fb_w),
+    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .sa_m(e_fa_m), .sa_w(e_sa_w), .sa_r(e_sa_r), .sb_m(e_fb_m), .sb_w(e_sb_w), .sb_r(e_sb_r),
     .k_shv(e_k_shv), .k_sub(e_k_sub), .sl(e_sl), .sra(e_c.alu == A_SRA), .k_grp(e_k_grp), .k_op(e_k_op), .k_f(e_k_f),
     .imm(e_insn[15:0]), .shamt(e_insn[10:6]),
     .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq)
@@ -1121,7 +1151,7 @@ always_comb begin
 end
 // ldl, ldr, sdl, sdr (XUA): a doubleword access at any address -- no alignment requirement, and its first read is the doubleword's first word
 wire e_ua = XUA && (e_c.ld == M_LDL || e_c.ld == M_LDR || e_c.st == S_SDL || e_c.st == S_SDR);
-// W's selects (see m_s_c0): the chains' conditions on E's instruction, in their priority
+// W's selects (see m_s_fp): the chains' conditions on E's instruction, in their priority
 wire e_ldw = e_c.ld != M_NONE && !e_ua;                                           // (m_ldw)
 wire e_xsh = XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);   // (m_xshift)
 wire e_xcm = XALU && (e_c.x64 == X_SLT || e_c.x64 == X_SLTU);                     // (m_xcmp)
@@ -1240,6 +1270,10 @@ ms_t ms;
 // a mapped access spends a cycle in MS_XLAT with its translation registered
 // (m_tlbq): from the micro-TLB, or after a search (MS_WALK)
 logic [34:0] m_tlbq;
+// (what the translation faults on, found as it is registered -- not from m_tlbq's bits at every use: a fault of the entry (invalid, a store to a
+// clean page: m_tq_bad), and an access to a physical address that is not RDRAM, by the upper bits of the page (m_tq_hi) and by bit 22 for a
+// console without the Expansion Pak (m_tq_22). m_tlb_fault, and with it the flush, are then a function of registers alone, one level)
+logic        m_tq_bad, m_tq_hi, m_tq_22;
 logic        m_tlbc;                         // (PGD) the translation's entry is cacheable
 logic        m_xc1;                          // (PGD) MS_XLAT's second cycle: the cache's word and tag at the physical index
 logic        m_wq;                           // MS_WALK: the scanner took the request
@@ -1248,9 +1282,17 @@ wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]})
 // TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
 // RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
 // monitor level, which answers it -- with COP0 22 holding the physical address the page gave
-wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && m_tlbq[34] && m_tlbq[33] &&
-              !(m_st && !m_tlbq[32]) && (m_tlbq[31:23] != 9'd0 || (mon_mem4 && m_tlbq[22]));
-wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]) || m_tdev);
+// (FAST: the two as registers too, from the same bits and what else they are made of -- the access is mapped, Status.ERL and mon_game, mon_mem4, which
+// do not change while a translation is held -- set where m_tlbq is: m_tdev and m_tlb_fault are then the state and one flag, not eight inputs, in front of
+// m_live, the flush, and the vector it goes to)
+logic        m_tdq, m_tfq;
+function automatic logic [1:0] tq_dev(input logic [2:0] f, input logic mapped);        // {a fault of the entry or the device's, the device's} of tq_flags' {bad, hi, bit 22}
+    logic d;
+    d = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && mapped && (f[1] || (mon_mem4 && f[0]));
+    return {mapped && (f[2] || d), d};
+endfunction
+wire m_tdev = FAST ? ms == MS_XLAT && m_tdq : TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && (m_tq_hi || (mon_mem4 && m_tq_22));
+wire m_tlb_fault = FAST ? ms == MS_XLAT && m_tfq : m_mapped && ms == MS_XLAT && (m_tq_bad || m_tdev);
 wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
               (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D) ||   // ldc1, sdc1
@@ -1397,11 +1439,12 @@ wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
 
 // (FAST) W's result and hx by one-hot selects, found as the instruction leaves E (the priority of the chains below, resolved there:
 // registered flags, not a decode of m_c behind every bit's choice)
-logic m_s_c0, m_s_fp, m_s_sc, m_s_ld, m_s_xc, m_s_sh, m_s_res;       // w_res: mfc0, mfc1 / cfc1 / dmfc1, sc, a load, a 64-bit compare, a d-shift, E's result
+logic [31:0] m_c0k, c0_rd_k;                                               // (mfc0's register one-hot: below; the value it makes, its select included)
+logic m_s_fp, m_s_sc, m_s_ld, m_s_xc, m_s_sh, m_s_res;       // w_res: mfc1 / cfc1 / dmfc1, sc, a load, a 64-bit compare, a d-shift, E's result
 logic m_h_lwu, m_h_ld, m_h_c1, m_h_sh, m_h_al, m_h_hi, m_h_lo;       // w_hx: lwu, ld, dmfc1, a d-shift, dadd / dsub / and / or / xor / nor, mfhi, mflo
 logic [31:0] m_wres_d, m_whx_d;
 always_comb begin
-    m_wres_d = ({32{m_s_c0}} & c0_rd) | ({32{m_s_fp}} & fpu_gpr_out[31:0]) | ({32{m_s_ld}} & m_ld_val) | ({32{m_s_sh}} & sh_r[31:0]) | ({32{m_s_res}} & m_res);
+    m_wres_d = c0_rd_k | ({32{m_s_fp}} & fpu_gpr_out[31:0]) | ({32{m_s_ld}} & m_ld_val) | ({32{m_s_sh}} & sh_r[31:0]) | ({32{m_s_res}} & m_res);
     m_wres_d[0] = m_wres_d[0] | (m_s_sc & ll_bit) | (m_s_xc & m_xlt);
     // (hx is the upper word XOR the lower word's sign: the upper word and the sign are chosen, then the one XOR)
     m_whx_d = ({32{m_h_ld}} & m_w64[63:32]) | ({32{m_h_c1}} & fpu_gpr_out_hi) | ({32{m_h_sh}} & sh_r[63:32]) | ({32{m_h_al}} & m_xsum)
@@ -1442,24 +1485,30 @@ end
 
 wire [31:0] cause_now = {c0_cause[31:11], irq_rcp, c0_cause[9:0]};
 logic [31:0] c0_rd;
+logic [31:0] c0_v [32];                      // the register mfc0 reads, by its number (0 where there is none)
 always_comb begin
-    case (m_insn[15:11])
-    5'd0: c0_rd = c0_index;
-    5'd1: c0_rd = {27'd0, rnd_now};
-    5'd2: c0_rd = c0_entrylo0; 5'd3: c0_rd = c0_entrylo1; 5'd4: c0_rd = c0_context;
-    5'd5: c0_rd = c0_pagemask; 5'd6: c0_rd = c0_wired;    5'd8: c0_rd = c0_badvaddr;
+    for (int k = 0; k < 32; k++) c0_v[k] = 32'd0;
+    c0_v[0] = c0_index;
+    c0_v[1] = {27'd0, rnd_now};
+    c0_v[2] = c0_entrylo0; c0_v[3] = c0_entrylo1; c0_v[4] = c0_context;
+    c0_v[5] = c0_pagemask; c0_v[6] = c0_wired;    c0_v[8] = c0_badvaddr;
     // (31:27: which of the 64-bit levels this core has -- W64_ALU, W64_SH, W64_MD, W64_DIV, W64_UA; a core before them reads 0 there)
-    5'd7: c0_rd = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
+    c0_v[7] = {XALU, XSH, XMD, XDIV, XUA, 12'd0, SPW ? mon_sp : 1'b0, 1'b0, MAP_HI ? mon_klo : 1'b0, 1'b0, MON ? mon_mem4 : 1'b0, 1'b0, MON ? mon_mi : 1'b0, MON ? {mon_code, mon_bd, mon_game} : 7'd0, hilo_soft};
     // (TLB_RAM: bit 0, the game's TLB instructions are the monitor's; TLB_EN: 'T' 'L' 'B', bit 2 cached fetches from mapped pages
     // (the page registers), bit 1 the real TLB, bit 0 the monitor)
-    5'd23: c0_rd = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
-    5'd22: c0_rd = ((TLB_RAM || TLB_EN) && MON) ? mon_badv : 32'd0;
-    5'd9: c0_rd = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
-    5'd10: c0_rd = c0_entryhi; 5'd11: c0_rd = c0_compare;
-    5'd12: c0_rd = c0_status;  5'd13: c0_rd = cause_now;  5'd14: c0_rd = c0_epc;   // (Cause: IP2 live, as the model)
-    5'd15: c0_rd = 32'h00000B22; 5'd16: c0_rd = c0_config; 5'd30: c0_rd = c0_errorepc;
-    default: c0_rd = 32'd0;
-    endcase
+    c0_v[23] = TLB_EN ? {24'h544C42, 5'd0, PG, 1'b1, MON} : TLB_RAM ? {28'h5442000, tr_lastf, 2'b00, MON} : 32'd0;
+    c0_v[22] = ((TLB_RAM || TLB_EN) && MON) ? mon_badv : 32'd0;
+    c0_v[9] = (SIM_COUNT_RETIRE && count_frac) ? c0_count + 32'd1 : c0_count;   // (the model counts before executing)
+    c0_v[10] = c0_entryhi; c0_v[11] = c0_compare;
+    c0_v[12] = c0_status;  c0_v[13] = cause_now;  c0_v[14] = c0_epc;   // (Cause: IP2 live, as the model)
+    c0_v[15] = 32'h00000B22; c0_v[16] = c0_config; c0_v[30] = c0_errorepc;
+    c0_rd = c0_v[m_insn[15:11]];
+end
+// (FAST: mfc0's register as one-hot, registered as the instruction enters M -- set only for an mfc0 -- so that the value is an AND-OR of the
+// registers by flags, not a multiplexer on m_insn's bits, which fan out to the whole core; m_c0k is then w_res's mfc0 term whole, the select (an mfc0) included)
+always_comb begin
+    c0_rd_k = 32'd0;
+    for (int k = 0; k < 32; k++) c0_rd_k = c0_rd_k | ({32{m_c0k[k]}} & c0_v[k]);
 end
 
 // interrupts: taken before the instruction at M (not while a slow access is under way)
@@ -1476,7 +1525,8 @@ always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; 
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
 // (the address EPC / ErrorEPC take: the branch's, if M's is in its delay slot -- the word address less the flag, one decrement)
 wire [31:0] m_epc = {m_pc[31:2] - 30'(m_dly), m_pc[1:0]};
-wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
+logic m_exc_vq;                                        // (FAST: m_exc_v, registered with them)
+wire m_exc_v = FAST ? m_exc_vq : m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
@@ -1550,8 +1600,16 @@ wire  [CK_W:0] ck_last = ck_dalias ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw ? (C
 wire m_wbsel = !m_cl && !(m_c.tlbp || m_c.tlbr) && m_st && (m_cw || (!m_needs_slow && !m_sc_fail));      // (a store whose completion waits for the buffer)
 wire m_done_b = m_cw ? m_ph : (m_ld && m_cached) ? (ms == MS_DONE || (ms == MS_IDLE && m_lhit)) : m_needs_slow ? ms == MS_DONE : 1'b1;
 wire m_done_x = (m_c.tlbp || m_c.tlbr) ? ms == MS_DONE : m_cl ? ms == MS_DONE : (m_mapped && (ms == MS_IDLE || ms == MS_WALK)) ? 1'b0 : m_done_b;
+// (FAST: the same from what is found as the cache op enters M -- an index op, a hit op on the D-cache at a mapped address, a hit op on the I-cache,
+// each only for a cache op -- and the one thing that moves while it is there, ic_alias: ck_run is not a decode of m_insn and m_kseg in front of ck_n's
+// compare, in front of m_done, the stall, and every enable of the pipeline)
+logic m_ck_ni, m_ck_d, m_ck_w; logic [CK_W:0] m_ck_c;
+wire           ck_isw_f = PG && ic_alias && m_ck_w;
+wire           ck_run_f = m_ck_ni || ck_isw_f || m_ck_d;
+wire  [CK_W:0] ck_last_f = m_ck_d ? (CK_W + 1)'((1 << CK_WD) - 1) : ck_isw_f ? (CK_W + 1)'((1 << (IC_LOG2 - 7)) - 1) : m_ck_c;
+wire m_ck_more = FAST ? ck_run_f && ck_n != ck_last_f : m_c.cache && ck_run && ck_n != ck_last;
 wire m_done_z = (m_k_fpu && fpu_busy) || (m_is_md && md_busy) || ms == MS_REFILL || ms == MS_REREAD || m_shwait ||
-                (CK_W != 0 && m_c.cache && ck_run && ck_n != ck_last);
+                (CK_W != 0 && m_ck_more);
 wire m_done_f = !m_valid || (m_done_x && !m_done_z && !(m_wbsel && wb_full));
 logic m_done;
 always_comb begin
@@ -2052,7 +2110,7 @@ always_ff @(posedge clk) begin
         w_lm <= m_lmiss;
         w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
-            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
+            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial; w_k_wprod <= m_k_wprod;
             if (FAST) begin
                 w_res <= m_wres_d;
                 w_hx <= W64 ? m_whx_d : 32'd0;
@@ -2184,25 +2242,29 @@ always_ff @(posedge clk) begin
             m_xshift <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_shwait <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_xc <= e_cs[32]; m_xltu <= e_ltu; m_k_ua <= e_ua;
-            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
+            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial; m_k_wprod <= wideprod(e_c);
             m_res <= e_res;
             m_addr <= e_ea;
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
+                m_ck_ni <= e_c.cache && !e_insn[20];
+                m_ck_d <= e_c.cache && (e_insn[20:16] == 5'h11 || e_insn[20:16] == 5'h15) && !kseg01(e_ea, game_view);
+                m_ck_w <= e_c.cache && e_insn[17:16] == 2'd0 && e_insn[20];
+                m_ck_c <= (CK_W + 1)'((e_insn[17:16] == 2'd0 ? (1 << (IC_LOG2 - 9)) : (1 << (DC_LOG2 - 9))) - 1);
                 m_k_ld <= e_c.ld != M_NONE; m_k_st <= e_c.st != S_NONE; m_ldw <= e_c.ld != M_NONE && !e_ua; m_k_sc <= e_c.st == S_SC;
                 m_k_fwide <= e_fwide; m_k_wide <= e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD)) || e_ua;
                 m_k_cach <= cacheable(e_ea, game_view); m_k_mapped <= e_mem && !kseg01(e_ea, game_view);
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == {e_ea[DW+1:3], e_ea[2] && !e_ua};   // (it is behind the store that is at M now; its read, dc_raddr's)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
-                m_s_c0 <= e_s_c0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
+                m_c0k <= e_s_c0 ? 32'd1 << e_insn[15:11] : 32'd0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
                 m_h_lwu <= e_h_lwu; m_h_ld <= e_h_ld; m_h_c1 <= e_h_c1; m_h_sh <= e_h_sh; m_h_al <= e_h_al; m_h_hi <= e_h_hi; m_h_lo <= e_h_lo;
             end
             m_st_lo <= FAST ? e_sdata : e_b;        // (FAST: a store's word in its lanes already)
             m_a_lo <= e_a;
             m_a_hx <= e_ra_hx; m_st_hx <= e_rb_hx;
             m_exc <= e_exc; m_exc_code <= e_exc_code; m_badv <= e_badv;
-            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx;
+            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx; m_exc_vq <= e_exc && !(e_hwx && N64WIN && e_n64dev);
         end
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
@@ -2224,11 +2286,15 @@ always_ff @(posedge clk) begin
             e_rs <= d_rs; e_rt <= d_rt;
             e_ra <= rf_a; e_rb <= rf_b;
             if (FAST) begin
+                logic fa_m_n, fa_w_n, fb_m_n, fb_w_n;
                 if (d_c.b_imm) e_rb <= d_c.imm_zero ? {16'd0, d_insn[15:0]} : sx16(d_insn[15:0]);
-                e_fa_m <= e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
-                e_fa_w <= m_wr && m_c.rd == d_rs && d_rs != 0;
-                e_fb_m <= !d_c.b_imm && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
-                e_fb_w <= !d_c.b_imm && m_wr && m_c.rd == d_rt && d_rt != 0;
+                fa_m_n = e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
+                fa_w_n = m_wr && m_c.rd == d_rs && d_rs != 0;
+                fb_m_n = !d_c.b_imm && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
+                fb_w_n = !d_c.b_imm && m_wr && m_c.rd == d_rt && d_rt != 0;
+                e_fa_m <= fa_m_n; e_fa_w <= fa_w_n; e_fb_m <= fb_m_n; e_fb_w <= fb_w_n;
+                e_sa_w <= fa_w_n && !fa_m_n; e_sa_r <= !fa_m_n && !fa_w_n;
+                e_sb_w <= fb_w_n && !fb_m_n; e_sb_r <= !fb_m_n && !fb_w_n;
             end
             e_aw <= rf_aw;
             e_hxeq <= (rf_aw && rf_bw) ? rfq_ah == rfq_bh : !rf_aw && !rf_bw;     // (a masked hx is zero)
@@ -2263,7 +2329,7 @@ always_ff @(posedge clk) begin
             // cycle, so an operand it supplies is kept here
             if (e_w_a) e_ra <= w_res;
             if (e_w_b) e_rb <= w_res;
-            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; end
+            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; e_sa_w <= 1'b0; e_sb_w <= 1'b0; e_sa_r <= !e_fa_m; e_sb_r <= !e_fb_m; end
         end
 
         // ---------------------------------------------------- F -> D
@@ -2293,6 +2359,7 @@ always_ff @(posedge clk) begin
                     ctl_t fc;
                     fc = decode(f_fault ? 32'd0 : f_insn);
                     d_c_r <= fc;
+                    {d_c_r.wr, d_c_r.rd} <= dec_wr_rd(f_fault ? 32'd0 : f_insn);
                     d_k_cti <= fc.br != B_NONE;
                     // (JRP: a register jump whose register nothing in D or E -- in E and M when it is in D -- is to write)
                     d_k_pred <= guess(fc, f_insn) || (JRP && fc.br == B_JR && !(d_valid && d_c.wr && d_c.rd == f_insn[25:21]) &&
@@ -2375,7 +2442,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(utlb_res(utlb_m.x, m_addr), m_st); {m_tfq, m_tdq} <= tq_dev(tq_flags(utlb_res(utlb_m.x, m_addr), m_st), m_mapped); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2388,6 +2455,8 @@ always_ff @(posedge clk) begin
                 else begin
                     ms <= MS_XLAT;
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
+                    {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
+                    {m_tfq, m_tdq} <= tq_dev(tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st), m_mapped);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
                     if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
                 end
@@ -2663,7 +2732,7 @@ endmodule
 (* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
 module mips_ealu (
     input  wire [31:0] m_res, w_res, e_ra, e_rb, e_pc, hi_r, lo_r,
-    input  wire        fa_m, fa_w, fb_m, fb_w,                 // where the operands come from: M's result, W's, else the register file's
+    input  wire        sa_m, sa_w, sa_r, sb_m, sb_w, sb_r,     // where the operands come from, one-hot: M's result, W's, the register file's
     input  wire        k_shv, k_sub, sl, sra,                  // the amount is rs's; subtract (and compare); sll; sra
     input  wire [1:0]  k_grp, input wire [2:0] k_op, input wire k_f,
     input  wire [15:0] imm, input wire [4:0] shamt,
@@ -2672,8 +2741,8 @@ module mips_ealu (
 function automatic logic [31:0] rev32(input logic [31:0] v);
     for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
 endfunction
-assign a = fa_m ? m_res : fa_w ? w_res : e_ra;
-assign b = fb_m ? m_res : fb_w ? w_res : e_rb;
+assign a = ({32{sa_m}} & m_res) | ({32{sa_w}} & w_res) | ({32{sa_r}} & e_ra);
+assign b = ({32{sb_m}} & m_res) | ({32{sb_w}} & w_res) | ({32{sb_r}} & e_rb);
 assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
 assign lt  = (a[31] != b[31]) ? a[31] : cs[31];
 assign ltu = !cs[32];
