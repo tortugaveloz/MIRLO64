@@ -338,12 +338,12 @@ module rdp_pix (
     endfunction
 
     // What the texture stages do not read -- x, the line buffer set, the shade, the depth (P1's), the coverage, the row --
-    // from P1 to P8c: a RAM written every clock and read 11 clocks after (as the stages between took), or with the LOD 11 + D
+    // from P1 to P8c: a RAM written every clock and read 12 clocks after (as the stages between took), or with the LOD 12 + D
     // (its pixels reach P5 D clocks late: the pointers make the delay, nothing chooses between two paths). Two M10K
     // where the stages' registers were (and Quartus's shift registers made of them).
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [4:0]  sb_wa;
-    wire [4:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 5'd16 : 5'd15) : 5'd11);
+    wire [4:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 5'd17 : 5'd16) : 5'd12);
     // (the shade's channels are bytes -- sr9 and the others clamp them -- so their ninth bits are not kept)
     (* ramstyle = "M10K, no_rw_check" *) reg [66:0] sb_ram [0:31];
     reg  [66:0] sb_q;
@@ -644,21 +644,41 @@ module rdp_pix (
     wire signed [33:0] tcp_t = $signed(t4) * $signed({1'b0, tc_pow(t_shiftt)});
     wire signed [23:0] tcs_s = tcp_s[33:10];
     wire signed [23:0] tcs_t = tcp_t[33:10];
-    wire signed [23:0] vs5 = tcs_s - $signed({9'd0, t_uls, 3'd0});
-    wire signed [23:0] vt5 = tcs_t - $signed({9'd0, t_ult, 3'd0});
+    // (P5: the products, in registers of their own; P5m: their slices less the tile's origin, and the pass's tile fields a clock on --
+    // the tile RAM's output through the power's decode and a DSP product in logic with the subtraction behind it was the worst path of
+    // the texture stages at 10.667 ns)
+    reg signed [33:0] tcp_sr, tcp_tr;
+    wire signed [23:0] vs5 = tcp_sr[33:10] - $signed({9'd0, u5p_uls, 3'd0});
+    wire signed [23:0] vt5 = tcp_tr[33:10] - $signed({9'd0, u5p_ult, 3'd0});
+    reg        v5p, ph5p, conv5p;
+    reg [3:0]  u5p_masks, u5p_maskt;
+    reg [11:0] u5p_uls, u5p_ult, u5p_lrs, u5p_lrt;
+    reg        u5p_cs, u5p_ms, u5p_ct, u5p_mt;
+    reg [8:0]  c5p_tmem, c5p_line;
+    reg [1:0]  c5p_size;
+    reg [3:0]  c5p_pal;
+    reg [2:0]  c5p_fmt;
+    reg        c5p_yuv;
     reg        v5;
     reg signed [23:0] vs5r, vt5r;
     always @(posedge clk) begin
         // (with the LOD the passes come D clocks after their perspective divides: L3's)
-        v5 <= (lod_on ? (p5_a || p5_b) : v4) & ~rst;
-        ph5 <= lod_on ? !p5_a : ph4;
+        v5p <= (lod_on ? (p5_a || p5_b) : v4) & ~rst;
+        ph5p <= lod_on ? !p5_a : ph4;
         // the clamp, mirror and mask of P5b, and what the later stages take of the pass's tile
-        u5_uls <= t_uls; u5_ult <= t_ult; u5_lrs <= t_lrs; u5_lrt <= t_lrt;
-        u5_cs <= t_cs; u5_ms <= t_ms; u5_ct <= t_ct; u5_mt <= t_mt;
-        u5_masks <= t_masks; u5_maskt <= t_maskt;
-        c5_tmem <= t_tmem; c5_line <= t_line; c5_size <= t_size; c5_pal <= t_pal; c5_fmt <= t_fmt;
-        c5_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
-        conv5 <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
+        u5p_uls <= t_uls; u5p_ult <= t_ult; u5p_lrs <= t_lrs; u5p_lrt <= t_lrt;
+        u5p_cs <= t_cs; u5p_ms <= t_ms; u5p_ct <= t_ct; u5p_mt <= t_mt;
+        u5p_masks <= t_masks; u5p_maskt <= t_maskt;
+        c5p_tmem <= t_tmem; c5p_line <= t_line; c5p_size <= t_size; c5p_pal <= t_pal; c5p_fmt <= t_fmt;
+        c5p_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
+        conv5p <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
+        tcp_sr <= tcp_s; tcp_tr <= tcp_t;
+        // P5m
+        v5 <= v5p & ~rst; ph5 <= ph5p; conv5 <= conv5p;
+        u5_uls <= u5p_uls; u5_ult <= u5p_ult; u5_lrs <= u5p_lrs; u5_lrt <= u5p_lrt;
+        u5_cs <= u5p_cs; u5_ms <= u5p_ms; u5_ct <= u5p_ct; u5_mt <= u5p_mt;
+        u5_masks <= u5p_masks; u5_maskt <= u5p_maskt;
+        c5_tmem <= c5p_tmem; c5_line <= c5p_line; c5_size <= c5p_size; c5_pal <= c5p_pal; c5_fmt <= c5p_fmt; c5_yuv <= c5p_yuv;
         vs5r <= vs5; vt5r <= vt5;
     end
 
@@ -922,13 +942,13 @@ module rdp_pix (
         tex9x <= tex9; tex19x <= dep9 ? yuv_fin(yb9, pb9) : tex19;
         shade9x <= shade9; depth9x <= depth9; lf9x <= lf9; nz9x <= nz9;
     end
-    // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 7 clocks after its write (the
-    // first pass at P5 to P9, with P1b and P8c between; lf holds for both passes)
+    // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 8 clocks after its write (the
+    // first pass at P5 to P9, with P1b, P5m and P8c between; lf holds for both passes)
     reg  [8:0]  lf_q, lf9, lf10a, lf10;
     (* ramstyle = "M10K, no_rw_check" *) reg [8:0] lf_ram [0:15];
     always @(posedge clk) begin
         lf_ram[rw_a] <= lf;
-        lf_q <= lf_ram[rw_a - 4'd6];
+        lf_q <= lf_ram[rw_a - 4'd7];
         lf9 <= lf_q; lf10a <= lf9x; lf10 <= lf10a;
     end
 
@@ -1601,7 +1621,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5p | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no
