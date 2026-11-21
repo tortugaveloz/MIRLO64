@@ -785,8 +785,9 @@ module rdp_pix (
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 
-    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The first
-    // edge goes to B for an upper triangle and to C for a lower one, the second to the other
+    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The edges are
+    // always B - A and C - A (texels 1 and 2 less the corner); an upper triangle weights them by the fractions, a lower one
+    // crosswise by the complements (below), so that no choice is made among the 32-bit texels
     function automatic [9:0] edge1;
         input [7:0] p, x;
         edge1 = $signed({2'b0, p}) - $signed({2'b0, x});
@@ -795,21 +796,21 @@ module rdp_pix (
         input [31:0] p, x;
         edge4 = { edge1(p[31:24], x[31:24]), edge1(p[23:16], x[23:16]), edge1(p[15:8], x[15:8]), edge1(p[7:0], x[7:0]) };
     endfunction
-    wire [39:0] e1w8t = edge4(up8t ? tx1 : tx2, tx0);
-    wire [39:0] e2w8t = edge4(up8t ? tx2 : tx1, tx0);
+    wire [39:0] e1w8t = edge4(tx1, tx0);
+    wire [39:0] e2w8t = edge4(tx2, tx0);
 
     // P8b: the decoded texels, registered (the memories through the decode
     // into the filter's multipliers is too long a path); x, the set, the shade,
     // the depth come out of sb_ram here
     reg        v8b;
     reg [31:0] ta8b;                        // the corner (A or D)
-    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
-    reg [5:0]  ws8b, wt8b;                  // the weights of those edges
+    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to texels 1 and 2, 10 bits a channel
+    reg [5:0]  ws8b, wt8b;                  // the weights of those edges (an upper triangle: S fraction, T fraction; a lower one: 32 - T's, 32 - S's)
     always @(posedge clk) begin
         v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
-        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
-        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
+        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, ft8t};
+        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, fs8t};
     end
 
     // ======================================================================
@@ -1109,7 +1110,7 @@ module rdp_pix (
     reg [1:0]  hid10;                 // its hidden two
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; bs10 <= bs10a;
-        c010 <= c0_w;
+        c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1118,7 +1119,7 @@ module rdp_pix (
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
-    wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
+    wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
     wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
