@@ -485,18 +485,17 @@ endfunction
 // one that needs s and t; any other when MUL is empty, EX1 is not kept (a clip, a reciprocal), and the first is not
 // busy with s and t.
 // A computation that reads the register another is writing waits for its write.
-// vt's element broadcast, for every lane at once: lane i takes the register's lane
-// ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]), {i[2:1], ve[0]} (ve[1]) or i. The sources are shared between lanes: one eight-way choice for a
-// single lane broadcast (ve[3]), one four-way for each half (ve[2]), one two-way
-// for each pair (ve[1]); a lane then picks among those and its own.
+// vt's element broadcast, for every lane at once: lane i takes the register's lane ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]),
+// {i[2:1], ve[0]} (ve[1]) or i. Which lane it takes is a function of ve alone, a register: it is made while the memory is read (tvi),
+// and each lane is then a four-way choice in each half of the register and the choice of the halves -- two levels after the read, with
+// no shared broadcast stage (an eight-way, a four-way, a two-way choice and the lane's pick among them) in front of the lane
 logic [15:0] tv [8];
+logic [2:0]  tvi [8];
 always_comb begin
-    logic [15:0] t_b, t_h [2], t_p [4];
-    t_b = qc[ve[2:0]];
-    for (int h = 0; h < 2; h++) t_h[h] = qc[{1'(h), ve[1:0]}];
-    for (int j = 0; j < 4; j++) t_p[j] = ve[0] ? qc[2 * j + 1] : qc[2 * j];
-    for (int i = 0; i < 8; i++)
-        tv[i] = ve[3] ? t_b : ve[2] ? t_h[i / 4] : ve[1] ? t_p[i / 2] : qc[i];
+    for (int i = 0; i < 8; i++) begin
+        tvi[i] = ve[3] ? ve[2:0] : ve[2] ? {i[2], ve[1:0]} : ve[1] ? {i[2:1], ve[0]} : 3'(i);
+        tv[i]  = tvi[i][2] ? qc[{1'b1, tvi[i][1:0]}] : qc[{1'b0, tvi[i][1:0]}];
+    end
 end
 wire  fn_ch = cd.ch;
 
