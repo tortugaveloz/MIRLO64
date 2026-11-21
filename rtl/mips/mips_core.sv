@@ -1482,7 +1482,7 @@ wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
 // (an interrupt that is taken instead of the instruction in M, which may have faulted -- a fetch the TLB has no entry for -- is
 //  not a refill: it goes to the general vector, and the fault comes again when the handler has returned)
-wire m_refill = !m_take_int && ((!m_exc_v && m_tlb_fault && !m_tlbq[34]) || m_fxr);
+wire m_refill = !m_take_int && ((!m_exc_v && !m_tlbq[34]) || m_fxr);        // (read only while an exception is taken: with no exception from E, it is the translation's)
 wire [4:0] m_ccode = m_fxr ? 5'd2 : m_code;                  // Cause.ExcCode
 // a TLB exception: BadVAddr, Context and EntryHi take the page
 wire m_tlbx = TLB_EN && ((!m_exc_v && m_tlb_fault && !m_tdev) || (m_exc_v && (m_exc_code == 5'd2 || m_fxr)));
@@ -1494,9 +1494,7 @@ wire m_to_mon  = MON && mon_game && !c0_status[2] &&
                  (m_take_int ? m_mon_int : (m_take_exc && (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : (TLB_RAM || m_tdev))));   // (TLB_EN: a TLB exception is the game's)
 // a translation fault (a fetch's, code 2 from E, or an access's, found here) that the monitor level takes
 wire m_tr_mon  = TLB_RAM && m_to_mon && m_take_exc && (!m_exc_v || m_exc_code == 5'd2);
-// (the game's own handler: an exception of the game's code that a console takes)
-wire m_to_game = MON && mon_game && (m_take_int || m_take_exc) && !m_to_mon && n64code(m_pc, game_view);
-wire m_live = m_valid && !m_take_int && !m_take_exc;
+wire m_live = m_valid && !m_take_int && !m_exc_v && !m_tlb_fault;
 
 logic m_k_sc;                                // (FAST: sc, registered with it)
 wire m_sc_fail = (FAST ? m_k_sc : m_c.st == S_SC) && !ll_bit;
@@ -1591,8 +1589,18 @@ wire e_adv = m_adv;
 wire d_adv = e_adv && !d_stall;
 // (an eret completes at once -- FAST: it is no access, no FPU or multiply operation, no cache op and no shift, the flags the rest of m_done
 // waits on, so only the refill that M's state machine may be in holds it: not m_done's whole cone in front of the fetch's redirect)
-wire m_eret_go = FAST ? m_live && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_commit_e && m_c.eret;
-wire flush = m_take_int || m_take_exc || m_eret_go || (FAST && rp_pend);
+// (FAST: an eret is no access, so no translation fault holds it back: m_live without m_tlb_fault)
+wire m_eret_go = FAST ? m_valid && !m_take_int && !m_exc_v && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_commit_e && m_c.eret;
+wire m_take_any = m_take_int || (m_valid && (m_exc_v || m_tlb_fault));      // (m_take_int || m_take_exc: an interrupt is taken whether or not E faulted)
+// (FAST, flush: an eret in M with an interrupt or an exception taken flushes anyway, so the eret's term here is M's valid and its flags alone;
+// m_eret_go, which the vector is chosen by, is the one that the exception does not hold back)
+wire m_eret_f = FAST ? m_valid && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_eret_go;
+wire flush = m_take_any || m_eret_f || (FAST && rp_pend);
+// (the vector is read only while flush: with rp_pend and the eret decided above it, what is left is an interrupt or an exception, so
+// the monitor-or-game choice is not asked whether one is taken -- m_take_int, m_take_exc and the translation fault's cone stay out of it)
+wire m_to_mon_f = MON && mon_game && !c0_status[2] &&
+                  (m_take_int ? m_mon_int : (m_exc_v ? (m_dev || m_exc_code == 5'd10 || (TLB_RAM && m_exc_code == 5'd2)) : (TLB_RAM || m_tdev)));
+wire m_to_game = MON && mon_game && !m_to_mon_f && n64code(m_pc, game_view);
 logic [31:0] flush_pc;
 always_comb begin
     if (FAST && rp_pend) flush_pc = w_pc;
@@ -1924,7 +1932,7 @@ always_comb begin
     tr_retire = w_ok;
     tr_pc = w_pc; tr_insn = w_insn;
     tr_wr = w_wr; tr_rd = w_c.rd; tr_val = v64(w_hx, w_res);
-    tr_exc = m_take_int || m_take_exc;
+    tr_exc = m_take_any;
     tr_exc_int = m_take_int;
     tr_exc_pc = m_pc;
     tr_exc_code = m_take_int ? 5'd0 : m_ccode;
@@ -1992,7 +2000,7 @@ mips_c0r c0r (
     .w_ctx_hi(c0_mtw && m_insn[15:11] == 5'd4), .w_ctx_lo(c0_mtw && m_insn[15:11] == 5'd4 && MON && c0_status[2]),
     .w_el0(c0_mtw && m_insn[15:11] == 5'd2), .w_el1(c0_mtw && m_insn[15:11] == 5'd3),
     .w_pm(c0_mtw && m_insn[15:11] == 5'd5), .w_eh(c0_mtw && m_insn[15:11] == 5'd10),
-    .x_eepc((m_take_int || m_take_exc) && m_to_mon), .x_epc((m_take_int || m_take_exc) && !m_to_mon && !c0_status[1]),
+    .x_eepc(m_take_any && m_to_mon), .x_epc(m_take_any && !m_to_mon && !c0_status[1]),
     .x_bv(m_take_exc && m_exc_v && (m_code == 5'd4 || m_code == 5'd5 || (TLB_RAM && m_code == 5'd2)) && !(m_to_mon && m_dev) && !m_tr_mon),
     .x_eh_r(m_take_exc && TLB_RAM && m_exc_v && m_code == 5'd2 && !m_tr_mon),
     .x_mbv_r(m_take_exc && m_tr_mon), .x_mbv_t(m_take_exc && m_tdev),
@@ -2058,7 +2066,7 @@ always_ff @(posedge clk) begin
         end
 
         // ---------------------------------------------------- M: exceptions
-        if (m_take_int || m_take_exc) begin
+        if (m_take_any) begin
             if (m_to_mon) begin
                 // the monitor level (MON): ERL and ErrorEPC; what the game's handler may be in the middle of is not touched
                 c0_status[2] <= 1'b1;
