@@ -262,7 +262,13 @@ module rdp_mem (
     reg [2:0]  rf_wr, rf_rd;
     wire [2:0] rf_cnt = rf_wr - rf_rd;
     wire       rf_room = ({1'b0, rf_cnt} + {3'd0, p1} + {3'd0, p2}) < 4'd4;
-    wire [79:0] rf_head = rf[rf_rd[1:0]];
+    // (the head is a register: loaded from the FIFO's RAM when the FIFO has a word and the head has none, or is done -- the RAM's
+    // output with the word's decode behind it, then the engine's own decisions and the data's choices, were one path of 25 levels)
+    wire [79:0] rf_ram  = rf[rf_rd[1:0]];
+    reg  [79:0] rf_head;
+    reg         hd_v;                         // the head holds a word
+    reg  [3:0]  hd_range;                     // its pixels' byte lanes (range_sel of its word)
+    reg         hd_fst, hd_lst;               // it is its span's first word of a group, last
     reg [1:0]  h_ph;                      // the head's commands done: 0 none, 1 its word's (its group's hidden word is next)
     reg [31:0] hacc;                      // the group's hidden word so far (the head's merged in at its pop)
     reg [3:0]  hbe;                       // a fill: the quads touched so far
@@ -301,12 +307,12 @@ module rdp_mem (
     wire [1:0]  h_zmask = rf_head[1:0];
     wire [1:0]  h_cmask = rf_head[1:0];
     // (a 32-bit colour word is a pixel of the span: all four bytes by its pass bit, the entry's bit 19)
-    wire [3:0]  h_range = w_wide ? 4'hF : range_sel(h_idx[8:0]);
+    wire [3:0]  h_range = w_wide ? 4'hF : hd_range;
     wire [3:0]  h_csel  = w_pz ? 4'd0 : w_fillm ? h_range : w_wide ? {4{h_cd36[19]}}
                         : (h_range & { {2{h_cmask[0]}}, {2{h_cmask[1]}} });
     wire [3:0]  h_zsel  = !w_pz ? 4'd0 : (h_range & { {2{h_zmask[0]}}, {2{h_zmask[1]}} });
     wire [3:0]  h_sel   = w_pz ? h_zsel : h_csel;
-    wire        h_v     = rf_wr != rf_rd;
+    wire        h_v     = hd_v;
     // an 8-bit image: the word's two bytes, by its half of the memory word (h_idx[0]: the second)
     wire [1:0]  h_be8   = {h_csel[3], h_csel[1]};
     wire [3:0]  h_c8be  = h_idx[0] ? {2'b00, h_be8} : {h_be8, 2'b00};
@@ -320,7 +326,7 @@ module rdp_mem (
     // 16-bit image has, is addressed from the colour word's)
     wire [29:0] h_wa    = ((h_c || !h_zz) ? w_cb : w_zb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
     wire [2:0]  h_j     = w_cb[2:0] + h_idx[2:0];
-    wire        h_first = h_j == 3'd0 || h_idx == {1'b0, w_x0[9:1]};
+    wire        h_first = h_j == 3'd0 || hd_fst;
     wire [31:0] h_base  = h_first ? h_hold : hacc;
     wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_base[{h_j, 2'b10} +: 2],
                             h_csel[2] ? h_cd36[19:18] : h_base[{h_j, 2'b00} +: 2] };
@@ -328,7 +334,7 @@ module rdp_mem (
                                   : (h_base & ~(32'hF << {h_j, 2'b00})) | ({28'd0, h_nib} << {h_j, 2'b00});
     wire [3:0]  h_qbe   = (h_first ? 4'd0 : hbe) | (4'd1 << h_j[2:1]);
     wire        h_any   = !w_c8 && !w_c32 && ((h_first ? 1'b0 : hany) | (h_csel != 4'd0));
-    wire        h_last  = h_j == 3'd7 || h_idx == w_lastw;
+    wire        h_last  = h_j == 3'd7 || hd_lst;
     wire        h_c     = h_v && h_ph == 2'd0 && h_csel != 4'd0;           // the head's colour word is to go
     wire        h_zz    = h_v && h_ph == 2'd0 && h_zsel != 4'd0;           // ... or (the second pass) its Z word
     wire        h_hh    = h_v && !w_pz && !h_c && h_last && h_any;        // ... or its group's hidden word
@@ -348,7 +354,7 @@ module rdp_mem (
             m_cmd_valid <= 1'b0;
             wf_wr <= 0; wf_rd <= 0; wq_v <= 1'b0;
             p1 <= 1'b0; p2 <= 1'b0;
-            rf_wr <= 0; rf_rd <= 0; h_ph <= 2'd0;
+            rf_wr <= 0; rf_rd <= 0; h_ph <= 2'd0; hd_v <= 1'b0;
             h_done <= 1'b0;
             la_v <= 1'b0; l_out <= 1'b0;
             z_have <= 10'd0; c_have <= 10'd0;
@@ -507,9 +513,18 @@ module rdp_mem (
                 // the head: a command went (above), or there is none for it
                 if (wr_go && h_c) h_ph <= 2'd1;
                 if (h_pop) begin
-                    rf_rd <= rf_rd + 3'd1; h_ph <= 2'd0;
+                    h_ph <= 2'd0;
                     hacc <= h_merge; hbe <= h_qbe; hany <= h_any;
                 end
+                // the head: the next word of the FIFO when this one is done (or there is none)
+                if (rf_wr != rf_rd && (!hd_v || h_pop)) begin
+                    rf_head <= rf_ram;
+                    hd_range <= range_sel(rf_ram[46:38]);
+                    hd_fst <= rf_ram[47:38] == {1'b0, w_x0[9:1]};
+                    hd_lst <= rf_ram[47:38] == w_lastw;
+                    hd_v <= 1'b1;
+                    rf_rd <= rf_rd + 3'd1;
+                end else if (h_pop) hd_v <= 1'b0;
                 // the RAM's data for the word addressed two edges ago
                 p2 <= p1;
                 p2_idx <= p1_idx;
@@ -529,7 +544,7 @@ module rdp_mem (
                     p1 <= 1'b0;
                 end
                 // the span's words have all gone: the same again for its Z words (Z_UPD), or done
-                if (w_all && !p1 && !p2 && rf_wr == rf_rd) begin
+                if (w_all && !p1 && !p2 && rf_wr == rf_rd && !hd_v) begin
                     if (w_z && !w_fillm && !w_pz) begin w_pz <= 1'b1; w_all <= 1'b0; w_idx <= {1'b0, w_x0[9:1]}; w_lastw <= {1'b0, w_zl}; end
                     else w_act <= 1'b0;
                 end
