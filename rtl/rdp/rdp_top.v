@@ -662,8 +662,14 @@ module rdp_top (
     wire [31:0] e_q = e_ram[tinit_w ? e_wa : ea], ade_q = ade_ram[ada];
     wire [31:0] e_add = e_q + (tinit_w ? mul_p[31:0] : ade_q);
     wire [31:0] e_wd = vset_w ? (vset_on ? vval : 32'd0) : e_add;
+    // (e's write is a clock later, from registers: the address, the adder and the choices in front of the RAM's data and its enable were
+    // one path; the reads that follow are of other attributes, and the last of a row's steps is read at S_SETUP's step 9)
+    reg         e_we_q;
+    reg  [2:0]  e_wa_q;
+    reg  [31:0] e_wd_q;
     always @(posedge clk) begin
-        if (vset_w || tinit_w || step_w) e_ram[e_wa] <= e_wd;
+        e_we_q <= vset_w || tinit_w || step_w; e_wa_q <= e_wa; e_wd_q <= e_wd;
+        if (e_we_q) e_ram[e_wa_q] <= e_wd_q;
         // DaDx goes in at a step of S_VSET after vgx is complete and before
         // the step that writes DaDe (Z: 5, the others: 7); an attribute that
         // is off is not written, and its product is 0 (S_SETUP)
