@@ -249,10 +249,9 @@ typedef struct packed {
 // a multiply's result: the accumulator's middle word, or its low word (VMUDL, VMUDN, VMADL, VMADN: k 4, 6), or a
 // constant where the word does not hold the value -- 7FFF / 8000, VMULU's and VMACU's (k 1) FFFF / 0000, the low
 // word's FFFF / 0000: its top bit and its other fifteen
-function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] a, input logic gt, input logic lt);
-    logic klo, kc, c15, clo;
-    klo = k == 3'd4 || k == 3'd6;
-    if (k == 3'd1) begin kc = a[47] || gt; c15 = !a[47]; clo = !a[47]; end
+function automatic logic [15:0] mul_res(input logic k1, input logic klo, input logic [47:0] a, input logic gt, input logic lt);
+    logic kc, c15, clo;
+    if (k1) begin kc = a[47] || gt; c15 = !a[47]; clo = !a[47]; end
     else if (klo)  begin kc = gt || lt;    c15 = gt;     clo = gt;     end
     else           begin kc = gt || lt;    c15 = !gt;    clo = gt;     end
     return kc ? {c15, {15{clo}}} : klo ? a[15:0] : a[31:16];
@@ -347,8 +346,10 @@ typedef struct packed {
     logic       vas;                // VADD, VSUB: the result is clamped
     logic       abs_;               // VABS: -t of -8000 is 8000
     logic       resv;               // a reserved function: 0
+    logic       mk1, mklo;          // a multiply's result by its function: VMULU's and VMACU's (k 1), the accumulator's low word's (k 4, 6)
+    logic [1:0] vsr;                // VSAR: which of the accumulator's words the element names (0 low, 1 middle, 2 high, 3 none: 0)
 } ydec_t;
-function automatic ydec_t ydecode(input logic [5:0] f);
+function automatic ydec_t ydecode(input logic [5:0] f, input logic [3:0] e);
     ydec_t d;
     d.cl    = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
     d.cx    = (f >= 6'h28 && f <= 6'h2D) || f == 6'h33 || (f >= 6'h30 && f <= 6'h36) || f == 6'h22;
@@ -366,12 +367,15 @@ function automatic ydec_t ydecode(input logic [5:0] f);
     d.vas   = f == 6'h10 || f == 6'h11;
     d.abs_  = f == 6'h13;
     d.resv  = is_resv(f);
+    d.mk1   = f[2:0] == 3'd1;
+    d.mklo  = f[2:0] == 3'd4 || f[2:0] == 3'd6;
+    d.vsr   = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
     return d;
 endfunction
 
 // EX2, any computation but a multiply: from the registered sum (lo) and flags (fr, the adder's {carry, b16, zero,
 // ones} of its compare) the result, the accumulator's low word, the flags and the register write's data
-function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
+function automatic lane_t lane_x2(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t,
                                   input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input logic kc_in, input ydec_t yd,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);
@@ -437,7 +441,7 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
     if (yd.resv) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
     // (VSAR: the accumulator's word e names, the lane's, or 0)
     if (yd.vsar) begin
-        rsel = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
+        rsel = yd.vsr;
         c15 = 1'b0; clo = 1'b0;
     end
     // the flags
@@ -555,8 +559,8 @@ logic [15:0] mres [LANES];
 logic [LANES-1:0] mgt_r, mlt_r;               // a multiply's sum is above / below what a word holds (made as it was: EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
-        mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
+        ex2[l]  = lane_x2(y_fn, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        mres[l] = mul_res(y_yd.mk1, y_yd.mklo, {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
 logic [15:0] hold_be_w;                       // ... and the bytes it writes
@@ -881,9 +885,9 @@ always_ff @(posedge clk) begin
         // (EX2 takes EX1's computation, or SEL's -- a fast one, when EX1 is empty -- whatever SEL does: only y_v is its choice)
         y_v <= x_ex2 || (sel0 && fn_fast && !x_v);
         if (x_v) begin
-            y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
+            y_fn <= x_fn; y_yd <= ydecode(x_fn, x_ve); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
         end else begin
-            y_fn <= fn; y_yd <= ydecode(fn); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
+            y_fn <= fn; y_yd <= ydecode(fn, ve); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
         end
         if (y_v) begin
             for (int l = 0; l < LANES; l++) begin
