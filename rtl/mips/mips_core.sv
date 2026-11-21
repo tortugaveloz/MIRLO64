@@ -1264,8 +1264,17 @@ wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]})
 // TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
 // RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
 // monitor level, which answers it -- with COP0 22 holding the physical address the page gave
-wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && (m_tq_hi || (mon_mem4 && m_tq_22));
-wire m_tlb_fault = m_mapped && ms == MS_XLAT && (m_tq_bad || m_tdev);
+// (FAST: the two as registers too, from the same bits and what else they are made of -- the access is mapped, Status.ERL and mon_game, mon_mem4, which
+// do not change while a translation is held -- set where m_tlbq is: m_tdev and m_tlb_fault are then the state and one flag, not eight inputs, in front of
+// m_live, the flush, and the vector it goes to)
+logic        m_tdq, m_tfq;
+function automatic logic [1:0] tq_dev(input logic [2:0] f, input logic mapped);        // {a fault of the entry or the device's, the device's} of tq_flags' {bad, hi, bit 22}
+    logic d;
+    d = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && mapped && (f[1] || (mon_mem4 && f[0]));
+    return {mapped && (f[2] || d), d};
+endfunction
+wire m_tdev = FAST ? ms == MS_XLAT && m_tdq : TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && (m_tq_hi || (mon_mem4 && m_tq_22));
+wire m_tlb_fault = FAST ? ms == MS_XLAT && m_tfq : m_mapped && ms == MS_XLAT && (m_tq_bad || m_tdev);
 wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
               (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D) ||   // ldc1, sdc1
@@ -1498,7 +1507,8 @@ always_ff @(posedge clk) begin int_pend_r <= int_pending; int_mon_r <= int_mon; 
 wire m_take_int = m_valid && (FAST ? int_pend_r : int_pending) && ms == MS_IDLE && !m_ph;
 // (the address EPC / ErrorEPC take: the branch's, if M's is in its delay slot -- the word address less the flag, one decrement)
 wire [31:0] m_epc = {m_pc[31:2] - 30'(m_dly), m_pc[1:0]};
-wire m_exc_v = m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
+logic m_exc_vq;                                        // (FAST: m_exc_v, registered with them)
+wire m_exc_v = FAST ? m_exc_vq : m_exc && !(m_hwx && m_dev);          // (MI: the game's word access to a register the hardware has is no exception)
 wire m_take_exc = m_valid && !m_take_int && (m_exc_v || m_tlb_fault);
 wire [4:0] m_code = m_exc_v ? m_exc_code : m_tlb_code;
 wire m_fxr = TLB_EN && m_exc_v && m_exc_code == 5'd18;       // a fetch no entry named (the refill vector); code 18 is TLBL's, as the pipeline carries it
@@ -2236,7 +2246,7 @@ always_ff @(posedge clk) begin
             m_a_lo <= e_a;
             m_a_hx <= e_ra_hx; m_st_hx <= e_rb_hx;
             m_exc <= e_exc; m_exc_code <= e_exc_code; m_badv <= e_badv;
-            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx;
+            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx; m_exc_vq <= e_exc && !(e_hwx && N64WIN && e_n64dev);
         end
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
@@ -2413,7 +2423,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(utlb_res(utlb_m.x, m_addr), m_st); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(utlb_res(utlb_m.x, m_addr), m_st); {m_tfq, m_tdq} <= tq_dev(tq_flags(utlb_res(utlb_m.x, m_addr), m_st), m_mapped); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2427,6 +2437,7 @@ always_ff @(posedge clk) begin
                     ms <= MS_XLAT;
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
                     {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
+                    {m_tfq, m_tdq} <= tq_dev(tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st), m_mapped);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
                     if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
                 end
