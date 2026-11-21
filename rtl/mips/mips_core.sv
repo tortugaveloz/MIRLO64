@@ -875,8 +875,10 @@ wire [31:0] br_a = m_rs ? m_res : rf_a, br_b = m_rt ? m_res : rf_b;
 function automatic logic wideprod(input ctl_t c);
     return (XALU && c.x64 != X_NONE && c.x64 != X_SLT && c.x64 != X_SLTU) || c.ld == M_LD || c.ld == M_LWU || c.ld == M_LDL || c.ld == M_LDR || c.cop1_64;   // (a compare's result is 0 or 1)
 endfunction
-wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && wideprod(m_c);
-wire w_wp = w_valid && w_c.wr && wideprod(w_c), x_wp = rf_xv && rf_xw;
+// (FAST: wideprod of M's and W's instruction, registered as it enters them -- a function of M's control bits is two levels in front of the hazard)
+logic m_k_wprod, w_k_wprod;
+wire e_wp = e_live && e_c.wr && wideprod(e_c), m_wp = m_valid && m_c.wr && (FAST ? m_k_wprod : wideprod(m_c));
+wire w_wp = w_valid && w_c.wr && (FAST ? w_k_wprod : wideprod(w_c)), x_wp = rf_xv && rf_xw;
 wire inflight_rs = (e_live && e_c.wr && e_c.rd == d_rs) || (m_valid && m_c.wr && m_c.rd == d_rs) || w_rs || x_rs;
 wire inflight_rt = (e_live && e_c.wr && e_c.rd == d_rt) || (m_valid && m_c.wr && m_c.rd == d_rt) || w_rt || x_rt;
 wire [31:0] rf_ah = (!W64 || d_rs == 0 || inflight_rs) ? 32'd0 : rfq_ah;
@@ -2086,7 +2088,7 @@ always_ff @(posedge clk) begin
         w_lm <= m_lmiss;
         w_pc <= m_pc;           // (every cycle: the pc that M had last cycle -- a load that took another line's word is run again from it, whether it moved on to W or not)
         if (m_commit_e) begin
-            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial;
+            w_c <= m_c; w_insn <= m_insn; w_serial <= m_serial; w_k_wprod <= m_k_wprod;
             if (FAST) begin
                 w_res <= m_wres_d;
                 w_hx <= W64 ? m_whx_d : 32'd0;
@@ -2216,7 +2218,7 @@ always_ff @(posedge clk) begin
             m_xshift <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_shwait <= XSH && (e_c.x64 == X_SLL || e_c.x64 == X_SRL || e_c.x64 == X_SRA);
             m_xc <= e_cs[32]; m_xltu <= e_ltu; m_k_ua <= e_ua;
-            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial;
+            m_c <= e_c; m_pc <= e_pc; m_insn <= e_insn; m_dly <= e_dly; m_serial <= e_serial; m_k_wprod <= wideprod(e_c);
             m_res <= e_res;
             m_addr <= e_ea;
             if (FAST) begin
