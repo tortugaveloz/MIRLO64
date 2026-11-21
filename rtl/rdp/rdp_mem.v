@@ -284,7 +284,22 @@ module rdp_mem (
     // span's last word has gone, and w_rdy is only wanted before that)
     wire [10:0] w_idx1 = {1'b0, w_idx} + 11'd1;
     wire [10:0] w_end  = w_wide ? w_idx1 : ({w_idx1[9:0], 1'b0} > w_x1) ? w_x1 : {w_idx1[9:0], 1'b0};
-    wire        w_rdy  = w_fillm || w_pz || w_res >= (w_end - {1'b0, w_x0});
+    // (what the results must have reached for the word w_idx names, w_end - w_x0, is a register: it is found for the next word as the
+    // counter steps, instead of from the counter with the compare of the results and the enables behind it)
+    function automatic [10:0] need_f;
+        input [9:0]  idx;
+        input [9:0]  x0;
+        input [10:0] x1;
+        input        wide;
+        reg [10:0] i1, e;
+        begin
+            i1 = {1'b0, idx} + 11'd1;
+            e = wide ? i1 : ({i1[9:0], 1'b0} > x1) ? x1 : {i1[9:0], 1'b0};
+            need_f = e - {1'b0, x0};
+        end
+    endfunction
+    reg  [10:0] w_need;
+    wire        w_rdy  = w_fillm || w_pz || w_res >= w_need;
     wire [12:0] w_hgw  = w_cb[12:0] + {3'd0, w_idx};       // (the word's address: its group, for the raw hidden buffer)
 
     // pixel range of a word: the byte lanes of its even pixel ([3:2]) and its odd one
@@ -506,6 +521,7 @@ module rdp_mem (
                     w_x0 <= wr_x0; w_x1 <= wr_x1;
                     // (the colour span first: a 32-bit image's a word a pixel)
                     w_idx <= wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}; w_lastw <= wr_c32 ? wr_xl[9:0] : {1'b0, wr_xl[9:1]};
+                    w_need <= need_f(wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}, wr_x0, wr_x1, wr_c32);
                     w_zl <= wr_xl[9:1];
                     w_all <= 1'b0; h_ph <= 2'd0; w_pz <= 1'b0;
                 end
@@ -540,6 +556,7 @@ module rdp_mem (
                     p1_idx <= w_idx;
                     if (w_idx == w_lastw) w_all <= 1'b1;
                     w_idx <= w_idx1[9:0];
+                    w_need <= need_f(w_idx1[9:0], w_x0, w_x1, w_wide);
                 end else begin
                     p1 <= 1'b0;
                 end
