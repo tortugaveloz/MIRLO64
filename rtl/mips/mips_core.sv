@@ -1264,6 +1264,7 @@ logic [3:0] m_k_sstrb; logic m_k_sfs, m_k_ssd;      // (FAST: a store of the FPU
 wire m_ld = FAST ? m_k_ld : m_c.ld != M_NONE, m_st = FAST ? m_k_st : m_c.st != S_NONE, m_mem = m_ld || m_st;
 // (FAST: what kind of address it is, registered with it)
 logic m_f_kseg, m_f_devk;
+logic m_f_devstk;                               // a store of the game's to an unmapped device address, as M has it (m_st && !m_wide && m_kseg && m_f_devk, made in E)
 wire m_kseg = FAST ? m_f_kseg : kseg01(m_addr, game_view);
 typedef enum logic [2:0] { MS_IDLE, MS_REFILL, MS_REREAD, MS_SLOW_A, MS_SLOW_B, MS_DONE, MS_XLAT, MS_WALK } ms_t;
 ms_t ms;
@@ -1555,7 +1556,7 @@ function automatic logic pa_dev(input logic [31:0] pa);
 endfunction
 // (FAST, an unmapped address: m_f_devk, registered; a mapped one: the table's page. Not pa_dev(m_pa) for both, which would
 // put m_addr -> kphys -> pa_dev into this mux's cone -- and into m_needs_slow, m_done and every stall of the pipeline -- for a case the mux never takes)
-wire m_devst = m_st && !m_wide && (FAST ? (m_kseg ? m_f_devk : pa_dev(tphys({m_tlbq[31:12], m_addr[11:0]}))) : pa_dev(m_pa));
+wire m_devst = FAST ? (m_f_devstk || (m_st && !m_wide && !m_kseg && pa_dev(tphys({m_tlbq[31:12], m_addr[11:0]})))) : (m_st && !m_wide && pa_dev(m_pa));
 // the slow path: uncached / device / mapped loads, device stores, 64-bit
 // accesses to anything not cached; other stores (sc too) go through the write
 // buffer whatever the region
@@ -2247,6 +2248,7 @@ always_ff @(posedge clk) begin
             m_addr <= e_ea;
             if (FAST) begin
                 m_f_kseg <= kseg01(e_ea, game_view); m_f_devk <= pa_dev(kphys(e_ea));
+                m_f_devstk <= (e_c.st != S_NONE) && !(e_fwide || (W64 && (e_c.ld == M_LD || e_c.st == S_SD)) || e_ua) && kseg01(e_ea, game_view) && pa_dev(kphys(e_ea));
                 m_ck_ni <= e_c.cache && !e_insn[20];
                 m_ck_d <= e_c.cache && (e_insn[20:16] == 5'h11 || e_insn[20:16] == 5'h15) && !kseg01(e_ea, game_view);
                 m_ck_w <= e_c.cache && e_insn[17:16] == 2'd0 && e_insn[20];
