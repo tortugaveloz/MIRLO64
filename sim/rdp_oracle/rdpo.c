@@ -349,6 +349,7 @@ int main(int argc, char **argv)
             orc_cmd(st, 2);
             rdp_push(&mdl, st[0]); rdp_push(&mdl, st[1]);
         }
+        mdl.tile_set = 0;       /* (the zero tiles are the harness's, not the stream's: rdp_exact.md rule 9 asks which tiles the stream sets) */
         uint64_t tot_c = 0, tot_h = 0, tot_z = 0; int nprim = 0, bad_prims = 0, first_bad = -1;
         if (!quiet) printf("%s: %d commands\n", argv[ai], ncmds);
         for (int i = 0; i < ncmds; i++) {
