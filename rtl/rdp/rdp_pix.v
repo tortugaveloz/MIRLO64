@@ -254,7 +254,7 @@ module rdp_pix (
     reg        v0;
     reg [9:0]  x0;
     // the line buffers' set of the pixel's row (rdp_top), along with x
-    reg        bs0, bs9, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
+    reg        bs0, bs9, bs9x, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
     reg [15:0] s0r, t0r;
     reg [31:0] w0r;
     reg [35:0] shade0;
@@ -800,6 +800,7 @@ module rdp_pix (
     // clock of 10.667 ns), the corner, the pass's flags
     reg        v8c, ph8c, conv8c;
     reg [31:0] ta8c;
+    reg [59:0] pa8c;                        // the YUV converter's products from the corner (a pass that converts its own texel)
     reg signed [16:0] acc8c [0:3];
     function automatic signed [16:0] tri3_acc;
         input [9:0] e1v, e2v;
@@ -812,6 +813,7 @@ module rdp_pix (
     endfunction
     always @(posedge clk) begin
         v8c <= v8b & ~rst; ph8c <= ph8b; conv8c <= conv8b; ta8c <= ta8b;
+        pa8c <= yuv_prod(ta8b);
         acc8c[3] <= tri3_acc(e1v8b[39:30], e2v8b[39:30], ws8b, wt8b);
         acc8c[2] <= tri3_acc(e1v8b[29:20], e2v8b[29:20], ws8b, wt8b);
         acc8c[1] <= tri3_acc(e1v8b[19:10], e2v8b[19:10], ws8b, wt8b);
@@ -852,7 +854,7 @@ module rdp_pix (
             cv_ch = clamp8($signed({12'd0, y}) + q);
         end
     endfunction
-    function automatic [31:0] yuv_conv;
+    function automatic [59:0] yuv_prod;             // the three channels' products + 128
         input [31:0] t;
         reg signed [8:0]  u, v;
         reg signed [9:0]  k0, k1, k2, k3;
@@ -864,16 +866,25 @@ module rdp_pix (
             pr = k0 * v + 20'sd128;
             pg = k1 * u + k2 * v + 20'sd128;
             pb = k3 * u + 20'sd128;
-            yuv_conv = { cv_ch(t[15:8], pr), cv_ch(t[15:8], pg), cv_ch(t[15:8], pb), t[15:8] };
+            yuv_prod = {pr, pg, pb};
+        end
+    endfunction
+    function automatic [31:0] yuv_fin;               // the texel's Y and the products: R G B and A = Y
+        input [7:0]  y;
+        input [59:0] pp;
+        begin
+            yuv_fin = { cv_ch(y, pp[59:40]), cv_ch(y, pp[39:20]), cv_ch(y, pp[19:0]), y };
         end
     endfunction
     reg  [31:0] texA9;
-    wire [31:0] conv9 = yuv_conv((ph8c && other_h[9]) ? texA9 : ta8c);
+    wire        dep8c = conv8c && ph8c && other_h[9];       // a second pass that converts the first pass's texel (CONVERT_ONE)
+    wire [31:0] conv9 = yuv_fin(ta8c[15:8], pa8c);
     // the texel the pass gives: filtered, or the corner's, or converted; a two_pass pixel's first pass is kept (texA9) for
     // its second, which gives TEXEL1 (tex19; TEXEL0 is tex9)
-    wire [31:0] tex_cur = conv8c ? conv9 : point ? ta8c : filt9;
+    wire [31:0] tex_cur = conv8c ? conv9 : point ? ta8c : filt9;      // (a dependent conversion is made in P9x: its texel here is not used)
     reg  [31:0] tex19;
-    reg  [3:0]  hk9, hk10a;
+    reg         dep9;
+    reg  [3:0]  hk9x, hk10a;
     reg        v9;
     reg [9:0]  x9;
     (* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *) reg [31:0] tex9;
@@ -881,14 +892,35 @@ module rdp_pix (
     reg [17:0] depth9;
     always @(posedge clk) begin
         v9 <= v8c & ~rst & (!two_pass | ph8c); x9 <= x8c; bs9 <= bs8c;
-        lb_raddr <= {bs8c, x8c[9:1]};           // line buffers: data after the next edge, captured at P10b
-        clb_raddr <= {bs8c, c32 ? x8c[8:0] : x8c[9:1]};
-        hl_raddr <= {bs8c, hw8c[9:3]};          // the hidden word of the pixel's group
-        hk9 <= {hw8c[2:0], x8c[0]};
         if (!ph8c) texA9 <= tex_cur;
         tex9 <= (two_pass & ph8c) ? texA9 : tex_cur;
-        tex19 <= tex_cur;
+        tex19 <= tex_cur; dep9 <= dep8c;
         shade9 <= shade8c; depth9 <= depth8c;
+    end
+    // The dependent conversion (a second pass that converts the first pass's texel, texA9): the products are made from texA9's
+    // register in the pass's own P9 clock and the sum and the clamp in the clock after, P9x. The other conversions have their
+    // source in P8b and are made in P8c (pa8c) and P9. P9x also holds the pixel's other registers a clock: the combiner's
+    // selection takes them from here, and the line buffers' addresses are issued from P9's, a clock later than they were.
+    reg [59:0] pb9;
+    reg [7:0]  yb9;
+    reg        v9x;
+    reg [9:0]  x9x;
+    reg [31:0] tex9x, tex19x;
+    reg [35:0] shade9x;
+    reg [17:0] depth9x;
+    reg [8:0]  lf9x, nz9x;
+    reg [3:0]  cv9x;
+    reg [1:0]  y9x;
+    wire [9:0] hw9 = (bs9 ? rwb1 : rwb0) + {1'b0, x9[9:1]};
+    always @(posedge clk) begin
+        pb9 <= yuv_prod(texA9); yb9 <= texA9[15:8];
+        v9x <= v9 & ~rst; x9x <= x9; bs9x <= bs9;
+        lb_raddr <= {bs9, x9[9:1]};             // line buffers: data after the next edge, captured at P10b
+        clb_raddr <= {bs9, c32 ? x9[8:0] : x9[9:1]};
+        hl_raddr <= {bs9, hw9[9:3]};            // the hidden word of the pixel's group
+        hk9x <= {hw9[2:0], x9[0]};
+        tex9x <= tex9; tex19x <= dep9 ? yuv_fin(yb9, pb9) : tex19;
+        shade9x <= shade9; depth9x <= depth9; lf9x <= lf9; nz9x <= nz9;
     end
     // the LOD fraction, from L3 (lf) to P9 and on to P10 for the second cycle: a RAM read 7 clocks after its write (the
     // first pass at P5 to P9, with P1b and P8c between; lf holds for both passes)
@@ -897,7 +929,7 @@ module rdp_pix (
     always @(posedge clk) begin
         lf_ram[rw_a] <= lf;
         lf_q <= lf_ram[rw_a - 4'd6];
-        lf9 <= lf_q; lf10a <= lf9; lf10 <= lf10a;
+        lf9 <= lf_q; lf10a <= lf9x; lf10 <= lf10a;
     end
 
     // ======================================================================
@@ -1089,9 +1121,9 @@ module rdp_pix (
     always @(posedge clk) begin
         if (rst) nlfsr <= 23'd0;
         else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
-        nz10 <= nz9;
+        nz10 <= nz9x;
     end
-    wire [155:0] o0_w = cc_sel(1'b0, tex9, tex19, shade9, 36'd0, lf9, nz9);
+    wire [155:0] o0_w = cc_sel(1'b0, tex9x, tex19x, shade9x, 36'd0, lf9x, nz9x);
     reg         v10a;
     reg [9:0]   x10a;
     reg [155:0] o10a;
@@ -1099,9 +1131,9 @@ module rdp_pix (
     reg [35:0]  shade10a;
     reg [17:0]  depth10a;
     always @(posedge clk) begin
-        v10a <= v9 & ~rst; x10a <= x9; bs10a <= bs9; hk10a <= hk9;
+        v10a <= v9x & ~rst; x10a <= x9x; bs10a <= bs9x; hk10a <= hk9x;
         o10a <= o0_w;
-        tex10a <= tex9; tex1_10a <= tex19; shade10a <= shade9; depth10a <= depth9;
+        tex10a <= tex9x; tex1_10a <= tex19x; shade10a <= shade9x; depth10a <= depth9x;
     end
     wire [35:0] c0_w = cc_arith0(o10a);
     reg        v10;
@@ -1194,8 +1226,8 @@ module rdp_pix (
     reg [3:0] cv9, cv10a, cv10, cv11a, cv11m, cv11;
     reg [1:0] y9, y10a, y10, y11a, y11m, y11, y11b, y12a, y12, y13a, y13b;
     always @(posedge clk) begin
-        cv9 <= cvg8c; cv10a <= cv9; cv10 <= cv10a; cv11a <= cv10; cv11m <= cv11a; cv11 <= cv11m;
-        y9 <= y8c; y10a <= y9; y10 <= y10a; y11a <= y10; y11m <= y11a; y11 <= y11m;
+        cv9 <= cvg8c; cv9x <= cv9; cv10a <= cv9x; cv10 <= cv10a; cv11a <= cv10; cv11m <= cv11a; cv11 <= cv11m;
+        y9 <= y8c; y9x <= y9; y10a <= y9x; y10 <= y10a; y11a <= y10; y11m <= y11a; y11 <= y11m;
         y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
     end
     wire [3:0] cvg11 = cv11;
@@ -1569,7 +1601,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no

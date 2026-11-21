@@ -1147,7 +1147,7 @@ module rdp_top (
                     if (pix_end) begin
                         st <= spl ? S_SPL : S_NEXT;
                         row_wq <= 1'b0;
-                        old_hold[set_cur] <= 5'd22;
+                        old_hold[set_cur] <= 5'd23;
                     end
                 end else if (pix_go) begin
                     pix_valid <= 1'b1; pix_ghost <= 1'b0;
@@ -1160,8 +1160,8 @@ module rdp_top (
                     if ({1'b0, xs} + {1'b0, px_cnt} + 11'd1 == xe && !(lod_on && lod_lft)) begin
                         st <= spl ? S_SPL : S_NEXT;
                         row_wq <= 1'b0;
-                        // (its last line buffer read: the pixel's P9, D clocks later with the LOD; P1b and P8c are two clocks of it)
-                        old_hold[set_cur] <= lod_on ? 5'd22 : two_pass ? 5'd17 : 5'd16;
+                        // (its last line buffer read: the pixel's P9, D clocks later with the LOD; P1b, P8c and the line buffer addresses' clock in P9x are three of it)
+                        old_hold[set_cur] <= lod_on ? 5'd23 : two_pass ? 5'd18 : 5'd17;
                     end
                 end
             end
