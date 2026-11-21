@@ -321,7 +321,11 @@ logic hazard /* verilator public_flat_rd */;
 
 wire [31:0] imm_sx = {{16{e_ins[15]}}, e_ins[15:0]};
 wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : eb;
-wire [4:0]  shamt  = e_c.sh_imm ? e_ins[10:6] : ea[4:0];
+// (the shift amount: what does not wait for the register file -- the immediate, the writer in M, the one in W -- is chosen first,
+// and the file's word is the last term, not the third of a choice made after the operand's: one level after the file, not two)
+wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
+(* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
+wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
 // two shifters: SLL, and SRL / SRA (a right shift of the sign-extended value)
 wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], eb};
 wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
@@ -336,22 +340,22 @@ wire [31:0] sum    = sum_c[32:1];
 wire        sum_co = sum_c[33];
 wire        lt_u   = !sum_co;
 wire        lt_s   = (ea[31] != op_b[31]) ? ea[31] : sum[31];
-logic [31:0] alu;
-always_comb begin
-    unique case (e_c.alu)
-    A_ADD, A_SUB: alu = sum;
-    A_AND:   alu = ea & op_b;
-    A_OR:    alu = ea | op_b;
-    A_XOR:   alu = ea ^ op_b;
-    A_NOR:   alu = ~(ea | op_b);
-    A_SLT:   alu = {31'b0, lt_s};
-    A_SLTU:  alu = {31'b0, lt_u};
-    A_SLL:   alu = sh_l;
-    A_SRL, A_SRA: alu = sh_r;
-    A_LUI:   alu = {e_ins[15:0], 16'h0};
-    default: alu = 'x;
-    endcase
-end
+// The result: an AND-OR of terms whose selects are decodes of E's registers (the instruction's function, its link and coprocessor
+// flags -- early, beside the register file's read), not a case behind an operand's choice and then the link / coprocessor choice:
+// the late words -- the shifters' -- are in the last LUT, with what is not late ahead of it
+wire        r_lk  = e_c.link;
+wire        r_cp  = !e_c.link && e_c.cop;
+wire        r_al  = !e_c.link && !e_c.cop;                          // (the ALU's own)
+wire        r_sum = r_al && (e_c.alu == A_ADD || e_c.alu == A_SUB);
+wire        r_and = r_al && e_c.alu == A_AND, r_or = r_al && e_c.alu == A_OR, r_xor = r_al && e_c.alu == A_XOR, r_nor = r_al && e_c.alu == A_NOR;
+wire        r_slt = r_al && e_c.alu == A_SLT, r_sltu = r_al && e_c.alu == A_SLTU;
+wire        r_shl = r_al && e_c.alu == A_SLL;
+wire        r_shr = r_al && (e_c.alu == A_SRL || e_c.alu == A_SRA);
+wire        r_lui = r_al && e_c.alu == A_LUI;
+(* keep *) wire [31:0] e_res_a = ({32{r_lk}} & {20'h0, e_spc + 12'd8}) | ({32{r_cp}} & c_res) | ({32{r_lui}} & {e_ins[15:0], 16'h0})
+                  | ({32{r_sum}} & sum) | ({32{r_and}} & (ea & op_b)) | ({32{r_or}} & (ea | op_b)) | ({32{r_xor}} & (ea ^ op_b)) | ({32{r_nor}} & ~(ea | op_b))
+                  | {31'b0, (r_slt & lt_s) | (r_sltu & lt_u)};
+wire [31:0] e_res = e_res_a | ({32{r_shl}} & sh_l) | ({32{r_shr}} & sh_r);
 
 // A branch's condition is made from the sources, not from the operands after the choice among them: the compares of the
 // pairs of sources (the choice is then among their results) and the zero of each
@@ -419,7 +423,6 @@ wire         s2_d   = pair_d && v_first;                        // E's scalar in
 wire  [4:0]  vrb_d  = s2_d ? vrb(i_data2) : vrb(ins_d);
 assign c_rd_n = stall_e ? c_rd : vrb_d;
 
-wire [31:0] e_res = e_c.link ? {20'h0, e_spc + 12'd8} : e_c.cop ? c_res : alu;
 assign stall_e = e_valid && (hazard || ((e_c.cop || v_e) && !c_done) || s_mwait);
 assign brk = e_go && e_c.brk;
 
