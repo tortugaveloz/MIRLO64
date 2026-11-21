@@ -1139,6 +1139,37 @@ module rdp_pix (
                       cc_eval1(o[135:126], o[95:86],   o[55:46], o[17:9]),
                       cc_eval1(o[125:116], o[85:76],   o[45:36], o[8:0]) };
     endfunction
+    // The second arithmetic in two steps: the differences A - B (11 bits), with C and D, are what the stage before registers (cc_pre: the
+    // subtractions after the operands' choice, which has the clock for them), and the product and the sum are the stage's (cc_fin: with
+    // the subtraction in front of the multiplier it did not fit 10.667 ns: o11a -> c1m, -0.2 to -0.74 ns)
+    function automatic [119:0] cc_pre;
+        input [155:0] o;
+        reg signed [10:0] d0, d1, d2, d3;
+        begin
+            d0 = $signed(o[155:146]) - $signed(o[115:106]);
+            d1 = $signed(o[145:136]) - $signed(o[105:96]);
+            d2 = $signed(o[135:126]) - $signed(o[95:86]);
+            d3 = $signed(o[125:116]) - $signed(o[85:76]);
+            cc_pre = { d0, o[75:66], o[35:27], d1, o[65:56], o[26:18], d2, o[55:46], o[17:9], d3, o[45:36], o[8:0] };
+        end
+    endfunction
+    function automatic [8:0] cc_fin1;
+        input signed [10:0] diff;
+        input signed [9:0]  c;
+        input [8:0]         d;
+        reg signed [20:0] prod;
+        reg [16:0] sum;
+        begin
+            prod = diff * c;
+            sum = prod[16:0] + {d, 8'h80};
+            cc_fin1 = sum[16:8];
+        end
+    endfunction
+    function automatic [35:0] cc_fin;
+        input [119:0] q;
+        cc_fin = { cc_fin1(q[119:109], q[108:99], q[98:90]), cc_fin1(q[89:79], q[78:69], q[68:60]),
+                   cc_fin1(q[59:49],   q[48:39],  q[38:30]), cc_fin1(q[29:19], q[18:9],  q[8:0]) };
+    endfunction
     function automatic [35:0] cc_arith1;
         input [155:0] o;
         cc_arith1 = { cc_eval1(o[155:146], o[115:106], o[75:66], o[35:27]),
@@ -1218,7 +1249,7 @@ module rdp_pix (
                                u_e ? 36'd0 : cm10, u_e ? lf9x : lf10b, u_e ? nz9x : nz10b);
     reg         v11a, ue11a;
     reg [9:0]   x11a;
-    reg [155:0] o11a;
+    reg [119:0] o11a;
     reg [31:0]  tex11a, mem11a;
     reg [35:0]  shade11a;
     reg [17:0]  depth11a, zold11a;    // (zold11a: the word's 18 bits, z_dec)
@@ -1229,7 +1260,7 @@ module rdp_pix (
     reg         c0f11a, c0f11;       // ... and whether it counts 256 (an alpha of 255 does: the coverage's multiply)
     always @(posedge clk) begin
         v11a <= v10b & ~rst; x11a <= x10b; bs11a <= bs10b; ue11a <= u_e;
-        o11a <= o1_w;
+        o11a <= cc_pre(o1_w);
         tex11a <= tex10b; shade11a <= shade10b; mem11a <= mem10b;
         depth11a <= depth10b; zold11a <= z_dec(zold10b);
         zfl11a <= zold10b[15:13] == 3'd0 ? 7'h7F : zold10b[15:13] == 3'd1 ? 7'h3F : zold10b[15:13] == 3'd2 ? 7'h1F : 7'h00;
@@ -1237,7 +1268,7 @@ module rdp_pix (
     end
     // P11m: the second cycle's arithmetic (the combiner's multipliers and adders) in a register of its own; the clamp, the
     // choice and the rest of the stage's work come after it (the two together did not fit a clock of 10.667 ns)
-    wire [35:0] c1_w = cc_arith1(o11a);
+    wire [35:0] c1_w = cc_fin(o11a);
     always @(posedge clk) if (ue11a) cm_r <= c1_w;
     reg         v11m, bs11m;
     reg [9:0]   x11m;
@@ -1389,25 +1420,7 @@ module rdp_pix (
                        : (zmode == 2'd3) ? (zfar11b && znear11b && !zmax11b)
                        : ovf11b ? (zfront11b || zmax11b) : (znear11b || zmax11b);
     wire        zpass11 = !z_cmp || zp;
-    wire [7:0]  zcm   = cvg_sb * zdifb;
-    wire [3:0]  cvg_i = (z_cmp && zinter) ? zcm[6:3] : cvg_sb;
     wire        blend_en = force_bl || (!ovf11b && aa_en && (!z_cmp || zfar11b));
-    // no covered sample: not drawn; without AA_EN the pixel's own coverage decides,
-    // so a CVG_X_ALPHA pixel whose scaled coverage is 0 is still written
-    wire        kill11 = k0_11b || (cvg_i == 4'd0 && aa_en && cyc != 2'd2);
-    // the coverage written (CVG_DST: clamp, wrap, zap, save) and so the bit 0
-    wire [4:0]  csum = {1'b0, cvg_i} + {2'd0, mcvg11b};
-    reg  [2:0]  cvo;
-    always @(*) begin
-        case (cvg_dst)
-            2'd0: cvo = blend_en ? ((csum >= 5'd8) ? 3'd7 : csum[2:0]) : (cvg_i[2:0] - 3'd1);
-            2'd1: cvo = csum[2:0];
-            2'd2: cvo = 3'd7;
-            default: cvo = mcvg11b;
-        endcase
-    end
-    // (copy mode: the texel's alpha bit, 7 or 0)
-    wire [2:0]  cv311 = (cyc == 2'd2) ? {3{comb11b[7]}} : cvo;
     // without a depth compare the memory coverage's weight shifts by the
     // primitive's dz (the N64's dzpixenc, ours + 3, up to 15): (static). The code's top two bits go into the depth's word
     reg  [2:0]  shb;
@@ -1520,14 +1533,35 @@ module rdp_pix (
     reg [7:0]  pa12a, sha12a;
     reg [2:0]  mcvg12a;
     reg [13:0] depth12a;
-    reg        pass12a, ben12a, ovf12a;
-    reg [2:0]  cv312a, cv312, cv313, cv313b;
+    reg        ben12a, ovf12a;
+    reg [2:0]  cv312, cv313, cv313b;
+    // (the coverage's multiply by the depth's inter-penetration weight, its choice, its sum with the memory's, the written coverage and
+    // the pixel's rejects are made from the registers of P12a and land in P12: the multiply, the choice, the sum and the rest were
+    // one path from cvg_sb to the next register, -0.69 ns at 10.667 ns)
+    reg [7:0]  zcm12a;
+    reg [3:0]  cvg12a;
+    reg        zinter12a, zpass12a, arej12a, k012a, blend12a;
+    wire [3:0] cvg_i12 = (z_cmp && zinter12a) ? zcm12a[6:3] : cvg12a;
+    wire       kill12 = k012a || (cvg_i12 == 4'd0 && aa_en && cyc != 2'd2);
+    wire       pass12w = (cyc == 2'd3) ? !k012a : (zpass12a && !arej12a && !kill12);
+    wire [4:0] csum12 = {1'b0, cvg_i12} + {2'd0, mcvg12a};
+    reg  [2:0] cvo12;
+    always @(*) begin
+        case (cvg_dst)
+            2'd0: cvo12 = blend12a ? ((csum12 >= 5'd8) ? 3'd7 : csum12[2:0]) : (cvg_i12[2:0] - 3'd1);
+            2'd1: cvo12 = csum12[2:0];
+            2'd2: cvo12 = 3'd7;
+            default: cvo12 = mcvg12a;
+        endcase
+    end
+    wire [2:0] cv312w = (cyc == 2'd2) ? {3{comb12a[7]}} : cvo12;
     always @(posedge clk) begin
         v12a <= v11b & ~rst; x12a <= x11b; bs12a <= bs11b;
         comb12a <= comb11b; mem12a <= mem11b; pa12a <= pa11b; sha12a <= sha11b; mcvg12a <= mcvg11b;
         depth12a <= depth11b;
-        pass12a <= (cyc == 2'd3) ? !k0_11b : (zpass11 && !arej11 && !kill11);
-        ben12a <= blend_en; ovf12a <= ovf11b; cv312a <= cv311;
+        zcm12a <= cvg_sb * zdifb; cvg12a <= cvg_sb; zinter12a <= zinter; zpass12a <= zpass11; arej12a <= arej11; k012a <= k0_11b;
+        blend12a <= blend_en;
+        ben12a <= blend_en; ovf12a <= ovf11b;
     end
     reg        v12;
     reg [9:0]  x12;
@@ -1539,7 +1573,7 @@ module rdp_pix (
     always @(posedge clk) begin
         v12 <= v12a & ~rst; x12 <= x12a; bs12 <= bs12a;
         comb12 <= comb12a; mem12 <= mem12a; pa12 <= pa12a; sha12 <= sha12a; mcvg12 <= mcvg12a;
-        depth12 <= depth12a; pass12 <= pass12a; ben12 <= ben12a; ovf12 <= ovf12a; cv312 <= cv312a;
+        depth12 <= depth12a; pass12 <= pass12w; ben12 <= ben12a; ovf12 <= ovf12a; cv312 <= cv312w;
     end
     // The one blender, as the combiner (above): a 2-cycle pixel's first cycle takes the pixel as P11b has it (early), its second -- or a
     // 1-cycle pixel's only one -- the same pixel's three clocks on (late: P12b), with the first cycle's result (b0_r) in P's place.
