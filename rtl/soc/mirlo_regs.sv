@@ -56,8 +56,10 @@ module mirlo_regs (
     // the runtime's answer a turn of ss_done_t, ss_err stable from before it; ss_sup what the Pocket's query is told
     input  wire         ss_save_t, ss_load_t,
     output logic        ss_done_t, ss_err, ss_sup,
-    // APF input
-    input  wire  [3:0][31:0] cont_key, cont_joy, cont_trig,
+    // APF input: the pads, a word at a time into a RAM (pad_ram, below) by the clock of the writes
+    input  wire         pad_clk, pad_we,
+    input  wire  [3:0]  pad_wa,
+    input  wire  [31:0] pad_wd,
     // APF interact
     input  wire  [3:0]  ia_address,
     input  wire  [31:0] ia_data,
@@ -432,6 +434,13 @@ always_ff @(posedge clk) begin
     if (!rst && wr && smask(a) != 32'd0) shadow[sh_a] <= r_wdata;
     sh_q <= shadow[sh_a];
 end
+// APF_INPUT: the pads' words, a RAM of 16 (a word a register, at a[5:2]: KEY1..4 at 0..3, JOY1..4 at 4..7, TRIG1..4 at 8..11),
+// written by io_pad_controller.v in the Pocket's clock and read here by the same rule as the shadow's
+(* ramstyle = "M10K, no_rw_check" *) logic [31:0] pad_ram [0:15];
+logic [31:0] pad_q;
+initial for (int k = 0; k < 16; k++) pad_ram[k] = 32'd0;
+always_ff @(posedge pad_clk) if (pad_we) pad_ram[pad_wa] <= pad_wd;
+always_ff @(posedge clk) pad_q <= pad_ram[a[5:2]];
 // The rest: the map's banks are a[11:8], a register's word in its bank a[5:2] (a[15:12] and a[7:6] are 0 for every register).
 // An address that names no register reads 0.
 logic [31:0] rb [16];
@@ -450,21 +459,7 @@ always_comb begin
     R_APF_BRIDGE_SAVESTATE[5:2]:           rb[1] = {29'd0, ss_load, ss_save, ss_sup};
     default: ;
     endcase
-    case (a[5:2])                                               // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4
-    R_APF_INPUT_CONT1_KEY[5:2]:            rb[2] = cont_key[0];
-    R_APF_INPUT_CONT2_KEY[5:2]:            rb[2] = cont_key[1];
-    R_APF_INPUT_CONT3_KEY[5:2]:            rb[2] = cont_key[2];
-    R_APF_INPUT_CONT4_KEY[5:2]:            rb[2] = cont_key[3];
-    R_APF_INPUT_CONT1_JOY[5:2]:            rb[2] = cont_joy[0];
-    R_APF_INPUT_CONT2_JOY[5:2]:            rb[2] = cont_joy[1];
-    R_APF_INPUT_CONT3_JOY[5:2]:            rb[2] = cont_joy[2];
-    R_APF_INPUT_CONT4_JOY[5:2]:            rb[2] = cont_joy[3];
-    R_APF_INPUT_CONT1_TRIG[5:2]:           rb[2] = cont_trig[0];
-    R_APF_INPUT_CONT2_TRIG[5:2]:           rb[2] = cont_trig[1];
-    R_APF_INPUT_CONT3_TRIG[5:2]:           rb[2] = cont_trig[2];
-    R_APF_INPUT_CONT4_TRIG[5:2]:           rb[2] = cont_trig[3];
-    default: ;
-    endcase
+    rb[2] = pad_q;                                              // APF_INPUT: KEY1..4, JOY1..4, TRIG1..4 (words 12..15 are never written: 0)
     case (a[5:2])                                               // APF_INTERACT
     R_APF_INTERACT_INTERACT0[5:2]:         rb[3] = ia0;
     R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
