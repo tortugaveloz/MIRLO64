@@ -32,6 +32,24 @@
 // flags of every computation before it are in by then).
 `default_nettype none
 
+// A 32-bit compare as three LUT levels: the difference of each three bits (dg, kept: the synthesis, in area mode, would fold them into a
+// deeper tree), whether none of the first six differs (h1) and none of the other five (h2); a and b are equal when both are
+module rsp_eq32h (
+    input  wire [31:0] a,
+    input  wire [31:0] b,
+    output wire        h1,
+    output wire        h2
+);
+(* keep *) wire [10:0] dg;
+wire [32:0] d = {1'b0, a} ^ {1'b0, b};
+genvar g;
+generate for (g = 0; g < 11; g++) begin : grp
+    assign dg[g] = |d[3 * g +: 3];
+end endgenerate
+assign h1 = ~|dg[5:0];
+assign h2 = ~|dg[10:6];
+endmodule
+
 module rsp_su_oc #(
     parameter bit LPAIR = 0
 ) (
@@ -126,6 +144,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     logic [5:0] op = i[31:26], fn = i[5:0];
     logic [4:0] rs = i[25:21], rt = i[20:16], rd = i[15:11];
     c.alu = A_ADD;
+    c.bcond = 3'd7;           // (no branch: no condition holds)
     unique case (op)
     6'h00: begin
         c.wr = rd; c.we = 1'b1;
@@ -358,32 +377,41 @@ wire        r_lui = r_al && e_c.alu == A_LUI;
 wire [31:0] e_res = e_res_a | ({32{r_shl}} & sh_l) | ({32{r_shr}} & sh_r);
 
 // A branch's condition is made from the sources, not from the operands after the choice among them: the compares of the
-// pairs of sources (the choice is then among their results) and the zero of each
-wire eq_mw = m_res == w_res, eq_mr = m_res == rf_qb, eq_rm = rf_qa == m_res, eq_wr = w_res == rf_qb, eq_rw = rf_qa == w_res, eq_rr = rf_qa == rf_qb;
-wire ea_eq_eb = fa_m ? (fb_m ? 1'b1  : fb_w ? eq_mw : eq_mr)
-              : fa_w ? (fb_m ? eq_mw : fb_w ? 1'b1  : eq_wr)
-              :        (fb_m ? eq_rm : fb_w ? eq_rw : eq_rr);
-wire ea_zero  = fa_m ? m_res == 32'd0 : fa_w ? w_res == 32'd0 : rf_qa == 32'd0;
-logic taken;
+// pairs of sources (the choice is then among their results) and the zero of each. The choices are AND-OR of terms whose selects
+// are registers (the sources' one-hot: a_m, a_w, a_r for ea, b_* for eb; the condition's decode), not nested 2:1 choices, so that
+// the compare's result is two levels behind the register file's words (a compare of 32 bits is three, with the choice)
+wire a_m = fa_m, a_w = fa_w, a_r = !(fa_m | fa_w), b_m = fb_m, b_w = fb_w, b_r = !(fb_m | fb_w);
+wire eq_mw = m_res == w_res;
+wire h1_mr, h2_mr, h1_rm, h2_rm, h1_wr, h2_wr, h1_rw, h2_rw, h1_rr, h2_rr;
+rsp_eq32h c_mr (.a(m_res),  .b(rf_qb), .h1(h1_mr), .h2(h2_mr));
+rsp_eq32h c_rm (.a(rf_qa), .b(m_res),  .h1(h1_rm), .h2(h2_rm));
+rsp_eq32h c_wr (.a(w_res),  .b(rf_qb), .h1(h1_wr), .h2(h2_wr));
+rsp_eq32h c_rw (.a(rf_qa), .b(w_res),  .h1(h1_rw), .h2(h2_rw));
+rsp_eq32h c_rr (.a(rf_qa), .b(rf_qb), .h1(h1_rr), .h2(h2_rr));
+(* keep *) wire ea_eq_eb = (a_m & b_m) | (a_w & b_w) | ((a_m & b_w | a_w & b_m) & eq_mw) | (a_m & b_r & h1_mr & h2_mr) | (a_r & b_m & h1_rm & h2_rm)
+              | (a_w & b_r & h1_wr & h2_wr) | (a_r & b_w & h1_rw & h2_rw) | (a_r & b_r & h1_rr & h2_rr);
+(* keep *) wire ea_zero  = (a_m & (m_res == 32'd0)) | (a_w & (w_res == 32'd0)) | (a_r & (rf_qa == 32'd0));
+(* keep *) wire ea31     = (a_m & m_res[31]) | (a_w & w_res[31]) | (a_r & rf_qa[31]);
+logic taken;                                                                                // (by the condition's code, a register, over the three: one LUT)
 always_comb begin
     unique case (e_c.bcond)
     3'd0: taken = ea_eq_eb;
     3'd1: taken = !ea_eq_eb;
-    3'd2: taken = ea[31] || ea_zero;               // blez
-    3'd3: taken = !ea[31] && !ea_zero;             // bgtz
-    3'd4: taken = ea[31];
-    3'd5: taken = !ea[31];
+    3'd2: taken = ea31 || ea_zero;               // blez
+    3'd3: taken = !ea31 && !ea_zero;             // bgtz
+    3'd4: taken = ea31;
+    3'd5: taken = !ea31;
     default: taken = 1'b0;
     endcase
 end
+wire bt    = taken;                                                                 // (a taken branch: the latest signal of the unit)
 wire [11:0] br_tgt = e_spc + 12'd4 + {imm_sx[9:0], 2'b00};
 wire [11:0] j_tgt  = {e_ins[9:0], 2'b00};
 wire        e_go   = e_valid && !stall_e;                 // E's instruction leaves it
 // (a register: made a cycle ahead, when the load leaves E, from the registers of the instruction that takes E's place -- D's; a
 // load that leaves E is always followed by the cycle in which M has it, and E's stall does not repeat the check)
 always_ff @(posedge clk) hazard <= !rst && e_go && e_c.we && (e_c.load || e_c.cf) && (e_c.wr == s_ins_d[25:21] || e_c.wr == s_ins_d[20:16]);
-wire        redirect = e_go && ((e_c.br && taken) || e_c.j || e_c.jr);
-wire [11:0] redirect_pc = e_c.jr ? {ea[11:2], 2'b00} : e_c.j ? j_tgt : br_tgt;
+wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
 // (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
@@ -455,7 +483,7 @@ assign idle = !e_valid && !m_valid_r;
 // last choice, so the stall (the longest chain of the unit) is one 2:1 choice before the register.
 wire        e_go0 = e_valid;                                                              // (E's instruction, if it is not stalled)
 wire        brk0  = e_go0 && e_c.brk;
-wire        br_go0 = e_go0 && ((e_c.br && taken) || e_c.j || e_c.jr);
+wire        jmp0  = e_go0 && (e_c.j || e_c.jr);                                           // (a jump, whose target does not wait for a condition)
 wire [11:0] pc_nr0 = brk0     ? (d_valid ? d_pc : pc_f)
                    : !run     ? (d_valid ? d_pc : pc_f)
                    :            (pair_d ? pc_f + 12'd8 : pc_f + 12'd4);
@@ -502,7 +530,8 @@ always_ff @(posedge clk) begin
         // (the fetch pointer and the word after it: a taken branch's target over what the rest would make -- the branch's condition
         // is late, so it is the last choice. After a redirect pf1 is not made: r_fix has the next cycle's address from pc_f)
         pf1 <= pc_load ? pc_in[11:2] + 10'd1 : stall_e ? pf1 : pf1_nr0;
-        pc_f <= pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : br_go0 ? redirect_pc : pc_nr0;
+        pc_f <= bt ? (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : e_go0 ? br_tgt : pc_nr0)
+                   : (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : jmp0 ? (e_c.jr ? {ea[11:2], 2'b00} : j_tgt) : pc_nr0);
     end
 end
 
