@@ -956,19 +956,29 @@ rdp_lod_t rdp_lod(uint32_t h, unsigned min_level, unsigned max_level, unsigned p
 }
 
 /* is the LOD computed for this 2-cycle primitive's pixels: TEX_LOD, or the combiner reads LOD_FRACTION (C 13 in a
- * colour, C 0 in an alpha, either cycle). RDP_X_FRAC0 (docs/rdp_exact.md, rule 9): TEX_LOD alone -- without it the
- * fraction reads 0, TEXEL0 of the primitive's tile alone, as the console shows a trilinear combiner on a texture of
- * a level count of 0 whose next tile was never set */
+ * colour, C 0 in an alpha, either cycle). RDP_X_FRAC0 (docs/rdp_exact.md, rule 9) changes the fraction of a magnified
+ * pixel, not whether it is computed: see frac0_pixel */
 static int lod_wanted(const rdp_t *r)
 {
     if (r->other_h & RDP_H_TEX_LOD) return 1;
-#ifdef RDP_X_FRAC0
-    return 0;
-#else
     if (!LOD_FRAC_USED) return 0;
     uint32_t hi = r->combine_hi, lo = r->combine_lo;
     return ((hi >> 15) & 31) == 13 || (hi & 31) == 13 || ((hi >> 9) & 7) == 0 || ((lo >> 18) & 7) == 0;
+}
+
+/* RDP_X_FRAC0 (rule 9): without TEX_LOD, SHARPEN and DETAIL, a magnified pixel -- its steps under a texel -- reads
+ * LOD_FRACTION as 0, TEXEL0 of the primitive's own tile, where the oracle's rule gives all ones at a level count of 0
+ * (the next level never blended: TEXEL1 alone). A pixel the texture is minified at (a step of a texel or more) keeps
+ * the fraction the LOD gives, all ones past the last level: the two pictures the console shows are a trilinear
+ * combiner on a texture drawn larger than its texels (TEXEL0), and one drawn smaller (TEXEL1, the next tile's). */
+static unsigned frac0_pixel(const rdp_t *r, const rdp_lod_t *L)
+{
+#ifdef RDP_X_FRAC0
+    if (!(r->other_h & (RDP_H_TEX_LOD | RDP_H_SHARPEN | RDP_H_DETAIL)) && L->magnify) return 0;
+#else
+    (void)r;
 #endif
+    return L->frac;
 }
 
 /* The pixel's LOD: S, T at the pixel (at), at the next pixel of the walk and on the next line, each taken as the pixel's
@@ -1349,7 +1359,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (cyc == 0 && pr->level == 0 && !(h & (RDP_H_SHARPEN | RDP_H_DETAIL))) in.lodf = 0xFF;
         if (cyc == 1 && lod_wanted(r)) {
             const rdp_lod_t L = lod_pixel(r, pr, at);
-            in.lodf = L.frac;
+            in.lodf = frac0_pixel(r, &L);
             tile0 = L.tile0; tile1 = L.tile1;
             if ((h & RDP_H_TEX_LOD) && pr->tex && cvg) {
                 r->lod_px++; r->lod_lvl[L.level & 7]++;

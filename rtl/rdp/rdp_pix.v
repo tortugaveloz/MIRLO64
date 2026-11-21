@@ -29,7 +29,8 @@
 // stage takes them from the pass's own read, carried down with it.
 //
 // LOD (lod_on; lang/c/rdp/rdp.c rdp_lod, docs/lod.md): a 2-cycle primitive
-// with TEX_LOD (LOD_FRACTION reads 0 without it, rdp_exact.md rule 9). Its pixels take two
+// with TEX_LOD, or whose combiner reads LOD_FRACTION (a magnified pixel's reads 0 without TEX_LOD, SHARPEN and
+// DETAIL, rdp_exact.md rule 9). Its pixels take two
 // clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
 // W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
 // is the neighbour's own perspective divide -- rdp_top issues the pixels in
@@ -682,7 +683,7 @@ module rdp_pix (
     wire [4:0]  l3_mx = (l2_lod[4:0] < min_lvl) ? min_lvl : l2_lod[4:0];
     wire [14:0] l3_sh = {l2_lod[11:0], 3'd0} >> l2_lg;
     wire        l3_pl = !sharpen && !detail;
-    wire [8:0]  l3_lf = l2_far ? 9'h0FF : l3_mag ? (l3_pl ? {1'b0, {8{l3_dis}}} : {sharpen, l3_mx, 3'd0})
+    wire [8:0]  l3_lf = l2_far ? 9'h0FF : l3_mag ? (l3_pl ? {1'b0, {8{l3_dis && tex_lod}}} : {sharpen, l3_mx, 3'd0})
                       : (l3_pl && l3_dis) ? 9'h0FF : {1'b0, l3_sh[7:0]};
     reg  [8:0]  lf;                  // the pixel's LOD_FRACTION: from its first pass at P5 to the next pixel's
     always @(posedge clk) begin
