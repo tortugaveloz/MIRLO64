@@ -904,9 +904,10 @@ module rdp_pix (
             u = $signed({1'b0, t[31:24]}) - 9'sd128;
             v = $signed({1'b0, t[23:16]}) - 9'sd128;
             k0 = {cv_k03[35:27], 1'b1}; k1 = {cv_k03[26:18], 1'b1}; k2 = {cv_k03[17:9], 1'b1}; k3 = {cv_k03[8:0], 1'b1};
-            pr = k0 * v + 20'sd128;
-            pg = k1 * u + k2 * v + 20'sd128;
-            pb = k3 * u + 20'sd128;
+            // (the texel's Y, 8 bits up, is in the sums: (p + Y * 256) >> 8 is (p >> 8) + Y, and the stage after has the clamp only)
+            pr = k0 * v + 20'sd128 + $signed({4'd0, t[15:8], 8'd0});
+            pg = k1 * u + k2 * v + 20'sd128 + $signed({4'd0, t[15:8], 8'd0});
+            pb = k3 * u + 20'sd128 + $signed({4'd0, t[15:8], 8'd0});
             yuv_prod = {pr, pg, pb};
         end
     endfunction
@@ -914,7 +915,7 @@ module rdp_pix (
         input [7:0]  y;
         input [59:0] pp;
         begin
-            yuv_fin = { cv_ch(y, pp[59:40]), cv_ch(y, pp[39:20]), cv_ch(y, pp[19:0]), y };
+            yuv_fin = { cv_ch(8'd0, pp[59:40]), cv_ch(8'd0, pp[39:20]), cv_ch(8'd0, pp[19:0]), y };
         end
     endfunction
     reg  [31:0] texA9;
