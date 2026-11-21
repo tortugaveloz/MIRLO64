@@ -670,6 +670,10 @@ module rdp_pix (
     reg        v5;
     reg signed [23:0] vs5r, vt5r;
     reg signed [10:0] mx5s, mx5t;           // each axis's tile's last texel (rdp_tcaxis)
+    reg               ng5s, gx5s, ng5t, gx5t;
+    // (the clamp's two tests, on the coordinate as P5m has it: the coordinate's sign, and its integer part against the tile's last texel)
+    wire signed [10:0] mxn_s = mx_f(u5p_uls, u5p_lrs), mxn_t = mx_f(u5p_ult, u5p_lrt);
+    wire ce5s = u5p_cs || u5p_masks == 4'd0, ce5t = u5p_ct || u5p_maskt == 4'd0;       // clamped
     function automatic signed [10:0] mx_f;
         input [11:0] lo, hi;
         reg signed [12:0] df;
@@ -695,13 +699,15 @@ module rdp_pix (
         c5_tmem <= c5p_tmem; c5_line <= c5p_line; c5_size <= c5p_size; c5_pal <= c5p_pal; c5_fmt <= c5p_fmt; c5_yuv <= c5p_yuv;
         vs5r <= vs5; vt5r <= vt5;
         mx5s <= mx_f(u5p_uls, u5p_lrs); mx5t <= mx_f(u5p_ult, u5p_lrt);
+        ng5s <= ce5s && vs5[23]; gx5s <= ce5s && !vs5[23] && ($signed(vs5[23:5]) >= $signed({{8{mxn_s[10]}}, mxn_s}));
+        ng5t <= ce5t && vt5[23]; gx5t <= ce5t && !vt5[23] && ($signed(vt5[23:5]) >= $signed({{8{mxn_t[10]}}, mxn_t}));
     end
 
     // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction (rdp_tcaxis, below)
     wire [10:0] s0c, s1c, t0c, t1c;
     wire [4:0]  fsc, ftc;
-    rdp_tcaxis tcs (.v(vs5r), .mx(mx5s), .clampbit(u5_cs), .mirror(u5_ms), .mask(u5_masks), .cpy(1'b0), .cm(3'd0), .c0(s0c), .c1(s1c), .fr(fsc));
-    rdp_tcaxis tct (.v(vt5r), .mx(mx5t), .clampbit(u5_ct), .mirror(u5_mt), .mask(u5_maskt), .cpy(1'b0), .cm(3'd0), .c0(t0c), .c1(t1c), .fr(ftc));
+    rdp_tcaxis tcs (.v(vs5r), .mx(mx5s), .ng_i(ng5s), .gx_i(gx5s), .clampbit(u5_cs), .mirror(u5_ms), .mask(u5_masks), .cpy(1'b0), .cm(3'd0), .c0(s0c), .c1(s1c), .fr(fsc));
+    rdp_tcaxis tct (.v(vt5r), .mx(mx5t), .ng_i(ng5t), .gx_i(gx5t), .clampbit(u5_ct), .mirror(u5_mt), .mask(u5_maskt), .cpy(1'b0), .cm(3'd0), .c0(t0c), .c1(t1c), .fr(ftc));
     reg        v6;
     reg [10:0] s06, s16, t06, t16;
     reg [4:0]  fs6, ft6;
@@ -1781,6 +1787,7 @@ endmodule
 module rdp_tcaxis (
     input  wire signed [23:0] v,
     input  wire signed [10:0] mx,            // the tile's last texel: (hi - lo) >> 2, signed (found a clock ahead, with the tile's other fields)
+    input  wire               ng_i, gx_i,    // below the start (clamped: 0), at or past the end (clamped: the last): found a clock ahead, with v
     input  wire               clampbit, mirror,
     input  wire [3:0]         mask,
     input  wire               cpy,           // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped, its mask at most 10 bits
@@ -1791,9 +1798,8 @@ module rdp_tcaxis (
     wire [18:0] i0 = v[23:5];
     wire [18:0] ia = i0 + {16'd0, cpy ? cm : 3'd0};
     wire [18:0] ja = cpy ? ia : ia + 19'd1;
-    wire        ce = !cpy && (clampbit || mask == 4'd0);          // clamped
-    wire        ng = ce && ia[18];                                 // below the start: 0
-    wire        gx = ce && !ia[18] && ($signed(ia) >= $signed({{8{mx[10]}}, mx}));   // at or past the end: the last
+    wire        ng = ng_i;                                         // below the start: 0
+    wire        gx = gx_i;                                         // at or past the end: the last
     wire [3:0]  mq = (cpy && mask > 4'd10) ? 4'd10 : mask;
     wire [15:0] t0 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ia[15:0];
     wire [15:0] t1 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ja[15:0];
