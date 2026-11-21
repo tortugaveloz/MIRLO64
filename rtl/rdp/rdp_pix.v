@@ -1363,8 +1363,14 @@ module rdp_pix (
     // An alpha of 255 counts 256 in the multiply: (256 * cvg + 4) >> 8 = cvg, >> 3 = cvg << 5 --
     // the coverage unscaled; so the product is used only below 255 (af11,
     // c0f11: the flags are registered, the select is not behind the multiplier).
-    wire [11:0] cvgmul  = comb11[7:0] * cvg11 + 12'd4;
-    wire [11:0] cvgmul0 = c0a11 * cvg11 + 12'd4;
+    // (the two products, alpha x coverage + 4, are registers made in the stage before, from the alpha as it is made -- the combiner's
+    // clamp or the copy mode's texel -- and the coverage that comes next (cv11m): the multiply in front of the alpha's choices and of
+    // the registers of P11b was -0.2 to -0.24 ns at 10.667 ns in 0 C: comb11 -> pa11b, cvg_sb and ca11b)
+    reg  [11:0] cvgmul, cvgmul0;
+    always @(posedge clk) begin
+        cvgmul  <= ((cyc == 2'd2) ? tex11m[7:0] : cc_clamp(c1m[8:0])) * cv11m + 12'd4;
+        cvgmul0 <= c0a11m * cv11m + 12'd4;
+    end
     wire        cx_m    = cvg_x_a & ~af11;
     wire        cx_m0   = cvg_x_a & ~c0f11;
     wire [3:0]  cvg_s   = cx_m ? cvgmul[11:8] : cvg11;
