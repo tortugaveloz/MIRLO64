@@ -638,6 +638,24 @@ always_ff @(posedge clk) begin
 end
 
 // ============================================================ outputs, writes
+// (FAST) what the write is, from E's instruction as it enters M: to the even register (wn_e) and the odd (wn_o) -- the moves, loads and mov, by their
+// fields -- or by the datapath (wn_a: an operation that is not a compare, to either or both by its format, found when it starts; wn_odd: bit 6), and its number
+function automatic logic [8:0] wdec(input logic [31:0] i);
+    logic cop1, s_, d_, w_, l_, mtc, dmt, lw, ld, mov, arith;
+    cop1 = i[31:26] == 6'h11;
+    s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
+    l_ = cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21);
+    mtc = cop1 && i[25:21] == 5'h04; dmt = cop1 && i[25:21] == 5'h05;
+    lw = i[31:26] == 6'h31; ld = i[31:26] == 6'h35;
+    mov = (s_ || d_) && i[5:0] == 6'h06;
+    arith = (((s_ || d_ || w_) && !mov) || l_) && i[5:0] < 6'h30;
+    return {(mtc && !i[11]) || dmt || (lw && !i[16]) || ld || (mov && (d_ || !i[6])),
+            (mtc && i[11]) || dmt || (lw && i[16]) || ld || (mov && (d_ || i[6])),
+            arith, i[6],
+            (mtc || dmt) ? i[15:12] : (lw || ld) ? i[20:17] : i[10:7]};
+endfunction
+logic wn_e, wn_o, wn_a, wn_odd; logic [3:0] wn_n;
+always_ff @(posedge clk) if (adv) {wn_e, wn_o, wn_a, wn_odd, wn_n} <= wdec(insn_e);
 logic [63:0] res_d;
 logic [31:0] ld_lo;
 always_comb res_d = f2d(res);
@@ -666,6 +684,14 @@ always_comb begin
             if (dst_l || dst_d) begin we_e = 1; we_o = 1; end
             else if (insn[6]) we_o = 1; else we_e = 1;
         end
+    end
+    // (FAST: the same from the registers that took E's instruction as M did -- an operation of the datapath writes unless its function is a
+    // compare's (kind is K_CMP by the time it completes exactly for those), and by dst_l / dst_d, as found when it starts, both registers or the one
+    // bit 6 names -- so that the index of the write and the bypass flags found from it (hx_*, hy_*) are not a decode of M's word)
+    if (FAST) begin
+        widx = wn_n;
+        we_e = valid && (wn_e || (wn_a && (dst_l || dst_d || !wn_odd)));
+        we_o = valid && (wn_o || (wn_a && (dst_l || dst_d || wn_odd)));
     end
     // the data of the registers written (what the others hold is not used: the write goes by we_e / we_o; the trace is read by
     // them too). A load of a word is mtc1's data or lwc1's, one selection for the even and the odd register
