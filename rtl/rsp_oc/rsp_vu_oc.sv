@@ -574,7 +574,9 @@ logic        r_sqrt, r_zero, r_min, r_mask;
 logic [31:0] r_dat;
 logic [4:0]  r_sh;
 wire  [31:0] r_data0 = rin ^ {32{rin[31]}};
-wire  [31:0] r_data  = ($signed(rin) > -32'sd32768) ? r_data0 + {31'd0, rin[31]} : r_data0;
+wire         r_ninc  = &rin[31:15];                                     // (rin >= -32768 and negative: -32768 is the one value of it that
+                                                                        // is not negated, and its result is r_min's, whatever r_dat is)
+wire  [31:0] r_data  = r_data0 + {31'd0, r_ninc};
 logic [5:0]  r_clz;
 always_comb begin
     r_clz = 6'd32;

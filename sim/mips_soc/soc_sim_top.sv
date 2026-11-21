@@ -104,6 +104,16 @@ always_ff @(posedge clk_sys) begin
     if (aud_flush) aud_fill <= 0;
     else aud_fill <= aud_fill + {11'd0, audio_wr && aud_fill != 12'hFFF} - {11'd0, aud_play && aud_div == 0 && aud_fill != 0};
 end
+// the pads: the bench's values are written into the pad RAM one word at a time, round and round (the Pocket's io_pad_controller
+// writes them as they arrive; the triggers are 0)
+logic [3:0]  pad_i = 4'd0;
+always_ff @(posedge clk_sys) pad_i <= pad_i + 4'd1;
+logic [31:0] pad_w;
+always_comb case (pad_i[3:2])
+    2'd0: pad_w = pad_i[1:0] == 2'd0 ? cont1_key : pad_i[1:0] == 2'd1 ? cont2_key : pad_i[1:0] == 2'd2 ? cont3_key : cont4_key;
+    2'd1: pad_w = pad_i[1:0] == 2'd0 ? cont1_joy : pad_i[1:0] == 2'd1 ? cont2_joy : pad_i[1:0] == 2'd2 ? cont3_joy : cont4_joy;
+    default: pad_w = 32'd0;
+endcase
 mirlo_mips #(.SDR_T_INIT(100)) soc (
     .altera_reserved_tck(1'b0), .altera_reserved_tdi(1'b0), .altera_reserved_tdo(), .altera_reserved_tms(1'b0),
     .apf_audio_buffer_fill(aud_fill), .apf_audio_bus_out(audio_out), .apf_audio_bus_wr(audio_wr), .apf_audio_flush(aud_flush),
@@ -115,10 +125,7 @@ mirlo_mips #(.SDR_T_INIT(100)) soc (
     .apf_bridge_request_getfile(), .apf_bridge_request_openfile(), .apf_bridge_request_read(br_req_read), .apf_bridge_request_write(),
     .apf_bridge_slot_id(br_slot), .apf_id_chip_id(64'd0),
     .apf_ss_save_t(ss_save_t), .apf_ss_load_t(ss_load_t), .apf_ss_done_t(ss_done_t), .apf_ss_err(ss_err), .apf_ss_sup(ss_sup),
-    .apf_input_cont1_joy(cont1_joy), .apf_input_cont1_key(cont1_key), .apf_input_cont1_trig(32'd0),
-    .apf_input_cont2_joy(cont2_joy), .apf_input_cont2_key(cont2_key), .apf_input_cont2_trig(32'd0),
-    .apf_input_cont3_joy(cont3_joy), .apf_input_cont3_key(cont3_key), .apf_input_cont3_trig(32'd0),
-    .apf_input_cont4_joy(cont4_joy), .apf_input_cont4_key(cont4_key), .apf_input_cont4_trig(32'd0),
+    .apf_pad_clk(clk_sys), .apf_pad_we(1'b1), .apf_pad_wa(pad_i), .apf_pad_wd(pad_w),
     .apf_interact_address(ia_address), .apf_interact_data(ia_data), .apf_interact_q(), .apf_interact_wr(ia_wr),
     .apf_rtc_date_bcd(32'd0), .apf_rtc_time_bcd(32'd0), .apf_rtc_unix_seconds(32'd0),
     .clk_sys, .clk_sys2x, .clk_sys2x_90deg(clk_sys2x), .clk_vid, .reset,

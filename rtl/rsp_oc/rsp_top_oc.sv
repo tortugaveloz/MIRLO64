@@ -209,10 +209,12 @@ logic [127:0] sw_pre;
 logic [3:0]  sw_rot;
 wire         unit_st = !dm_valid && (vu_own ? vm_valid && vm_we : sm_valid && sm_we);     // a store is taken
 function automatic logic [127:0] rot16(input logic [127:0] pre, input logic [3:0] r);   // byte b of the result is byte (b + r) mod 16
-    logic [127:0] w1, w2;
-    for (int b = 0; b < 16; b++) w1[127 - 8 * b -: 8] = pre[127 - 8 * ((b + int'(r[1:0])) & 15) -: 8];
-    for (int b = 0; b < 16; b++) w2[127 - 8 * b -: 8] = w1[127 - 8 * ((b + 4 * int'(r[3:2])) & 15) -: 8];
-    return w2;
+    logic [127:0] w1, w2, w3, w4;                                // (by 1, 2, 4, 8 bytes, the early bits of r first: four stages of two, fewer LUTs than two of four)
+    for (int b = 0; b < 16; b++) w1[127 - 8 * b -: 8] = r[0] ? pre[127 - 8 * ((b + 1) & 15) -: 8] : pre[127 - 8 * b -: 8];
+    for (int b = 0; b < 16; b++) w2[127 - 8 * b -: 8] = r[1] ? w1[127 - 8 * ((b + 2) & 15) -: 8] : w1[127 - 8 * b -: 8];
+    for (int b = 0; b < 16; b++) w3[127 - 8 * b -: 8] = r[2] ? w2[127 - 8 * ((b + 4) & 15) -: 8] : w2[127 - 8 * b -: 8];
+    for (int b = 0; b < 16; b++) w4[127 - 8 * b -: 8] = r[3] ? w3[127 - 8 * ((b + 8) & 15) -: 8] : w3[127 - 8 * b -: 8];
+    return w4;
 endfunction
 always_comb begin
     if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_addr = dm_addr; x_addr16 = dm_addr + 12'd16; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
@@ -249,11 +251,13 @@ logic [3:0]  x_rot;
 rsp_dpram_oc #(.DUALCLK(DUALCLK)) dmem (.clk, .clk_b, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), .a_dat_w(x_wd), .a_dat_r(q16),
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
-// byte m of the result is byte (m + x_rot) mod 16 of the line: by words, then bytes
-logic [127:0] q_w, x_rd;
+// byte m of the result is byte (m + x_rot) mod 16 of the line: by 1, 2, 4, 8 bytes (four stages of two: fewer LUTs than two of four)
+logic [127:0] q_w, q_x, q_y, x_rd;
 always_comb begin
-    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = q16[127 - 8 * ((m + 4 * int'(x_rot[3:2])) & 15) -: 8];
-    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = q_w[127 - 8 * ((m + int'(x_rot[1:0])) & 15) -: 8];
+    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = x_rot[0] ? q16[127 - 8 * ((m + 1) & 15) -: 8] : q16[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) q_x[127 - 8 * m -: 8] = x_rot[1] ? q_w[127 - 8 * ((m + 2) & 15) -: 8] : q_w[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) q_y[127 - 8 * m -: 8] = x_rot[2] ? q_x[127 - 8 * ((m + 4) & 15) -: 8] : q_x[127 - 8 * m -: 8];
+    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = x_rot[3] ? q_y[127 - 8 * ((m + 8) & 15) -: 8] : q_y[127 - 8 * m -: 8];
 end
 assign m_rdata   = x_rd[127:96];
 assign m_rdata16 = x_rd;
