@@ -657,6 +657,12 @@ endfunction
 function automatic logic [34:0] utlb_res(input tlbx_t x, input logic [31:0] va);
     return {1'b1, x.v, x.d, {x.pfn, 12'd0} | {7'd0, va[24:0] & {x.om, 12'hFFF}}};
 endfunction
+// {bad, hi, bit 22} of a translation (m_tq_*), for an access that stores (st) or loads
+function automatic logic [2:0] tq_flags(input logic [34:0] q, input logic st);
+    logic ok;
+    ok = q[34] && q[33] && !(st && !q[32]);
+    return {!ok, ok && q[31:23] != 9'd0, ok && q[22]};
+endfunction
 
 typedef enum logic [1:0] { SC_IDLE, SC_RUN, SC_DONE } sc_t;
 typedef enum logic [1:0] { SCM_LOOKUP, SCM_PROBE, SCM_READ } scm_t;
@@ -1242,6 +1248,10 @@ ms_t ms;
 // a mapped access spends a cycle in MS_XLAT with its translation registered
 // (m_tlbq): from the micro-TLB, or after a search (MS_WALK)
 logic [34:0] m_tlbq;
+// (what the translation faults on, found as it is registered -- not from m_tlbq's bits at every use: a fault of the entry (invalid, a store to a
+// clean page: m_tq_bad), and an access to a physical address that is not RDRAM, by the upper bits of the page (m_tq_hi) and by bit 22 for a
+// console without the Expansion Pak (m_tq_22). m_tlb_fault, and with it the flush, are then a function of registers alone, one level)
+logic        m_tq_bad, m_tq_hi, m_tq_22;
 logic        m_tlbc;                         // (PGD) the translation's entry is cacheable
 logic        m_xc1;                          // (PGD) MS_XLAT's second cycle: the cache's word and tag at the physical index
 logic        m_wq;                           // MS_WALK: the scanner took the request
@@ -1250,9 +1260,8 @@ wire [31:0] m_pa = m_kseg ? kphys(m_addr) : tphys({m_tlbq[31:12], m_addr[11:0]})
 // TLB_EN with the monitor: the game's access through a valid page to a physical address that is not its RDRAM (the console's
 // RCP registers, cartridge, a bus with nothing on it) is the device access of an unmapped address -- an address error for the
 // monitor level, which answers it -- with COP0 22 holding the physical address the page gave
-wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && m_tlbq[34] && m_tlbq[33] &&
-              !(m_st && !m_tlbq[32]) && (m_tlbq[31:23] != 9'd0 || (mon_mem4 && m_tlbq[22]));
-wire m_tlb_fault = m_mapped && ms == MS_XLAT && (!m_tlbq[34] || !m_tlbq[33] || (m_st && !m_tlbq[32]) || m_tdev);
+wire m_tdev = TLB_EN && MON && N64WIN && FLAT && mon_game && !c0_status[2] && m_mapped && ms == MS_XLAT && (m_tq_hi || (mon_mem4 && m_tq_22));
+wire m_tlb_fault = m_mapped && ms == MS_XLAT && (m_tq_bad || m_tdev);
 wire [4:0] m_tlb_code = m_tdev ? (m_st ? 5'd5 : 5'd4) : (!m_tlbq[34] || !m_tlbq[33]) ? (m_st ? 5'd3 : 5'd2) : 5'd1;
 wire m_wide = FAST ? m_k_wide :
               (m_c.ld == M_FL && m_insn[31:26] == 6'h35) || (m_c.st == S_FS && m_insn[31:26] == 6'h3D) ||   // ldc1, sdc1
@@ -2377,7 +2386,7 @@ always_ff @(posedge clk) begin
         MS_IDLE: if (m_live && (m_c.tlbp || m_c.tlbr)) begin ms <= MS_WALK; m_wq <= 0; end
         else if (m_live && m_mem) begin
             if (m_mapped) begin
-                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); m_tlbc <= 1'b0; end
+                if (TLB_EN && utlb_hit(utlb_m, m_addr)) begin ms <= MS_XLAT; m_tlbq <= utlb_res(utlb_m.x, m_addr); {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(utlb_res(utlb_m.x, m_addr), m_st); m_tlbc <= 1'b0; end
                 else begin ms <= MS_WALK; m_wq <= 0; end
             end
             else if (m_ld && m_cached && !m_dc_hit && !m_ph) begin ms <= MS_REFILL; ms_cnt <= 0; end
@@ -2390,6 +2399,7 @@ always_ff @(posedge clk) begin
                 else begin
                     ms <= MS_XLAT;
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
+                    {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
                     if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
                 end
