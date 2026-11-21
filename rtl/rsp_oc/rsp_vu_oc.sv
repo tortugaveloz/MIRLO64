@@ -47,7 +47,11 @@ module rsp_vu_oc #(
     input  wire  [31:0] ins_n,
     input  wire  [31:0] lins_n,
     input  wire         adv,
-    input  wire  [31:0] a,              // rs: the base of a load / store
+    input  wire  [11:0] la_m,           // rs's low 12 bits, the base of a load / store, from each source -- the scalar unit's writer in M, the one in W, the register file's --
+    input  wire  [11:0] la_w,           // ... and the choice (la_fm, la_fw; else the file's): the address is made from each and chosen
+    input  wire  [11:0] la_r,
+    input  wire         la_fm,
+    input  wire         la_fw,
     input  wire         l_valid,        // (LPAIR) a load, store or move paired with the computation on ins
     input  wire  [31:0] b,              // rt: MTC2, CTC2
     // the registers' read addresses, from the scalar unit: of the slot E holds next cycle -- the computation's vs and
@@ -175,7 +179,6 @@ wire       ctc2 = ld.ctc2;
 // (the load or store: l_ins, alone or a pair's load)
 wire       lp   = LPAIR && l_valid;
 wire [31:0] li  = l_ins;
-wire [31:0] la  = a;
 wire       lwc2 = ld.lwc2;
 wire       swc2 = ld.swc2;
 wire [4:0] lsop = li[15:11];
@@ -249,10 +252,9 @@ typedef struct packed {
 // a multiply's result: the accumulator's middle word, or its low word (VMUDL, VMUDN, VMADL, VMADN: k 4, 6), or a
 // constant where the word does not hold the value -- 7FFF / 8000, VMULU's and VMACU's (k 1) FFFF / 0000, the low
 // word's FFFF / 0000: its top bit and its other fifteen
-function automatic logic [15:0] mul_res(input logic [2:0] k, input logic [47:0] a, input logic gt, input logic lt);
-    logic klo, kc, c15, clo;
-    klo = k == 3'd4 || k == 3'd6;
-    if (k == 3'd1) begin kc = a[47] || gt; c15 = !a[47]; clo = !a[47]; end
+function automatic logic [15:0] mul_res(input logic k1, input logic klo, input logic [47:0] a, input logic gt, input logic lt);
+    logic kc, c15, clo;
+    if (k1) begin kc = a[47] || gt; c15 = !a[47]; clo = !a[47]; end
     else if (klo)  begin kc = gt || lt;    c15 = gt;     clo = gt;     end
     else           begin kc = gt || lt;    c15 = !gt;    clo = gt;     end
     return kc ? {c15, {15{clo}}} : klo ? a[15:0] : a[31:16];
@@ -347,8 +349,10 @@ typedef struct packed {
     logic       vas;                // VADD, VSUB: the result is clamped
     logic       abs_;               // VABS: -t of -8000 is 8000
     logic       resv;               // a reserved function: 0
+    logic       mk1, mklo;          // a multiply's result by its function: VMULU's and VMACU's (k 1), the accumulator's low word's (k 4, 6)
+    logic [1:0] vsr;                // VSAR: which of the accumulator's words the element names (0 low, 1 middle, 2 high, 3 none: 0)
 } ydec_t;
-function automatic ydec_t ydecode(input logic [5:0] f);
+function automatic ydec_t ydecode(input logic [5:0] f, input logic [3:0] e);
     ydec_t d;
     d.cl    = f == 6'h10 || f == 6'h11 || f == 6'h14 || f == 6'h15 || is_resv(f);
     d.cx    = (f >= 6'h28 && f <= 6'h2D) || f == 6'h33 || (f >= 6'h30 && f <= 6'h36) || f == 6'h22;
@@ -366,12 +370,15 @@ function automatic ydec_t ydecode(input logic [5:0] f);
     d.vas   = f == 6'h10 || f == 6'h11;
     d.abs_  = f == 6'h13;
     d.resv  = is_resv(f);
+    d.mk1   = f[2:0] == 3'd1;
+    d.mklo  = f[2:0] == 3'd4 || f[2:0] == 3'd6;
+    d.vsr   = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
     return d;
 endfunction
 
 // EX2, any computation but a multiply: from the registered sum (lo) and flags (fr, the adder's {carry, b16, zero,
 // ones} of its compare) the result, the accumulator's low word, the flags and the register write's data
-function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, input logic [15:0] s, input logic [15:0] t,
+function automatic lane_t lane_x2(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t,
                                   input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input logic kc_in, input ydec_t yd,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
                                   input logic [3:0] fr);
@@ -437,7 +444,7 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [3:0] e, inpu
     if (yd.resv) begin rsel = 2'd3; c15 = 1'b0; clo = 1'b0; end
     // (VSAR: the accumulator's word e names, the lane's, or 0)
     if (yd.vsar) begin
-        rsel = e == 4'd8 ? 2'd2 : e == 4'd9 ? 2'd1 : e == 4'd10 ? 2'd0 : 2'd3;
+        rsel = yd.vsr;
         c15 = 1'b0; clo = 1'b0;
     end
     // the flags
@@ -485,19 +492,19 @@ endfunction
 // one that needs s and t; any other when MUL is empty, EX1 is not kept (a clip, a reciprocal), and the first is not
 // busy with s and t.
 // A computation that reads the register another is writing waits for its write.
-// vt's element broadcast, for every lane at once: lane i takes the register's lane
-// ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]), {i[2:1], ve[0]} (ve[1]) or i. The sources are shared between lanes: one eight-way choice for a
-// single lane broadcast (ve[3]), one four-way for each half (ve[2]), one two-way
-// for each pair (ve[1]); a lane then picks among those and its own.
+// vt's element broadcast, for every lane at once: lane i takes the register's lane ve[2:0] (ve[3]), {i[2], ve[1:0]} (ve[2]),
+// {i[2:1], ve[0]} (ve[1]) or i. Which lane it takes is a function of ve alone: it is made with the instruction's decode (tvi, a register
+// of the lane, as `cd` is), and each lane is then a four-way choice in each half of the register and the choice of the halves -- two levels after the read, with
+// no shared broadcast stage (an eight-way, a four-way, a two-way choice and the lane's pick among them) in front of the lane
 logic [15:0] tv [8];
-always_comb begin
-    logic [15:0] t_b, t_h [2], t_p [4];
-    t_b = qc[ve[2:0]];
-    for (int h = 0; h < 2; h++) t_h[h] = qc[{1'(h), ve[1:0]}];
-    for (int j = 0; j < 4; j++) t_p[j] = ve[0] ? qc[2 * j + 1] : qc[2 * j];
+logic [2:0]  tvi [8];
+function automatic logic [2:0] tv_lane(input logic [3:0] e, input int i);
+    return e[3] ? e[2:0] : e[2] ? {i[2], e[1:0]} : e[1] ? {i[2:1], e[0]} : 3'(i);
+endfunction
+always_ff @(posedge clk) if (adv) for (int i = 0; i < 8; i++) tvi[i] <= tv_lane(ins_n[24:21], i);    // (registered with the instruction)
+always_comb
     for (int i = 0; i < 8; i++)
-        tv[i] = ve[3] ? t_b : ve[2] ? t_h[i / 4] : ve[1] ? t_p[i / 2] : qc[i];
-end
+        tv[i] = tvi[i][2] ? qc[{1'b1, tvi[i][1:0]}] : qc[{1'b0, tvi[i][1:0]}];
 wire  fn_ch = cd.ch;
 
 logic [15:0]        s_n [LANES], t_n [LANES];
@@ -556,8 +563,8 @@ logic [15:0] mres [LANES];
 logic [LANES-1:0] mgt_r, mlt_r;               // a multiply's sum is above / below what a word holds (made as it was: EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, y_ve, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
-        mres[l] = mul_res(y_fn[2:0], {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
+        ex2[l]  = lane_x2(y_fn, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        mres[l] = mul_res(y_yd.mk1, y_yd.mklo, {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
     end
 logic [15:0] hold [8];                        // EX2's results, for a write put off
 logic [15:0] hold_be_w;                       // ... and the bytes it writes
@@ -618,8 +625,9 @@ logic [11:0] off_sh, off_sh16;              // ... and 16 more: registered with 
 always_ff @(posedge clk) if (adv) begin off_sh <= offs(lins_n); off_sh16 <= offs(lins_n) + 12'd16; end
 // (the offset scaled first, so that the address is one adder after rs: the
 // store's rotation hangs off its low bits)
-wire  [11:0] ls_addr = la[11:0] + off_sh;
-wire  [11:0] ls_addr16 = la[11:0] + off_sh16;
+wire  [11:0] lsa_m = la_m + off_sh, lsa_w = la_w + off_sh, lsa_r = la_r + off_sh;
+wire  [11:0] lsb_m = la_m + off_sh16, lsb_w = la_w + off_sh16, lsb_r = la_r + off_sh16;
+wire  [11:0] ls_addr   = la_fm ? lsa_m : la_fw ? lsa_w : lsa_r;
 wire  ls_packed = ld.packed_;
 wire  ls_tv     = ld.tv;                                           // LTV, STV
 // SHV, SFV: a byte every second / fourth of the 16 from the 8-byte block
@@ -628,11 +636,13 @@ wire  st_fv     = ld.fv;
 wire  ls_known  = ld.known;
 wire  [3:0]  o    = ls_addr[3:0];
 wire  [4:0]  size = 5'd1 << lsop[1:0];
-// the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV)
-// the 8-byte block's
-wire  [1:0]  win_w  = lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ls_addr[3], 1'b0} : ls_addr[3:2];
-wire  [11:0] ls_win = {ls_addr[11:4], win_w, 2'b00};
-wire  [11:0] ls_win16 = {ls_addr16[11:4], win_w, 2'b00};
+// the access's first word: LRV / SRV the block's, a packed load (and SHV, SFV) the 8-byte block's. Its address, and its next line's, are
+// made from each source of the base and chosen (m_addr, m_addr16 below): the window's low bits are not behind the choice of the sum
+function automatic logic [1:0] win_of(input logic [3:2] ab);
+    return lsop == 5'd5 ? 2'b00 : ((lwc2 && ls_packed) || st_hv || st_fv) ? {ab[3], 1'b0} : ab[3:2];
+endfunction
+wire  [11:0] lw_m = {lsa_m[11:4], win_of(lsa_m[3:2]), 2'b00}, lw_w = {lsa_w[11:4], win_of(lsa_w[3:2]), 2'b00}, lw_r = {lsa_r[11:4], win_of(lsa_r[3:2]), 2'b00};
+wire  [11:0] lh_m = {lsb_m[11:4], win_of(lsa_m[3:2]), 2'b00}, lh_w = {lsb_w[11:4], win_of(lsa_w[3:2]), 2'b00}, lh_r = {lsb_r[11:4], win_of(lsa_r[3:2]), 2'b00};
 // a load's register bytes: a run of the register's sixteen from e on -- its size's; to the 16-byte block's end
 // (LQV); or (LRV) from where the block's start comes, the bytes before the address, to the register's end
 function automatic logic [15:0] ld_mask_f(input logic [3:0] o_, input logic [3:0] el_, input logic [4:0] op_);
@@ -694,7 +704,7 @@ wire         in_tv   = st == V_TV;
 logic [7:0]  sarr [16];
 wire         st_pk  = swc2 && ls_packed;
 wire  [3:0]  st_eo  = el - off_sh[3:0];
-wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - a[3:0] : el;
+wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - (la_fm ? la_m[3:0] : la_fw ? la_w[3:0] : la_r[3:0]) : el;
 // (byte i one of four, by a select the bytes share -- st_sel[0] for the first eight, [1] for the others: 0 its byte, 1 SHV's,
 // 2 the packed top 8 bits, 3 the packed bits 14..7; SFV's bytes are only the four i a multiple of 4, the others no matter)
 logic [1:0]  st_sel [2];
@@ -761,12 +771,28 @@ always_comb
 // a computational instruction's SEL: not under a computation that writes what it reads (in MUL, EX1 or EX2), nor under a
 // load's write of what it reads; not behind a computation in EX1 (above), nor, if it is not a multiply, behind one in MUL
 wire cmp      /* verilator public_flat_rd */ = valid && vec && fn_known && !fn_none;
-wire dep      /* verilator public_flat_rd */ = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn || x_vdn == vtn))
-             || (y_v && (y_vdn == vsn || y_vdn == vtn)) || (wp && (w_vdn == vsn || w_vdn == vtn));
+// (whether the register a stage writes is one the instruction in E reads -- vs or vt -- is a register of its own, made a cycle ahead from
+// what each stage will hold and the instruction that will be in E, the arriving one (ins_n) if E is taken, so that what stands in front of
+// SEL, and of the stall that comes of it, is a choice among four flags and not four pairs of compares of five bits)
+logic dp_m, dp_x, dp_y, dp_w;
+logic dp_l;                       // (and the same for the register a load or MTC2 writes, lw_reg)
+wire  [4:0] x_vdn_nx = (x_v && x_wait) ? x_vdn : m_v ? m_vdn : vdn;     // (what EX1, EX2 and the put-off write will name next cycle)
+wire  [4:0] y_vdn_nx = x_v ? x_vdn : vdn;
+wire  [4:0] w_vdn_nx = x_defer ? y_vdn : w_vdn;
+function automatic logic reads(input logic [4:0] d, input logic [4:0] s, input logic [4:0] t);
+    return d == s || d == t;
+endfunction
+always_ff @(posedge clk) begin
+    dp_m <= adv ? reads(vdn,      ins_n[15:11], ins_n[20:16]) : reads(vdn,      vsn, vtn);
+    dp_x <= adv ? reads(x_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(x_vdn_nx, vsn, vtn);
+    dp_y <= adv ? reads(y_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(y_vdn_nx, vsn, vtn);
+    dp_w <= adv ? reads(w_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(w_vdn_nx, vsn, vtn);
+end
+wire dep      /* verilator public_flat_rd */ = (m_v && dp_m) || (x_v && dp_x) || (y_v && dp_y) || (wp && dp_w);
 // (a load's write of another register is no matter: the operands come from
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
-wire ldep     /* verilator public_flat_rd */ = lw_v && (lw_reg == vsn || lw_reg == vtn);
+wire ldep     /* verilator public_flat_rd */ = lw_v && dp_l;
 wire pipe_e   = !m_v && !x_v && !y_v && !wp;          // no computation is under way
 // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
 wire fn_fast  /* verilator public_flat_rd */ = cd.fast;
@@ -788,13 +814,28 @@ wire sel_fire /* verilator public_flat_rd */ = sel0;
 // write, a cycle on, may meet a computation's, which is put off); a store or MFC2 under a computation that writes
 // another register than the one it reads, and under a load's write of another that is of whole lanes; MTC2 as a load;
 // CFC2 and CTC2 when no computation is under way (the flags they read and write are final then)
-wire x_free   = !(m_v && m_vdn == rb_live) && !(x_v && x_vdn == rb_live) && !(y_v && y_vdn == rb_live) && !(wp && w_vdn == rb_live);
-wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
+// (the compares with the register the instruction in E reads or writes, in registers made a cycle ahead as dep's: rd_n is the next cycle's rb_live)
+logic lf_q;                                                   // (lw_reg is not rb_live: made a cycle ahead, as dep's)
+logic xf_m, xf_x, xf_y, xf_w;
+always_ff @(posedge clk) begin
+    xf_m <= vdn      == rd_n;
+    xf_x <= x_vdn_nx == rd_n;
+    xf_y <= y_vdn_nx == rd_n;
+    xf_w <= w_vdn_nx == rd_n;
+end
+wire x_free   = !(m_v && xf_m) && !(x_v && xf_x) && !(y_v && xf_y) && !(wp && xf_w);
+wire l_free   = !lw_v || (!lw_merge && lf_q);
 // (a load into the register a computation is to write would be written over by it, put off or not)
 logic [4:0] l_reg;                                            // (the register a load or MTC2 writes: registered with the instruction)
 wire  mtc2_n = lins_n[31:26] == 6'h12 && !lins_n[25] && lins_n[24:21] == 4'd4;     // (MTC2, of the instruction entering E)
 always_ff @(posedge clk) if (adv) l_reg <= mtc2_n ? lins_n[15:11] : lins_n[20:16];
-wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
+wire  [4:0] l_reg_n = adv ? (mtc2_n ? lins_n[15:11] : lins_n[20:16]) : l_reg;
+logic lo_m, lo_x;
+always_ff @(posedge clk) begin
+    lo_m <= vdn      == l_reg_n;
+    lo_x <= x_vdn_nx == l_reg_n;
+end
+wire ld_ok    = !(m_v && lo_m) && !(x_v && lo_x) && !x_defer;
 wire ls_go    = ld.go;
 wire m_stall  = swc2 ? m_stall_st : m_stall_ld;                              // (the port, for the load or store of E)
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
@@ -805,6 +846,14 @@ wire sel0     = sel0r && (!lp || start_r);
 wire start_nc = start_r && (!lp || sel0r || none_ok);
 // a load's read goes out this cycle, or MTC2 starts (its write is the next)
 wire lw_nx    = (lwc2 && m_valid) || (mtc2 && start_nc);
+// (the compares of the register a load or MTC2 writes, which lw_reg will hold next cycle if one starts now: MTC2's rd, a load's vt, a beat of LTV's
+// register -- made for each and chosen by which starts, the last of the choices, as the instruction that will be in E is for dep's)
+wire  [4:0] lw_reg_b = in_tv ? tv_reg : ltn;
+always_ff @(posedge clk) begin
+    dp_l <= (lwc2 && m_valid) ? (adv ? reads(lw_reg_b, ins_n[15:11], ins_n[20:16]) : reads(lw_reg_b, vsn, vtn))
+                              : (adv ? reads(li[15:11], ins_n[15:11], ins_n[20:16]) : reads(li[15:11], vsn, vtn));
+    lf_q <= (lwc2 && m_valid) ? lw_reg_b != rd_n : li[15:11] != rd_n;
+end
 // D's address next cycle: the register STV is at then (two beats each), else the one E's instruction reads
 wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv && !(tv_n == 4'd15 && !m_stall)));
 wire  [4:0]  tv_nn   = {1'b0, tv_n} + 5'd1;
@@ -829,8 +878,8 @@ always_comb begin
     // DMEM
     m_valid = (start_nc && ls_go) || (in_tv && !m_stall);
     m_we    = swc2;
-    m_addr  = in_tv ? tv_addr : ls_win;
-    m_addr16 = in_tv ? tv_addr16 : ls_win16;
+    m_addr  = in_tv ? tv_addr : la_fm ? lw_m : la_fw ? lw_w : lw_r;
+    m_addr16 = in_tv ? tv_addr16 : la_fm ? lh_m : la_fw ? lh_w : lh_r;
     m_be    = in_tv ? 16'd1 << tv_addr[3:0] : st_be;
     m_rot   = in_tv ? tv_addr[3:0] - tv_n : o - el;
     for (int i = 0; i < 16; i++) m_wpre[127 - 8 * i -: 8] = sarr[i];
@@ -882,9 +931,9 @@ always_ff @(posedge clk) begin
         // (EX2 takes EX1's computation, or SEL's -- a fast one, when EX1 is empty -- whatever SEL does: only y_v is its choice)
         y_v <= x_ex2 || (sel0 && fn_fast && !x_v);
         if (x_v) begin
-            y_fn <= x_fn; y_yd <= ydecode(x_fn); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
+            y_fn <= x_fn; y_yd <= ydecode(x_fn, x_ve); y_ve <= x_ve; y_vdn <= x_vdn; y_de <= x_de; y_one <= x_one; y_rcp <= x_rcp; y_mul <= x_mul;
         end else begin
-            y_fn <= fn; y_yd <= ydecode(fn); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
+            y_fn <= fn; y_yd <= ydecode(fn, ve); y_ve <= ve; y_vdn <= vdn; y_de <= de; y_one <= fn_one; y_rcp <= fn_rcp; y_mul <= 1'b0;
         end
         if (y_v) begin
             for (int l = 0; l < LANES; l++) begin

@@ -106,6 +106,10 @@ logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
 logic [31:0] c_ins, c_a, c_b, c_res, c_lins, c_ins_n, c_lins_n;
+logic [11:0] c_bm, c_bw, c_br;
+logic        c_fm, c_fw;
+logic [11:0] sm_addr_e, sm_addr16_e, sm_addr_r, sm_addr16_r;
+logic        sm_sel_r;
 logic        c_adv, c_vls;
 logic        c_pr;
 logic [4:0]  c_ra_n, c_rb_n, c_rd_n, c_rd;
@@ -115,8 +119,8 @@ logic        tr_e_mem;
 
 rsp_su_oc #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
-    .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
+    .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_addr_e(sm_addr_e), .m_addr16_e(sm_addr16_e), .m_addr_r(sm_addr_r), .m_addr16_r(sm_addr16_r), .m_sel_r(sm_sel_r), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
+    .c_valid, .c_ins, .c_a, .c_bm, .c_bw, .c_br, .c_fm, .c_fw, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
@@ -127,7 +131,7 @@ logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
-rsp_vu_oc #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .a(c_a), .b(c_b),
+rsp_vu_oc #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .la_m(c_bm), .la_w(c_bw), .la_r(c_br), .la_fm(c_fm), .la_fw(c_fw), .b(c_b),
     .l_valid(c_valid && c_pr && l_vu), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_addr16(vm_addr16), .m_be(vm_be), .m_wpre(vm_wpre), .m_wsh(vm_wsh), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall_ld(dm_valid || sw_v), .m_stall_st(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
@@ -188,7 +192,7 @@ assign p2_ok = p2_q;
 // the instruction in E is the vector unit's load or store (a computation's, alone or in a pair, does not use DMEM)
 wire         vu_own = c_vls;                                  // (E's instruction is the vector unit's load or store: a register; the unit's request is its own)
 logic        x_valid, x_we;
-logic [11:0] x_addr, x_addr16;
+wire  [11:0] x_addr, x_addr16;
 logic [15:0] x_be16;
 logic [127:0] x_wd;
 logic [3:0]  x_rot_n;
@@ -217,15 +221,23 @@ function automatic logic [127:0] rot16(input logic [127:0] pre, input logic [3:0
     return w4;
 endfunction
 always_comb begin
-    if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_addr = dm_addr; x_addr16 = dm_addr + 12'd16; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
+    if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
                            x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
-    else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_addr = sw_addr; x_addr16 = sw_addr16; x_be16 = sw_be;
+    else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_be16 = sw_be;
                            x_wd = rot16(sw_pre, sw_rot); x_rot_n = 4'd0; end
-    else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_addr = vm_addr; x_addr16 = vm_addr16; x_be16 = 16'd0;
+    else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_be16 = 16'd0;
                            x_wd = '0; x_rot_n = vm_rot; end
-    else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_addr = sm_addr; x_addr16 = sm_addr16; x_be16 = 16'd0;
+    else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_be16 = 16'd0;
                            x_wd = '0; x_rot_n = sa; end
 end
+// The address -- and the next line's -- is the same choice, made as an AND-OR whose selects are decodes of registers (the DMA's request, a
+// store waiting, whose unit's access it is) and whose last terms are the late ones: the scalar unit's sum from the register file, and the
+// vector unit's address (its sum is made from each source too); what does not wait for the file is one term
+wire         a_dm = dm_valid, a_sw = !dm_valid && sw_v, a_vu = !dm_valid && !sw_v && vu_own, a_sc = !dm_valid && !sw_v && !vu_own;
+assign x_addr   = ({12{a_dm}} & dm_addr)                    | ({12{a_sw}} & sw_addr)   | ({12{a_vu}} & vm_addr)
+                | ({12{a_sc}} & sm_addr_e)   | ({12{a_sc && sm_sel_r}} & sm_addr_r);
+assign x_addr16 = ({12{a_dm}} & (dm_addr + 12'd16))         | ({12{a_sw}} & sw_addr16) | ({12{a_vu}} & vm_addr16)
+                | ({12{a_sc}} & sm_addr16_e) | ({12{a_sc && sm_sel_r}} & sm_addr16_r);
 always_ff @(posedge clk) begin
     if (rst) sw_v <= 1'b0;
     else begin
@@ -259,7 +271,13 @@ always_comb begin
     for (int m = 0; m < 16; m++) q_y[127 - 8 * m -: 8] = x_rot[2] ? q_x[127 - 8 * ((m + 4) & 15) -: 8] : q_x[127 - 8 * m -: 8];
     for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = x_rot[3] ? q_y[127 - 8 * ((m + 8) & 15) -: 8] : q_y[127 - 8 * m -: 8];
 end
-assign m_rdata   = x_rd[127:96];
+// the scalar unit's word is the line's bytes x_rot .. x_rot + 3: the two words they lie in (by x_rot[3:2]) and then the four bytes (by
+// x_rot[1:0]), two LUTs of a choice of four, where the rotation of the whole line (for the vector unit) is four stages
+logic [63:0] q_s;
+always_comb begin
+    for (int w = 0; w < 2; w++) q_s[63 - 32 * w -: 32] = q16[127 - 32 * ((int'(x_rot[3:2]) + w) & 3) -: 32];
+    for (int j = 0; j < 4; j++) m_rdata[31 - 8 * j -: 8] = q_s[63 - 8 * (j + int'(x_rot[1:0])) -: 8];
+end
 assign m_rdata16 = x_rd;
 
 // ------------------------------------------------------------ registers --

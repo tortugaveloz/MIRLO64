@@ -32,6 +32,24 @@
 // flags of every computation before it are in by then).
 `default_nettype none
 
+// A 32-bit compare as three LUT levels: the difference of each three bits (dg, kept: the synthesis, in area mode, would fold them into a
+// deeper tree), whether none of the first six differs (h1) and none of the other five (h2); a and b are equal when both are
+module rsp_eq32h (
+    input  wire [31:0] a,
+    input  wire [31:0] b,
+    output wire        h1,
+    output wire        h2
+);
+(* keep *) wire [10:0] dg;
+wire [32:0] d = {1'b0, a} ^ {1'b0, b};
+genvar g;
+generate for (g = 0; g < 11; g++) begin : grp
+    assign dg[g] = |d[3 * g +: 3];
+end endgenerate
+assign h1 = ~|dg[5:0];
+assign h2 = ~|dg[10:6];
+endmodule
+
 module rsp_su_oc #(
     parameter bit LPAIR = 0
 ) (
@@ -61,6 +79,13 @@ module rsp_su_oc #(
     output logic        m_we,
     output logic [11:0] m_addr,
     output logic [11:0] m_addr16,       // ... and the address + 16 (the next line's: made in parallel)
+    // ... and each of them in two parts, the sources that are not the register file's (m_addr_e, m_addr16_e: ORed, a zero where the file is the
+    // source) and the file's (m_addr_r, m_addr16_r, when m_sel_r), for rsp_top_oc's choice among the units' addresses
+    output logic [11:0] m_addr_e,
+    output logic [11:0] m_addr16_e,
+    output logic [11:0] m_addr_r,
+    output logic [11:0] m_addr16_r,
+    output logic        m_sel_r,
     output logic [1:0]  m_n,            // bytes - 1 (0, 1 or 3)
     output logic [31:0] m_wdata,
     input  wire  [31:0] m_rdata,
@@ -71,6 +96,13 @@ module rsp_su_oc #(
     output logic        c_valid,
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
+    // ... and its low 12 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
+    // else the file's), for the vector unit's load and store addresses, made from each source as the scalar unit's own are
+    output logic [11:0] c_bm,
+    output logic [11:0] c_bw,
+    output logic [11:0] c_br,
+    output logic        c_fm,
+    output logic        c_fw,
     output logic [31:0] c_b,            // rt
     output logic        c_pr,           // E holds a pair: the computation on c_ins, the scalar unit's own on c_lins
     output logic [31:0] c_lins,         // E's own instruction (c_ins but for a pair's computation)
@@ -126,6 +158,7 @@ function automatic ctl_t decode(input logic [31:0] i);
     logic [5:0] op = i[31:26], fn = i[5:0];
     logic [4:0] rs = i[25:21], rt = i[20:16], rd = i[15:11];
     c.alu = A_ADD;
+    c.bcond = 3'd7;           // (no branch: no condition holds)
     unique case (op)
     6'h00: begin
         c.wr = rd; c.we = 1'b1;
@@ -287,13 +320,18 @@ wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocess
 wire         pair_go = pair_d && !stall_e;
 
 // ---- the register file: two copies, read with the instruction arriving in D
-logic [31:0] rf_qa, rf_qb;
+logic [31:0] rf_qa, rf_qb;               // (the operands')
+logic [31:0] rf_qac, rf_qbc;             // (the branch condition's: copies of the file, one for each use, so that a word has few loads)
+logic [31:0] rf_qam;                     // (the address adders')
 wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
 // (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
 wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
 rsp_rfram_oc rfa (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qa));
 rsp_rfram_oc rfb (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qb));
+rsp_rfram_oc rfac (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qac));
+rsp_rfram_oc rfbc (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qbc));
+rsp_rfram_oc rfam (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qam));
 
 // ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
 // in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which
@@ -321,7 +359,11 @@ logic hazard /* verilator public_flat_rd */;
 
 wire [31:0] imm_sx = {{16{e_ins[15]}}, e_ins[15:0]};
 wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : eb;
-wire [4:0]  shamt  = e_c.sh_imm ? e_ins[10:6] : ea[4:0];
+// (the shift amount: what does not wait for the register file -- the immediate, the writer in M, the one in W -- is chosen first,
+// and the file's word is the last term, not the third of a choice made after the operand's: one level after the file, not two)
+wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
+(* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
+wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
 // two shifters: SLL, and SRL / SRA (a right shift of the sign-extended value)
 wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], eb};
 wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
@@ -336,62 +378,76 @@ wire [31:0] sum    = sum_c[32:1];
 wire        sum_co = sum_c[33];
 wire        lt_u   = !sum_co;
 wire        lt_s   = (ea[31] != op_b[31]) ? ea[31] : sum[31];
-logic [31:0] alu;
-always_comb begin
-    unique case (e_c.alu)
-    A_ADD, A_SUB: alu = sum;
-    A_AND:   alu = ea & op_b;
-    A_OR:    alu = ea | op_b;
-    A_XOR:   alu = ea ^ op_b;
-    A_NOR:   alu = ~(ea | op_b);
-    A_SLT:   alu = {31'b0, lt_s};
-    A_SLTU:  alu = {31'b0, lt_u};
-    A_SLL:   alu = sh_l;
-    A_SRL, A_SRA: alu = sh_r;
-    A_LUI:   alu = {e_ins[15:0], 16'h0};
-    default: alu = 'x;
-    endcase
-end
+// The result: an AND-OR of terms whose selects are decodes of E's registers (the instruction's function, its link and coprocessor
+// flags -- early, beside the register file's read), not a case behind an operand's choice and then the link / coprocessor choice:
+// the late words -- the shifters' -- are in the last LUT, with what is not late ahead of it
+wire        r_lk  = e_c.link;
+wire        r_cp  = !e_c.link && e_c.cop;
+wire        r_al  = !e_c.link && !e_c.cop;                          // (the ALU's own)
+wire        r_sum = r_al && (e_c.alu == A_ADD || e_c.alu == A_SUB);
+wire        r_and = r_al && e_c.alu == A_AND, r_or = r_al && e_c.alu == A_OR, r_xor = r_al && e_c.alu == A_XOR, r_nor = r_al && e_c.alu == A_NOR;
+wire        r_slt = r_al && e_c.alu == A_SLT, r_sltu = r_al && e_c.alu == A_SLTU;
+wire        r_shl = r_al && e_c.alu == A_SLL;
+wire        r_shr = r_al && (e_c.alu == A_SRL || e_c.alu == A_SRA);
+wire        r_lui = r_al && e_c.alu == A_LUI;
+(* keep *) wire [31:0] e_res_a = ({32{r_lk}} & {20'h0, e_spc + 12'd8}) | ({32{r_cp}} & c_res) | ({32{r_lui}} & {e_ins[15:0], 16'h0})
+                  | ({32{r_sum}} & sum) | ({32{r_and}} & (ea & op_b)) | ({32{r_or}} & (ea | op_b)) | ({32{r_xor}} & (ea ^ op_b)) | ({32{r_nor}} & ~(ea | op_b))
+                  | {31'b0, (r_slt & lt_s) | (r_sltu & lt_u)};
+wire [31:0] e_res = e_res_a | ({32{r_shl}} & sh_l) | ({32{r_shr}} & sh_r);
 
 // A branch's condition is made from the sources, not from the operands after the choice among them: the compares of the
-// pairs of sources (the choice is then among their results) and the zero of each
-wire eq_mw = m_res == w_res, eq_mr = m_res == rf_qb, eq_rm = rf_qa == m_res, eq_wr = w_res == rf_qb, eq_rw = rf_qa == w_res, eq_rr = rf_qa == rf_qb;
-wire ea_eq_eb = fa_m ? (fb_m ? 1'b1  : fb_w ? eq_mw : eq_mr)
-              : fa_w ? (fb_m ? eq_mw : fb_w ? 1'b1  : eq_wr)
-              :        (fb_m ? eq_rm : fb_w ? eq_rw : eq_rr);
-wire ea_zero  = fa_m ? m_res == 32'd0 : fa_w ? w_res == 32'd0 : rf_qa == 32'd0;
-logic taken;
+// pairs of sources (the choice is then among their results) and the zero of each. The choices are AND-OR of terms whose selects
+// are registers (the sources' one-hot: a_m, a_w, a_r for ea, b_* for eb; the condition's decode), not nested 2:1 choices, so that
+// the compare's result is two levels behind the register file's words (a compare of 32 bits is three, with the choice)
+wire a_m = fa_m, a_w = fa_w, a_r = !(fa_m | fa_w), b_m = fb_m, b_w = fb_w, b_r = !(fb_m | fb_w);
+wire eq_mw = m_res == w_res;
+wire h1_mr, h2_mr, h1_rm, h2_rm, h1_wr, h2_wr, h1_rw, h2_rw, h1_rr, h2_rr;
+rsp_eq32h c_mr (.a(m_res),  .b(rf_qbc), .h1(h1_mr), .h2(h2_mr));
+rsp_eq32h c_rm (.a(rf_qac), .b(m_res),  .h1(h1_rm), .h2(h2_rm));
+rsp_eq32h c_wr (.a(w_res),  .b(rf_qbc), .h1(h1_wr), .h2(h2_wr));
+rsp_eq32h c_rw (.a(rf_qac), .b(w_res),  .h1(h1_rw), .h2(h2_rw));
+rsp_eq32h c_rr (.a(rf_qac), .b(rf_qbc), .h1(h1_rr), .h2(h2_rr));
+(* keep *) wire ea_eq_eb = (a_m & b_m) | (a_w & b_w) | ((a_m & b_w | a_w & b_m) & eq_mw) | (a_m & b_r & h1_mr & h2_mr) | (a_r & b_m & h1_rm & h2_rm)
+              | (a_w & b_r & h1_wr & h2_wr) | (a_r & b_w & h1_rw & h2_rw) | (a_r & b_r & h1_rr & h2_rr);
+(* keep *) wire ea_zero  = (a_m & (m_res == 32'd0)) | (a_w & (w_res == 32'd0)) | (a_r & (rf_qac == 32'd0));
+(* keep *) wire ea31     = (a_m & m_res[31]) | (a_w & w_res[31]) | (a_r & rf_qac[31]);
+logic taken;                                                                                // (by the condition's code, a register, over the three: one LUT)
 always_comb begin
     unique case (e_c.bcond)
     3'd0: taken = ea_eq_eb;
     3'd1: taken = !ea_eq_eb;
-    3'd2: taken = ea[31] || ea_zero;               // blez
-    3'd3: taken = !ea[31] && !ea_zero;             // bgtz
-    3'd4: taken = ea[31];
-    3'd5: taken = !ea[31];
+    3'd2: taken = ea31 || ea_zero;               // blez
+    3'd3: taken = !ea31 && !ea_zero;             // bgtz
+    3'd4: taken = ea31;
+    3'd5: taken = !ea31;
     default: taken = 1'b0;
     endcase
 end
+wire bt    = taken;                                                                 // (a taken branch: the latest signal of the unit)
 wire [11:0] br_tgt = e_spc + 12'd4 + {imm_sx[9:0], 2'b00};
 wire [11:0] j_tgt  = {e_ins[9:0], 2'b00};
 wire        e_go   = e_valid && !stall_e;                 // E's instruction leaves it
 // (a register: made a cycle ahead, when the load leaves E, from the registers of the instruction that takes E's place -- D's; a
 // load that leaves E is always followed by the cycle in which M has it, and E's stall does not repeat the check)
 always_ff @(posedge clk) hazard <= !rst && e_go && e_c.we && (e_c.load || e_c.cf) && (e_c.wr == s_ins_d[25:21] || e_c.wr == s_ins_d[20:16]);
-wire        redirect = e_go && ((e_c.br && taken) || e_c.j || e_c.jr);
-wire [11:0] redirect_pc = e_c.jr ? {ea[11:2], 2'b00} : e_c.j ? j_tgt : br_tgt;
+wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
 // (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
-wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qa[11:0] + imm_sx[11:0];
+wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qam[11:0] + imm_sx[11:0];
 logic [31:0] imm16;                            // (the offset + 16, registered with the instruction)
 always_ff @(posedge clk) if (!stall_e) imm16 <= {{16{s_ins_d[15]}}, s_ins_d[15:0]} + 32'd16;
-wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qa[11:0] + imm16[11:0];
+wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qam[11:0] + imm16[11:0];
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
 assign m_addr = addr_v[11:0];
 assign m_addr16 = fa_m ? adh_m : fa_w ? adh_w : adh_r;
+assign m_addr_e   = ({12{fa_m}} & ad_m)  | ({12{fa_w}} & ad_w);
+assign m_addr16_e = ({12{fa_m}} & adh_m) | ({12{fa_w}} & adh_w);
+assign m_addr_r   = ad_r;
+assign m_addr16_r = adh_r;
+assign m_sel_r    = !(fa_m | fa_w);
 assign m_n = e_c.size;
 assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
 
@@ -408,6 +464,11 @@ logic e_vls;
 always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
 assign c_vls = e_vls;
 assign c_a = ea;
+assign c_bm = m_res[11:0];
+assign c_bw = w_res[11:0];
+assign c_br = rf_qam[11:0];
+assign c_fm = fa_m;
+assign c_fw = fa_w;
 assign c_b = eb;
 function automatic logic [4:0] vrb(input logic [31:0] i);      // MFC2, MTC2 (COP2, rs 0 or 4): rd
     return (i[31:26] == 6'h12 && i[25:24] == 2'b00 && i[22:21] == 2'b00) ? i[15:11] : i[20:16];
@@ -419,20 +480,22 @@ wire         s2_d   = pair_d && v_first;                        // E's scalar in
 wire  [4:0]  vrb_d  = s2_d ? vrb(i_data2) : vrb(ins_d);
 assign c_rd_n = stall_e ? c_rd : vrb_d;
 
-wire [31:0] e_res = e_c.link ? {20'h0, e_spc + 12'd8} : e_c.cop ? c_res : alu;
 assign stall_e = e_valid && (hazard || ((e_c.cop || v_e) && !c_done) || s_mwait);
 assign brk = e_go && e_c.brk;
 
 // ---- M
-logic [31:0] ld;
-always_comb begin
-    unique case (m_c.size)
-    2'd0:    ld = m_c.lu ? {24'h0, m_rdata[31:24]} : {{24{m_rdata[31]}}, m_rdata[31:24]};
-    2'd1:    ld = m_c.lu ? {16'h0, m_rdata[31:16]} : {{16{m_rdata[31]}}, m_rdata[31:16]};
-    default: ld = m_rdata;
-    endcase
-end
-wire [31:0] m_out = m_c.load ? ld : m_c.cf ? c_res_l : m_res;
+// A load's value is picked out of the word DMEM's read brings (m_rdata: the bytes from the address on, the first in [31:24]) by its size
+// -- a byte or a half-word is sign- or zero-extended, from the word's top bit -- and what M holds otherwise (CFC2's word, or the
+// result) is the other term: an AND-OR of the word's bits with selects that are decodes of M's registers, not the size's case and
+// the choice of the source behind it, so that the word goes through one LUT, not two
+wire        l_w  = m_c.load && m_c.size[1];                           // a word
+wire        l_h  = m_c.load && m_c.size == 2'd1;                      // a half-word
+wire        l_b  = m_c.load && m_c.size == 2'd0;                      // a byte
+wire        l_e  = (l_h || l_b) && !m_c.lu;                           // ... extended by its sign
+wire [31:0] m_nl = m_c.cf ? c_res_l : m_res;
+wire [31:0] m_out = {({16{l_w}} & m_rdata[31:16]) | {16{l_e & m_rdata[31]}} | ({16{!m_c.load}} & m_nl[31:16]),
+                     ({8{l_w}} & m_rdata[15:8]) | ({8{l_h}} & m_rdata[31:24]) | {8{l_b & l_e & m_rdata[31]}} | ({8{!m_c.load}} & m_nl[15:8]),
+                     ({8{l_w}} & m_rdata[7:0]) | ({8{l_h}} & m_rdata[23:16]) | ({8{l_b}} & m_rdata[31:24]) | ({8{!m_c.load}} & m_nl[7:0])};
 
 // ---- sequencing
 // (the fetch pointer's next words are kept: pf1 = pc_f's word + 1, pf2 = + 2, dp1 = D's word + 1, so that the address is a
@@ -452,7 +515,7 @@ assign idle = !e_valid && !m_valid_r;
 // last choice, so the stall (the longest chain of the unit) is one 2:1 choice before the register.
 wire        e_go0 = e_valid;                                                              // (E's instruction, if it is not stalled)
 wire        brk0  = e_go0 && e_c.brk;
-wire        br_go0 = e_go0 && ((e_c.br && taken) || e_c.j || e_c.jr);
+wire        jmp0  = e_go0 && (e_c.j || e_c.jr);                                           // (a jump, whose target does not wait for a condition)
 wire [11:0] pc_nr0 = brk0     ? (d_valid ? d_pc : pc_f)
                    : !run     ? (d_valid ? d_pc : pc_f)
                    :            (pair_d ? pc_f + 12'd8 : pc_f + 12'd4);
@@ -499,7 +562,8 @@ always_ff @(posedge clk) begin
         // (the fetch pointer and the word after it: a taken branch's target over what the rest would make -- the branch's condition
         // is late, so it is the last choice. After a redirect pf1 is not made: r_fix has the next cycle's address from pc_f)
         pf1 <= pc_load ? pc_in[11:2] + 10'd1 : stall_e ? pf1 : pf1_nr0;
-        pc_f <= pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : br_go0 ? redirect_pc : pc_nr0;
+        pc_f <= bt ? (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : e_go0 ? br_tgt : pc_nr0)
+                   : (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : jmp0 ? (e_c.jr ? {ea[11:2], 2'b00} : j_tgt) : pc_nr0);
     end
 end
 
