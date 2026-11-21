@@ -344,16 +344,17 @@ module rdp_pix (
     wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
     reg  [3:0]  sb_wa;
     wire [3:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 4'd14 : 4'd13) : 4'd9);
-    (* ramstyle = "M10K, no_rw_check" *) reg [70:0] sb_ram [0:15];
-    reg  [70:0] sb_q;
+    // (the shade's channels are bytes -- sr9 and the others clamp them -- so their ninth bits are not kept)
+    (* ramstyle = "M10K, no_rw_check" *) reg [66:0] sb_ram [0:15];
+    reg  [66:0] sb_q;
     always @(posedge clk) begin
-        sb_ram[sb_wa] <= {x0, bs0, shade0, depth_c, cvg0, y0};
+        sb_ram[sb_wa] <= {x0, bs0, shade0[34:27], shade0[25:18], shade0[16:9], shade0[7:0], depth_c, cvg0, y0};
         sb_q <= sb_ram[sb_ra];
         sb_wa <= sb_wa + 4'd1;
     end
-    wire [9:0]  x8b     = sb_q[70:61];
-    wire        bs8b    = sb_q[60];
-    wire [35:0] shade8b = sb_q[59:24];
+    wire [9:0]  x8b     = sb_q[66:57];
+    wire        bs8b    = sb_q[56];
+    wire [35:0] shade8b = {1'b0, sb_q[55:48], 1'b0, sb_q[47:40], 1'b0, sb_q[39:32], 1'b0, sb_q[31:24]};
     wire [17:0] depth8b = sb_q[23:6];
     wire [3:0]  cvg8b   = sb_q[5:2];
     wire [1:0]  y8b     = sb_q[1:0];
@@ -647,44 +648,11 @@ module rdp_pix (
         vs5r <= vs5; vt5r <= vt5;
     end
 
-    // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction
-    task automatic tc_axis;
-        input  signed [23:0] v;
-        input  [11:0] lo, hi;
-        input  clampbit, mirror;
-        input  [3:0] mask;
-        output [10:0] c0, c1;
-        output [4:0]  fr;
-        reg signed [18:0] i, j, mx, m;
-        reg [4:0] f;
-        begin
-            i = v >>> 5;
-            f = v[4:0];
-            j = i + 19'sd1;
-            if (clampbit || mask == 4'd0) begin
-                mx = ($signed({7'd0, hi}) - $signed({7'd0, lo})) >>> 2;
-                if (i < 0) begin i = 0; j = 0; f = 0; end
-                else if (i >= mx) begin i = mx; j = mx; f = 0; end
-            end
-            if (mask != 4'd0) begin
-                m = (19'sd1 <<< mask) - 19'sd1;
-                if (mirror && ((i >>> mask) & 19'sd1)) i = ~i;
-                if (mirror && ((j >>> mask) & 19'sd1)) j = ~j;
-                i = i & m;
-                j = j & m;
-            end
-            c0 = i[10:0];
-            c1 = j[10:0];
-            fr = f;
-        end
-    endtask
-
-    reg [10:0] s0c, s1c, t0c, t1c;
-    reg [4:0]  fsc, ftc;
-    always @(*) begin
-        tc_axis(vs5r, u5_uls, u5_lrs, u5_cs, u5_ms, u5_masks, s0c, s1c, fsc);
-        tc_axis(vt5r, u5_ult, u5_lrt, u5_ct, u5_mt, u5_maskt, t0c, t1c, ftc);
-    end
+    // one axis: v -> c0, c1 (wrapped) and the 5-bit fraction (rdp_tcaxis, below)
+    wire [10:0] s0c, s1c, t0c, t1c;
+    wire [4:0]  fsc, ftc;
+    rdp_tcaxis tcs (.v(vs5r), .lo(u5_uls), .hi(u5_lrs), .clampbit(u5_cs), .mirror(u5_ms), .mask(u5_masks), .cpy(1'b0), .cm(3'd0), .c0(s0c), .c1(s1c), .fr(fsc));
+    rdp_tcaxis tct (.v(vt5r), .lo(u5_ult), .hi(u5_lrt), .clampbit(u5_ct), .mirror(u5_mt), .mask(u5_maskt), .cpy(1'b0), .cm(3'd0), .c0(t0c), .c1(t1c), .fr(ftc));
     reg        v6;
     reg [10:0] s06, s16, t06, t16;
     reg [4:0]  fs6, ft6;
@@ -785,8 +753,9 @@ module rdp_pix (
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
     wire [31:0] tx2 = tlut_on ? tex16(tlut_ia, tl_q2) : texel(u8t_fmt, u8t_size, q2t, h2t, sl2_t);
 
-    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The first
-    // edge goes to B for an upper triangle and to C for a lower one, the second to the other
+    // The filter's edges, formed here: the decode leaves this stage slack, the filter's multipliers (P9) none. The edges are
+    // always B - A and C - A (texels 1 and 2 less the corner); an upper triangle weights them by the fractions, a lower one
+    // crosswise by the complements (below), so that no choice is made among the 32-bit texels
     function automatic [9:0] edge1;
         input [7:0] p, x;
         edge1 = $signed({2'b0, p}) - $signed({2'b0, x});
@@ -795,21 +764,21 @@ module rdp_pix (
         input [31:0] p, x;
         edge4 = { edge1(p[31:24], x[31:24]), edge1(p[23:16], x[23:16]), edge1(p[15:8], x[15:8]), edge1(p[7:0], x[7:0]) };
     endfunction
-    wire [39:0] e1w8t = edge4(up8t ? tx1 : tx2, tx0);
-    wire [39:0] e2w8t = edge4(up8t ? tx2 : tx1, tx0);
+    wire [39:0] e1w8t = edge4(tx1, tx0);
+    wire [39:0] e2w8t = edge4(tx2, tx0);
 
     // P8b: the decoded texels, registered (the memories through the decode
     // into the filter's multipliers is too long a path); x, the set, the shade,
     // the depth come out of sb_ram here
     reg        v8b;
     reg [31:0] ta8b;                        // the corner (A or D)
-    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to the other two texels, 10 bits a channel
-    reg [5:0]  ws8b, wt8b;                  // the weights of those edges
+    reg [39:0] e1v8b, e2v8b;                // the edges from the corner to texels 1 and 2, 10 bits a channel
+    reg [5:0]  ws8b, wt8b;                  // the weights of those edges (an upper triangle: S fraction, T fraction; a lower one: 32 - T's, 32 - S's)
     always @(posedge clk) begin
         v8b <= v8t & ~rst; ph8b <= ph8t; conv8b <= conv8t;
         ta8b <= tx0; e1v8b <= e1w8t; e2v8b <= e2w8t;
-        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, fs8t};
-        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, ft8t};
+        ws8b <= up8t ? {1'b0, fs8t} : 6'd32 - {1'b0, ft8t};
+        wt8b <= up8t ? {1'b0, ft8t} : 6'd32 - {1'b0, fs8t};
     end
 
     // ======================================================================
@@ -821,10 +790,15 @@ module rdp_pix (
         input [5:0] ws, wt;
         reg signed [9:0]  e1, e2;
         reg signed [16:0] acc;
+        reg signed [19:0] r;
         begin
             e1 = e1v; e2 = e2v;
             acc = e1 * $signed({1'b0, ws}) + e2 * $signed({1'b0, wt}) + 17'sd16;
-            tri3 = clamp8($signed({12'd0, x}) + (acc >>> 5));
+            // (no clamp: where the filter's result is taken, ws + wt <= 32 -- the weights are those of the triangle the fractions are in -- so it is
+            // a rounded mean of three bytes, x (32 - ws - wt) + A ws + B wt over 32, within 0..255; where it is not taken -- the point and the
+            // converted passes -- it is not used)
+            r = $signed({12'd0, x}) + (acc >>> 5);
+            tri3 = r[7:0];
         end
     endfunction
     wire [31:0] filt9 = { tri3(ta8b[31:24], e1v8b[39:30], e2v8b[39:30], ws8b, wt8b),
@@ -1109,7 +1083,7 @@ module rdp_pix (
     reg [1:0]  hid10;                 // its hidden two
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; bs10 <= bs10a;
-        c010 <= c0_w;
+        c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1118,7 +1092,7 @@ module rdp_pix (
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
-    wire [35:0]  cm10 = (cyc == 2'd1) ? c010 : 36'd0;   // COMBINED for cycle 1
+    wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
     wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
     reg         v11a;
     reg [9:0]   x11a;
@@ -1662,4 +1636,40 @@ module rdp_div_rom (
     end
     assign point = e[24:10];
     assign slope = e[9:0];
+endmodule
+
+// One axis of the texture coordinate's clamp, mirror and mask (the model's tc_axis): the texel (v >> 5) and its neighbour (+ 1) in the tile
+// -- c0, c1, the wrapped coordinates -- and the fraction fr. The two are chosen first (0 below the tile's start, the tile's last texel
+// from there up, where the tile clamps), then each is masked (a mirror turns a texel in an odd repeat) by the mask's thermometer.
+module rdp_tcaxis (
+    input  wire signed [23:0] v,
+    input  wire [11:0]        lo, hi,
+    input  wire               clampbit, mirror,
+    input  wire [3:0]         mask,
+    input  wire               cpy,           // copy mode (a texture rectangle's): the texel is the group's plus the pixel's place, never clamped, its mask at most 10 bits
+    input  wire [2:0]         cm,
+    output wire [10:0]        c0, c1,
+    output wire [4:0]         fr
+);
+    wire [18:0] i0 = v[23:5];
+    wire [18:0] ia = i0 + {16'd0, cpy ? cm : 3'd0};
+    wire [18:0] ja = cpy ? ia : ia + 19'd1;
+    // the tile's last texel: (hi - lo) >> 2, signed
+    wire signed [12:0] df = $signed({1'b0, hi}) - $signed({1'b0, lo});
+    wire signed [10:0] mx = df[12:2];
+    wire        ce = !cpy && (clampbit || mask == 4'd0);          // clamped
+    wire        ng = ce && ia[18];                                 // below the start: 0
+    wire        gx = ce && !ia[18] && ($signed(ia) >= $signed({{8{mx[10]}}, mx}));   // at or past the end: the last
+    wire [3:0]  mq = (cpy && mask > 4'd10) ? 4'd10 : mask;
+    wire [15:0] t0 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ia[15:0];
+    wire [15:0] t1 = ng ? 16'd0 : gx ? {{5{mx[10]}}, mx} : ja[15:0];
+    wire        m0 = mirror && mask != 4'd0 && t0[mq];
+    wire        m1 = mirror && mask != 4'd0 && t1[mq];
+    genvar b;
+    generate for (b = 0; b < 11; b = b + 1) begin : bb
+        wire mb = mask == 4'd0 || b < mq;
+        assign c0[b] = mb & (t0[b] ^ m0);
+        assign c1[b] = mb & (t1[b] ^ m1);
+    end endgenerate
+    assign fr = (cpy || ng || gx) ? 5'd0 : v[4:0];
 endmodule

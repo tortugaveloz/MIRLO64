@@ -490,6 +490,8 @@ module rdp_top (
     wire [31:0] row_off = cimg8 ? row_h : {row_h[30:0], 1'b0};
     // the row's colour base: a 32-bit image's row is twice the bytes of the depth image's
     wire [31:0] crow = cimg + (cimg32 ? {row_off[30:0], 1'b0} : row_off);
+    // (the hidden words' row base, rwb, is that address' bits 11:2; a 32-bit image has no hidden words, so the colour image's, where crow differs from
+    // cimg + row_off, is not read)
     reg [9:0]  px_cnt;
     // loads (lang/c/rdp/rdp.c load_block, load_tlut, load_tile_n64)
     reg [9:0]  tt, tt1;             // LOAD TILE's rows
@@ -1061,7 +1063,7 @@ module rdp_top (
                         set_cur <= !set_cur;
                         rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
                         rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                        rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
+                        rwb[!set_cur] <= crow[11:2];
                     end
                 end
             end
@@ -1083,7 +1085,7 @@ module rdp_top (
                     set_cur <= !set_cur;
                     rq_pend <= 1'b1; rq_load <= 1'b0; rq_z <= z_cmp; rq_c <= need_mem; rq_h <= !cimg8 && !cimg32; rq_set <= !set_cur;
                     rq_zbase <= zimg + row_off; rq_cbase <= crow;
-                    rwb[!set_cur] <= cimg[11:2] + row_off[11:2];
+                    rwb[!set_cur] <= crow[11:2];
                 end
             end
 
