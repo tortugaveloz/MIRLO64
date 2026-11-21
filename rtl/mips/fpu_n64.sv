@@ -114,8 +114,17 @@ wire [31:0] xe = FAST ? (hx_e ? lw_de : gx_e ? l2_de : qxe) : (lw_e && lw_idx ==
 wire [31:0] xo = FAST ? (hx_o ? lw_do : gx_o ? l2_do : qxo) : (lw_o && lw_idx == insn[15:12]) ? lw_do : qxo;
 wire [31:0] ye = FAST ? (hy_e ? lw_de : gy_e ? l2_de : qye) : (lw_e && lw_idx == insn[20:17]) ? lw_de : qye;
 wire [31:0] yo = FAST ? (hy_o ? lw_do : gy_o ? l2_do : qyo) : (lw_o && lw_idx == insn[20:17]) ? lw_do : qyo;
-wire [31:0] rfs = insn[11] ? xo : xe;                   // f[fs]
-wire [31:0] rft = insn[16] ? yo : ye;                   // f[ft]
+// (FAST) what M's instruction word is asked for here, registered from E's as it enters M (a word that fans out to the whole core: the choice of the
+// odd or the even register of fs and ft, the moves to the integer registers' choice -- m_insn -> fpu -> gpr_out -> w_res, -0.31 ns at 10.667 ns)
+logic fs_o, ft_o, g_xe, g_xo, g_31, g_0, g_sd;           // fs, ft odd; gpr_out: the even register (mfc1 of an even fs, dmfc1), the odd, FCR31, FCR0; sdc1
+function automatic logic [6:0] gdec(input logic [31:0] i);
+    logic mf, dmf;
+    mf = i[31:26] == 6'h11 && i[25:21] == 5'h00; dmf = i[31:26] == 6'h11 && i[25:21] == 5'h01;
+    return {i[11], i[16], (mf && !i[11]) || dmf, mf && i[11], !mf && !dmf && i[15:11] == 5'd31, !mf && !dmf && i[15:11] == 5'd0, i[31:26] == 6'h3D};
+endfunction
+always_ff @(posedge clk) if (adv) {fs_o, ft_o, g_xe, g_xo, g_31, g_0, g_sd} <= gdec(insn_e);
+wire [31:0] rfs = (FAST ? fs_o : insn[11]) ? xo : xe;   // f[fs]
+wire [31:0] rft = (FAST ? ft_o : insn[16]) ? yo : ye;   // f[ft]
 
 logic [31:0] fcr31;                                     // RM, C (bit 23), FS and the enables (as written)
 
@@ -634,8 +643,11 @@ logic [31:0] ld_lo;
 always_comb res_d = f2d(res);
 always_comb begin
     gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xe : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000B00 : 32'd0);
+    // (FAST: one AND-OR of the registered selects)
+    if (FAST) gpr_out = ({32{g_xe}} & xe) | ({32{g_xo}} & xo) | ({32{g_31}} & fcr31) | ({32{g_0}} & 32'h00000B00);
     gpr_out_hi = xo;
     mem_out = is_sdc1 ? {yo, ye} : {32'd0, rft};
+    if (FAST) mem_out = g_sd ? {yo, ye} : {32'd0, rft};
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : fcr31[23];
 
     we_e = 0; we_o = 0; widx = 0;
