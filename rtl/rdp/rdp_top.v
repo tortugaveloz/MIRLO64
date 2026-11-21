@@ -407,7 +407,11 @@ module rdp_top (
     wire       pix_ok = !rq_pend && h_done && (!z_cmp || z_have > pix_wi) && (!need_mem || c_have > (cimg32 ? px_cnt : pix_wi));
     // a pixel that goes through the texture stages twice (rdp_pix two_pass), or takes the LOD, is issued every second
     // clock: pix_valid is still up the clock after an issue
-    wire       pix_slot = !((two_pass || lod_on) && pix_valid);
+    // A 2-cycle pixel goes through rdp_pix's one combiner twice (a pass every three clocks): its pixels are issued every second clock,
+    // all on the same parity of a free-running count, so that a first pass never meets another pixel's second
+    reg        ph_t;
+    always @(posedge clk) ph_t <= ~ph_t;
+    wire       pix_slot = !((two_pass || lod_on) && pix_valid) && (cyc != 2'd1 || ph_t);
     // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
     // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
     // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself

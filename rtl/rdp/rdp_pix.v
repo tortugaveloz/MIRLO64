@@ -254,7 +254,7 @@ module rdp_pix (
     reg        v0;
     reg [9:0]  x0;
     // the line buffers' set of the pixel's row (rdp_top), along with x
-    reg        bs0, bs9, bs9x, bs10a, bs10, bs11a, bs11, bs12a, bs12, bs13a;
+    reg        bs0, bs9, bs9x, bs10a, bs10, bs10b, bs11a, bs11, bs12a, bs12, bs13a;
     reg [15:0] s0r, t0r;
     reg [31:0] w0r;
     reg [35:0] shade0;
@@ -1158,22 +1158,22 @@ module rdp_pix (
         else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
         nz10 <= nz9x;
     end
-    wire [155:0] o0_w = cc_sel(1'b0, tex9x, tex19x, shade9x, 36'd0, lf9x, nz9x);
+    // The one combiner (the console's: a 2-cycle pixel goes through it twice, RDP_SHARE of the faithful build). A 2-cycle pixel's first
+    // cycle takes its operands from P9x (early: u_e), its second cycle's -- or a 1-cycle pixel's only one -- are those of the same pixel
+    // three clocks on (late: P10b), when the first cycle's result, cm_r, has come round. 2-cycle pixels are issued every second clock on one
+    // parity (rdp_top), so a first pass never meets another pixel's second. The late operands have TEXEL0 and TEXEL1 changed places (the
+    // N64's second cycle takes the first cycle's TEXEL1 as TEXEL0).
     reg         v10a;
     reg [9:0]   x10a;
-    reg [155:0] o10a;
     reg [31:0]  tex10a, tex1_10a;     // (tex1_*: the next tile's sample, the second cycle's TEXEL0)
     reg [35:0]  shade10a;
     reg [17:0]  depth10a;
     always @(posedge clk) begin
         v10a <= v9x & ~rst; x10a <= x9x; bs10a <= bs9x; hk10a <= hk9x;
-        o10a <= o0_w;
         tex10a <= tex9x; tex1_10a <= tex19x; shade10a <= shade9x; depth10a <= depth9x;
     end
-    wire [35:0] c0_w = cc_arith0(o10a);
     reg        v10;
     reg [9:0]  x10;
-    reg [35:0] c010;                   // the first cycle's result: 9 raw bits a channel (cc_eval1)
     reg [31:0] tex10, tex1_10, mem10;
     reg [35:0] shade10;
     reg [17:0] depth10;
@@ -1182,7 +1182,6 @@ module rdp_pix (
     reg [1:0]  hid10;                 // its hidden two
     always @(posedge clk) begin
         v10 <= v10a & ~rst; x10 <= x10a; bs10 <= bs10a;
-        c010 <= (cyc == 2'd1) ? c0_w : 36'd0;     // (a clear of the register: the cycle count is the primitive's, steady while its pixels are in the pipe)
         tex10 <= tex10a; tex1_10 <= tex1_10a; shade10 <= shade10a; depth10 <= depth10a;
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
@@ -1191,9 +1190,27 @@ module rdp_pix (
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
-    wire [35:0]  cm10 = c010;                           // COMBINED for cycle 1 (c010 is 0 but in a 2-cycle primitive)
-    wire [155:0] o1_w = cc_sel(1'b1, tex1_10, tex10, shade10, cm10, lf10, nz10);   // (the second cycle: TEXEL0 the next tile's sample, TEXEL1 the tile's)
-    reg         v11a;
+    reg         v10b;
+    reg [9:0]   x10b;
+    reg [31:0]  tex10b, tex1_10b, mem10b;
+    reg [35:0]  shade10b;
+    reg [17:0]  depth10b;
+    reg [15:0]  zold10b;
+    reg [8:0]   lf10b, nz10b;
+    reg         memb10b;
+    reg [1:0]   hid10b;
+    always @(posedge clk) begin
+        v10b <= v10 & ~rst; x10b <= x10; bs10b <= bs10;
+        tex10b <= tex10; tex1_10b <= tex1_10; shade10b <= shade10; depth10b <= depth10;
+        mem10b <= mem10; zold10b <= zold10; memb10b <= memb10; hid10b <= hid10;
+        lf10b <= lf10; nz10b <= nz10;
+    end
+    wire         u_e = v9x && cyc == 2'd1;
+    reg  [35:0]  cm_r;                                  // the first cycle's result, 9 raw bits a channel (cc_eval1), held
+    wire [35:0]  cm10 = (cyc == 2'd1) ? cm_r : 36'd0;   // COMBINED for the second cycle (0 in the other modes)
+    wire [155:0] o1_w = cc_sel(!u_e, u_e ? tex9x : tex1_10b, u_e ? tex19x : tex10b, u_e ? shade9x : shade10b,
+                               u_e ? 36'd0 : cm10, u_e ? lf9x : lf10b, u_e ? nz9x : nz10b);
+    reg         v11a, ue11a;
     reg [9:0]   x11a;
     reg [155:0] o11a;
     reg [31:0]  tex11a, mem11a;
@@ -1205,16 +1222,17 @@ module rdp_pix (
     reg [7:0]   c0a11a, c0a11;       // 2-cycle: the first cycle's alpha (the alpha compare's)
     reg         c0f11a, c0f11;       // ... and whether it counts 256 (an alpha of 255 does: the coverage's multiply)
     always @(posedge clk) begin
-        v11a <= v10 & ~rst; x11a <= x10; bs11a <= bs10;
+        v11a <= v10b & ~rst; x11a <= x10b; bs11a <= bs10b; ue11a <= u_e;
         o11a <= o1_w;
-        tex11a <= tex10; shade11a <= shade10; mem11a <= mem10;
-        depth11a <= depth10; zold11a <= z_dec(zold10);
-        zfl11a <= zold10[15:13] == 3'd0 ? 7'h7F : zold10[15:13] == 3'd1 ? 7'h3F : zold10[15:13] == 3'd2 ? 7'h1F : 7'h00;
-        memb11a <= memb10; c0a11a <= cc_clamp(c010[8:0]); c0f11a <= cc_a256(c010[8:0]); hid11a <= hid10;
+        tex11a <= tex10b; shade11a <= shade10b; mem11a <= mem10b;
+        depth11a <= depth10b; zold11a <= z_dec(zold10b);
+        zfl11a <= zold10b[15:13] == 3'd0 ? 7'h7F : zold10b[15:13] == 3'd1 ? 7'h3F : zold10b[15:13] == 3'd2 ? 7'h1F : 7'h00;
+        memb11a <= memb10b; c0a11a <= cc_clamp(cm10[8:0]); c0f11a <= cc_a256(cm10[8:0]); hid11a <= hid10b;
     end
     // P11m: the second cycle's arithmetic (the combiner's multipliers and adders) in a register of its own; the clamp, the
     // choice and the rest of the stage's work come after it (the two together did not fit a clock of 10.667 ns)
     wire [35:0] c1_w = cc_arith1(o11a);
+    always @(posedge clk) if (ue11a) cm_r <= c1_w;
     reg         v11m, bs11m;
     reg [9:0]   x11m;
     reg [35:0]  c1m;
@@ -1258,11 +1276,11 @@ module rdp_pix (
     // The coverage and the row's low bits (a row's last pixels are still in
     // the pipe when the next row's y is issued), out of sb_ram at P8b, on to
     // P11 (the coverage, the alpha dither) and P13b (the RGB dither)
-    reg [3:0] cv9, cv10a, cv10, cv11a, cv11m, cv11;
-    reg [1:0] y9, y10a, y10, y11a, y11m, y11, y11b, y12a, y12, y13a, y13b;
+    reg [3:0] cv9, cv10a, cv10, cv10b, cv11a, cv11m, cv11;
+    reg [1:0] y9, y10a, y10, y10b, y11a, y11m, y11, y11b, y12a, y12, y13a, y13b;
     always @(posedge clk) begin
-        cv9 <= cvg8c; cv9x <= cv9; cv10a <= cv9x; cv10 <= cv10a; cv11a <= cv10; cv11m <= cv11a; cv11 <= cv11m;
-        y9 <= y8c; y9x <= y9; y10a <= y9x; y10 <= y10a; y11a <= y10; y11m <= y11a; y11 <= y11m;
+        cv9 <= cvg8c; cv9x <= cv9; cv10a <= cv9x; cv10 <= cv10a; cv10b <= cv10; cv11a <= cv10b; cv11m <= cv11a; cv11 <= cv11m;
+        y9 <= y8c; y9x <= y9; y10a <= y9x; y10 <= y10a; y10b <= y10; y11a <= y10b; y11m <= y11a; y11 <= y11m;
         y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
     end
     wire [3:0] cvg11 = cv11;
@@ -1636,7 +1654,7 @@ module rdp_pix (
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5p | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5p | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v10b | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no
