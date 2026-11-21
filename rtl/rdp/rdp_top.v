@@ -425,7 +425,7 @@ module rdp_top (
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
-    reg [10:0] rc_x1c, rc_y1c, rc_xa, rc_ya;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
+    reg [10:0] rc_x1c, rc_y1c, rc_xa, rc_ya, rc_xm;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
     reg        rc_incl;
     reg [1:0]  rxf;                // XH's quarter pixels (outside copy mode: the column-stepped attribute's origin)
     reg [31:0] exh;                 // the major edge's x at the row's top (the attributes' reference)
@@ -1211,8 +1211,9 @@ module rdp_top (
                     xl = {1'b0, sc_x1} + {10'd0, rc_incl};
                     xb <= (rc_x1c < xl) ? rc_x1c[9:0] : sc_x1 + {9'd0, rc_incl};
                     yb <= (rc_y1c < {1'b0, sc_y1}) ? {1'b0, rc_y1c} : {2'b00, sc_y1};
-                    if (((rc_x1c < xl) ? rc_x1c : xl) <= rc_xa) yb <= {1'b0, rc_ya};   // empty
+                    rc_xm <= (rc_x1c < xl) ? rc_x1c : xl;
                 end
+                if (mi == 5'd1 && rc_xm <= rc_xa) yb <= {1'b0, rc_ya};   // empty
                 if (mi == 5'd2) st <= S_ROW;
                 mi <= mi + 5'd1;
             end
