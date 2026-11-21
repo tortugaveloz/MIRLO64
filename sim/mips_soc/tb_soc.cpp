@@ -46,6 +46,12 @@
 //                    port, a word at a time, as the Pocket does (else straight
 //                    to and from the chip model)
 #include "Vsoc_sim_top.h"
+// (the RSP's DMEM: in the overclocked build the RSP is the generate block oc of the SoC)
+#ifdef MIRLO_RSP_OC
+#define RSP_DMEM soc_sim_top__DOT__soc__DOT__oc__DOT__rsp__DOT__dmem__DOT__mem
+#else
+#define RSP_DMEM soc_sim_top__DOT__soc__DOT__noc__DOT__rsp__DOT__dmem__DOT__mem
+#endif
 #include "Vsoc_sim_top___024root.h"
 #include "verilated.h"
 #include <cstdio>
@@ -1143,7 +1149,7 @@ int main(int argc, char **argv)
                 const char *rd2 = getenv("RSPDUMP");
                 static long n2;
                 if (rd2 && phalt && !halt) {
-                    auto &dm = t->rootp->soc_sim_top__DOT__soc__DOT__rsp__DOT__dmem__DOT__mem;
+                    auto &dm = t->rootp->RSP_DMEM;
                     uint32_t task[16];
                     for (int i = 0; i < 16; i++) task[i] = dm[0x3F0 + i];
                     // (the CTL file as above)
@@ -1383,7 +1389,7 @@ int main(int argc, char **argv)
                     static int was_halt = 1, was_sig0; static long t_start, n_ins, n_dma, n_wait, t_yield = -1; static uint32_t ty, fl;
                     const int halt = t->audio_state & 1, sig0 = t->rsp_sig & 1;
                     if (was_halt && !halt) {
-                        auto &dm = t->rootp->soc_sim_top__DOT__soc__DOT__rsp__DOT__dmem__DOT__mem;
+                        auto &dm = t->rootp->RSP_DMEM;
                         t_start = sys; ty = dm[0x3F0]; fl = dm[0x3F1]; n_ins = n_dma = n_wait = 0; t_yield = sig0 ? sys : -1;
                     }
                     if (!halt) {
