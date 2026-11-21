@@ -269,6 +269,7 @@ module rdp_mem (
     reg         hd_v;                         // the head holds a word
     reg  [3:0]  hd_range;                     // its pixels' byte lanes (range_sel of its word)
     reg         hd_fst, hd_lst;               // it is its span's first word of a group, last
+    reg  [2:0]  hd_j;                         // its place in its group: the span's base's low bits and its index's
     reg [1:0]  h_ph;                      // the head's commands done: 0 none, 1 its word's (its group's hidden word is next)
     reg [31:0] hacc;                      // the group's hidden word so far (the head's merged in at its pop)
     reg [3:0]  hbe;                       // a fill: the quads touched so far
@@ -340,7 +341,7 @@ module rdp_mem (
     // the write command's word address: one adder for the colour and the depth span (the group's hidden word, which only a
     // 16-bit image has, is addressed from the colour word's)
     wire [29:0] h_wa    = ((h_c || !h_zz) ? w_cb : w_zb) + (w_c8 && h_c ? {21'd0, h_idx[9:1]} : {20'd0, h_idx});
-    wire [2:0]  h_j     = w_cb[2:0] + h_idx[2:0];
+    wire [2:0]  h_j     = hd_j;
     wire        h_first = h_j == 3'd0 || hd_fst;
     wire [31:0] h_base  = h_first ? h_hold : hacc;
     wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_base[{h_j, 2'b10} +: 2],
@@ -538,6 +539,7 @@ module rdp_mem (
                     hd_range <= range_sel(rf_ram[46:38]);
                     hd_fst <= rf_ram[47:38] == {1'b0, w_x0[9:1]};
                     hd_lst <= rf_ram[47:38] == w_lastw;
+                    hd_j <= w_cb[2:0] + rf_ram[40:38];
                     hd_v <= 1'b1;
                     rf_rd <= rf_rd + 3'd1;
                 end else if (h_pop) hd_v <= 1'b0;
