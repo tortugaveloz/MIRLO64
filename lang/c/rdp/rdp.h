@@ -251,6 +251,7 @@ typedef struct {
     uint32_t zimg;
     uint32_t timg, timg_width;             /* width in texels */
     rdp_tile_t tile[8];
+    uint8_t tile_set;                      /* RDP_N64: the tiles SET_TILE has set since the reset (a bit a tile): rdp_exact.md rule 9 */
     uint16_t tmem[4][1024];
     uint16_t tmem16[2048];                 /* RDP_N64: TMEM as the N64's, in 16-bit words (see rdp.c) */
     uint8_t cimg_size;                     /* RDP_N64: the colour image's (2: 16-bit, 1: 8-bit -- rdp.c wr8; 3: 32-bit, RDP_CVG) */

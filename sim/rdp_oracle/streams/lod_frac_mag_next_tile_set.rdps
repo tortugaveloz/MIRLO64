@@ -1,0 +1,27 @@
+# (The LOD logic as the oracle's: docs/rdp_exact.md rule 9.) 2-cycle, no TEX_LOD, a trilinear combiner ((TEXEL1 - TEXEL0) *
+# LOD_FRACTION + TEXEL0, then COMBINED) on a texture of a level count of 0, drawn larger than its texels (a step of 16 in S, half a
+# texel: the LOD magnified), whose next tile (tile 1, blue) was set apart: the fraction is the LOD's, all ones for a level count of
+# 0, so its pixels are TEXEL1, tile 1's blue, as the oracle's and the model's. (A fraction of 0 here, TEXEL0, made a surface drawn
+# with a step just under a texel a pixel -- a light's cone -- show a seam where its steps pass a texel and the fraction jumped to
+# all ones: rule 9 is for a next tile never set, lod_frac_mag_no_tex_lod.rdps.)
+rdram zero
+mem 200000 f8010001000107c1003f003f003f003f
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 3d100003 00200000
+cmd 35100200 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 3d100003 00200008
+cmd 35100201 07000000
+cmd 27000000 00000000
+cmd 34000000 0700c000
+cmd 27000000 00000000
+cmd 35100200 00000020
+cmd 32000000 0000c000
+cmd 35100201 01000000
+cmd 32000000 0100c000
+cmd 2f100cf0 00000000
+cmd 3c26a000 10009200
+cmd 0a800040 00400020 001c0000 00000000 00080000 00000000 001c0000 00000000 00800080 7fff0000 00100000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+cmd 29000000 00000000

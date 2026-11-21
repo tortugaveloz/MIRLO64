@@ -966,17 +966,19 @@ static int lod_wanted(const rdp_t *r)
     return ((hi >> 15) & 31) == 13 || (hi & 31) == 13 || ((hi >> 9) & 7) == 0 || ((lo >> 18) & 7) == 0;
 }
 
-/* RDP_X_FRAC0 (rule 9): without TEX_LOD, SHARPEN and DETAIL, a magnified pixel -- its steps under a texel -- reads
- * LOD_FRACTION as 0, TEXEL0 of the primitive's own tile, where the oracle's rule gives all ones at a level count of 0
- * (the next level never blended: TEXEL1 alone). A pixel the texture is minified at (a step of a texel or more) keeps
- * the fraction the LOD gives, all ones past the last level: the two pictures the console shows are a trilinear
- * combiner on a texture drawn larger than its texels (TEXEL0), and one drawn smaller (TEXEL1, the next tile's). */
-static unsigned frac0_pixel(const rdp_t *r, const rdp_lod_t *L)
+/* RDP_X_FRAC0 (rule 9): without TEX_LOD, SHARPEN and DETAIL, a magnified pixel -- its steps under a texel -- of a primitive
+ * whose next tile (TEXEL1's) was never set reads LOD_FRACTION as 0, TEXEL0 of the primitive's own tile, where the oracle's
+ * rule gives all ones at a level count of 0 (the next level never blended: TEXEL1 alone, a tile of zeros). A pixel the texture
+ * is minified at (a step of a texel or more), or whose next tile was set, keeps the fraction the LOD gives, all ones past
+ * the last level: the two pictures the console shows are a trilinear combiner on a texture drawn larger than its texels with
+ * the second tile unused (TEXEL0), and one with its second tile set (the LOD's blend, smooth across a step of a texel: a
+ * fraction that jumped from 0 to all ones there drew a seam where two layers of a surface meet). */
+static unsigned frac0_pixel(const rdp_t *r, const rdp_lod_t *L, unsigned tile)
 {
 #ifdef RDP_X_FRAC0
-    if (!(r->other_h & (RDP_H_TEX_LOD | RDP_H_SHARPEN | RDP_H_DETAIL)) && L->magnify) return 0;
+    if (!(r->other_h & (RDP_H_TEX_LOD | RDP_H_SHARPEN | RDP_H_DETAIL)) && L->magnify && !((r->tile_set >> ((tile + 1u) & 7u)) & 1u)) return 0;
 #else
-    (void)r;
+    (void)r; (void)tile;
 #endif
     return L->frac;
 }
@@ -1359,7 +1361,7 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         if (cyc == 0 && pr->level == 0 && !(h & (RDP_H_SHARPEN | RDP_H_DETAIL))) in.lodf = 0xFF;
         if (cyc == 1 && lod_wanted(r)) {
             const rdp_lod_t L = lod_pixel(r, pr, at);
-            in.lodf = frac0_pixel(r, &L);
+            in.lodf = frac0_pixel(r, &L, (unsigned)pr->tile);
             tile0 = L.tile0; tile1 = L.tile1;
             if ((h & RDP_H_TEX_LOD) && pr->tex && cvg) {
                 r->lod_px++; r->lod_lvl[L.level & 7]++;
@@ -2605,6 +2607,7 @@ static void load_tile_n64(rdp_t *r, const uint32_t *w)
 static void set_tile(rdp_t *r, const uint32_t *w)
 {
     rdp_tile_t *t = &r->tile[(w[1] >> 24) & 7];
+    r->tile_set |= (uint8_t)(1u << ((w[1] >> 24) & 7));
     t->fmt = (w[0] >> 21) & 7;
     t->line = (w[0] >> 9) & 0x1FF;
 #ifdef RDP_N64
