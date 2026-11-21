@@ -113,8 +113,9 @@ always_ff @(posedge clk_c) begin
     c_rv <= r_rv; c_seq <= r_seq; c_data <= p_rdata; c_xack <= x_ack; c_xdata <= x_rdata; c_irq <= irq; c_irq_mon <= irq_mon;
     if (rst_c) begin q_busy <= 1'b0; rq_t <= 1'b0; end
     else if (!q_busy) begin
+        q_got <= 4'd0;                                  // (read only while a read is out: set to 0 whenever none is, not only on the request)
         if (s_req || c_x_req) begin
-            q_busy <= 1'b1; rq_t <= !rq_t; q_got <= 4'd0;
+            q_busy <= 1'b1; rq_t <= !rq_t;
             rq_dev <= c_x_req; rq_line <= s_line; rq_addr <= c_x_req ? c_x_addr : s_addr;
         end
     end else begin
