@@ -807,13 +807,28 @@ wire sel_fire /* verilator public_flat_rd */ = sel0;
 // write, a cycle on, may meet a computation's, which is put off); a store or MFC2 under a computation that writes
 // another register than the one it reads, and under a load's write of another that is of whole lanes; MTC2 as a load;
 // CFC2 and CTC2 when no computation is under way (the flags they read and write are final then)
-wire x_free   = !(m_v && m_vdn == rb_live) && !(x_v && x_vdn == rb_live) && !(y_v && y_vdn == rb_live) && !(wp && w_vdn == rb_live);
-wire l_free   = !lw_v || (!lw_merge && lw_reg != rb_live);
+// (the compares with the register the instruction in E reads or writes, in registers made a cycle ahead as dep's: rd_n is the next cycle's rb_live)
+logic lf_q;                                                   // (lw_reg is not rb_live: made a cycle ahead, as dep's)
+logic xf_m, xf_x, xf_y, xf_w;
+always_ff @(posedge clk) begin
+    xf_m <= vdn      == rd_n;
+    xf_x <= x_vdn_nx == rd_n;
+    xf_y <= y_vdn_nx == rd_n;
+    xf_w <= w_vdn_nx == rd_n;
+end
+wire x_free   = !(m_v && xf_m) && !(x_v && xf_x) && !(y_v && xf_y) && !(wp && xf_w);
+wire l_free   = !lw_v || (!lw_merge && lf_q);
 // (a load into the register a computation is to write would be written over by it, put off or not)
 logic [4:0] l_reg;                                            // (the register a load or MTC2 writes: registered with the instruction)
 wire  mtc2_n = lins_n[31:26] == 6'h12 && !lins_n[25] && lins_n[24:21] == 4'd4;     // (MTC2, of the instruction entering E)
 always_ff @(posedge clk) if (adv) l_reg <= mtc2_n ? lins_n[15:11] : lins_n[20:16];
-wire ld_ok    = !(m_v && m_vdn == l_reg) && !(x_v && x_vdn == l_reg) && !x_defer;
+wire  [4:0] l_reg_n = adv ? (mtc2_n ? lins_n[15:11] : lins_n[20:16]) : l_reg;
+logic lo_m, lo_x;
+always_ff @(posedge clk) begin
+    lo_m <= vdn      == l_reg_n;
+    lo_x <= x_vdn_nx == l_reg_n;
+end
+wire ld_ok    = !(m_v && lo_m) && !(x_v && lo_x) && !x_defer;
 wire ls_go    = ld.go;
 wire m_stall  = swc2 ? m_stall_st : m_stall_ld;                              // (the port, for the load or store of E)
 wire start_r  = (lp || (valid && !vec)) && st == V_IDLE
@@ -830,6 +845,7 @@ wire  [4:0] lw_reg_b = in_tv ? tv_reg : ltn;
 always_ff @(posedge clk) begin
     dp_l <= (lwc2 && m_valid) ? (adv ? reads(lw_reg_b, ins_n[15:11], ins_n[20:16]) : reads(lw_reg_b, vsn, vtn))
                               : (adv ? reads(li[15:11], ins_n[15:11], ins_n[20:16]) : reads(li[15:11], vsn, vtn));
+    lf_q <= (lwc2 && m_valid) ? lw_reg_b != rd_n : li[15:11] != rd_n;
 end
 // D's address next cycle: the register STV is at then (two beats each), else the one E's instruction reads
 wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv && !(tv_n == 4'd15 && !m_stall)));
