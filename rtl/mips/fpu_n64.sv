@@ -198,7 +198,9 @@ fbits_t up;
 // (a single's compare takes its operands as they are: the VR4300 orders a denormal exactly there, and does not trap on
 // it -- software tests a pointer kept in a float register against 0.0, and KSEG0's below 8 MiB are all denormals)
 wire cmp_s = !sel_d && fn[5:4] == 2'b11;
-assign up = (sel_w || sel_l || cmp_s) ? up_raw : ftz(sel_d ? d2f(up_lo, up_hi) : up_raw);
+// (a double's float is d2f's, which is flushed already -- its exponent is 0 only where it made the whole word a signed 0 -- so ftz is not
+// in front of that choice: the unpacker's longest path was the double's exponent range, the rounding, then ftz's compare of the exponent)
+assign up = sel_d ? d2f(up_lo, up_hi) : (sel_w || sel_l || cmp_s) ? up_raw : ftz(up_raw);
 
 // (FAST: without `live` -- the core asks only for an instruction in M, and
 // one that is not live is flushed)
