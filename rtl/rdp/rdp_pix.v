@@ -30,7 +30,7 @@
 //
 // LOD (lod_on; lang/c/rdp/rdp.c rdp_lod, docs/lod.md): a 2-cycle primitive
 // with TEX_LOD, or whose combiner reads LOD_FRACTION (a magnified pixel's reads 0 without TEX_LOD, SHARPEN and
-// DETAIL, rdp_exact.md rule 9). Its pixels take two
+// DETAIL while the next tile was never set, rdp_exact.md rule 9). Its pixels take two
 // clocks, and P0's second load is the pixel on the next line (rdp_top's S, T,
 // W plus DaDy): its perspective divide is the LOD's next line. Its next pixel
 // is the neighbour's own perspective divide -- rdp_top issues the pixels in
@@ -88,6 +88,7 @@ module rdp_pix (
     output wire [2:0]  tl_ra,
     input  wire [2:0]  p_tile,      // the primitive's tile (TEXEL1's: the next)
     input  wire [7:0]  yuv_vec,     // by tile: a YUV 16-bit one (the tile a converting pass checks)
+    input  wire [7:0]  tset,        // by tile: SET_TILE has set it since the reset (the next tile's: l3_lf)
     output wire        two_pass,    // the primitive's pixels go through the texture stages twice (rdp_top issues one every second clock)
     // the LOD (rdp_top: stable for a primitive)
     input  wire        lod_on,      // the primitive's pixels take the LOD (and two clocks each)
@@ -683,7 +684,8 @@ module rdp_pix (
     wire [4:0]  l3_mx = (l2_lod[4:0] < min_lvl) ? min_lvl : l2_lod[4:0];
     wire [14:0] l3_sh = {l2_lod[11:0], 3'd0} >> l2_lg;
     wire        l3_pl = !sharpen && !detail;
-    wire [8:0]  l3_lf = l2_far ? 9'h0FF : l3_mag ? (l3_pl ? {1'b0, {8{l3_dis && tex_lod}}} : {sharpen, l3_mx, 3'd0})
+    wire        nt_set = tset[p_tile + 3'd1];       // the next tile (TEXEL1's) has been set: a magnified pixel's fraction is the LOD's (rule 9)
+    wire [8:0]  l3_lf = l2_far ? 9'h0FF : l3_mag ? (l3_pl ? {1'b0, {8{l3_dis && (tex_lod || nt_set)}}} : {sharpen, l3_mx, 3'd0})
                       : (l3_pl && l3_dis) ? 9'h0FF : {1'b0, l3_sh[7:0]};
     reg  [8:0]  lf;                  // the pixel's LOD_FRACTION: from its first pass at P5 to the next pixel's
     always @(posedge clk) begin

@@ -291,8 +291,8 @@ module rdp_top (
     // a W of s.15 -- and go to the pipeline as they are: its perspective divide, and the
     // affine path, take the integer halves (lang/c/rdp/rdp.c draw_pixel_cvg)
     // The LOD (docs/lod.md): a 2-cycle primitive with TEX_LOD, or whose combiner reads LOD_FRACTION (C 13 in a colour, C
-    // 0 in an alpha, either cycle). Without TEX_LOD, SHARPEN and DETAIL a magnified pixel's fraction reads 0 (rdp_pix's
-    // l3_lf, docs/rdp_exact.md rule 9). (Registered: the modes are set many clocks before a primitive's first pixel.)
+    // 0 in an alpha, either cycle). Without TEX_LOD, SHARPEN and DETAIL a magnified pixel's fraction reads 0 while the
+    // next tile was never set (rdp_pix's l3_lf, docs/rdp_exact.md rule 9). (Registered: the modes are set many clocks before a primitive's first pixel.)
     reg         lod_on;
     always @(posedge clk) lod_on <= cyc == 2'd1 && (other_h[16] || cc_hi[19:15] == 5'd13 || cc_hi[4:0] == 5'd13
                                                          || cc_hi[11:9] == 3'd0 || cc_lo[20:18] == 3'd0);
@@ -355,6 +355,8 @@ module rdp_top (
     // which tiles are YUV 16-bit ones (a pass that converts checks its tile's, or with CONVERT_ONE the one before)
     reg [7:0]  yuv_vec;
     initial yuv_vec = 8'd0;
+    reg [7:0]  tset;                // by tile: SET_TILE has set it since the reset (rdp_pix's l3_lf: rdp_exact.md rule 9)
+    initial tset = 8'd0;
     wire two_pass;
     wire        px_valid, px_cpass, px_zpass, pix_busy, px_set;
     reg         set_cur;            // the line-buffer set of the row being drawn
@@ -376,7 +378,7 @@ module rdp_top (
         .t_cs(ts_cs), .t_ms(ts_ms), .t_ct(ts_ct), .t_mt(ts_mt),
         .t_masks(ts_masks), .t_shifts(ts_shifts), .t_maskt(ts_maskt), .t_shiftt(ts_shiftt),
         .t_uls(ts_uls), .t_ult(ts_ult), .t_lrs(ts_lrs), .t_lrt(ts_lrt),
-        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .two_pass(two_pass),
+        .tl_ra(tl_ra), .p_tile(p_tile), .yuv_vec(yuv_vec), .tset(tset), .two_pass(two_pass),
         .lod_on(lod_on), .lod_lft(lod_lft), .lod_lvl(lod_lvl), .min_lvl(min_lvl), .in_ghost(pix_ghost),
         .in_valid(pix_valid), .in_x(pix_x), .in_par(par_c), .in_set(set_cur), .row_y(sc_field ? cy[2:1] : cy[1:0]),
         .in_r(cur[0]), .in_g(cur[1]), .in_b(cur[2]), .in_a(cur[3]),
@@ -947,7 +949,7 @@ module rdp_top (
             fill <= 0; fog <= 0; blend <= 0; prim <= 0; env <= 0; prim_lod_frac <= 0; k4 <= 0; k5 <= 0; cv_k03 <= 0; prim_z <= 0;
             sc_xh <= 0; sc_yh <= 0; sc_xl <= 12'd4092; sc_yl <= 12'd4092; sc_field <= 1'b0; sc_odd <= 1'b0;
             cimg <= 0; zimg <= 0; timg <= 0; cimg_width <= 11'd1; timg_width <= 11'd1;
-            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0;
+            timg_size <= 2'd0; cimg_ok <= 1'b0; cimg8 <= 1'b0; cimg32 <= 1'b0; tset <= 8'd0;
         end else begin
             // ---- the engines take their requests
             if (rq_pend && rd_ready && old_hold[rq_set] == 5'd0 && hz_ok) begin
@@ -1099,6 +1101,7 @@ module rdp_top (
                     end
                     6'h35: begin
                         yuv_vec[nw1[26:24]] <= nw0[23:21] == 3'd1 && nw0[20:19] == 2'd2;
+                        tset[nw1[26:24]] <= 1'b1;
                         tl_attr[nw1[26:24]] <= {nw0[23:21], nw0[20:19], nw1[23:20], nw0[17:9], nw0[8:0],
                                                nw1[9], nw1[8], nw1[19], nw1[18],
                                                nw1[7:4], nw1[3:0], nw1[17:14], nw1[13:10]};
