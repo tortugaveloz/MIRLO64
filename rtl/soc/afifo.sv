@@ -48,6 +48,6 @@ always_ff @(posedge rclk) begin
     end
 end
 always_ff @(posedge rclk) r_data <= mem[rptr_n[AW-1:0]];
-assign r_empty = rptr == b(wptr_g_r2);
+assign r_empty = rptr_g == wptr_g_r2;          // (the Gray codes of the two pointers are equal as the pointers are: no conversion back)
 endmodule
 `default_nettype wire
