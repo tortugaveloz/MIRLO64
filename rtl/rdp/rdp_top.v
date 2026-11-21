@@ -425,7 +425,7 @@ module rdp_top (
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
-    reg [10:0] rc_x1c, rc_y1c, rc_xa, rc_ya, rc_xm;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
+    reg [10:0] rc_x1c, rc_y1c, rc_x0c, rc_xa, rc_ya, rc_xm;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
     reg        rc_incl;
     reg [1:0]  rxf;                // XH's quarter pixels (outside copy mode: the column-stepped attribute's origin)
     reg [31:0] exh;                 // the major edge's x at the row's top (the attributes' reference)
@@ -549,6 +549,10 @@ module rdp_top (
     wire signed [18:0] aa_a8 = {aa_xa[31:14], ax_h_s}, aa_b8 = aa_lo ? {ax_m[31:14], ax_m_s} : {ax_l[31:14], ax_l_s};
     wire signed [18:0] aa_l8 = t_lft ? aa_a8 : aa_b8, aa_r8 = t_lft ? aa_b8 : aa_a8;
     wire        aa_cross = $signed(aa_r8[18:1]) < $signed(aa_l8[18:1]);
+    // (each edge clamped to the scissor on its own, the left / right and major / minor choices after the clamps: the choices in front of
+    // them, t_lft and aa_lo with the sticky bits, were -0.3 to -0.8 ns at 10.667 ns)
+    wire signed [18:0] aa_m8 = {ax_m[31:14], ax_m_s}, aa_n8 = {ax_l[31:14], ax_l_s};
+    wire [12:0] aa_cla = aa_clamp(aa_a8, aa_cxh, aa_cxl), aa_clm = aa_clamp(aa_m8, aa_cxh, aa_cxl), aa_cll = aa_clamp(aa_n8, aa_cxh, aa_cxl);
     wire [12:0] aa_cxh = {sc_xh, 1'b0}, aa_cxl = {sc_xl, 1'b0};
     function automatic [12:0] aa_clamp;       // max(v, lo), then min(., hi)
         input signed [18:0] v;
@@ -705,8 +709,8 @@ module rdp_top (
     // AA_EN: the subscanline stages
     always @(posedge clk) begin
         aa_s1 <= st == S_AASUB && !aa_j[2];
-        aa_l1 <= aa_clamp(aa_l8, aa_cxh, aa_cxl);
-        aa_r1 <= aa_clamp(aa_r8, aa_cxh, aa_cxl);
+        aa_l1 <= t_lft ? aa_cla : aa_lo ? aa_clm : aa_cll;
+        aa_r1 <= t_lft ? (aa_lo ? aa_clm : aa_cll) : aa_cla;
         aa_v1 <= aa_vj;
         if (aa_s1) begin
             aa_lp <= {aa_l1[12:3], aa_lp[39:10]};
@@ -912,12 +916,11 @@ module rdp_top (
                             ya_c = y0c > {1'b0, sc_y0} ? y0c : {1'b0, sc_y0};
                             // (copy and fill mode write the scissor's last column too, as the console's: the span
                             // runs to the edge clamped to the scissor, that pixel included)
-                            xa <= xa_c[9:0];
                             y <= {1'b0, ya_c};
                             // (the lower right corner, clamped to the scissor, and whether the rectangle is empty: the first
                             // step of S_RECT_INIT, from these registers -- the corner's adder, the compares and the choices
                             // in one clock did not fit 10.667 ns)
-                            rc_x1c <= x1c; rc_y1c <= y1c; rc_xa <= xa_c; rc_ya <= ya_c; rc_incl <= incl;
+                            rc_x1c <= x1c; rc_y1c <= y1c; rc_x0c <= x0c; rc_ya <= ya_c; rc_incl <= incl;
                         end
                         mi <= 5'd0;
                         st <= S_RECT_INIT;
@@ -1221,6 +1224,8 @@ module rdp_top (
                     xb <= (rc_x1c < xl) ? rc_x1c[9:0] : sc_x1 + {9'd0, rc_incl};
                     yb <= (rc_y1c < {1'b0, sc_y1}) ? {1'b0, rc_y1c} : {2'b00, sc_y1};
                     rc_xm <= (rc_x1c < xl) ? rc_x1c : xl;
+                    rc_xa <= (rc_x0c > {1'b0, sc_x0}) ? rc_x0c : {1'b0, sc_x0};
+                    xa <= ((rc_x0c > {1'b0, sc_x0}) ? rc_x0c : {1'b0, sc_x0}) & 11'h3FF;
                 end
                 if (mi == 5'd1 && rc_xm <= rc_xa) yb <= {1'b0, rc_ya};   // empty
                 if (mi == 5'd2) st <= S_ROW;
