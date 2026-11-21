@@ -117,6 +117,7 @@ esac
   for m in ${OOC_MACROS:-}; do echo "set_global_assignment -name VERILOG_MACRO \"$m\""; done      # (OOC_MACROS="MIRLO_RSP_OC": the SoC with the RSP on the CPU's clock)
   [ $unit = cpu ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
   [ $unit = soc ] && echo 'set_instance_assignment -name MUX_RESTRUCTURE OFF -to "mips_sys:sys"'
+  [ -n "${OOC_QSF:-}" ] && printf '%s\n' "$OOC_QSF"                          # (OOC_QSF='set_global_assignment -name X Y': more assignments, newline-separated)
   for pv in ${params:-}; do echo "set_parameter -name ${pv%%=*} ${pv#*=}"; done
   [ $unit = xingpll ] && echo "set_global_assignment -name QIP_FILE $W/target/pocket/mf_pllbase.qip"
   [ -f top.sv ] && echo "set_global_assignment -name SYSTEMVERILOG_FILE top.sv"

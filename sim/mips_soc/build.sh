@@ -16,11 +16,11 @@ soc)
     # the Quartus project's macros (projects/mirlo.qsf) but MIRLO_NO_JTAG_UART (the JTAG UART is built, its chain idle)
     DEFS="+define+CMDQ_AW=12 ${EXTRA_DEFS:-}"
     # (the closing set's MIRLO_* macros are always on in the RTL now; EXTRA_DEFS is for the value macros: MIRLO_CPU_IC_LOG2,
-    # MIRLO_CPU_DC_LOG2, MIRLO_RSP_LANES, and MIRLO_RSP_OC (the overclocked build: the RSP of rtl/rsp_oc on the game CPU's clock). The bench's clocks are the closing set's: the SoC at 62.5 MHz, the game CPU at 3/2 of it.)
+    # MIRLO_CPU_DC_LOG2, MIRLO_RSP_LANES, and MIRLO_RDP_OC (the RDP on the game CPU's clock too), MIRLO_RSP_OC (the overclocked build: the RSP of rtl/rsp_oc on the game CPU's clock). The bench's clocks are the closing set's: the SoC at 62.5 MHz, the game CPU at 3/2 of it.)
     S="$R/rtl/soc"
     "$VL" --cc --exe --build -j 8 -O3 ${VL_THREADS:+--threads $VL_THREADS} -Wno-fatal -Wno-lint -Wno-style -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN \
         --x-assign fast --x-initial fast -Mdir "${OBJ:-$HERE/obj_soc}" --top-module soc_sim_top $DEFS ${TBC:+-CFLAGS "$TBC"} -I"$S" \
-        "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/rsp_gate.sv" "$S/rsp_clk.sv" "$S/rsp_xing.sv" "$S/psram.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
+        "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/rsp_gate.sv" "$S/rsp_clk.sv" "$S/rsp_xing.sv" "$S/rdp_xing.sv" "$S/psram.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
         "$S/mirlo_regs.sv" "$S/rcp_mi.sv" "$S/rcp_vi.sv" "$S/rcp_dpc_view.sv" "$S/rcp_ai.sv" "$S/rcp_si.sv" "$S/n64_ports.sv" "$S/cpu_port.sv" "$S/n64_uart.sv" "$S/jtag_uart_bridge.v" \
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
         "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" \

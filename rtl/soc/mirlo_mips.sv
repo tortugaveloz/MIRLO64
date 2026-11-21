@@ -33,10 +33,18 @@
 `define MIRLO_RSP_OC_VAL 1'b0
 `endif
 
+// RDP_OC: the RDP on the game CPU's clock too (rdp_xing.sv takes its ports across); off, it is on clk_sys and nothing changes
+`ifdef MIRLO_RDP_OC
+`define MIRLO_RDP_OC_VAL 1'b1
+`else
+`define MIRLO_RDP_OC_VAL 1'b0
+`endif
+
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
     parameter int SDR_T_INIT = 12600,
-    parameter bit RSP_OC = `MIRLO_RSP_OC_VAL
+    parameter bit RSP_OC = `MIRLO_RSP_OC_VAL,
+    parameter bit RDP_OC = `MIRLO_RDP_OC_VAL
 ) (
     input  wire          altera_reserved_tck,
     input  wire          altera_reserved_tdi,
@@ -613,19 +621,51 @@ logic [3:0]  m_wdata_we;
 // the RDP for the N64's command stream (rtl/rdp): its addresses are the
 // N64's, in the 8 MiB of RDRAM at SDRAM 0x4380_0000
 logic [31:0] rdp_addr;
-rdp_top rdp (.clk, .rst,
-    .cmd_valid, .cmd_ready, .cmd_data,
-    .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
-    .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
-    .m_rdata_valid, .m_rdata,
-    .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
-    .tmem_busy(rdp_tmem_busy));
+logic        pq_empty;                // port_rdp's queue holds nothing
+generate if (RDP_OC) begin : oc_rdp
+    // the RDP on clk_cpu: its command words, its memory channels and its status cross in rdp_xing
+    logic        rc_valid, rc_ready, rr_cmd_valid, rr_cmd_we, rr_cmd_ready, rr_wvalid, rr_wready, rr_rvalid, rr_idle, rr_tm, rr_ev;
+    logic [31:0] rc_data, rr_wdata, rr_rdata, rr_sync, rr_load;
+    logic [23:0] rr_addr;
+    logic [3:0]  rr_wwe;
+    logic [15:0] rr_unk;
+    logic [23:2] xm_addr;
+    rdp_top rdp (.clk(clk_cpu), .rst(rst_cpu),
+        .cmd_valid(rc_valid), .cmd_ready(rc_ready), .cmd_data(rc_data),
+        .m_cmd_valid(rr_cmd_valid), .m_cmd_ready(rr_cmd_ready), .m_cmd_we(rr_cmd_we), .m_cmd_addr(rr_addr),
+        .m_wdata_valid(rr_wvalid), .m_wdata_ready(rr_wready), .m_wdata(rr_wdata), .m_wdata_we(rr_wwe),
+        .m_rdata_valid(rr_rvalid), .m_rdata(rr_rdata),
+        .sync_count(rr_sync), .sync_ev(rr_ev), .load_count(rr_load), .unknown_ops(rr_unk), .idle(rr_idle),
+        .tmem_busy(rr_tm));
+    rdp_xing rxing (.clk_r(clk_cpu), .rst_r(rst_cpu),
+        .c_valid(rc_valid), .c_data(rc_data), .c_ready(rc_ready),
+        .rm_cmd_valid(rr_cmd_valid), .rm_cmd_we(rr_cmd_we), .rm_cmd_addr(rr_addr[23:2]), .rm_cmd_ready(rr_cmd_ready),
+        .rm_wdata_valid(rr_wvalid), .rm_wdata(rr_wdata), .rm_wdata_we(rr_wwe), .rm_wdata_ready(rr_wready),
+        .rm_rdata_valid(rr_rvalid), .rm_rdata(rr_rdata),
+        .r_idle(rr_idle), .r_tmem_busy(rr_tm), .r_sync_ev(rr_ev), .r_sync_count(rr_sync), .r_load_count(rr_load), .r_unknown_ops(rr_unk),
+        .clk, .rst,
+        .cmd_valid, .cmd_data, .cmd_ready,
+        .m_cmd_valid, .m_cmd_we, .m_cmd_addr(xm_addr), .m_cmd_ready,
+        .m_wdata_valid, .m_wdata, .m_wdata_we, .m_wdata_ready,
+        .m_rdata_valid, .m_rdata, .q_empty(pq_empty),
+        .idle(rdp_idle), .tmem_busy(rdp_tmem_busy), .sync_ev(mon_dp),
+        .sync_count(rdp_sync), .load_count(rdp_load), .unknown_ops(rdp_unknown));
+    assign rdp_addr = {8'd0, xm_addr, 2'b00};
+end else begin : rdp_sys
+    rdp_top rdp (.clk, .rst,
+        .cmd_valid, .cmd_ready, .cmd_data,
+        .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
+        .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
+        .m_rdata_valid, .m_rdata,
+        .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
+        .tmem_busy(rdp_tmem_busy));
+end endgenerate
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
 assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
-    .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata));
+    .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata), .q_empty(pq_empty));
 assign p_urgent[2] = 0;
 
 // ---------------------------------------------------------------- the Pocket's bridge

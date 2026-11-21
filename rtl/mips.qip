@@ -10,6 +10,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path)
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/rsp_gate.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/rsp_clk.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/rsp_xing.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/rdp_xing.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/afifo.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/fifo_fwft.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE   [file join $::quartus(qip_path) "soc/n64_video.sv"]

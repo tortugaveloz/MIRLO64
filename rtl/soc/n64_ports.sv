@@ -91,12 +91,14 @@ module port_rdp (
     output logic [31:0] p_wdata,
     output logic [3:0]  p_be,
     input  wire         p_ready, p_rvalid,
-    input  wire  [31:0] p_rdata
+    input  wire  [31:0] p_rdata,
+    output wire         q_empty             // the queue holds nothing (rdp_xing: the SYNC FULL's interrupt waits for it)
 );
 logic [24:0] q [4];                         // {we, word address}
 logic [2:0]  qw, qr;
 wire  [2:0]  qn = qw - qr;
 assign m_cmd_ready = qn != 3'd4;
+assign q_empty = qn == 3'd0;
 wire  [24:0] head = q[qr[1:0]];
 assign p_we    = head[24];
 assign p_addr  = head[23:0];
