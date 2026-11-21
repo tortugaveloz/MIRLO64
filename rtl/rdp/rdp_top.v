@@ -425,6 +425,8 @@ module rdp_top (
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
+    reg [10:0] rc_x1c, rc_y1c, rc_xa, rc_ya;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
+    reg        rc_incl;
     reg [1:0]  rxf;                // XH's quarter pixels (outside copy mode: the column-stepped attribute's origin)
     reg [31:0] exh;                 // the major edge's x at the row's top (the attributes' reference)
     // S_VSET: attribute vi (R G B A, S T W, Z) out of the staging RAM. The
@@ -897,11 +899,11 @@ module rdp_top (
                             // (copy and fill mode write the scissor's last column too, as the console's: the span
                             // runs to the edge clamped to the scissor, that pixel included)
                             xa <= xa_c[9:0];
-                            xb <= (x1c < {1'b0, sc_x1} + {10'd0, incl}) ? x1c[9:0] : sc_x1 + {9'd0, incl};
                             y <= {1'b0, ya_c};
-                            yb <= (y1c < {1'b0, sc_y1}) ? {1'b0, y1c} : {2'b00, sc_y1};
-                            if (((x1c < {1'b0, sc_x1} + {10'd0, incl}) ? x1c : {1'b0, sc_x1} + {10'd0, incl}) <= xa_c)
-                                yb <= {1'b0, ya_c};   // empty
+                            // (the lower right corner, clamped to the scissor, and whether the rectangle is empty: the first
+                            // step of S_RECT_INIT, from these registers -- the corner's adder, the compares and the choices
+                            // in one clock did not fit 10.667 ns)
+                            rc_x1c <= x1c; rc_y1c <= y1c; rc_xa <= xa_c; rc_ya <= ya_c; rc_incl <= incl;
                         end
                         mi <= 5'd0;
                         st <= S_RECT_INIT;
@@ -1199,6 +1201,13 @@ module rdp_top (
 
             // ---- rectangles: row offset of the first row
             S_RECT_INIT: begin
+                if (mi == 5'd0) begin : rect_end
+                    reg [10:0] xl;
+                    xl = {1'b0, sc_x1} + {10'd0, rc_incl};
+                    xb <= (rc_x1c < xl) ? rc_x1c[9:0] : sc_x1 + {9'd0, rc_incl};
+                    yb <= (rc_y1c < {1'b0, sc_y1}) ? {1'b0, rc_y1c} : {2'b00, sc_y1};
+                    if (((rc_x1c < xl) ? rc_x1c : xl) <= rc_xa) yb <= {1'b0, rc_ya};   // empty
+                end
                 if (mi == 5'd2) st <= S_ROW;
                 mi <= mi + 5'd1;
             end
