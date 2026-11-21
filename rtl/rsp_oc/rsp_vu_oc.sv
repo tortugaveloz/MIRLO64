@@ -764,12 +764,28 @@ always_comb
 // a computational instruction's SEL: not under a computation that writes what it reads (in MUL, EX1 or EX2), nor under a
 // load's write of what it reads; not behind a computation in EX1 (above), nor, if it is not a multiply, behind one in MUL
 wire cmp      /* verilator public_flat_rd */ = valid && vec && fn_known && !fn_none;
-wire dep      /* verilator public_flat_rd */ = (m_v && (m_vdn == vsn || m_vdn == vtn)) || (x_v && (x_vdn == vsn || x_vdn == vtn))
-             || (y_v && (y_vdn == vsn || y_vdn == vtn)) || (wp && (w_vdn == vsn || w_vdn == vtn));
+// (whether the register a stage writes is one the instruction in E reads -- vs or vt -- is a register of its own, made a cycle ahead from
+// what each stage will hold and the instruction that will be in E, the arriving one (ins_n) if E is taken, so that what stands in front of
+// SEL, and of the stall that comes of it, is a choice among four flags and not four pairs of compares of five bits)
+logic dp_m, dp_x, dp_y, dp_w;
+logic dp_l;                       // (and the same for the register a load or MTC2 writes, lw_reg)
+wire  [4:0] x_vdn_nx = (x_v && x_wait) ? x_vdn : m_v ? m_vdn : vdn;     // (what EX1, EX2 and the put-off write will name next cycle)
+wire  [4:0] y_vdn_nx = x_v ? x_vdn : vdn;
+wire  [4:0] w_vdn_nx = x_defer ? y_vdn : w_vdn;
+function automatic logic reads(input logic [4:0] d, input logic [4:0] s, input logic [4:0] t);
+    return d == s || d == t;
+endfunction
+always_ff @(posedge clk) begin
+    dp_m <= adv ? reads(vdn,      ins_n[15:11], ins_n[20:16]) : reads(vdn,      vsn, vtn);
+    dp_x <= adv ? reads(x_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(x_vdn_nx, vsn, vtn);
+    dp_y <= adv ? reads(y_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(y_vdn_nx, vsn, vtn);
+    dp_w <= adv ? reads(w_vdn_nx, ins_n[15:11], ins_n[20:16]) : reads(w_vdn_nx, vsn, vtn);
+end
+wire dep      /* verilator public_flat_rd */ = (m_v && dp_m) || (x_v && dp_x) || (y_v && dp_y) || (wp && dp_w);
 // (a load's write of another register is no matter: the operands come from
 // the copies the instruction addresses itself, and this one's own write is a
 // cycle on. Microcode loads a register and computes with others at once.)
-wire ldep     /* verilator public_flat_rd */ = lw_v && (lw_reg == vsn || lw_reg == vtn);
+wire ldep     /* verilator public_flat_rd */ = lw_v && dp_l;
 wire pipe_e   = !m_v && !x_v && !y_v && !wp;          // no computation is under way
 // the kinds: fast ones (no adder), compares and clips (s and t used in EX2), the rest (adds, reciprocals)
 wire fn_fast  /* verilator public_flat_rd */ = cd.fast;
@@ -808,6 +824,13 @@ wire sel0     = sel0r && (!lp || start_r);
 wire start_nc = start_r && (!lp || sel0r || none_ok);
 // a load's read goes out this cycle, or MTC2 starts (its write is the next)
 wire lw_nx    = (lwc2 && m_valid) || (mtc2 && start_nc);
+// (the compares of the register a load or MTC2 writes, which lw_reg will hold next cycle if one starts now: MTC2's rd, a load's vt, a beat of LTV's
+// register -- made for each and chosen by which starts, the last of the choices, as the instruction that will be in E is for dep's)
+wire  [4:0] lw_reg_b = in_tv ? tv_reg : ltn;
+always_ff @(posedge clk) begin
+    dp_l <= (lwc2 && m_valid) ? (adv ? reads(lw_reg_b, ins_n[15:11], ins_n[20:16]) : reads(lw_reg_b, vsn, vtn))
+                              : (adv ? reads(li[15:11], ins_n[15:11], ins_n[20:16]) : reads(li[15:11], vsn, vtn));
+end
 // D's address next cycle: the register STV is at then (two beats each), else the one E's instruction reads
 wire         stv_n   = swc2 && ((st == V_IDLE && start_nc && ls_tv) || (in_tv && !(tv_n == 4'd15 && !m_stall)));
 wire  [4:0]  tv_nn   = {1'b0, tv_n} + 5'd1;
