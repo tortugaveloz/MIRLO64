@@ -295,12 +295,13 @@ module rdp_mem (
         input        wide;
         reg [10:0] i1, e;
         begin
-            i1 = {1'b0, idx} + 11'd1;
+            i1 = {1'b0, idx};
             e = wide ? i1 : ({i1[9:0], 1'b0} > x1) ? x1 : {i1[9:0], 1'b0};
             need_f = e - {1'b0, x0};
         end
     endfunction
     reg  [10:0] w_need;
+    reg  [9:0]  w_idx2;                   // w_idx + 2: the word after the next, kept (need_f's own +1 for the next word's next)
     wire        w_rdy  = w_fillm || w_pz || w_res >= w_need;
     wire [12:0] w_hgw  = w_cb[12:0] + {3'd0, w_idx};       // (the word's address: its group, for the raw hidden buffer)
 
@@ -531,7 +532,8 @@ module rdp_mem (
                     w_x0 <= wr_x0; w_x1 <= wr_x1;
                     // (the colour span first: a 32-bit image's a word a pixel)
                     w_idx <= wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}; w_lastw <= wr_c32 ? wr_xl[9:0] : {1'b0, wr_xl[9:1]};
-                    w_need <= need_f(wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}, wr_x0, wr_x1, wr_c32);
+                    w_need <= need_f((wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}) + 10'd1, wr_x0, wr_x1, wr_c32);
+                    w_idx2 <= (wr_c32 ? wr_x0 : {1'b0, wr_x0[9:1]}) + 10'd2;
                     w_zl <= wr_xl[9:1];
                     w_all <= 1'b0; h_ph <= 2'd0; w_pz <= 1'b0;
                 end
@@ -567,7 +569,8 @@ module rdp_mem (
                     p1_idx <= w_idx;
                     if (w_idx == w_lastw) w_all <= 1'b1;
                     w_idx <= w_idx1[9:0];
-                    w_need <= need_f(w_idx1[9:0], w_x0, w_x1, w_wide);
+                    w_need <= need_f(w_idx2, w_x0, w_x1, w_wide);
+                    w_idx2 <= w_idx2 + 10'd1;
                 end else begin
                     p1 <= 1'b0;
                 end
