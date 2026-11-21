@@ -428,6 +428,9 @@ module rdp_top (
     reg        kind_tri, kind_texrect, kind_fillmode, kind_rect;   // what is being drawn
     reg signed [11:0] y, y0r, ymr, yb;
     reg signed [11:0] ry0;         // rect / texrect top row
+    reg        aasp_ph;             // S_AASPAN's second clock
+    reg [10:0] aa_xe_r;
+    reg        a_cut_r;
     reg [9:0]  rx0, xa, xb;        // rect columns [xa, xb), texrect origin rx0
     reg [10:0] rc_x1c, rc_y1c, rc_x0c, rc_xa, rc_ya, rc_xm;     // a rectangle's corners as the decode found them (S_RECT_INIT finishes xb, yb)
     reg        rc_incl;
@@ -799,7 +802,7 @@ module rdp_top (
         pix_valid <= 1'b0;
         sync_ev <= 1'b0;
         if (rst) begin
-            st <= S_IDLE;
+            st <= S_IDLE; aasp_ph <= 1'b0;
             es <= 4'd8; es_done <= 1'b0;
             collecting <= 1'b0;
             exec_go <= 1'b0;
@@ -1115,11 +1118,17 @@ module rdp_top (
                 if (aa_j == 3'd4) st <= S_AASPAN;
             end
             S_AASPAN: begin
-                if (!aa_any || {1'b0, aa_min} >= aa_xe || sc_skip) st <= S_NEXT;
+                // (a clock more: the span's end and whether it is cut are registers of the first, the scissor's compare with the
+                // largest end the edges reached -- aa_max, final in the first clock -- was in front of xs, xe, mi and the request's
+                // base: -0.2 to -0.42 ns at 10.667 ns, the next worst group in 4 of 8 fits)
+                aasp_ph <= !aasp_ph;
+                aa_xe_r <= aa_xe; a_cut_r <= a_cut;
+                if (!aasp_ph) begin end
+                else if (!aa_any || {1'b0, aa_min} >= aa_xe_r || sc_skip) st <= S_NEXT;
                 else begin
                     xs <= aa_min;
-                    xe <= a_cut ? aa_m512 : aa_xe;
-                    spl <= a_cut;
+                    xe <= a_cut_r ? aa_m512 : aa_xe_r;
+                    spl <= a_cut_r;
                     mi <= 5'd0;
                     st <= S_SETUP;
                     set_cur <= !set_cur;
