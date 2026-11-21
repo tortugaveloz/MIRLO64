@@ -134,7 +134,10 @@
 
 // (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
 // and has no way into a state its code does not name; the recovery logic that the project's setting adds to each is area for nothing)
-(* altera_attribute = "-name SAFE_STATE_MACHINE OFF" *)
+// (and the multiplexers restructured, the whole CPU's: the project holds MUX_RESTRUCTURE off at mips_sys, for the CPU's clock -- the paths of the
+// pipeline's advance, the fetch's address and the forwarding did not close with it -- and an attribute of the module is the more specific assignment.
+// One attribute string: only the last of several is taken)
+(* altera_attribute = "-name SAFE_STATE_MACHINE OFF; -name MUX_RESTRUCTURE ON" *)
 module mips_core #(
     parameter int TLB_N = 32,               // the VR4300's; in a RAM, so the count costs no logic
     // 0: no TLB -- as if it never held a valid entry: a mapped access takes
@@ -949,30 +952,38 @@ wire e_m_a = FAST ? e_fa_m : m_wr && !m_c.late && m_c.rd == e_rs && e_rs != 0;
 wire e_m_b = FAST ? e_fb_m : m_wr && !m_c.late && m_c.rd == e_rt && e_rt != 0;
 wire e_w_a = FAST ? e_fa_w : w_wr && w_c.rd == e_rs && e_rs != 0;
 wire e_w_b = FAST ? e_fb_w : w_wr && w_c.rd == e_rt && e_rt != 0;
-wire [31:0] e_a  = e_m_a ? m_res : e_w_a ? w_res : e_ra;
-wire [31:0] e_b  = e_m_b ? m_res : e_w_b ? w_res : e_rb;
+// (FAST: the forwarding, the adder, the compares, the shifter and E's result are mips_ealu, below the core, which holds the multiplexers
+// as they are written: the module's own attribute, where the core's restructures them. The code that follows is the other builds')
+wire [31:0] ea_a, ea_b, ea_res; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
+logic       e_k_shv, e_k_sub; logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
+wire e_sl = e_c.alu == A_SLL;
+mips_ealu ealu (
+    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .fa_m(e_fa_m), .fa_w(e_fa_w), .fb_m(e_fb_m), .fb_w(e_fb_w),
+    .k_shv(e_k_shv), .k_sub(e_k_sub), .sl(e_sl), .sra(e_c.alu == A_SRA), .k_grp(e_k_grp), .k_op(e_k_op), .k_f(e_k_f),
+    .imm(e_insn[15:0]), .shamt(e_insn[10:6]),
+    .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq)
+);
+wire [31:0] e_a  = FAST ? ea_a : e_m_a ? m_res : e_w_a ? w_res : e_ra;
+wire [31:0] e_b  = FAST ? ea_b : e_m_b ? m_res : e_w_b ? w_res : e_rb;
 
 wire [31:0] e_bv  = (!FAST && e_c.b_imm) ? (e_c.imm_zero ? {16'd0, e_insn[15:0]} : sx16(e_insn[15:0])) : e_b;
 // the compares, for slt and the traps (32 bits: with a 64-bit operand slt
 // runs at M and a trap is a Reserved Instruction -- d_cx)
 // (FAST: from the adder, which subtracts for all but an add -- e_k_sub: no borrow is "not below", and the difference's sign
 // decides a signed compare of operands of one sign)
-logic       e_k_sub;
 wire [32:0] e_cs;
-wire        e_lt   = FAST ? ((e_a[31] != e_bv[31]) ? e_a[31] : e_cs[31]) : $signed(e_a) < $signed(e_bv);
-wire        e_ltu  = FAST ? !e_cs[32] : e_a < e_bv;
-wire        e_eq   = e_a == e_bv;
+wire        e_lt   = FAST ? ea_lt : $signed(e_a) < $signed(e_bv);
+wire        e_ltu  = FAST ? ea_ltu : e_a < e_bv;
+wire        e_eq   = FAST ? ea_eq : e_a == e_bv;
 wire [5:0]  e_fn  = e_insn[5:0];
 // (FAST: whether the amount is rs's -- sllv, srlv, srav -- is a register set with e_insn, e_k_shv, so the shifter's
 // amount is one select after rs's forwarding and no decode of e_insn sits in front of it)
-logic       e_k_shv;
 wire [4:0]  e_sh  = (FAST ? e_k_shv : (e_fn == 6'h04 || e_fn == 6'h06 || e_fn == 6'h07)) ? e_a[4:0] : e_insn[10:6];
 
 // one shifter: SRL/SRA directly, SLL as a right shift of the bit-reversed value
 function automatic logic [31:0] rev32(input logic [31:0] v);
     for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
 endfunction
-wire        e_sl = e_c.alu == A_SLL;
 wire [32:0] e_shx = {e_c.alu == A_SRA && e_b[31], e_sl ? rev32(e_b) : e_b};
 wire [32:0] e_shr = $signed(e_shx) >>> e_sh;
 wire [31:0] e_shv = e_sl ? rev32(e_shr[31:0]) : e_shr[31:0];
@@ -980,10 +991,9 @@ wire [31:0] e_shv = e_sl ? rev32(e_shr[31:0]) : e_shr[31:0];
 // (FAST) the result by its kind, registered with the instruction: e_k_grp 0
 // add or subtract (e_k_sub), 1 a shift, 2 one of e_k_op's, 3 a compare (e_k_f:
 // unsigned) -- or nothing (e_k_op[0])
-logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 // (the carry out, for the upper word of a 64-bit add or subtract, which M does)
 wire        e_fsub = FAST ? e_k_sub : e_c.alu == A_SUB;
-assign      e_cs = {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
+assign      e_cs = FAST ? ea_cs : {1'b0, e_a} + {1'b0, e_bv ^ {32{e_fsub}}} + 33'(e_fsub);
 wire [31:0] e_addsub = e_cs[31:0];
 logic [31:0] e_misc;
 always_comb begin
@@ -998,30 +1008,31 @@ always_comb begin
     default: e_misc = lo_r;
     endcase
 end
-logic [31:0] e_res;
+logic [31:0] e_res_o;
+wire  [31:0] e_res = FAST ? ea_res : e_res_o;
 always_comb begin
-    e_res = 32'd0;
+    e_res_o = 32'd0;
     if (FAST) begin
         case (e_k_grp)
-        2'd0: e_res = e_addsub;
-        2'd1: e_res = e_shv;
-        2'd2: e_res = e_misc;
-        default: e_res = {31'd0, !e_k_op[0] && (e_k_f ? e_ltu : e_lt)};
+        2'd0: e_res_o = e_addsub;
+        2'd1: e_res_o = e_shv;
+        2'd2: e_res_o = e_misc;
+        default: e_res_o = {31'd0, !e_k_op[0] && (e_k_f ? e_ltu : e_lt)};
         endcase
     end
     else case (e_c.alu)
-    A_ADD, A_SUB: e_res = e_cs[31:0];
-    A_LUI:   e_res = {e_insn[15:0], 16'd0};
-    A_SLL, A_SRL, A_SRA: e_res = e_shv;
-    A_LINK:  e_res = e_pc + 32'd8;
-    A_SLT:   e_res = {31'd0, e_lt};
-    A_SLTU:  e_res = {31'd0, e_ltu};
-    A_AND:   e_res = e_a & e_bv;
-    A_OR:    e_res = e_a | e_bv;
-    A_XOR:   e_res = e_a ^ e_bv;
-    A_NOR:   e_res = ~(e_a | e_bv);
-    A_MFHI:  e_res = hi_r;
-    A_MFLO:  e_res = lo_r;
+    A_ADD, A_SUB: e_res_o = e_cs[31:0];
+    A_LUI:   e_res_o = {e_insn[15:0], 16'd0};
+    A_SLL, A_SRL, A_SRA: e_res_o = e_shv;
+    A_LINK:  e_res_o = e_pc + 32'd8;
+    A_SLT:   e_res_o = {31'd0, e_lt};
+    A_SLTU:  e_res_o = {31'd0, e_ltu};
+    A_AND:   e_res_o = e_a & e_bv;
+    A_OR:    e_res_o = e_a | e_bv;
+    A_XOR:   e_res_o = e_a ^ e_bv;
+    A_NOR:   e_res_o = ~(e_a | e_bv);
+    A_MFHI:  e_res_o = hi_r;
+    A_MFLO:  e_res_o = lo_r;
     default: ;
     endcase
 end
@@ -1254,8 +1265,7 @@ wire m_cached = FAST ? m_k_cach : cacheable(m_addr, game_view);
 // a cache instruction): an access right behind it read the tag in the edge
 // that cleared it
 logic        tk_valid; logic [DC_LOG2-1:0] tk_idx;
-wire m_dc_hit = dc_tq[16] && dc_tq[15:0] == m_pa[28:13] &&   // (physically tagged; index bits pa == va)
-                !(tk_valid && tk_idx == m_addr[DW+1:4]);
+wire m_dc_hit;       // (mips_dchit, below the core, once the commit is declared: the tag's hit, physically tagged -- index bits pa == va)
 // FAST: a load's word is taken as it is; m_lmiss, late in the cycle, says it
 // was not its line's. In a delay slot the load has waited a cycle: m_hit_r
 logic m_w1, m_hit_r;
@@ -1565,16 +1575,28 @@ assign m_w0 = m_live && m_cw && !m_ph && ms == MS_IDLE && (m_st ? !wb_full : m_l
 assign m_lmiss = FAST && m_live && m_ld && m_cached && !m_dly && ms == MS_IDLE && !m_ph && !m_dc_hit;
 wire m_commit_e = m_live && m_done;         // (M always advances when done)
 wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong line)
+// the D-cache's hit and what hangs on it -- the RAM write enables and the store buffer's -- one module with the multiplexers as written
+// (the core's restructuring lengthens the tag compare's path to the write enables of the RAM)
+wire st_go = (m_commit_e || m_w0) && m_st && !m_sc_fail;      // a store's word completes this cycle
+wire st_dc_we, st_sb_we;
+mips_dchit #(.DC_LOG2(DC_LOG2)) dchit (
+    .dc_tq, .pa_tag(m_pa[28:13]), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
+    .go(st_go), .commit(m_commit_e && m_st && !m_sc_fail), .cached(m_cached),
+    .hit(m_dc_hit), .dc_we(st_dc_we), .sb_we(st_sb_we)
+);
 
 // =============================================================== pipeline advance
 wire m_adv = !m_stall;
 wire e_adv = m_adv;
 wire d_adv = e_adv && !d_stall;
-wire flush = m_take_int || m_take_exc || (m_commit_e && m_c.eret) || (FAST && rp_pend);
+// (an eret completes at once -- FAST: it is no access, no FPU or multiply operation, no cache op and no shift, the flags the rest of m_done
+// waits on, so only the refill that M's state machine may be in holds it: not m_done's whole cone in front of the fetch's redirect)
+wire m_eret_go = FAST ? m_live && m_c.eret && ms != MS_REFILL && ms != MS_REREAD : m_commit_e && m_c.eret;
+wire flush = m_take_int || m_take_exc || m_eret_go || (FAST && rp_pend);
 logic [31:0] flush_pc;
 always_comb begin
     if (FAST && rp_pend) flush_pc = w_pc;
-    else if (m_commit_e && m_c.eret) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
+    else if (m_eret_go) flush_pc = c0_status[2] ? c0_errorepc : c0_epc;
     else if (m_to_game) flush_pc = (m_refill && !c0_status[1]) ? 32'h8000_0000 : 32'h8000_0180;     // (the TLB refill vector, when no exception is being handled)
     else flush_pc = (c0_status[22] ? 32'hBFC00200 : EXC_BASE) + ((m_refill && !c0_status[1] && !FLAT) ? 32'h0 : 32'h180);   // (FLAT: one vector -- a miss there is the runtime's to report)
 end
@@ -1812,12 +1834,10 @@ always_comb begin
         if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:4]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
-    if ((m_commit_e || m_w0) && m_st && !m_sc_fail) begin
-        if (m_cached && m_dc_hit) begin
-            dc_we = 1; dc_wbe = m_cst_strb;
-        end else if (!m_cached && pa_cached(m_pa)) begin
-            dct_we = 1; dct_waddr = m_pa[DW+1:4]; dct_wdata = 17'd0;
-        end
+    if (st_dc_we) begin
+        dc_we = 1; dc_wbe = m_cst_strb;
+    end else if (st_go && !m_cached && pa_cached(m_pa)) begin
+        dct_we = 1; dct_waddr = m_pa[DW+1:4]; dct_wdata = 17'd0;
     end
     // (the D-cache's write address and data do not wait for the conditions of the write -- they are
     // the enables' -- but go by the port only: no store completes while a line is coming in)
@@ -2055,12 +2075,12 @@ always_ff @(posedge clk) begin
         end
 
         // ---------------------------------------------------- M: completing
-        sb_valid <= 0;
+        // (the store buffer is a one-cycle pulse: sb_valid is set for the cycle after a store's completion, and its address, word and strobes are
+        // read only then -- they are the store's if they are loaded every cycle, with no enable behind the completion's whole cone)
+        sb_valid <= st_sb_we;
+        sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
         tk_valid <= dct_we && !dct_wdata[16]; tk_idx <= dct_waddr;
         if (m_commit_e) begin
-            if (m_st && !m_sc_fail && m_cached && m_dc_hit) begin
-                sb_valid <= 1; sb_waddr <= m_cst_idx; sb_data <= m_cst_data; sb_strb <= m_cst_strb;
-            end
             if (m_c.ld == M_LL && !m_lmiss) ll_bit <= 1'b1;
             if (m_c.st == S_SC) ll_bit <= 1'b0;
             if (m_c.cop1 && m_c.cop1_cond) fcc <= fpu_cond;
@@ -2617,6 +2637,76 @@ always_ff @(posedge clk) begin
         end
     end
 end
+endmodule
+
+// E's datapath (FAST): the operands from the forwarding (M's and W's results, or the register file's), the adder, the compares, the logic
+// operations, the shifter (one: srl, sra directly, sll as a right shift of the reversed value) and E's result by the kind of the instruction
+// -- registered flags, found as it left D. The core is synthesised with its multiplexers restructured; these paths (a result to the next
+// instruction's operand to a result) are the ones that restructuring lengthens, so the module holds them as written.
+(* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
+module mips_ealu (
+    input  wire [31:0] m_res, w_res, e_ra, e_rb, e_pc, hi_r, lo_r,
+    input  wire        fa_m, fa_w, fb_m, fb_w,                 // where the operands come from: M's result, W's, else the register file's
+    input  wire        k_shv, k_sub, sl, sra,                  // the amount is rs's; subtract (and compare); sll; sra
+    input  wire [1:0]  k_grp, input wire [2:0] k_op, input wire k_f,
+    input  wire [15:0] imm, input wire [4:0] shamt,
+    output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq
+);
+function automatic logic [31:0] rev32(input logic [31:0] v);
+    for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
+endfunction
+assign a = fa_m ? m_res : fa_w ? w_res : e_ra;
+assign b = fb_m ? m_res : fb_w ? w_res : e_rb;
+assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
+assign lt  = (a[31] != b[31]) ? a[31] : cs[31];
+assign ltu = !cs[32];
+assign eq  = a == b;
+wire [4:0]  sh  = k_shv ? a[4:0] : shamt;
+wire [32:0] shx = {sra && b[31], sl ? rev32(b) : b};
+wire [32:0] shr = $signed(shx) >>> sh;
+wire [31:0] shv = sl ? rev32(shr[31:0]) : shr[31:0];
+logic [31:0] misc;
+always_comb begin
+    case (k_op)
+    3'd0: misc = a & b;
+    3'd1: misc = a | b;
+    3'd2: misc = a ^ b;
+    3'd3: misc = ~(a | b);
+    3'd4: misc = {imm, 16'd0};
+    3'd5: misc = e_pc + 32'd8;
+    3'd6: misc = hi_r;
+    default: misc = lo_r;
+    endcase
+end
+logic [31:0] r;
+always_comb begin
+    case (k_grp)
+    2'd0: r = cs[31:0];
+    2'd1: r = shv;
+    2'd2: r = misc;
+    default: r = {31'd0, !k_op[0] && (k_f ? ltu : lt)};
+    endcase
+end
+assign res = r;
+endmodule
+
+// The D-cache's hit: the tag RAM's word against the access's physical tag, unless the line was dropped last cycle (tk_*, the index the
+// tag was cleared at), and the two terms of a store that hang on it: the RAM's write enable and the store buffer's. The multiplexers as
+// written: the module's own attribute (see mips_ealu).
+(* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
+module mips_dchit #(parameter int DC_LOG2 = 9) (
+    input  wire [16:0]       dc_tq,
+    input  wire [15:0]       pa_tag,
+    input  wire              tk_valid,
+    input  wire [DC_LOG2-1:0] tk_idx, idx,
+    input  wire              go,          // a store's word completes this cycle (not a failed sc)
+    input  wire              commit,      // a store's M completes: the store buffer takes it
+    input  wire              cached,
+    output wire              hit, dc_we, sb_we
+);
+assign hit   = dc_tq[16] && dc_tq[15:0] == pa_tag && !(tk_valid && tk_idx == idx);
+assign dc_we = go && cached && hit;
+assign sb_we = commit && cached && hit;
 endmodule
 
 // A register with a clock enable and a synchronous clear: a stage's operand that is zeroed when its source is not the register file's
