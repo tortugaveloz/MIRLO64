@@ -185,9 +185,14 @@ assign diag_vi = {20'd0, soc.video.hid_f, soc.vi_aa, soc.mon_vi, soc.fb_en,
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
 assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.rdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
                     soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
-assign rsp_sig   = soc.rsp.st_sig;
-assign rsp_stat  = {soc.dpc_status[3], soc.dpc.end_valid, soc.rsp.tr_e, soc.rsp_r_valid && !soc.p_ready[3],
-                    soc.rsp.ds != 0, !soc.rsp_halted};
+`ifdef MIRLO_RSP_OC
+`define RSPI soc.oc.rsp
+`else
+`define RSPI soc.noc.rsp
+`endif
+assign rsp_sig   = `RSPI.st_sig;
+assign rsp_stat  = {soc.dpc_status[3], soc.dpc.end_valid, `RSPI.tr_e, soc.rsp_r_valid && !soc.p_ready[3],
+                    `RSPI.ds != 0, !soc.rsp_halted};
 assign cpu_stat  = {soc.sys.cpu.d_valid, 3'(soc.sys.cpu.port), soc.sys.cpu.flush, soc.sys.cpu.m_live && soc.sys.cpu.m_st && soc.sys.cpu.wb_full,
                     soc.sys.cpu.md_busy, soc.sys.cpu.fpu_busy, soc.sys.cpu.d_stall, soc.sys.cpu.f_have, 3'(soc.sys.cpu.fs), 3'(soc.sys.cpu.ms),
                     soc.sys.cpu.m_stall, soc.sys.cpu.w_valid};
