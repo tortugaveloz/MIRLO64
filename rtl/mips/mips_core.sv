@@ -956,6 +956,10 @@ wire [31:0] d_ptarget = (JRP && d_c.br == B_JR) ? rf_a : d_c.br == B_J ? {d_pc[3
 // (FAST: which of them, known as the instruction leaves D -- M and W then
 // hold what E and M hold now -- and an immediate in e_rb, as an operand)
 logic e_fa_m, e_fa_w, e_fb_m, e_fb_w;
+// (FAST: the same selects one-hot -- M's result, W's where M's is not, else the register file's -- for the operand multiplexers of mips_ealu:
+// each bit is then one AND-OR of six inputs, not a chain of two multiplexers. Kept with e_f?_?: set as the instruction leaves D, and W's
+// dropped when E waits)
+logic e_sa_w, e_sa_r, e_sb_w, e_sb_r;
 wire e_m_a = FAST ? e_fa_m : m_wr && !m_c.late && m_c.rd == e_rs && e_rs != 0;
 wire e_m_b = FAST ? e_fb_m : m_wr && !m_c.late && m_c.rd == e_rt && e_rt != 0;
 wire e_w_a = FAST ? e_fa_w : w_wr && w_c.rd == e_rs && e_rs != 0;
@@ -966,7 +970,7 @@ wire [31:0] ea_a, ea_b, ea_res; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
 logic       e_k_shv, e_k_sub; logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 wire e_sl = e_c.alu == A_SLL;
 mips_ealu ealu (
-    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .fa_m(e_fa_m), .fa_w(e_fa_w), .fb_m(e_fb_m), .fb_w(e_fb_w),
+    .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .sa_m(e_fa_m), .sa_w(e_sa_w), .sa_r(e_sa_r), .sb_m(e_fb_m), .sb_w(e_sb_w), .sb_r(e_sb_r),
     .k_shv(e_k_shv), .k_sub(e_k_sub), .sl(e_sl), .sra(e_c.alu == A_SRA), .k_grp(e_k_grp), .k_op(e_k_op), .k_f(e_k_f),
     .imm(e_insn[15:0]), .shamt(e_insn[10:6]),
     .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq)
@@ -2235,11 +2239,15 @@ always_ff @(posedge clk) begin
             e_rs <= d_rs; e_rt <= d_rt;
             e_ra <= rf_a; e_rb <= rf_b;
             if (FAST) begin
+                logic fa_m_n, fa_w_n, fb_m_n, fb_w_n;
                 if (d_c.b_imm) e_rb <= d_c.imm_zero ? {16'd0, d_insn[15:0]} : sx16(d_insn[15:0]);
-                e_fa_m <= e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
-                e_fa_w <= m_wr && m_c.rd == d_rs && d_rs != 0;
-                e_fb_m <= !d_c.b_imm && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
-                e_fb_w <= !d_c.b_imm && m_wr && m_c.rd == d_rt && d_rt != 0;
+                fa_m_n = e_wr && !e_c.late && e_c.rd == d_rs && d_rs != 0;
+                fa_w_n = m_wr && m_c.rd == d_rs && d_rs != 0;
+                fb_m_n = !d_c.b_imm && e_wr && !e_c.late && e_c.rd == d_rt && d_rt != 0;
+                fb_w_n = !d_c.b_imm && m_wr && m_c.rd == d_rt && d_rt != 0;
+                e_fa_m <= fa_m_n; e_fa_w <= fa_w_n; e_fb_m <= fb_m_n; e_fb_w <= fb_w_n;
+                e_sa_w <= fa_w_n && !fa_m_n; e_sa_r <= !fa_m_n && !fa_w_n;
+                e_sb_w <= fb_w_n && !fb_m_n; e_sb_r <= !fb_m_n && !fb_w_n;
             end
             e_aw <= rf_aw;
             e_hxeq <= (rf_aw && rf_bw) ? rfq_ah == rfq_bh : !rf_aw && !rf_bw;     // (a masked hx is zero)
@@ -2274,7 +2282,7 @@ always_ff @(posedge clk) begin
             // cycle, so an operand it supplies is kept here
             if (e_w_a) e_ra <= w_res;
             if (e_w_b) e_rb <= w_res;
-            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; end
+            if (FAST) begin e_fa_w <= 1'b0; e_fb_w <= 1'b0; e_sa_w <= 1'b0; e_sb_w <= 1'b0; e_sa_r <= !e_fa_m; e_sb_r <= !e_fb_m; end
         end
 
         // ---------------------------------------------------- F -> D
@@ -2675,7 +2683,7 @@ endmodule
 (* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
 module mips_ealu (
     input  wire [31:0] m_res, w_res, e_ra, e_rb, e_pc, hi_r, lo_r,
-    input  wire        fa_m, fa_w, fb_m, fb_w,                 // where the operands come from: M's result, W's, else the register file's
+    input  wire        sa_m, sa_w, sa_r, sb_m, sb_w, sb_r,     // where the operands come from, one-hot: M's result, W's, the register file's
     input  wire        k_shv, k_sub, sl, sra,                  // the amount is rs's; subtract (and compare); sll; sra
     input  wire [1:0]  k_grp, input wire [2:0] k_op, input wire k_f,
     input  wire [15:0] imm, input wire [4:0] shamt,
@@ -2684,8 +2692,8 @@ module mips_ealu (
 function automatic logic [31:0] rev32(input logic [31:0] v);
     for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
 endfunction
-assign a = fa_m ? m_res : fa_w ? w_res : e_ra;
-assign b = fb_m ? m_res : fb_w ? w_res : e_rb;
+assign a = ({32{sa_m}} & m_res) | ({32{sa_w}} & w_res) | ({32{sa_r}} & e_ra);
+assign b = ({32{sb_m}} & m_res) | ({32{sb_w}} & w_res) | ({32{sb_r}} & e_rb);
 assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
 assign lt  = (a[31] != b[31]) ? a[31] : cs[31];
 assign ltu = !cs[32];
