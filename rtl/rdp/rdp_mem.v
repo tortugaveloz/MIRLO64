@@ -269,6 +269,7 @@ module rdp_mem (
     reg         hd_v;                         // the head holds a word
     reg  [3:0]  hd_range;                     // its pixels' byte lanes (range_sel of its word)
     reg         hd_fst, hd_lst;               // it is its span's first word of a group, last
+    reg  [7:0]  hd_oh;                       // ... as a one-hot
     reg  [2:0]  hd_j;                         // its place in its group: the span's base's low bits and its index's
     reg [1:0]  h_ph;                      // the head's commands done: 0 none, 1 its word's (its group's hidden word is next)
     reg [31:0] hacc;                      // the group's hidden word so far (the head's merged in at its pop)
@@ -344,11 +345,19 @@ module rdp_mem (
     wire [2:0]  h_j     = hd_j;
     wire        h_first = h_j == 3'd0 || hd_fst;
     wire [31:0] h_base  = h_first ? h_hold : hacc;
-    wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_base[{h_j, 2'b10} +: 2],
-                            h_csel[2] ? h_cd36[19:18] : h_base[{h_j, 2'b00} +: 2] };
-    wire [31:0] h_merge = w_fillm ? {8{w_fillc[0], w_fillc[0], w_fillc[16], w_fillc[16]}}
-                                  : (h_base & ~(32'hF << {h_j, 2'b00})) | ({28'd0, h_nib} << {h_j, 2'b00});
-    wire [3:0]  h_qbe   = (h_first ? 4'd0 : hbe) | (4'd1 << h_j[2:1]);
+    // (the nibble the word's pixels go to, by a one-hot of its place in the group, hd_oh, found as the head is loaded: the three-bit
+    // index's decodes behind the shifts and the selects were the path to the write data)
+    wire [3:0]  h_bn = ({4{hd_oh[0]}} & h_base[3:0])   | ({4{hd_oh[1]}} & h_base[7:4])   | ({4{hd_oh[2]}} & h_base[11:8])  | ({4{hd_oh[3]}} & h_base[15:12])
+                     | ({4{hd_oh[4]}} & h_base[19:16]) | ({4{hd_oh[5]}} & h_base[23:20]) | ({4{hd_oh[6]}} & h_base[27:24]) | ({4{hd_oh[7]}} & h_base[31:28]);
+    wire [3:0]  h_nib   = { h_csel[0] ? h_cd36[1:0]   : h_bn[3:2],
+                            h_csel[2] ? h_cd36[19:18] : h_bn[1:0] };
+    wire [31:0] h_mg;
+    genvar hk;
+    generate for (hk = 0; hk < 8; hk = hk + 1) begin : hmg
+        assign h_mg[4*hk +: 4] = hd_oh[hk] ? h_nib : h_base[4*hk +: 4];
+    end endgenerate
+    wire [31:0] h_merge = w_fillm ? {8{w_fillc[0], w_fillc[0], w_fillc[16], w_fillc[16]}} : h_mg;
+    wire [3:0]  h_qbe   = (h_first ? 4'd0 : hbe) | {hd_oh[7] | hd_oh[6], hd_oh[5] | hd_oh[4], hd_oh[3] | hd_oh[2], hd_oh[1] | hd_oh[0]};
     wire        h_any   = !w_c8 && !w_c32 && ((h_first ? 1'b0 : hany) | (h_csel != 4'd0));
     wire        h_last  = h_j == 3'd7 || hd_lst;
     wire        h_c     = h_v && h_ph == 2'd0 && h_csel != 4'd0;           // the head's colour word is to go
@@ -539,7 +548,7 @@ module rdp_mem (
                     hd_range <= range_sel(rf_ram[46:38]);
                     hd_fst <= rf_ram[47:38] == {1'b0, w_x0[9:1]};
                     hd_lst <= rf_ram[47:38] == w_lastw;
-                    hd_j <= w_cb[2:0] + rf_ram[40:38];
+                    hd_j <= w_cb[2:0] + rf_ram[40:38]; hd_oh <= 8'd1 << (w_cb[2:0] + rf_ram[40:38]);
                     hd_v <= 1'b1;
                     rf_rd <= rf_rd + 3'd1;
                 end else if (h_pop) hd_v <= 1'b0;
