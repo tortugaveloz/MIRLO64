@@ -278,10 +278,13 @@ module rdp_pix (
     wire [1:0] ox4 = cjf[3] ? 2'd0 : cjf[2] ? 2'd1 : cjf[1] ? 2'd2 : 2'd3;
     wire signed [28:0] zcx = $signed(z_dx[31:5]) * $signed({1'b0, ox4});
     wire signed [28:0] zcy = $signed(z_dy[31:5]) * $signed({1'b0, oy4});
-    wire [31:0] zcorr = ({{3{zcx[28]}}, zcx} + {{3{zcy[28]}}, zcy}) << 3;
+    // (the two products are registers, P0's; their sum, shifted, is added to Z where it is used: the products with the adds behind
+    // them did not fit a clock of 10.667 ns)
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
                       + in_mask[4] + in_mask[5] + in_mask[6] + in_mask[7];
-    reg  [31:0] z0r, zc0;
+    reg  [31:0] z0r;
+    reg signed [28:0] zcx0, zcy0;
+    wire [31:0] zc0 = ({{3{zcx0[28]}}, zcx0} + {{3{zcy0[28]}}, zcy0}) << 3;
     reg  [3:0]  cvg0;                // the coverage
     reg  [1:0]  y0;                  // the row's low bits (a row's last pixels are still in the pipe when the next row's y is issued)
     reg         g0;                  // a ghost (LOD)
@@ -294,7 +297,7 @@ module rdp_pix (
             x0 <= in_x; bs0 <= in_set;
             shade0 <= p_shade ? {sr9, sg9, sb9, sa9} : 36'd0;
             z0r <= in_z;
-            zc0 <= p_aa ? zcorr : 32'd0;
+            zcx0 <= p_aa ? zcx : 29'sd0; zcy0 <= p_aa ? zcy : 29'sd0;
             cvg0 <= cvg_in; y0 <= row_y; g0 <= in_ghost;
         end
         // (a primitive without texture coefficients has S = T = W = 0 and samples the tile's texel (0, 0) all the same: the model's
