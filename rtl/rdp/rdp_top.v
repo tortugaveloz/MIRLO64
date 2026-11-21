@@ -736,6 +736,10 @@ module rdp_top (
     wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
     // (the value, e + the product, and which attribute it is for are registered, and the attribute is loaded the clock after: the
     // value's adder and the attribute's own were one path of 30 levels at 10.667 ns; S_SETUP's last step is a clock later)
+    // a load's texel count (LOAD BLOCK's whole texels, the others' 10.2 coordinates): a register of the clock before, the command's
+    // words being steady while S_LOAD_INIT runs
+    reg  [12:0] l_nt_q;
+    always @(posedge clk) l_nt_q <= (l_kind == 2'd0) ? {1'b0, w1[23:12]} - {1'b0, w0[23:12]} + 13'd1 : {3'd0, w1[23:14]} - {3'd0, w0[23:14]} + 13'd1;
     wire [7:0]  cur_ldc;
     reg  [7:0]  cur_ld;
     reg  [31:0] cur_ldq;
@@ -1236,12 +1240,12 @@ module rdp_top (
                         l_dst <= {ts_tmem, 2'b00};
                         l_odd <= 1'b0;
                         if (l_kind == 2'd0) begin
-                            nt = {1'b0, w1[23:12]} - {1'b0, w0[23:12]} + 13'd1;
+                            nt = l_nt_q;
                             l_n <= load_words(nt, timg_size);
                             l_none <= w1[23:12] < w0[23:12];
                             tt <= 10'd0; tt1 <= 10'd0;
                         end else begin
-                            nt = {3'd0, s1} - {3'd0, s0} + 13'd1;
+                            nt = l_nt_q;
                             l_n <= (l_kind == 2'd2) ? ((nt > 13'd256) ? 11'd256 : nt[10:0]) : load_words(nt, timg_size);
                             l_none <= s1 < s0 || (l_kind == 2'd1 && t1 < t0);
                             tt <= (l_kind == 2'd1) ? t0 : 10'd0; tt1 <= (l_kind == 2'd1) ? t1 : 10'd0;
