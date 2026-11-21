@@ -1283,11 +1283,11 @@ module rdp_pix (
     // the pipe when the next row's y is issued), out of sb_ram at P8b, on to
     // P11 (the coverage, the alpha dither) and P13b (the RGB dither)
     reg [3:0] cv9, cv10a, cv10, cv10b, cv11a, cv11m, cv11;
-    reg [1:0] y9, y10a, y10, y10b, y11a, y11m, y11, y11b, y12a, y12, y13a, y13b;
+    reg [1:0] y9, y10a, y10, y10b, y11a, y11m, y11, y11b, y12a, y12, y12b, y13a, y13b;
     always @(posedge clk) begin
         cv9 <= cvg8c; cv9x <= cv9; cv10a <= cv9x; cv10 <= cv10a; cv10b <= cv10; cv11a <= cv10b; cv11m <= cv11a; cv11 <= cv11m;
         y9 <= y8c; y9x <= y9; y10a <= y9x; y10 <= y10a; y10b <= y10; y11a <= y10b; y11m <= y11a; y11 <= y11m;
-        y11b <= y11; y12a <= y11b; y12 <= y12a; y13a <= y12; y13b <= y13a;
+        y11b <= y11; y12a <= y11b; y12 <= y12a; y12b <= y12; y13a <= y12b; y13b <= y13a;
     end
     wire [3:0] cvg11 = cv11;
     wire [1:0] dy11 = y11;
@@ -1514,10 +1514,8 @@ module rdp_pix (
     // ======================================================================
     wire        door11 = 1'b0;
     wire arej11 = (a_cmp && ca11b < athr11b) || door11;
-    wire [63:0] bo0_w = bl_sel(1'b0, comb11b, mem11b, pa11b, sha11b, mcvg11b, shb);
     reg        v12a;
     reg [9:0]  x12a;
-    reg [63:0] bo12a;
     reg [31:0] comb12a, mem12a;
     reg [7:0]  pa12a, sha12a;
     reg [2:0]  mcvg12a;
@@ -1526,16 +1524,13 @@ module rdp_pix (
     reg [2:0]  cv312a, cv312, cv313, cv313b;
     always @(posedge clk) begin
         v12a <= v11b & ~rst; x12a <= x11b; bs12a <= bs11b;
-        bo12a <= bo0_w;
         comb12a <= comb11b; mem12a <= mem11b; pa12a <= pa11b; sha12a <= sha11b; mcvg12a <= mcvg11b;
         depth12a <= depth11b;
         pass12a <= (cyc == 2'd3) ? !k0_11b : (zpass11 && !arej11 && !kill11);
         ben12a <= blend_en; ovf12a <= ovf11b; cv312a <= cv311;
     end
-    wire [41:0] s0_w = bl_sum(bo12a);
     reg        v12;
     reg [9:0]  x12;
-    reg [23:0] b0rgb12;
     reg [31:0] comb12, mem12;
     reg [7:0]  pa12, sha12;
     reg [2:0]  mcvg12;
@@ -1543,19 +1538,33 @@ module rdp_pix (
     reg        pass12, ben12, ovf12;
     always @(posedge clk) begin
         v12 <= v12a & ~rst; x12 <= x12a; bs12 <= bs12a;
-        b0rgb12 <= { s0_w[40:33], s0_w[26:19], s0_w[12:5] };
         comb12 <= comb12a; mem12 <= mem12a; pa12 <= pa12a; sha12 <= sha12a; mcvg12 <= mcvg12a;
         depth12 <= depth12a; pass12 <= pass12a; ben12 <= ben12a; ovf12 <= ovf12a; cv312 <= cv312a;
     end
-    // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
-    wire [31:0] b012 = { b0rgb12, comb12[7:0] };
+    // The one blender, as the combiner (above): a 2-cycle pixel's first cycle takes the pixel as P11b has it (early), its second -- or a
+    // 1-cycle pixel's only one -- the same pixel's three clocks on (late: P12b), with the first cycle's result (b0_r) in P's place.
+    reg        v12b, bs12b, pass12b, ben12b, ovf12b;
+    reg [9:0]  x12b;
+    reg [31:0] comb12b, mem12b;
+    reg [7:0]  pa12b, sha12b;
+    reg [2:0]  mcvg12b, cv312b;
+    reg [13:0] depth12b;
+    always @(posedge clk) begin
+        v12b <= v12 & ~rst; x12b <= x12; bs12b <= bs12;
+        comb12b <= comb12; mem12b <= mem12; pa12b <= pa12; sha12b <= sha12; mcvg12b <= mcvg12;
+        depth12b <= depth12; pass12b <= pass12; ben12b <= ben12; ovf12b <= ovf12; cv312b <= cv312;
+    end
+    wire       bu_e = v11b && cyc == 2'd1;
+    reg [23:0] b0_r;                         // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
+    wire [63:0] bo1_w = bl_sel(!bu_e && cyc == 2'd1, bu_e ? comb11b : (cyc == 2'd1) ? { b0_r, comb12b[7:0] } : comb12b,
+                               bu_e ? mem11b : mem12b, bu_e ? pa11b : pa12b, bu_e ? sha11b : sha12b, bu_e ? mcvg11b : mcvg12b, shb);
+    reg        be13a;
 
     // ======================================================================
     // P13a: the last blender cycle's operands -- 2-cycle's second on the
     // first's result, or 1-cycle's (cycle 0's settings) on the pixel; P13b:
     // its sums; out: the result
     // ======================================================================
-    wire [63:0] bo1_w = bl_sel(cyc == 2'd1, (cyc == 2'd1) ? b012 : comb12, mem12, pa12, sha12, mcvg12, shb);
     reg        v13a;
     reg [9:0]  x13a;
     reg [63:0] bo13a;
@@ -1563,12 +1572,13 @@ module rdp_pix (
     reg [13:0] depth13;
     reg        pass13, ben13, ovf13;
     always @(posedge clk) begin
-        v13a <= v12 & ~rst; x13a <= x12; bs13a <= bs12;
+        v13a <= v12b & ~rst; x13a <= x12b; bs13a <= bs12b; be13a <= bu_e;
         bo13a <= bo1_w;
-        comb13 <= comb12;
-        depth13 <= depth12; pass13 <= pass12; ben13 <= ben12; ovf13 <= ovf12; cv313 <= cv312;
+        comb13 <= comb12b;
+        depth13 <= depth12b; pass13 <= pass12b; ben13 <= ben12b; ovf13 <= ovf12b; cv313 <= cv312b;
     end
     wire [41:0] s1_w = bl_sum(bo13a);
+    always @(posedge clk) if (be13a) b0_r <= { s1_w[40:33], s1_w[26:19], s1_w[12:5] };
     reg        v13b;
     reg [9:0]  x13b;
     reg        bs13b;
@@ -1621,9 +1631,9 @@ module rdp_pix (
     wire [2:0] dt13;
     rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1]), .bayer(other_h[6]),
                          .y(dy13), .x(x13b[1:0]), .dt(dt13));
-    // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
-    reg [8:0] nz1, nz2, nz3, nz4, nz5;
-    always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz4 <= nz3; nz5 <= nz4; end
+    // the noise: the LFSR at the pixel's P11 (the sample before its step), six clocks to P13b (P12b is one of them)
+    reg [8:0] nz1, nz2, nz3, nz4, nz5, nz6;
+    always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz4 <= nz3; nz5 <= nz4; nz6 <= nz5; end
     wire dnoise = other_h[7:6] == 2'd2 && !cyc[1];
     reg [14:0] col_t;                           // R5 G5 B5, truncated
     reg [8:0]  col_lo;                          // the low three bits of R, G, B
@@ -1652,15 +1662,15 @@ module rdp_pix (
         out_hid <= (cyc == 2'd3) ? {2{x13b[0] ? fill[0] : fill[16]}} : cv313b[1:0];
         col_lo <= (cyc == 2'd3) ? 9'd0 : { fin[26:24], fin[18:16], fin[10:8] };
         out_r8 <= (cyc == 2'd3) ? fill[{~x13b[1:0], 3'd0} +: 8] : fin[31:24];
-        col_dt <= dnoise ? nz5[2:0] : dt13;
-        col_dg <= dnoise ? nz5[5:3] : dt13;
-        col_db <= dnoise ? nz5[8:6] : dt13;
+        col_dt <= dnoise ? nz6[2:0] : dt13;
+        col_dg <= dnoise ? nz6[5:3] : dt13;
+        col_db <= dnoise ? nz6[8:6] : dt13;
         out_depth <= {depth13b, dzc};
         out_cpass <= pass13b;
         out_zpass <= pass13b && z_upd;
     end
 
-    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5p | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v10b | v11a | v11m | v11 | v11b | v12a | v12 | v13a | v13b | out_valid;
+    assign busy = v0 | v1 | v1b | v2 | v3 | v4 | (|av) | v5p | v5 | v6 | v7 | v8 | v8t | v8b | v8c | v9 | v9x | v10a | v10 | v10b | v11a | v11m | v11 | v11b | v12a | v12 | v12b | v13a | v13b | out_valid;
 endmodule
 
 // the dither's threshold at a place of the 4 x 4 matrix; 7 turns it off (no
