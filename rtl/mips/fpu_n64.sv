@@ -720,6 +720,25 @@ end
 logic [63:0] res_d;
 logic [31:0] ld_lo;
 logic        wr_, dbl_; logic [4:0] n_;                  // (the instruction writes a register; a double; its number)
+// (FAST) what the write is, from E's instruction as it enters M: writes a register (wd_wr), a double (wd_dbl; wd_arw: the datapath's, a
+// double or not by its format, found when it starts), and the number
+function automatic logic [7:0] wdec(input logic [31:0] i);
+    logic cop1, s_, d_, w_, l_, mtc, lw, mov, d64w, arw;
+    cop1 = i[31:26] == 6'h11;
+    s_ = cop1 && i[25:21] == 5'h10; d_ = cop1 && i[25:21] == 5'h11; w_ = cop1 && i[25:21] == 5'h14;
+    l_ = cop1 && i[25:21] == 5'h15 && (i[5:0] == 6'h20 || i[5:0] == 6'h21);
+    mtc = cop1 && (i[25:21] == 5'h04 || i[25:21] == 5'h05);
+    lw = i[31:26] == 6'h31 || i[31:26] == 6'h35;
+    mov = (s_ || d_) && i[5:0] == 6'h06;
+    d64w = d64_of(i) && i[5:0] < 6'h30;
+    arw = ((((s_ || d_ || w_) && !mov) || l_) && !d64_of(i)) && i[5:0] < 6'h30;
+    return {mtc || lw || mov || d64w || arw,                                           // writes
+            (cop1 && i[25:21] == 5'h05) || i[31:26] == 6'h35 || (mov && d_) || d64w,   // a double
+            arw,
+            lw ? i[20:16] : (mov || d64w || arw) ? i[10:6] : i[15:11]};                // the number
+endfunction
+logic wd_wr, wd_dbl, wd_arw; logic [4:0] wd_n;
+always_ff @(posedge clk) if (adv) {wd_wr, wd_dbl, wd_arw, wd_n} <= wdec(insn_e);
 always_comb res_d = f2d(res);
 always_comb begin
     gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xl_ : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000A00 : 32'd0);
@@ -736,6 +755,9 @@ always_comb begin
     if (is_mov) begin wr_ = 1; dbl_ = is_d; n_ = insn[10:6]; end
     if (is_d64 && !d64_cmp) begin wr_ = 1; dbl_ = 1; n_ = insn[10:6]; end
     if (is_arith && kind != K_CMP) begin wr_ = 1; dbl_ = dst_l || dst_d; n_ = insn[10:6]; end
+    // (FAST: the same from the registers that took E's instruction as M did -- a compare is the one that its function field says, as
+    // kind is by the time it completes -- so that the index of the write, and the bypass flags found from it, are not the decode of M's word)
+    if (FAST) begin wr_ = wd_wr; dbl_ = wd_dbl || (wd_arw && (dst_l || dst_d)); n_ = wd_n; end
     widx = {n_[4:1], n_[0] & frm};
     wi_l = wr_ && (dbl_ || frm || !n_[0]);
     wi_h = wr_ && (dbl_ || (!frm && n_[0]));
