@@ -306,13 +306,18 @@ wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocess
 wire         pair_go = pair_d && !stall_e;
 
 // ---- the register file: two copies, read with the instruction arriving in D
-logic [31:0] rf_qa, rf_qb;
+logic [31:0] rf_qa, rf_qb;               // (the operands')
+logic [31:0] rf_qac, rf_qbc;             // (the branch condition's: copies of the file, one for each use, so that a word has few loads)
+logic [31:0] rf_qam;                     // (the address adders')
 wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
 // (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
 wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
 rsp_rfram_oc rfa (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qa));
 rsp_rfram_oc rfb (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qb));
+rsp_rfram_oc rfac (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qac));
+rsp_rfram_oc rfbc (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qbc));
+rsp_rfram_oc rfam (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qam));
 
 // ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
 // in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which
@@ -383,15 +388,15 @@ wire [31:0] e_res = e_res_a | ({32{r_shl}} & sh_l) | ({32{r_shr}} & sh_r);
 wire a_m = fa_m, a_w = fa_w, a_r = !(fa_m | fa_w), b_m = fb_m, b_w = fb_w, b_r = !(fb_m | fb_w);
 wire eq_mw = m_res == w_res;
 wire h1_mr, h2_mr, h1_rm, h2_rm, h1_wr, h2_wr, h1_rw, h2_rw, h1_rr, h2_rr;
-rsp_eq32h c_mr (.a(m_res),  .b(rf_qb), .h1(h1_mr), .h2(h2_mr));
-rsp_eq32h c_rm (.a(rf_qa), .b(m_res),  .h1(h1_rm), .h2(h2_rm));
-rsp_eq32h c_wr (.a(w_res),  .b(rf_qb), .h1(h1_wr), .h2(h2_wr));
-rsp_eq32h c_rw (.a(rf_qa), .b(w_res),  .h1(h1_rw), .h2(h2_rw));
-rsp_eq32h c_rr (.a(rf_qa), .b(rf_qb), .h1(h1_rr), .h2(h2_rr));
+rsp_eq32h c_mr (.a(m_res),  .b(rf_qbc), .h1(h1_mr), .h2(h2_mr));
+rsp_eq32h c_rm (.a(rf_qac), .b(m_res),  .h1(h1_rm), .h2(h2_rm));
+rsp_eq32h c_wr (.a(w_res),  .b(rf_qbc), .h1(h1_wr), .h2(h2_wr));
+rsp_eq32h c_rw (.a(rf_qac), .b(w_res),  .h1(h1_rw), .h2(h2_rw));
+rsp_eq32h c_rr (.a(rf_qac), .b(rf_qbc), .h1(h1_rr), .h2(h2_rr));
 (* keep *) wire ea_eq_eb = (a_m & b_m) | (a_w & b_w) | ((a_m & b_w | a_w & b_m) & eq_mw) | (a_m & b_r & h1_mr & h2_mr) | (a_r & b_m & h1_rm & h2_rm)
               | (a_w & b_r & h1_wr & h2_wr) | (a_r & b_w & h1_rw & h2_rw) | (a_r & b_r & h1_rr & h2_rr);
-(* keep *) wire ea_zero  = (a_m & (m_res == 32'd0)) | (a_w & (w_res == 32'd0)) | (a_r & (rf_qa == 32'd0));
-(* keep *) wire ea31     = (a_m & m_res[31]) | (a_w & w_res[31]) | (a_r & rf_qa[31]);
+(* keep *) wire ea_zero  = (a_m & (m_res == 32'd0)) | (a_w & (w_res == 32'd0)) | (a_r & (rf_qac == 32'd0));
+(* keep *) wire ea31     = (a_m & m_res[31]) | (a_w & w_res[31]) | (a_r & rf_qac[31]);
 logic taken;                                                                                // (by the condition's code, a register, over the three: one LUT)
 always_comb begin
     unique case (e_c.bcond)
@@ -415,10 +420,10 @@ wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
 // (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
-wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qa[11:0] + imm_sx[11:0];
+wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qam[11:0] + imm_sx[11:0];
 logic [31:0] imm16;                            // (the offset + 16, registered with the instruction)
 always_ff @(posedge clk) if (!stall_e) imm16 <= {{16{s_ins_d[15]}}, s_ins_d[15:0]} + 32'd16;
-wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qa[11:0] + imm16[11:0];
+wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qam[11:0] + imm16[11:0];
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
