@@ -2,7 +2,7 @@
 # fails.sh <projects dir> [slack threshold]: grouped failing endpoints (setup) of a finished fit
 d=$1; th=${2:-0.05}
 cd $d && cat > /tmp/a2_f_$$.tcl <<TCL
-project_open mirlo
+project_open ${REV:-mirlo}
 create_timing_netlist -model slow
 read_sdc
 update_timing_netlist
