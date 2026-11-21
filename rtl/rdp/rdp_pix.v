@@ -276,8 +276,13 @@ module rdp_pix (
     wire [3:0] cjf = (cj0 != 4'd0) ? cj0 : (cj1 != 4'd0) ? cj1 : (cj2 != 4'd0) ? cj2 : cj3;
     wire [1:0] oy4 = (cj0 != 4'd0) ? 2'd0 : (cj1 != 4'd0) ? 2'd1 : (cj2 != 4'd0) ? 2'd2 : 2'd3;
     wire [1:0] ox4 = cjf[3] ? 2'd0 : cjf[2] ? 2'd1 : cjf[1] ? 2'd2 : 2'd3;
-    wire signed [28:0] zcx = $signed(z_dx[31:5]) * $signed({1'b0, ox4});
-    wire signed [28:0] zcy = $signed(z_dy[31:5]) * $signed({1'b0, oy4});
+    // (the offsets are 0..3 quarter pixels: the product is a choice among 0, the step, twice it and three times it, the last a register
+    // of the clock before, the primitive's DzDx and DzDy being steady long before its pixels -- the adder was in the mask's way)
+    reg signed [28:0] zdx3, zdy3;
+    always @(posedge clk) begin zdx3 <= $signed(z_dx[31:5]) * 3; zdy3 <= $signed(z_dy[31:5]) * 3; end
+    wire signed [28:0] zdx1 = $signed(z_dx[31:5]), zdy1 = $signed(z_dy[31:5]);
+    wire signed [28:0] zcx = ox4 == 2'd0 ? 29'sd0 : ox4 == 2'd1 ? zdx1 : ox4 == 2'd2 ? (zdx1 <<< 1) : zdx3;
+    wire signed [28:0] zcy = oy4 == 2'd0 ? 29'sd0 : oy4 == 2'd1 ? zdy1 : oy4 == 2'd2 ? (zdy1 <<< 1) : zdy3;
     // (the two products are registers, P0's; their sum, shifted, is added to Z where it is used: the products with the adds behind
     // them did not fit a clock of 10.667 ns)
     wire [3:0] cvg_in = {3'd0, in_mask[0]} + in_mask[1] + in_mask[2] + in_mask[3]
