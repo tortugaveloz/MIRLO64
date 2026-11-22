@@ -230,7 +230,7 @@ static u32 ul_patch(u32 vram, u32 len)
 /* The audio library is not always in the boot segment: a game that loads its code after the boot (decompressed, or from an overlay) has the
  * function in the RDRAM only some time into the run. So the lowest 4 MiB of the RDRAM (the code is there; the frame buffers and the heap are
  * higher) are looked through again, a sweep that starts when the game sets the audio's rate (its audio thread has started, its library is
- * loaded) and at a few ticks after (4.2 ms each: 2.5, 5.5, 11, 22 and 44 s). A sweep reads 8 KiB a tick, some 0.5 ms of it: a pass over the
+ * loaded) and at a few ticks after (4.2 ms each: 2.5, 5.5 and 11 s: none after the first 20 s of the run). A sweep reads 8 KiB a tick, some 0.5 ms of it: a pass over the
  * whole range in one go would hold the game for 0.2 s. A function that comes in behind the sweep is found by the next one. */
 #define UL_CHUNK 0x2000u
 #define UL_TOP   0x400000u
@@ -242,7 +242,7 @@ void n64rt_ul_late(void)
 }
 void n64rt_ul_tick(void)
 {
-    static const u16 s_at[] = { 600u, 1310u, 2620u, 5240u, 10480u };
+    static const u16 s_at[] = { 600u, 1310u, 2620u };
     static u32 s_ticks, s_next;
     if (!s_ul_late_on) return;
     if (s_next < sizeof s_at / sizeof s_at[0] && ++s_ticks == s_at[s_next]) { s_next++; n64rt_ul_late(); }

@@ -634,8 +634,8 @@ and is called with values live in what it leaves alone, so its wrapper keeps eve
 of the ratio times `8 / 2^30` times its own `2^30 / samples` -- and gets the console's 16.16 rate, or one `2^-16` off. A
 game that loads its code after the boot (unpacked, or from an overlay) has the function in the RDRAM only some time into the run,
 so `n64rt_ul_late` starts a sweep of the lowest 4 MiB of the RDRAM for it: when the game first sets the audio's rate (its audio
-thread is up) and at ticks 600, 1310, 2620, 5240 and 10480 (2.5, 5.5, 11, 22 and 44 s), one at a time. `n64rt_ul_tick` goes
-through 8 KiB of the range each tick (some 0.5 ms of the 4.2 ms, 31,000 cycles at most; the whole range is 12.9 million cycles, 0.2 s, which one pass would hold the game for), looking for the same
+thread is up) and at ticks 600, 1310 and 2620 (2.5, 5.5 and 11 s), one at a time. `n64rt_ul_tick` goes
+through 8 KiB of the range each tick (0.41 ms of the 4.2 ms on average, 26,000 cycles, and 0.53 ms, 33,500 cycles, at most; the whole range is 12.9 million cycles, 0.2 s, which one pass would hold the game for), looking for the same
 words with a first test that the function's first word is an `addiu $sp, $sp, -n` of `0xFF18` - `0xFFB8`. The sweep's position
 and the tick counters are in the runtime's `.bss`, which a state keeps with the RDRAM and a Restart Game clears. The
 envelope rate is the one change the runtime makes to the game's arithmetic, made in the RDRAM's copy; it is entered with
