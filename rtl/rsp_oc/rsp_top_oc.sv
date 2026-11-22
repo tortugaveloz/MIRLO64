@@ -220,11 +220,19 @@ function automatic logic [127:0] rot16(input logic [127:0] pre, input logic [3:0
     for (int b = 0; b < 16; b++) w4[127 - 8 * b -: 8] = r[3] ? w3[127 - 8 * ((b + 8) & 15) -: 8] : w3[127 - 8 * b -: 8];
     return w4;
 endfunction
+logic [127:0] q16;
+logic [3:0]  x_rot;
+// One rotation of sixteen bytes serves the store's data and the vector unit's loads: a store's data is rotated in the cycle its write
+// takes the port (sw_v), a load's line the cycle after its read (x_rot), and the two are never in the same cycle -- the store is in the
+// vector unit's E the cycle before it is taken, so no load of that unit's reads then, and the one a cycle earlier has its data by then; the
+// DMA's reads of DMEM take their words from q_s (word aligned: no rotation of bytes), not from this. The input and the amount are chosen
+// by sw_v: the first stage is then a choice of four (the store's pair of bytes, the line's) and the other three are the rotation's alone
+wire  [127:0] rt_o = rot16(sw_v ? sw_pre : q16, sw_v ? sw_rot : x_rot);
 always_comb begin
     if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
                            x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
     else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_be16 = sw_be;
-                           x_wd = rot16(sw_pre, sw_rot); x_rot_n = 4'd0; end
+                           x_wd = rt_o; x_rot_n = 4'd0; end
     else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_be16 = 16'd0;
                            x_wd = '0; x_rot_n = vm_rot; end
     else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_be16 = 16'd0;
@@ -258,19 +266,15 @@ wire  [7:0]  x_wa1 = x_addr16[11:4];             // (the row after: from the add
 logic [31:0] x_row;
 always_comb
     for (int k = 0; k < 4; k++) x_row[8 * k +: 8] = (2'(k) < x_wa[1:0]) ? x_wa1 : x_wa[9:2];
-logic [127:0] q16;
-logic [3:0]  x_rot;
 rsp_dpram_oc #(.DUALCLK(DUALCLK)) dmem (.clk, .clk_b, .a_row(x_row), .a_we((x_valid && x_we) ? x_be16 : 16'd0), .a_dat_w(x_wd), .a_dat_r(q16),
     .b_adr(dx_addr), .b_dat_r(dx_data));
 always_ff @(posedge clk) x_rot <= x_rot_n;
-// byte m of the result is byte (m + x_rot) mod 16 of the line: by 1, 2, 4, 8 bytes (four stages of two: fewer LUTs than two of four)
-logic [127:0] q_w, q_x, q_y, x_rd;
-always_comb begin
-    for (int m = 0; m < 16; m++) q_w[127 - 8 * m -: 8] = x_rot[0] ? q16[127 - 8 * ((m + 1) & 15) -: 8] : q16[127 - 8 * m -: 8];
-    for (int m = 0; m < 16; m++) q_x[127 - 8 * m -: 8] = x_rot[1] ? q_w[127 - 8 * ((m + 2) & 15) -: 8] : q_w[127 - 8 * m -: 8];
-    for (int m = 0; m < 16; m++) q_y[127 - 8 * m -: 8] = x_rot[2] ? q_x[127 - 8 * ((m + 4) & 15) -: 8] : q_x[127 - 8 * m -: 8];
-    for (int m = 0; m < 16; m++) x_rd[127 - 8 * m -: 8] = x_rot[3] ? q_y[127 - 8 * ((m + 8) & 15) -: 8] : q_y[127 - 8 * m -: 8];
-end
+// byte m of the result is byte (m + x_rot) mod 16 of the line: rt_o above (the store's rotation, shared)
+wire [127:0] x_rd = rt_o;
+`ifdef VERILATOR
+// (simulation) the shared rotation: no load's data is the vector unit's in the cycle a store's write takes the rotation
+always @(posedge clk) if (!rst && sw_v && vu.lw_v && !vu.lw_mt) $fatal(1, "rsp_top_oc: a vector load's data and a store's write in one cycle (the shared rotation)");
+`endif
 // the scalar unit's word is the line's bytes x_rot .. x_rot + 3: the two words they lie in (by x_rot[3:2]) and then the four bytes (by
 // x_rot[1:0]), two LUTs of a choice of four, where the rotation of the whole line (for the vector unit) is four stages
 logic [63:0] q_s;
@@ -497,7 +501,7 @@ always_ff @(posedge clk) begin
             iq <= o_load ? 2'd0 : iq == 2'd2 ? 2'd2 : iq + 2'd1;
             // (DMEM: a read's pair into the FIFO the cycle after; the head to ob as it empties)
             pf_rd <= dm_rd;
-            if (pf_rd) pf[pf_h ^ pf_n[0]] <= m_rdata16[127:64];
+            if (pf_rd) pf[pf_h ^ pf_n[0]] <= q_s;
             pf_n <= pf_n + 2'(pf_rd) - 2'(o_load && !d_im);
             if (o_load && !d_im) pf_h <= !pf_h;
             if (d_im ? o_load : dm_rd) np <= np + 9'd1;
