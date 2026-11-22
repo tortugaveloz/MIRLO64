@@ -320,18 +320,14 @@ wire  [31:0] c_ins_d = pair_d ? v_ins_d : ins_d;                // the coprocess
 wire         pair_go = pair_d && !stall_e;
 
 // ---- the register file: two copies, read with the instruction arriving in D
-logic [31:0] rf_qa, rf_qb;               // (the operands')
-logic [31:0] rf_qac, rf_qbc;             // (the branch condition's: copies of the file, one for each use, so that a word has few loads)
-logic [31:0] rf_qam;                     // (the address adders')
+logic [31:0] rf_qa, rf_qb;               // (the operands'; the branch condition's and the address adders' are the same words)
+wire  [31:0] rf_qac = rf_qa, rf_qbc = rf_qb, rf_qam = rf_qa;
 wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
 // (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
 wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
 rsp_rfram_oc rfa (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qa));
 rsp_rfram_oc rfb (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qb));
-rsp_rfram_oc rfac (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qac));
-rsp_rfram_oc rfbc (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qbc));
-rsp_rfram_oc rfam (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qam));
 
 // ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
 // in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which
