@@ -96,7 +96,7 @@ module mirlo_regs (
     output logic        cmd_valid,
     input  wire         cmd_ready,
     output logic [31:0] cmd_data,
-    input  wire  [31:0] rdp_sync_count,
+    input  wire  [15:0] rdp_sync_count,
     input  wire  [31:0] rdp_load_count,
     input  wire  [15:0] rdp_unknown_ops,
     input  wire         rdp_idle,
@@ -485,7 +485,7 @@ always_comb begin
     case (a[5:2])                                               // RDP
     R_RDP_CMD_STATUS[5:2]:                rb[7] = {19'd0, !f_in_ready, f_level};
     R_RDP_CMD_DROPPED[5:2]:               rb[7] = {16'd0, dropped};
-    R_RDP_SYNC_COUNT[5:2]:                rb[7] = rdp_sync_count;
+    R_RDP_SYNC_COUNT[5:2]:                rb[7] = {16'd0, rdp_sync_count};
     R_RDP_STATUS[5:2]:                    rb[7] = {31'd0, rdp_idle && f_level == 0 && !cmd_valid};
     default: ;
     endcase

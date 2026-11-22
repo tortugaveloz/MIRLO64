@@ -39,7 +39,8 @@ module rdp_xing #(
     output logic        rm_rdata_valid,
     output logic [31:0] rm_rdata,
     input  wire         r_idle, r_tmem_busy, r_sync_ev,
-    input  wire  [31:0] r_sync_count, r_load_count,
+    input  wire  [15:0] r_sync_count,
+    input  wire  [31:0] r_load_count,
     input  wire  [15:0] r_unknown_ops,
     // ---- clk's side
     input  wire         clk, rst,
@@ -59,7 +60,8 @@ module rdp_xing #(
     output wire         idle,
     output logic        tmem_busy,
     output logic        sync_ev,            // one cycle
-    output logic [31:0] sync_count, load_count,
+    output logic [15:0] sync_count,
+    output logic [31:0] load_count,
     output logic [15:0] unknown_ops
 );
 

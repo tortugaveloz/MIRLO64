@@ -87,7 +87,8 @@ u32 n64rt_gfx_poll(void)
     }
     /* one full sync per task, at its end: one DP event each, in order (one
      * per poll: the next tick posts the next) */
-    if (s_dp_posted < s_kicked && rdp_sync_count_read() - s_sync0 > s_dp_posted) {
+    u32 d_sync = (rdp_sync_count_read() - s_sync0 - s_dp_posted) & 0xFFFFu;       /* (the counter is 16 bits: the syncs not yet posted, 1..0x7FFF) */
+    if (s_dp_posted < s_kicked && d_sync != 0 && d_sync < 0x8000u) {
         s_dp_posted++;
         s_t_dp = cyc();
         ev |= 1u << OS_EVENT_DP;
