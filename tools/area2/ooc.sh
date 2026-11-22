@@ -102,7 +102,8 @@ module ooc_dpc (input wire clk, rst, start_we0, end_we, status_we, input wire [3
 endmodule
 SV
 ;;
-xing|xingpll) cp $W/tools/area2/xing_top.sv top.sv; top=ooc_$unit ;;       # (rsp_clk, rsp_gate and rsp_xing with stand-ins on both sides; CLK_C_NS=10.667)
+xing|xingpll) cp $W/tools/area2/xing_top.sv top.sv; top=ooc_$unit ;;
+rdpx) cp $W/tools/area2/rdpx_top.sv top.sv; top=ooc_rdpx ;;       # (rdp_xing alone: the RDP's crossings with clk_sys)       # (rsp_clk, rsp_gate and rsp_xing with stand-ins on both sides; CLK_C_NS=10.667)
 ports) cat > top.sv <<SV
 module ooc_ports (input wire clk, rst,
     input wire m_cmd_valid, m_cmd_we, input wire [31:0] m_cmd_addr, output wire m_cmd_ready, input wire m_wdata_valid, input wire [31:0] m_wdata,
@@ -118,7 +119,7 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rdpt rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+*) echo "unit: cpu rdp rdpt rdpx rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
