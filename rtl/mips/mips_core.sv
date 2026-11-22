@@ -1440,7 +1440,7 @@ wire         m_xcmp = m_c.x64 == X_SLT || m_c.x64 == X_SLTU;
 
 // (FAST) W's result and hx by one-hot selects, found as the instruction leaves E (the priority of the chains below, resolved there:
 // registered flags, not a decode of m_c behind every bit's choice)
-logic [31:0] m_c0k, c0_rd_k;                                               // (mfc0's register one-hot: below; the value it makes, its select included)
+logic [4:0]  m_c0s; logic m_s_c0; logic [31:0] c0_rd_k;                                               // (mfc0's register and select, registered: below; the value it makes, its select included)
 logic m_s_fp, m_s_sc, m_s_ld, m_s_xc, m_s_sh, m_s_res;       // w_res: mfc1 / cfc1 / dmfc1, sc, a load, a 64-bit compare, a d-shift, E's result
 logic m_h_lwu, m_h_ld, m_h_c1, m_h_sh, m_h_al, m_h_hi, m_h_lo;       // w_hx: lwu, ld, dmfc1, a d-shift, dadd / dsub / and / or / xor / nor, mfhi, mflo
 logic [31:0] m_wres_d, m_whx_d;
@@ -1505,12 +1505,9 @@ always_comb begin
     c0_v[15] = 32'h00000B22; c0_v[16] = c0_config; c0_v[30] = c0_errorepc;
     c0_rd = c0_v[m_insn[15:11]];
 end
-// (FAST: mfc0's register as one-hot, registered as the instruction enters M -- set only for an mfc0 -- so that the value is an AND-OR of the
-// registers by flags, not a multiplexer on m_insn's bits, which fan out to the whole core; m_c0k is then w_res's mfc0 term whole, the select (an mfc0) included)
-always_comb begin
-    c0_rd_k = 32'd0;
-    for (int k = 0; k < 32; k++) c0_rd_k = c0_rd_k | ({32{m_c0k[k]}} & c0_v[k]);
-end
+// (FAST: mfc0's register number and whether it is an mfc0, registered as the instruction enters M, so that the value is a multiplexer on
+// flip-flops of its own, not on m_insn's bits, which fan out to the whole core; zero for anything but an mfc0: w_res's mfc0 term whole)
+always_comb c0_rd_k = {32{m_s_c0}} & c0_v[m_c0s];
 
 // interrupts: taken before the instruction at M (not while a slow access is under way)
 assign hwx_on = MI && mon_mi;
@@ -2259,7 +2256,7 @@ always_ff @(posedge clk) begin
                 m_k_md <= e_c.md != MD_NONE; m_k_fpu <= e_c.cop1 || e_c.ld == M_FL || e_c.st == S_FS;
                 m_k_sbeq <= m_cst_idx == {e_ea[DW+1:3], e_ea[2] && !e_ua};   // (it is behind the store that is at M now; its read, dc_raddr's)
                 m_k_sstrb <= e_sstrb; m_k_sfs <= e_c.st == S_FS; m_k_ssd <= e_c.st == S_SD;
-                m_c0k <= e_s_c0 ? 32'd1 << e_insn[15:11] : 32'd0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
+                m_c0s <= e_insn[15:11]; m_s_c0 <= e_s_c0; m_s_fp <= e_s_fp; m_s_sc <= e_s_sc; m_s_ld <= e_s_ld; m_s_xc <= e_s_xc; m_s_sh <= e_s_sh; m_s_res <= e_s_res;
                 m_h_lwu <= e_h_lwu; m_h_ld <= e_h_ld; m_h_c1 <= e_h_c1; m_h_sh <= e_h_sh; m_h_al <= e_h_al; m_h_hi <= e_h_hi; m_h_lo <= e_h_lo;
             end
             m_st_lo <= FAST ? e_sdata : e_b;        // (FAST: a store's word in its lanes already)
