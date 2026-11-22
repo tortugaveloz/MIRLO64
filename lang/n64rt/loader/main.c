@@ -141,9 +141,9 @@ int main(void)
         }
     }
     g.mem_size = GAME_MEM;
-    /* The core's "Expansion Pak" setting (interact.json: field 14, INTERACT1's bit 24; 0 with the Pak in, which is how the
-     * core starts): without it the console has 4 MiB */
-    if ((apf_interact_interact1_read() >> 24) & 1u) g.mem_size = 0x400000u;
+    /* The core's "Expansion Pak/Gameshark" setting (interact.json: field 7, INTERACT0's bits 26:25; bit 0 of the list's value, bit 25, is 0 with
+     * the Pak in, which is how the core starts): without it the console has 4 MiB */
+    if ((apf_interact_interact0_read() >> 25) & 1u) g.mem_size = 0x400000u;
     g.cic = cic;
     n64rt_boot_rom(&g, size);
 }

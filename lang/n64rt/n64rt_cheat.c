@@ -1,4 +1,4 @@
-/* GameShark codes: the setting "Enable Gameshark codes" (interact.json: INTERACT1[25]). With it on the
+/* GameShark codes: the setting "Expansion Pak/Gameshark" (interact.json: INTERACT0[26], bit 1 of the list's value). With it on the
  * runtime looks, once, for the game's codes in a text file on the SD card -- Assets/n64/common/gameshark/<ID>.<version>.txt, else
  * <ID>.txt, where <ID> is the cartridge's four characters (ROM 0x3B..0x3E: "NSME": the game's code and its region) and <version> the
  * header's version byte, in decimal -- and runs every code in it in every video field (n64rt_gs.h has the format and the code types), as a
@@ -121,7 +121,7 @@ void n64rt_cheat_init(void) { s_n = 0; s_loaded = 0; }
 
 void n64rt_cheat_field(void)
 {
-    const int on = (apf_interact_interact1_read() >> 25 & 1u) != 0;
+    const int on = (apf_interact_interact0_read() >> 26 & 1u) != 0;
     if (on && !s_loaded) { s_loaded = 1; load_codes(); }
     else if (!on && s_loaded) { s_loaded = 0; s_n = 0; }
     if (!s_n) return;

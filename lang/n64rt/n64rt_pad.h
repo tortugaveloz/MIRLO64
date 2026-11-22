@@ -6,13 +6,14 @@
  * right Y, from the low byte up; 0x80 centred) and the settings are the two words of APF_INTERACT, as interact.json
  * (pkg/pocket/Cores/tortuga.Mirlo64/interact.json) writes them -- a field at a time, at the addresses 0x1000_0100 + 4 x n:
  *
- *   word 0 [4:0]    n=2  "Controller 1 pak": n64rt_pak.c
+ *   word 0 [4:0]    n=2  "Controller paks": n64rt_pak.c
  *          [9:5]    n=3  "Crop Vertical" (the video: rtl/soc/mirlo_regs.sv)
  *          [14:10]  n=4  "R as modifier": 0 none, 1 face C buttons (R held turns X, B, Y, A into C-up, C-down, C-left, C-right
  *                        where they sit), 2 joystick half press (R held makes the D-pad's stick 60 %); used so, R never reaches the game
  *          [19:15]  n=5  "Crop Horizontal" (the video: [16:15] columns at the right, [18:17] at the left, 0..3 each)
- *          [24:20]  n=6  free
- *          [29:25]  n=7  free (was "R stick dead zone": the one "Stick dead zone", n=9, serves both sticks)
+ *          [24:20]  n=6  free (was "Controller 2 pak": "Controller paks" has both)
+ *          [26:25]  n=7  "Expansion Pak/Gameshark": bit 25 set, no Expansion Pak (the console has 4 MiB); bit 26 set, the GameShark codes on
+ *          [29:27]  n=7  free
  *   word 1 [4:0]    n=8  "Start button": which Pocket key is the N64's Start (a button code, below; 0 the Start key), or 12
  *                        a Start macro, two keys together (neither counts for anything else then): 12 Select+Start, and the C buttons' pairs:
  *                        13 C-left+C-right, 14 C-down+C-up, 15 C-down+C-left, 16 C-down+C-right, 17 C-up+C-left, 18 C-up+C-right
@@ -25,8 +26,8 @@
  *                        (the stick stays centred); any other value is the D-pad
  *          [21:20]  n=12 "Restart Game": the action's value (1) when it is chosen, cleared by the runtime (n64rt_restart.c); not a setting
  *          [23:22]  n=13 "D-pad": 0 none, 1 the D-pad, 2 the left analog stick, 3 the right analog stick
- *          [24]     n=14 free (was "Show FPS", which nothing ever read)
- *          [25]     n=15 free (was "Start = Select+Start")
+ *          [24]     n=14 free (was the Expansion Pak setting, now in n=7)
+ *          [25]     n=15 free (was the GameShark setting, now in n=7)
  *
  * A button setting (Z, L, R, Modifier) is a code, 0 the setting's own default (so that the word's reset value, 0, is the
  * default layout before the Pocket has written anything): 1 the Pocket's L, 2 R, 3 ZL (L2), 4 ZR (R2), 5 none, 6 A, 7 B, 8 X,
