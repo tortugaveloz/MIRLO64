@@ -38,6 +38,10 @@
 #define LAYOUT_GBSAVE_MAX   0x00021000
 #define LAYOUT_GBSAVE2      0x42D50000      /* slot 6: cartridge 2's RAM, at the bridge's 0x06D5_0000; likewise */
 #define LAYOUT_GBSAVE2_SLOT 6
+#define LAYOUT_SHADOW       0x43200000      /* the RDP's shadow plane (the core's "Video settings" 32-bit option, docs/video_options.md): 2 MiB, a byte for each pixel
+                                             * of a 16-bit image (some of its low colour bits and a check), the image's address folded into it
+                                             * (rtl/soc/mirlo_mips.sv); no program reads it */
+#define LAYOUT_SHADOW_BYTES 0x00200000
 #define LAYOUT_GBROM        0x43400000      /* slot 8: cartridge 1's ROM, up to 3 MiB, at the bridge's 0x0740_0000. Below it the bridge's
                                              * 0x0730_0000 - 0x073F_FFFF are the PSRAM's, not the SDRAM's */
 #define LAYOUT_GBROM_SLOT   8
