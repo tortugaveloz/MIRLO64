@@ -1057,22 +1057,23 @@ The same setting's values 4, 5 and 6 (Transfer Pak SD P2, Transfer Pak SD P1P2, 
 ### GameShark codes
 
 The setting "Expansion Pak/Gameshark" with the codes on (the other half of that list; off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
-`n64rt_gs.c`). They are a text file on the SD card, in `Assets/n64/common/gameshark/`, named after the cartridge: its four-character ID
-(ROM `0x3B..0x3E`: `NSME`, the game's code and its region) and, for a revision whose addresses differ, its version byte in decimal:
-`NSME.1.txt` is tried first, then `NSME.txt`. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
-from its hook on the vertical retrace: there is no choosing among them (the file holds the codes to run). `n64rt_gs.h` has the format
+`n64rt_gs.c`). They are a text file on the SD card, written by the Game Shark core (`tortuga.gameshark`): `Saves/n64/common/<the ROM's name without its extension>.gs`
+(`n64rt_gsfile.h`; the ROM's path is what the Pocket answers to `REQUEST_GETFILE` for the data slot 0). Only the codes to run are in it: the core writes the ones the user
+turned on, with a `#` line before each cheat that has its name. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
+from its hook on the vertical retrace. `n64rt_gs.h` has the format
 (`80123456 0063  a description`; lines that are not a code and `#`, `;` and `//` comments are skipped) and the types: `80`/`81` (8- and 16-bit
 writes), `A0`/`A1`, `D0` to `D3` (the next line runs if the byte or half-word at the address is, or is not, the value), `50` (the repeater), and
 `F0`/`F1` (as `80`/`81`). The GS button's `88` and `89` and the types that are not known are skipped. A write that would not change a value is not made;
 one that does is made visible to the game's data cache, and the instruction cache is dropped in the field if any did. With 4 MiB of RDRAM (the
-Expansion Pak setting off) writes above it are ignored. `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host.
+Expansion Pak setting off) writes above it are ignored. `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host and `gsfile_host.c` the file's path.
+There is no other place the runtime looks in: a game without that file runs no codes.
 
 The file is read by the Pocket at the runtime's request, with the bridge's target commands (`APF_BRIDGE`, [control.md](control.md)); the
 core's hardware already has them. The runtime writes the open command's parameter struct (the path, 256 bytes, then the flags and the size,
 0) at `0x42D3_0000`, sets `SLOT_ID` to 7 and `RAM_DATA_ADDRESS` to it, and writes `REQUEST_OPENFILE`; the Pocket reads the struct from the
 SDRAM through the bridge and opens the file. Then `DATA_OFFSET` 0, `TRANSFER_LENGTH` the file's size (`FILE_SIZE`), `RAM_DATA_ADDRESS` `0x42D4_0000` and
 `REQUEST_READ`. Each command's end is `STATUS`; the result is `COMMAND_RESULT_CODE` (0 done; the Pocket answers 4 for a path it does not find).
-**The path has to start with a slash and be the card's own** (`/Assets/n64/common/gameshark/NSME.txt`): measured on a Pocket, the same path
+**The path has to start with a slash and be the card's own** (`/Saves/n64/common/Some Game (U).gs`): measured on a Pocket, the same path
 without the slash, relative to `common/`, to `n64/common/` or alone, all fail with 4.
 
 The setting is looked at in every field (a box that is on and has no codes loads the file; off drops them) because the Pocket does

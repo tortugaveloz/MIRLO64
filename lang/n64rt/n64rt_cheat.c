@@ -1,8 +1,7 @@
-/* GameShark codes: the codes of the setting "Expansion Pak/Gameshark" (interact.json: INTERACT1[25]). With it on the
- * runtime looks, once, for the game's codes in a text file on the SD card -- Assets/n64/common/gameshark/<ID>.<version>.txt, else
- * <ID>.txt, where <ID> is the cartridge's four characters (ROM 0x3B..0x3E: "NSME": the game's code and its region) and <version> the
- * header's version byte, in decimal -- and runs every code in it in every video field (n64rt_gs.h has the format and the code types), as a
- * GameShark does from its hook on the vertical retrace. No code is left out: the file holds the ones to run.
+/* GameShark codes: the setting "Expansion Pak/Gameshark" with the codes on. The runtime looks, once, for the game's codes in the text file the Game Shark core
+ * writes -- /Saves/n64/common/<the ROM's name without its extension>.gs (n64rt_gsfile.h; the ROM's path is what the Pocket answers to REQUEST_GETFILE for
+ * data.json's slot 0, the game's) -- and runs every code in it in every video field (n64rt_gs.h has the format and the code types), as a GameShark does
+ * from its hook on the vertical retrace. No code is left out: the file holds the ones to run. There is no other file: a game without one runs no codes.
  *
  * The file is read by the Pocket at the runtime's request, with the bridge's target commands (docs/control.md, APF_BRIDGE): the open of
  * data.json's slot LAYOUT_GS_SLOT to a path (the parameter struct at LAYOUT_GS_PARAM, which the Pocket reads from the SDRAM through the
@@ -16,6 +15,7 @@
 #include <system.h>
 #include "n64rt.h"
 #include "n64rt_gs.h"
+#include "n64rt_gsfile.h"
 
 #define GS_MAX 512u
 static n64rt_gs_code_t s_code[GS_MAX];
@@ -89,27 +89,33 @@ static int load(const char *path)
     return 1;
 }
 
+/* the game ROM's path, as the Pocket has it (the slot 0's file: GETFILE writes it, NUL-ended, to the parameter struct); 0 if it did not answer */
+static int rom_path(char *path)
+{
+    volatile u8 *ps = (volatile u8 *)(uintptr_t)LAYOUT_GS_PARAM;
+    int r = -1;
+    for (int tries = 0; tries < 3 && r != 0; tries++) {         /* (the Pocket answers in 20 ms; a missing answer is tried again) */
+        for (u32 i = 0; i < 0x110u; i++) ps[i] = 0;
+        flush_cpu_dcache_range((const void *)ps, 0x110u);
+        apf_bridge_slot_id_write(0);
+        apf_bridge_ram_data_address_write(LAYOUT_GS_PARAM);
+        settle();
+        r = command(apf_bridge_request_getfile_write);
+    }
+    if (r != 0) return 0;
+    settle();
+    flush_cpu_dcache_range((const void *)ps, 0x110u);
+    u32 len = 0;
+    for (; len < 255u && ps[len]; len++) path[len] = (char)ps[len];
+    path[len] = 0;
+    return len != 0;
+}
+
 static void load_codes(void)
 {
-    const u32 w = n64rt_rom_word(0x38u), v = n64rt_rom_word(0x3Cu);      /* 0x3B..0x3E: the ID, 0x3F: the version */
-    char id[5] = { (char)w, (char)(v >> 24), (char)(v >> 16), (char)(v >> 8), 0 };
-    for (int i = 0; i < 4; i++) {
-        char c = id[i];
-        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) id[i] = '_';
-    }
-    char plain[48] = "/Assets/n64/common/gameshark/", with[56];
-    memcpy(plain + 29, id, 4);
-    memcpy(plain + 33, ".txt", 5);
-    memcpy(with, plain, 33);
-    char *p = with + 33;
-    *p++ = '.';
-    char dig[4];
-    int nd = 0;
-    u32 r = v & 0xFFu;
-    do { dig[nd++] = (char)('0' + r % 10u); r /= 10u; } while (r);
-    while (nd) *p++ = dig[--nd];
-    memcpy(p, ".txt", 5);
-    if (!load(with)) load(plain);
+    char rp[256], gs[300];
+    if (rom_path(rp) && n64rt_gsfile_path(rp, gs, sizeof gs)) (void)load(gs);
+    else n64rt_log("n64rt: GameShark: the ROM's path is not known: no codes\n");
     apf_bridge_slot_id_write(0);
 }
 

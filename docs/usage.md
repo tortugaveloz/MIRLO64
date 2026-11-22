@@ -46,9 +46,8 @@ A Transfer Pak SD uses the Game Boy game's own `<game>.sav`, in the same Saves f
 
 ## GameShark codes
 
-With the codes on in "Expansion Pak/Gameshark", the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
-is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
-field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
-choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the
-types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The codes are read when the
-game starts. The file `PUT_CODES_HERE.txt` in that folder says it too.
+With the codes on in "Expansion Pak/Gameshark", the core runs, in every video field and as a GameShark does, the codes in the file `<the game's name>.gs` in `Saves/n64/common/`
+(for the ROM `Assets/n64/common/Some Game (U).z64`, `Saves/n64/common/Some Game (U).gs`). The Game Shark core makes that file: it lists the codes of the game's entry in
+its database and writes the ones you turn on. The file is text, one code to run in each line, `80123456 0063`, with `#` lines for the cheats' names (the codes can be
+written by hand too); the types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The file is read
+when the game starts; a game without a file runs no codes.
