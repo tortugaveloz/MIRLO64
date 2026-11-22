@@ -287,9 +287,11 @@ module rdp_mem (
     // (the head is a register: loaded from the FIFO's RAM when the FIFO has a word and the head has none, or is done -- the RAM's
     // output with the word's decode behind it, then the engine's own decisions and the data's choices, were one path of 25 levels)
     wire [79:0] rf_ram  = rf[rf_rd[1:0]];
+    wire [3:0]  rg_n    = range_sel(rf_ram[46:38]);       // (its pixels' byte lanes, found as it is loaded)
     reg  [79:0] rf_head;
     reg  [15:0] rfs_head;                     // ... its shadow bytes
     reg         hd_par;                       // its colour word is the odd one of its pair (the colour word's address' bit 0 against its image's)
+    reg  [1:0]  hd_se;                        // its pixels that are written, [1] the odd one's (a 16-bit image's colour pass: h_csel's two halves), found as it is loaded
     reg         hd_v;                         // the head holds a word
     reg  [3:0]  hd_range;                     // its pixels' byte lanes (range_sel of its word)
     reg         hd_fst, hd_lst;               // it is its span's first word of a group, last
@@ -412,13 +414,13 @@ module rdp_mem (
     // written with the pair's second word (or the span's last, when that is the even one), with the bytes of the pixels written: the
     // first word's held in s_pd, s_pe from its own turn
     wire        h_pend  = hd_par || hd_lst;                                     // the plane word is complete with the head's word
-    wire [1:0]  h_se    = {h_csel[3], h_csel[1]};                               // this word's pixels that are written
+    wire [1:0]  h_se    = hd_se;                                                // this word's pixels that are written
     wire [1:0]  h_pe    = (hd_par && !hd_fst) ? s_pe : 2'b00;                   // ... and the pair's first word's
     wire [15:0] h_sdata = w_fillm ? w_shfill : rfs_head;
     wire        h_need_s = w_sh && !w_pz && h_pend && {h_pe, h_se} != 4'd0;      // the head ends a plane word that has bytes to write
     wire [31:0] h_sword = {hd_par ? s_pd : h_sdata, h_sdata};           // (an even word alone: its bytes go in the upper half, the lower has no byte enable)
     wire [3:0]  h_sbe   = hd_par ? {h_pe, h_se} : {h_se, 2'b00};
-    wire        h_s     = h_v && h_need_s && (h_ph == 2'd1 || (h_ph == 2'd0 && h_csel == 4'd0));   // its plane word (after its colour word)
+    wire        h_s     = h_v && h_need_s && (h_ph == 2'd1 || (h_ph == 2'd0 && h_se == 2'd0));   // its plane word (after its colour word)
     wire        h_hh    = h_v && !w_pz && !h_c && !h_s && h_last && h_any;        // ... or its group's hidden word
     wire        wr_want = (h_c || h_zz || h_s || h_hh) && !wf_full;
     wire        wr_go   = wr_want && cmd_free && !rd_want;
@@ -625,7 +627,8 @@ module rdp_mem (
                     rf_head <= rf_ram;
                     rfs_head <= rfs[rf_rd[1:0]];
                     hd_par <= w_cb[0] ^ rf_ram[38];
-                    hd_range <= range_sel(rf_ram[46:38]);
+                    hd_se <= w_fillm ? {rg_n[3], rg_n[1]} : {rg_n[3] & rf_ram[0], rg_n[1] & rf_ram[1]};
+                    hd_range <= rg_n;
                     hd_fst <= rf_ram[47:38] == {1'b0, w_x0[9:1]};
                     hd_lst <= rf_ram[47:38] == w_lastw;
                     hd_j <= w_cb[2:0] + rf_ram[40:38]; hd_oh <= 8'd1 << (w_cb[2:0] + rf_ram[40:38]);

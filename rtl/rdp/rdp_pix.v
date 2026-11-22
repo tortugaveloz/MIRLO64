@@ -1260,6 +1260,8 @@ module rdp_pix (
     reg        v10;
     reg [9:0]  x10;
     reg [31:0] tex10, tex1_10, mem10;
+    reg [15:0] mv10;                  // a 16-bit image's memory word and its shadow byte, kept as they come out of the RAMs: their check and the low bits they give are made in the next clock (P10b)
+    reg [7:0]  ms10;
     reg [35:0] shade10;
     reg [17:0] depth10;
     reg [15:0] zold10;               // the depth image's word, as it is
@@ -1271,7 +1273,9 @@ module rdp_pix (
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
         // a 16-bit one has its bit 0 and the hidden two; lang/c/rdp/rdp.c draw_pixel_cvg)
-        mem10 <= c32 ? {clb_rdata[31:8], 8'hFF} : un565sh(c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16], c8 ? 8'd0 : hk10a[1] ? (x10a[0] ? slb_rdata[7:0] : slb_rdata[15:8]) : (x10a[0] ? slb_rdata[23:16] : slb_rdata[31:24]));
+        mem10 <= {clb_rdata[31:8], 8'hFF};                          // (a 32-bit image's; a 16-bit one's is made in P10b)
+        mv10 <= c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16];
+        ms10 <= c8 ? 8'd0 : hk10a[1] ? (x10a[0] ? slb_rdata[7:0] : slb_rdata[15:8]) : (x10a[0] ? slb_rdata[23:16] : slb_rdata[31:24]);
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
     end
@@ -1287,7 +1291,7 @@ module rdp_pix (
     always @(posedge clk) begin
         v10b <= v10 & ~rst; x10b <= x10; bs10b <= bs10;
         tex10b <= tex10; tex1_10b <= tex1_10; shade10b <= shade10; depth10b <= depth10;
-        mem10b <= mem10; zold10b <= zold10; memb10b <= memb10; hid10b <= hid10;
+        mem10b <= c32 ? mem10 : un565sh(mv10, ms10); zold10b <= zold10; memb10b <= memb10; hid10b <= hid10;
         lf10b <= lf10; nz10b <= nz10;
     end
     // (cyc is the primitive's, steady while its pixels are in the pipe: its test is a register, and the choice between the first cycle's
