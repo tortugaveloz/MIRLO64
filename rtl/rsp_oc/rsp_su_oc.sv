@@ -539,7 +539,7 @@ always_ff @(posedge clk) begin
         m_we_r <= e_go && e_c.we;
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
-            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= s2_d ? decode(i_data2) : decode(ins_d);
+            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= decode(s_ins_d);
             e_spc <= (pair_d && v_first) ? d_pc + 12'd4 : d_pc;
             v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
