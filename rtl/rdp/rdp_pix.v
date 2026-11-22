@@ -1012,25 +1012,35 @@ module rdp_pix (
         input [35:0] cm;
         rgb_b = (sel == 4'd7) ? cc_xab(k4) : (sel >= 4'd6) ? 10'd0 : rgb_a(sel, i, tex, tex1, sh, cm);
     endfunction
-    function automatic [9:0] rgb_c;        // (fr: the LOD fraction or the primitive's, 13 or 14, chosen once for the three)
+    function automatic [9:0] rgb_c_com;   // C's choices that are the same for the three channels (the alphas, the fraction, K5), made once
         input [4:0]  sel;
-        input [1:0]  i;
         input [31:0] tex, tex1;
         input [35:0] sh;
         input [35:0] cm;
         input [9:0]  fr;
         case (sel)
+            5'd7:  rgb_c_com = cc_xc(ch9(cm, 2'd3));
+            5'd8:  rgb_c_com = {2'b00, tex[7:0]};
+            5'd9:  rgb_c_com = {2'b00, tex1[7:0]};
+            5'd10: rgb_c_com = {2'b00, prim[7:0]};
+            5'd11: rgb_c_com = {1'b0, ch9(sh, 2'd3)};
+            5'd12: rgb_c_com = {2'b00, env[7:0]};
+            5'd13, 5'd14: rgb_c_com = fr;
+            5'd15: rgb_c_com = cc_xc(k5);
+            default: rgb_c_com = 10'd0;
+        endcase
+    endfunction
+    function automatic [9:0] rgb_c;        // (fr: the LOD fraction or the primitive's, 13 or 14, chosen once for the three; com: rgb_c_com)
+        input [4:0]  sel;
+        input [1:0]  i;
+        input [31:0] tex, tex1;
+        input [35:0] sh;
+        input [35:0] cm;
+        input [9:0]  com;
+        case (sel)
             5'd0:  rgb_c = cc_xc(ch9(cm, i));
             5'd1, 5'd2, 5'd3, 5'd4, 5'd5: rgb_c = rgb_a(sel[3:0], i, tex, tex1, sh, cm);
-            5'd7:  rgb_c = cc_xc(ch9(cm, 2'd3));
-            5'd8:  rgb_c = {2'b00, tex[7:0]};
-            5'd9:  rgb_c = {2'b00, tex1[7:0]};
-            5'd10: rgb_c = {2'b00, prim[7:0]};
-            5'd11: rgb_c = {1'b0, ch9(sh, 2'd3)};
-            5'd12: rgb_c = {2'b00, env[7:0]};
-            5'd13, 5'd14: rgb_c = fr;
-            5'd15: rgb_c = cc_xc(k5);
-            default: rgb_c = 10'd0;
+            default: rgb_c = com;
         endcase
     endfunction
     function automatic [8:0] rgb_d;        // (D's low 9 bits are all that count)
@@ -1108,7 +1118,7 @@ module rdp_pix (
         reg [3:0] sa_r, sb_r;
         reg [4:0] mul_r;
         reg [2:0] sa_a, mul_a, sb_a, add_a, add_r;
-        reg [9:0] lfx, fr_c, fr_a;
+        reg [9:0] lfx, fr_c, fr_a, c_com;
         begin
             if (!cy) begin
                 sa_r = cc_hi[23:20]; mul_r = cc_hi[19:15]; sa_a = cc_hi[14:12]; mul_a = cc_hi[11:9];
@@ -1123,11 +1133,12 @@ module rdp_pix (
             lfx = lod_on ? {lf[8], lf} : (cyc == 2'd0 && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
+            c_com = rgb_c_com(mul_r, tex, tex1, sh, cm, fr_c);
             cc_sel = {
                 (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd0, tex, tex1, sh, cm), (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd1, tex, tex1, sh, cm),
                 (sa_r == 4'd7) ? cc_xab(nz) : rgb_a(sa_r, 2'd2, tex, tex1, sh, cm), al_abd(sa_a, tex, tex1, sh, cm),
                 rgb_b(sb_r, 2'd0, tex, tex1, sh, cm), rgb_b(sb_r, 2'd1, tex, tex1, sh, cm), rgb_b(sb_r, 2'd2, tex, tex1, sh, cm), al_abd(sb_a, tex, tex1, sh, cm),
-                rgb_c(mul_r, 2'd0, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm, fr_c), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm, fr_c), al_c(mul_a, tex, tex1, sh, fr_a),
+                rgb_c(mul_r, 2'd0, tex, tex1, sh, cm, c_com), rgb_c(mul_r, 2'd1, tex, tex1, sh, cm, c_com), rgb_c(mul_r, 2'd2, tex, tex1, sh, cm, c_com), al_c(mul_a, tex, tex1, sh, fr_a),
                 rgb_d(add_r, 2'd0, tex, tex1, sh, cm), rgb_d(add_r, 2'd1, tex, tex1, sh, cm), rgb_d(add_r, 2'd2, tex, tex1, sh, cm), al_d(add_a, tex, tex1, sh, cm) };
         end
     endfunction
