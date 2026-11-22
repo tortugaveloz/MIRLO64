@@ -1,0 +1,15 @@
+# (Not the LOD: docs/rdp_exact.md, rule 4, attribute interpolation.) A texture rectangle has no Z coefficients: with Z_SOURCE_SEL off its depth is 0, the
+# nearest, as the oracle's. The model without RDP_EXACT, and the RTL, took SET_PRIM_DEPTH's value for it, so a depth-compared
+# rectangle (a game's 2D overlay drawn after its 3D scene with Z_COMPARE on) was hidden behind whatever the scene had drawn nearer
+# than that value. The depth image holds 0x4040 everywhere, the primitive depth is 0x7FF0 (far): the rectangle must be drawn.
+rdram zero
+fill 140000 25800 40
+cmd 3f10013f 00100000
+cmd 3e000000 00140000
+cmd 2d000000 005003c0
+cmd 3a000000 ff0000ff
+cmd 2e000000 7ff00000
+cmd 3cffffff ffffff3c
+cmd 2f000000 00000010
+cmd 24140140 000a00a0 00000000 04000400
+cmd 29000000 00000000

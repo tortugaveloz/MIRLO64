@@ -1272,8 +1272,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
             while (!((row >> (3 - offx)) & 1u)) offx++;
         } else offy = 0;
     }
-    if ((l & RDP_L_Z_SRC_PRIM) || (!pr->zbuf && !pr->xwalk)) {
+    if (l & RDP_L_Z_SRC_PRIM) {
         depth = (uint32_t)r->prim_z << 2;
+    } else if (!pr->zbuf) {
+        depth = 0;                                      /* (no Z coefficients, a rectangle's, a triangle's: Z 0, the nearest) */
     } else {
         const int32_t sz = (at[AZ] >> 10) & 0x3FFFFF;
         const int32_t zc = cvg == 8 ? sz >> 3 : (int32_t)((uint32_t)sz * 4u + (uint32_t)(offx * pr->xcd[4]) + (uint32_t)(offy * pr->xdy[4])) >> 5;
