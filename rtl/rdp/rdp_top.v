@@ -1394,9 +1394,9 @@ module rdp_top (
                         l_dst <= {ts_tmem, 2'b00};
                         l_odd <= 1'b0;
                         if (l_kind == 2'd0) begin
-                            nt = {1'b0, w1[23:12]} - {1'b0, w0[23:12]} + 13'd1;
+                            nt = {1'b0, w1[23:12] - w0[23:12] + 12'd1};      // (the count is 12 bits: 4,096 texels are 0, and load nothing)
                             l_n <= load_words(nt, timg_size);
-                            l_none <= w1[23:12] < w0[23:12];
+                            l_none <= w1[23:12] < w0[23:12] || nt == 13'd0;
                             tt <= 10'd0; tt1 <= 10'd0;
                         end else begin
                             nt = {3'd0, s1} - {3'd0, s0} + 13'd1;
