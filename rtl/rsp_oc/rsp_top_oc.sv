@@ -228,15 +228,16 @@ logic [3:0]  x_rot;
 // DMA's reads of DMEM take their words from q_s (word aligned: no rotation of bytes), not from this. The input and the amount are chosen
 // by sw_v: the first stage is then a choice of four (the store's pair of bytes, the line's) and the other three are the rotation's alone
 wire  [127:0] rt_o = rot16(sw_v ? sw_pre : q16, sw_v ? sw_rot : x_rot);
+// (x_wd is where a write is made, x_be16 enabling bytes of it: the DMA's word, else the rotation -- a read's cycles do not care)
 always_comb begin
     if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
                            x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
     else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_be16 = sw_be;
                            x_wd = rt_o; x_rot_n = 4'd0; end
     else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_be16 = 16'd0;
-                           x_wd = '0; x_rot_n = vm_rot; end
+                           x_wd = rt_o; x_rot_n = vm_rot; end
     else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_be16 = 16'd0;
-                           x_wd = '0; x_rot_n = sa; end
+                           x_wd = rt_o; x_rot_n = sa; end
 end
 // The address -- and the next line's -- is the same choice, made as an AND-OR whose selects are decodes of registers (the DMA's request, a
 // store waiting, whose unit's access it is) and whose last terms are the late ones: the scalar unit's sum from the register file, and the
