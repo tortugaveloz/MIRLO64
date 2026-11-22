@@ -28,7 +28,7 @@ extern "C" {
 #include "rdp.h"   // rdp.c is built as C++ here too
 
 static const uint32_t SIZE = 8u << 20;                     // the RDRAM (the RSP's)
-static const uint32_t MSIZE = 16u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB (rdp.h)
+static const uint32_t MSIZE = 32u << 20;                   // the RTL's and the model's: and the hidden plane at 8 MiB, the shadow plane at 16 MiB (rdp.h)
 static uint8_t *rsp_mem, *rtl_mem, *mdl_mem;
 static uint16_t mdl_rd(void *, uint32_t a) { a &= MSIZE - 2; return (uint16_t)(mdl_mem[a] << 8 | mdl_mem[a + 1]); }
 static void mdl_wr(void *, uint32_t a, uint16_t v) { a &= MSIZE - 2; mdl_mem[a] = (uint8_t)(v >> 8); mdl_mem[a + 1] = (uint8_t)v; }
@@ -490,8 +490,14 @@ int main(int argc, char **argv)
         memset(mdl_mem + SIZE, 0xFF, MSIZE - SIZE);
 
         rdp_init(&mdl, nullptr, mdl_rd, mdl_wr);
+        // TB_DITHEROFF=1: the core's 32-bit option without the plane: the RTL's dither_off is up and the model's rgb_dither_off is set (the games' RGB_DITHER_SEL as it is)
+        // TB_SHADOW=1 (2: with the blender reading it too): the shadow plane (docs/video_options.md): the RTL's dither_off and shadow_en up, the model's shadow set
+        // (TB_SHADOW=model: the model alone, which must then differ)
+        mdl.shadow = getenv("TB_SHADOW") ? (atoi(getenv("TB_SHADOW")) == 2 ? 3 : 1) : 0;
+        mdl.rgb_dither_off = (getenv("TB_DITHEROFF") && strcmp(getenv("TB_DITHEROFF"), "rtl")) || mdl.shadow;
         if (top) delete top;
         top = new Vrdp_top;
+        top->dither_off = getenv("TB_DITHEROFF") != nullptr || getenv("TB_SHADOW") != nullptr; top->shadow_en = getenv("TB_SHADOW") != nullptr && strcmp(getenv("TB_SHADOW"), "model");
         cmdq.clear(); reads.clear(); wr_addrs.clear();
         top->rst = 1;
         for (int i = 0; i < 8; i++) tick();
