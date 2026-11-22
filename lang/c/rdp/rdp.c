@@ -2396,7 +2396,11 @@ static void load_block(rdp_t *r, const uint32_t *w)
     const rdp_tile_t *t = &r->tile[(w[1] >> 24) & 7];
     uint32_t uls = (w[0] >> 12) & 0xFFF, ult = w[0] & 0xFFF, lrs = (w[1] >> 12) & 0xFFF;
     if (lrs < uls) return;
-    tmem_load(r, t, timg_addr(r, uls, ult), (uint32_t)t->tmem * 4u, load_words(r, lrs - uls + 1u), w[1] & 0xFFFu, 0);
+    /* the texel count is 12 bits wide: a block of 4,096 texels (lrs - uls + 1 = 0x1000) is a count of 0 and loads nothing, so that the TLUT and
+     * whatever else TMEM holds are not overwritten (a game that loads its sky in strips ends a load of that kind with lrs = 0xFFF) */
+    const uint32_t n = (lrs - uls + 1u) & 0xFFFu;
+    if (!n) return;
+    tmem_load(r, t, timg_addr(r, uls, ult), (uint32_t)t->tmem * 4u, load_words(r, n), w[1] & 0xFFFu, 0);
 }
 /* LOAD TLUT: 16-bit entries uls .. lrs of the texture image, each four times over (a 64-bit word of TMEM) */
 static void load_tlut(rdp_t *r, const uint32_t *w)

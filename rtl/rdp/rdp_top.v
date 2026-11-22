@@ -772,7 +772,7 @@ module rdp_top (
     // a load's texel count (LOAD BLOCK's whole texels, the others' 10.2 coordinates): a register of the clock before, the command's
     // words being steady while S_LOAD_INIT runs
     reg  [12:0] l_nt_q;
-    always @(posedge clk) l_nt_q <= (l_kind == 2'd0) ? {1'b0, w1[23:12]} - {1'b0, w0[23:12]} + 13'd1 : {3'd0, w1[23:14]} - {3'd0, w0[23:14]} + 13'd1;
+    always @(posedge clk) l_nt_q <= (l_kind == 2'd0) ? {1'b0, w1[23:12] - w0[23:12] + 12'd1} : {3'd0, w1[23:14]} - {3'd0, w0[23:14]} + 13'd1;   // (LOAD BLOCK's count is 12 bits: 4,096 texels are 0)
     wire [7:0]  cur_ldc;
     reg  [7:0]  cur_ld;
     reg  [31:0] cur_ldq;
@@ -1292,7 +1292,7 @@ module rdp_top (
                         if (l_kind == 2'd0) begin
                             nt = l_nt_q;
                             l_n <= load_words(nt, timg_size);
-                            l_none <= w1[23:12] < w0[23:12];
+                            l_none <= w1[23:12] < w0[23:12] || nt == 13'd0;
                             tt <= 10'd0; tt1 <= 10'd0;
                         end else begin
                             nt = l_nt_q;

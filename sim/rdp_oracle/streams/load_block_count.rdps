@@ -1,0 +1,26 @@
+# LOAD BLOCK's texel count is 12 bits wide: a block of 4,096 texels (sh - sl + 1 = 0x1000, as a game that ends a load of its sky strips
+# with sh = 0xFFF sends it) is a count of 0 and loads nothing. The model took it for the whole of TMEM (4 KiB, 8 KiB of texels) and
+# overwrote the TLUT that the copy-mode CI4 rectangle after it looks its colours up in (the sky of a game came out pink where the
+# rectangles came after such a block). The four pixels are TLUT entries 0 to 3 (f801 07c1 003f ffc1).
+rdram zero
+mem 200000 f80107c1003fffc1f83f07ff8001408121011081c183630939cfadadbdefffff
+mem 201000 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+cmd 3f10013f 00100000
+cmd 2d000000 005003c0
+cmd 2f208c7f 00000001
+cmd 3d10000f 00200000
+cmd 35000100 27000000
+cmd 30000000 2703c000
+cmd 27000000 00000000
+cmd 35102600 27000000
+cmd 32000000 00000000
+cmd 35402600 0007c1f0
+cmd 3d10003f 00201000
+cmd 34000000 070ff000
+cmd 27000000 00000000
+cmd 3d10003f 00203000
+cmd 35100010 06000000
+cmd 33000000 fffff000
+cmd 27000000 00000000
+cmd 2400c000 00000000 00000000 10000400
+cmd 29000000 00000000
