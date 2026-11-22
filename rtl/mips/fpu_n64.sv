@@ -489,8 +489,8 @@ function automatic logic iszero(input fbits_t x); return {x.e, x.f} == 31'd0; en
 
 // c.cond.d compares the doubles' own 64 bits, not their conversions to float (two doubles that differ below a float's
 // precision, or above its range, would be equal: a game that compares 64-bit commands as doubles to find the ones that
-// repeat would take a changed one for a repeat). The pairs as S_IDLE read them:
-logic [31:0] rxl, rxh, ryl, ryh;
+// repeat would take a changed one for a repeat). The pairs of fs and ft:
+wire  [31:0] rxl = qxe, rxh = qxo, ryl = qye, ryh = qyo;    // (the register file's own outputs: by S_DECIDE every write that was in flight has landed, and nothing else writes while M's instruction is in the unit)
 wire         dc_nx = rxh[30:20] == 11'h7FF && {rxh[19:0], rxl} != 52'd0, dc_ny = ryh[30:20] == 11'h7FF && {ryh[19:0], ryl} != 52'd0;
 wire [62:0]  dc_mx = {rxh[30:0], rxl}, dc_my = {ryh[30:0], ryl};
 wire         dc_zx = dc_mx == 63'd0, dc_zy = dc_my == 63'd0;
@@ -506,7 +506,6 @@ always_ff @(posedge clk) begin
     else case (st)
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
-        rxl <= xe; rxh <= xo; ryl <= ye; ryh <= yo;
         if (FAST) begin
             ax <= (isd_q || isl_q) ? xe : rfs; ay <= isd_q ? ye : rft;
             st <= S_UNPX;
