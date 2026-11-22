@@ -26,7 +26,7 @@
 //                    changed while the game runs, or an action chosen: 0x10000130:1 is "Restart Game")
 //   POCKET_FS=<dir> the Pocket's target commands for files the program asks by path (the Transfer Pak (SD)'s Game Boy saves,
 //                    n64rt_gbvirt.c): GETFILE gives the path of the file in slots 8 and 9 (SLOT<n>_PATH=<path>, else /Assets/gbc/common/
-//                    <the file's name>), OPENFILE opens <dir><path> into the slot (created by flag 1), READ and WRITE move it
+//                    <the file's name>) and of the game's slot 0 (SLOT0_PATH=<path>, else /Assets/n64/common/<the ROM= file's name>), OPENFILE opens <dir><path> into the slot (created by flag 1), READ and WRITE move it
 //   SLOT_AT=<frame>:<slot>:<file>[,...]  a slot's file the Pocket loads while the game runs (the core menu's "Load Transfer Pak 1":
 //                    slot 8 or 9), when that scan-out frame is over, through the bridge's port
 //   SLOTS_OUT=<dir>  when the run ends the Pocket quits the core: each
@@ -1117,8 +1117,9 @@ int main(int argc, char **argv)
             }
             if (pocket_fs && t->br_req_getfile) {
                 const int k = t->br_slot;
-                const char *e = k == 8 ? getenv("SLOT8_PATH") : getenv("SLOT9_PATH");
+                const char *e = k == 0 ? getenv("SLOT0_PATH") : k == 8 ? getenv("SLOT8_PATH") : getenv("SLOT9_PATH");
                 std::string path = e ? e : "", f = k == 8 ? (getenv("SLOT8") ? getenv("SLOT8") : "") : (getenv("SLOT9") ? getenv("SLOT9") : "");
+                if (k == 0 && path.empty() && getenv("ROM")) path = std::string("/Assets/n64/common/") + (strrchr(getenv("ROM"), '/') ? strrchr(getenv("ROM"), '/') + 1 : getenv("ROM"));   // (the game's slot: the ROM= file's name)
                 if (path.empty() && !f.empty()) path = "/Assets/gbc/common/" + f.substr(f.rfind('/') + 1);
                 if (path.empty() && !slot_at.empty()) for (const auto &w : slot_at) if (w.slot == k) path = "/Assets/gbc/common/" + w.file.substr(w.file.rfind('/') + 1);
                 for (uint32_t i = 0; i < 256; i += 4) {
