@@ -379,7 +379,7 @@ wire         d_rd0   = p_rd0;
 wire  [9:0]  sp_word = {sp_addr[11:3], d_half};
 assign dma_busy = ds != D_IDLE;
 assign rd_cnt   = ds == D_IDLE ? 8'd0 : g_rows;
-assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : g_words[9:1] - 9'd1 + {8'd0, g_words[0]};
+assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : (g_words - 10'd1) >> 1;
 
 assign r_valid  = (ds == D_IN && !q_done) || (ds == D_OUT && ob_n != 2'd0);
 assign r_we     = ds == D_OUT;
