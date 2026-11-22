@@ -119,128 +119,17 @@ each setting has an address of its own and needs no mask.
 |---|---|---|---|
 | 0 | `0x1000_0100` | `INTERACT0`, whole | |
 | 1 | `0x1000_0104` | `INTERACT1`, whole | |
-| 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller 1 pak |
+| 2 | `0x1000_0108` | `INTERACT0[4:0]` | Controller paks (None, Controller Pak, Transfer Pak cartridge, Transfer Pak SD, Transfer Pak SD in controller 2, in both, or the cartridge in controller 1 and an SD one in 2: `n64rt_pak.c`) |
 | 3 | `0x1000_010C` | `INTERACT0[9:5]` | Crop Vertical (the scan-out reads it) |
 | 4 | `0x1000_0110` | `INTERACT0[14:10]` | Modifier |
 | 5 | `0x1000_0114` | `INTERACT0[19:15]` | Crop Right (the scan-out reads its low two bits) |
-| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Controller 2 pak (None, or Transfer Pak SD: 3) |
-| 7 | `0x1000_011C` | `INTERACT0[29:25]` | R button |
+| 6 | `0x1000_0118` | `INTERACT0[24:20]` | Free (it was Controller 2 pak: "Controller paks" has both) |
+| 7 | `0x1000_011C` | `INTERACT0[26:25]` | Expansion Pak/Gameshark, one list of four options: bit 25 set, no Expansion Pak (the console has 4 MiB); bit 26 set, the GameShark codes on. `INTERACT0[29:27]` are free |
 | 8 | `0x1000_0120` | `INTERACT1[4:0]` | Start macro |
-| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Z button |
+| 9 | `0x1000_0124` | `INTERACT1[9:5]` | Stick dead zone (both sticks) |
 | 10 | `0x1000_0128` | `INTERACT1[14:10]` | C buttons |
 | 11 | `0x1000_012C` | `INTERACT1[19:15]` | Stick |
 | 12 | `0x1000_0130` | `INTERACT1[21:20]` | Restart Game: an action (`interact.json` type `action`) that writes 1 here whenever it is chosen; the runtime clears the field when it has seen it, so that the next choice is a change again (the Pocket writes the same value every time) |
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
-| 14 | `0x1000_0138` | `INTERACT1[24]` | Expansion Pak (0: in) |
-| 15 | `0x1000_013C` | `INTERACT1[25]` | Enable Gameshark codes (a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
-
-## APF_VIDEO
-
-One register, `VIDEO`, at offset `0x00`:
-
-| Field | Bits | What |
-|---|---|---|
-| `VBLANK_STATUS` | 0 | 1 while the scan-out is in vblank |
-| `VBLANK_TRIGGERED` | 1 | Set when vblank starts, cleared by a read of the register |
-| `FRAME_COUNTER` | 31:2 | The fields sent since reset |
-
-## CTRL
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `RESET` | `0x00` | W | No effect: there is no soft reset (quit the core and launch it again) |
-| `SCRATCH` | `0x04` | RW | A word (`0x1234_5678` after reset) |
-| `BUS_ERRORS` | `0x08` | R | The CPU's accesses to addresses nothing answers (16 bits) |
-
-## RDP command port
-
-A FIFO of command words for the RDP beside its own command fetch (`rtl/rdp/rdp_dpc.sv`, [rdp.md](rdp.md)), and the
-RDP's counters. A game's commands come through the DPC registers, not through this port; the runtime reads the count of
-full syncs here.
-
-| Offset | Dir | What |
-|---|---|---|
-| `0x00` | W | A command word into the FIFO (lost, and counted, when the FIFO is full) |
-| `0x04` | R | Bits 11:0: the FIFO's level. Bit 12: full |
-| `0x08` | R | The words lost (16 bits) |
-| `0x0C` | R | The SYNC FULL commands the RDP has completed: everything before them is in memory |
-| `0x14` | R | Bit 0: the RDP is idle and the FIFO empty |
-
-The accessors' names are in `csr.h`.
-
-## TIMER0
-
-A free-running 64-bit count of system clock cycles (62.5 MHz).
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `UPTIME_LATCH` | `0x00` | W | A write latches the count |
-| `UPTIME_CYCLES` | `0x04` | R | The latched count: the high word at `0x04`, the low word at `0x08` |
-
-## UART
-
-A UART over the Pocket's JTAG port (`rtl/soc/jtag_uart_bridge.v`; `tools/jtag/jtag_uart_relay.py` is the host's side):
-the boot ROM's and the runtime's messages. The project file builds the bitstream without it (the macro
-`MIRLO_NO_JTAG_UART` in `projects/mirlo.qsf`).
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `RXTX` | `0x00` | RW | Write: a byte out (dropped if the FIFO is full). Read: the next byte in |
-| `TXFULL` | `0x04` | R | The transmit FIFO is full |
-| `RXEMPTY` | `0x08` | R | The receive FIFO is empty |
-| `EV_PENDING` | `0x0C` | RW | Always 0: the UART is polled |
-
-## VIDEO_FRAMEBUFFER
-
-The scan-out's settings (`rtl/soc/n64_video.sv`, [resolution.md](resolution.md)). With the VI in hardware
-(`MONITOR.CTL` bit 3) the base, the gamma and the blanking are the VI's own; the runtime writes the rest from the VI's
-registers.
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `DMA_BASE` | `0x00` | RW | The frame buffer's address; taken at the frame boundary, so a new base never tears the frame being sent |
-| `DMA_LENGTH` | `0x04` | RW | Not used |
-| `DMA_ENABLE` | `0x08` | RW | The scan-out reads the frame buffer |
-| `DMA_OFFSET` | `0x0C` | R | Reads 0 |
-| `VTG_ENABLE` | `0x10` | RW | The video timing runs (with `DMA_ENABLE`: the picture) |
-| `VTG_MODE` | `0x14` | RW | No effect |
-| `WIDTH` | `0x18` | RW | Bits 11:0: the pitch, the pixels from one row of the frame buffer to the next (512 or more: the VI's filters are off). Bit 16: the VI's gamma correction. Bit 17: the pixels are 32-bit (`VI_STATUS` type 3: RGBA8888, the pitch in words, the coverage in the alpha byte). Bit 18: the TV system to use until the game programs the VI (1: PAL). Bit 19, read only: the TV system the scan-out is using |
-| `WINDOW` | `0x1C` | RW | The picture's window in the field: bits 15:8 its first line, bits 24:16 its lines (0: the whole field) |
-| `HWINDOW` | `0x20` | RW | Its window in the line: bits 9:0 its first clock, bits 25:16 its width in clocks |
-| `SCALE` | `0x24` | RW | The steps through the frame buffer, with 10 fraction bits: bits 10:0 the pixels a clock of the window steps (at most 1), bits 26:16 the rows a line steps (at most 2) |
-| `ROWWORDS` | `0x28` | RW | The words the scan-out reads of a row (11 bits) |
-
-## GB_CART
-
-A Game Boy cartridge in the Pocket's slot (`rtl/soc/gb_cart.sv`), read and written a byte at a time: what the Transfer
-Pak uses.
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `ID` | `0x00` | R | `0x4742_0001` |
-| `CTRL` | `0x04` | RW | Bit 0 `ON`: the cartridge out of reset, the bus driven. Bit 1 `TRUST`: chip select and writes allowed (it is a Game Boy's cartridge) |
-| `ACCESS` | `0x08` | RW | Write: an access starts (not while `BUSY`): `DATA` bits 7:0, `ADDR` bits 23:8, `WE` bit 24. Read: `BUSY` bit 31 and the byte read in `DATA` |
-
-## MONITOR
-
-The monitor level of the CPU ([mips.md](mips.md)) and the controls of the RCP's blocks in hardware
-(`rtl/soc/rcp_mi.sv`, `rcp_vi.sv`, `rcp_ai.sv`, `rcp_si.sv`). Only the runtime uses these.
-
-| Register | Offset | Dir | What |
-|---|---|---|---|
-| `ID` | `0x00` | R | `0x4D4F_0000` with a bit for each block the core has: 0 the monitor, 1 the MI, 2 the PI's engine, 3 the VI, 4 the AI, 5 the SI and the PIF RAM, 6 the PI's domain 2 and the cartridge's word reads |
-| `CTL` | `0x04` | RW | Bit 0 `OWN`: the game's interrupt line is the one below, not the RSP's own. Bit 1 `RCP`: that line. Bit 2 `MI`: the game's interrupt is the MI's line. Bit 3 `VI`: the VI is the hardware's. Bit 4 `AI`: the AI is the hardware's |
-| `PEND` | `0x08` | RW | What has happened (a write of 1s clears): bit 0 the RSP's interrupt rose; bit 1 a field began (with the VI in hardware: the registers the picture's window comes from changed); bit 2 a tick of 4.2 ms; bit 3 the RDP completed a full sync (with the AI in hardware: the game wrote the AI's rate); bit 4 the PIF has commands to run; bit 5 the Pocket asks for a save state or for its load (`APF_BRIDGE.SAVESTATE`) |
-| `MASK` | `0x0C` | RW | Which of them interrupt the monitor |
-| `KICK` | `0x10` | RW | A write of 1s sets `PEND`'s bits |
-| `LEVEL` | `0x14` | R | Bit 0: the RSP's interrupt, as it is |
-| `MIRAISE` | `0x18` | W | A write of 1s sets bits of the MI's interrupt register (SI, AI, VI, PI, DP: bits 1 to 5) |
-| `MICLR` | `0x1C` | W | A write of 1s clears them |
-| `MIINTR` | `0x20` | R | Bits 5:0: the MI's interrupts. Bits 13:8: its mask. Bit 16: the PI's engine is running |
-| `PIDST` | `0x24` | W | The PI's engine: the destination word (in the RDRAM, or anywhere in the SDRAM when bits 23:21 are not 0) |
-| `PISRC` | `0x28` | W | Its source word in the SDRAM (bit 24: from the word's second half) |
-| `PILEN` | `0x2C` | RW | The words to copy (bits 23:22: the bytes of the last one, 0 for all four): the write starts the copy. Read: the words left, and bit 31 while it runs |
-| `VITHR` | `0x30` | W | The last origin (in units of 64 bytes) at which a picture of the mode's size fits in the RDRAM: beyond it the scan-out shows black |
-| `AIRATE` | `0x34` | RW | Write: the resampler's step (source frames for each 48 kHz sample, 16 fraction bits). Read: the AI's rate register as the game wrote it |
-| `SIDONE` | `0x38` | W | A write: the runtime has run the PIF's commands (the SI's busy flag clears); [17:0] the console's time for them in RCP cycles, which an RD64B waits out |
-| `PI2` | `0x3C` | RW | Bit 0: the cartridge's domain 2 is a FlashRAM (the game's reads of it are the status word, its writes go nowhere) |
+| 14 | `0x1000_0138` | `INTERACT1[24]` | Free (it was Expansion Pak, now in the field 7) |
+| 15 | `0x1000_013C` | `INTERACT1[25]` | Free (it was Enable Gameshark codes, now in the field 7). A variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
