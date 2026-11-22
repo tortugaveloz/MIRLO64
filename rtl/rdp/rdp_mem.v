@@ -239,7 +239,7 @@ module rdp_mem (
 
     // ---- write data FIFO (data follows its accepted command)
     localparam WF = 4;                    // 16 entries
-    reg [35:0] wf [0:(1<<WF)-1];
+    (* ramstyle = "MLAB, no_rw_check" *) reg [35:0] wf [0:(1<<WF)-1];
     reg [WF:0] wf_wr, wf_rd;
     reg [35:0] wq;                        // the head
     reg        wq_v;
@@ -257,7 +257,7 @@ module rdp_mem (
     // or in the second pass Z's (dropped when no pixel of it passed)
     reg        p1, p2;
     reg [9:0]  p1_idx, p2_idx;
-    reg [79:0] rf [0:3];                  // {old hidden word, word (10), the pass's data (36), the pass's mask}: the colour pass's, or the second pass's depth
+    (* ramstyle = "MLAB, no_rw_check" *) reg [79:0] rf [0:3];                  // {old hidden word, word (10), the pass's data (36), the pass's mask}: the colour pass's, or the second pass's depth
                                           // (w_pz only changes with the FIFO empty)
     reg [2:0]  rf_wr, rf_rd;
     wire [2:0] rf_cnt = rf_wr - rf_rd;
