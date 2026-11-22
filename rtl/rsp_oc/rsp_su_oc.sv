@@ -450,7 +450,9 @@ assign m_addr_r   = ad_r;
 assign m_addr16_r = adh_r;
 assign m_sel_r    = !(fa_m | fa_w);
 assign m_n = e_c.size;
-assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
+// (the store's bytes, the first of them the word's first: a byte or a half-word is the register's low byte or bytes there; the bytes after the size's are not
+// written -- no enable -- and are what the word's choice leaves)
+assign m_wdata = {e_c.size == 2'd3 ? eb[31:24] : e_c.size == 2'd1 ? eb[15:8] : eb[7:0], e_c.size[1] ? eb[23:16] : eb[7:0], eb[15:0]};
 
 // the coprocessors (a pair's computation goes when its scalar instruction can: neither waits on a load nor on DMEM)
 wire        s_mwait /* verilator public_flat_rd */ = (m_stall && e_c.load) || (m_stall_st && e_c.store);
