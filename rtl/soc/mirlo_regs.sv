@@ -68,7 +68,7 @@ module mirlo_regs (
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
     output wire  [1:0]  ia_crop_l,
-    output wire         ia_out32,           // interact: "Video settings" (field 17, INTERACT2[9:5]): bit 0 the 32-bit output, bit 1 Deblur (docs/video_options.md)
+    output wire         ia_out32,           // interact: "Video settings" (field 17: the bus' address 0x1000_0144; bit 0 the 32-bit output, bit 1 Deblur (docs/video_options.md)
     output wire         ia_deblur,
     // video
     input  wire         vblank,             // sys: the scan-out is in vblank
@@ -223,19 +223,19 @@ end
 // ---- APF interact (slot 0: A, B, Z, Start, L, R at 5 bits each; slot 1:
 // C-up/down/left/right at 5 bits, stick [21:20], D-pad [23:22], Show FPS
 // [24], Start = Select+Start [25]) -- docs/control.md, Interact API
-logic [31:0] ia0, ia1, ia2;
+logic [31:0] ia0, ia1;
+logic        ia_o32, ia_dbl;               // the video settings (field 17): bit 0 the 32-bit output, bit 1 Deblur
 logic        ia_ch0, ia_ch1;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
-assign ia_out32  = ia2[5];
-assign ia_deblur = ia2[6];
+assign ia_out32  = ia_o32;
+assign ia_deblur = ia_dbl;
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia2 <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
+    if (rst) begin ia0 <= 0; ia1 <= 0; ia_o32 <= 0; ia_dbl <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
-        if (wr && a == R_APF_INTERACT_INTERACT2) ia2 <= r_wdata;
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr) case (ia_address)
@@ -255,10 +255,7 @@ always_ff @(posedge clk) begin
             5'd13: ia1[23:22] <= ia_data[1:0];
             5'd14: ia1[24]    <= ia_data[0];
             5'd15: ia1[25]    <= ia_data[0];
-            5'd16: ia2[4:0]   <= ia_data[4:0];
-            5'd17: ia2[9:5]   <= ia_data[4:0];
-            5'd18: ia2[14:10] <= ia_data[4:0];
-            5'd19: ia2[19:15] <= ia_data[4:0];
+            5'd17: begin ia_o32 <= ia_data[0]; ia_dbl <= ia_data[1]; end
             default: ;
         endcase
     end
@@ -279,10 +276,7 @@ always_ff @(posedge clk) begin
     5'd13: ia_q <= {30'd0, ia1[23:22]};
     5'd14: ia_q <= {31'd0, ia1[24]};
     5'd15: ia_q <= {31'd0, ia1[25]};
-    5'd16: ia_q <= {27'd0, ia2[4:0]};
-    5'd17: ia_q <= {27'd0, ia2[9:5]};
-    5'd18: ia_q <= {27'd0, ia2[14:10]};
-    5'd19: ia_q <= {27'd0, ia2[19:15]};
+    5'd17: ia_q <= {30'd0, ia_dbl, ia_o32};
     default: ia_q <= 32'd0;
     endcase
 end
@@ -480,7 +474,6 @@ always_comb begin
     R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1[5:2]:         rb[3] = ia1;
     R_APF_INTERACT_INTERACT_CHANGED1[5:2]: rb[3] = {31'd0, ia_ch1};
-    R_APF_INTERACT_INTERACT2[5:2]:         rb[3] = ia2;
     default: ;
     endcase
     case (a[5:2])                                               // APF_VIDEO
