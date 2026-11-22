@@ -360,11 +360,16 @@ wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : 
 wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
 (* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
 wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
-// two shifters: SLL, and SRL / SRA (a right shift of the sign-extended value)
-wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], eb};
+// one shifter, to the right: SLL's operand and result are reversed in bit order (a left shift is a right shift of the reversed word),
+// the sign-extended value for SRA
+wire        sh_rev  = e_c.alu == A_SLL;
+logic [31:0] eb_rv, sh_y, sh_yr;
+always_comb for (int i = 0; i < 32; i++) begin eb_rv[i] = eb[31 - i]; sh_yr[i] = sh_y[31 - i]; end
+wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], sh_rev ? eb_rv : eb};
 wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
-wire [31:0] sh_r    = sh_out[31:0];
-wire [31:0] sh_l    = eb << shamt;
+assign      sh_y    = sh_out[31:0];
+wire [31:0] sh_r    = sh_y;
+wire [31:0] sh_l    = sh_yr;
 // one adder for add, subtract and both compares: ea + op_b, or ea - op_b = ea + ~op_b + 1,
 // whose carry out is "no borrow" (ea >= op_b unsigned) and whose sign decides a signed
 // compare when the signs agree
