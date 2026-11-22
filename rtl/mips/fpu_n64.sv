@@ -491,12 +491,15 @@ function automatic logic iszero(input fbits_t x); return {x.e, x.f} == 31'd0; en
 // precision, or above its range, would be equal: a game that compares 64-bit commands as doubles to find the ones that
 // repeat would take a changed one for a repeat). The pairs of fs and ft:
 wire  [31:0] rxl = qxe, rxh = qxo, ryl = qye, ryh = qyo;    // (the register file's own outputs: by S_DECIDE every write that was in flight has landed, and nothing else writes while M's instruction is in the unit)
-wire         dc_nx = rxh[30:20] == 11'h7FF && {rxh[19:0], rxl} != 52'd0, dc_ny = ryh[30:20] == 11'h7FF && {ryh[19:0], ryl} != 52'd0;
+wire [51:0]  dc_fx = {rxh[19:0], rxl}, dc_fy = {ryh[19:0], ryl};
+wire         dc_fxz = dc_fx == 52'd0, dc_fyz = dc_fy == 52'd0;       // (the fractions' zero test, once, for the NaN and the zero of each)
+wire         dc_nx = rxh[30:20] == 11'h7FF && !dc_fxz, dc_ny = ryh[30:20] == 11'h7FF && !dc_fyz;
 wire [62:0]  dc_mx = {rxh[30:0], rxl}, dc_my = {ryh[30:0], ryl};
-wire         dc_zx = dc_mx == 63'd0, dc_zy = dc_my == 63'd0;
+wire         dc_zx = rxh[30:20] == 11'd0 && dc_fxz, dc_zy = ryh[30:20] == 11'd0 && dc_fyz;
 wire         dc_un = dc_nx || dc_ny;
-wire         dc_eq = !dc_un && ((dc_zx && dc_zy) || (dc_mx == dc_my && rxh[31] == ryh[31]));
-wire         dc_lt = !dc_un && !(dc_zx && dc_zy) && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? dc_mx > dc_my : dc_mx < dc_my);
+wire         dc_mlt = dc_mx < dc_my, dc_meq = dc_mx == dc_my;             // (the one magnitude comparison: "greater" is neither below nor equal)
+wire         dc_eq = !dc_un && ((dc_zx && dc_zy) || (dc_meq && rxh[31] == ryh[31]));
+wire         dc_lt = !dc_un && !(dc_zx && dc_zy) && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? !dc_mlt && !dc_meq : dc_mlt);
 
 // ============================================================ the FSM
 always_ff @(posedge clk) begin
