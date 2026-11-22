@@ -1009,7 +1009,7 @@ module core_top (
       .apf_pad_wa(pad_wa),
       .apf_pad_wd(pad_wd),
 
-      .apf_interact_address(interact_addr),
+      .apf_interact_address(interact_addr[4:0]),
       .apf_interact_data(interact_data),
       .apf_interact_q(interact_q),
       .apf_interact_wr(interact_wr),
