@@ -384,7 +384,7 @@ module rdp_pix (
     // from P1 to P8c: a RAM written every clock and read 12 clocks after (as the stages between took), or with the LOD 12 + D
     // (its pixels reach P5 D clocks late: the pointers make the delay, nothing chooses between two paths). Two M10K
     // where the stages' registers were (and Quartus's shift registers made of them).
-    wire [17:0] depth_c = (z_src_p || !p_zbuf) ? {prim_z, 2'b00} : dz;
+    wire [17:0] depth_c = z_src_p ? {prim_z, 2'b00} : p_zbuf ? dz : 18'd0;     // (a primitive without Z coefficients -- a rectangle -- has Z 0, the nearest, not the primitive depth: rdp_exact.md)
     reg  [4:0]  sb_wa;
     wire [4:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 5'd17 : 5'd16) : 5'd12);
     // (the shade's channels are bytes -- sr9 and the others clamp them -- so their ninth bits are not kept)

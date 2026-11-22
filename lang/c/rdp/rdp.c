@@ -1226,8 +1226,10 @@ static void draw_pixel_cvg(rdp_t *r, const prim_t *pr, int x, int y, const int32
         depth = zt == 2 ? 0x3FFFFu : zt == 3 ? 0u : (uint32_t)zc & 0x3FFFFu;
     }
 #else
-    if ((l & RDP_L_Z_SRC_PRIM) || !pr->zbuf) {
+    if (l & RDP_L_Z_SRC_PRIM) {
         depth = (uint32_t)r->prim_z << 2;
+    } else if (!pr->zbuf) {
+        depth = 0;                                      /* (no Z coefficients, a rectangle's, a triangle's: Z 0, the nearest) */
     } else {
         int32_t z = at[AZ] >> 13;
         depth = (uint32_t)(z < 0 ? 0 : z > 0x3FFFF ? 0x3FFFF : z);
