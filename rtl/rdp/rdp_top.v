@@ -814,6 +814,31 @@ module rdp_top (
         end
     end
 
+    // The attributes' steps (adx): cleared by a triangle's first word, loaded from vgx at S_VSET's last step, and a texrect's S and T steps
+    // at S_SETUP. Their strobes are registers (the state, the step and the attribute's decode and the command intake's were two LUTs of
+    // routing in front of 32 enables each: st -> adx, -0.32 ns at 10.667 ns): the clear is a clock after the first word (the attributes
+    // are first written at S_VSET, after the whole command), the loads are in the clock they were (the strobe is made at the step
+    // before, 7, or 5 for Z), and a texrect's, a clock after its S_SETUP clocks -- the values are steady through them, and the last
+    // write is in S_PIX's first clock, before the first step of cur.
+    reg         adx_clr_q, adx_rs_q;
+    reg  [7:0]  adx_ld_q;
+    always @(posedge clk) begin
+        adx_clr_q <= !rst && cmd_valid && cmd_ready && !collecting && op0[5:3] == 3'b001;
+        adx_rs_q  <= !rst && st == S_SETUP && !kind_tri;
+        adx_ld_q  <= {8{!rst && st == S_VSET && (vs == 4'd7 || (vs == 4'd5 && vz))}} & (8'd1 << vi);
+    end
+    integer ai;
+    always @(posedge clk) begin
+        for (ai = 0; ai < 8; ai = ai + 1) begin
+            if (adx_clr_q) adx[ai] <= 32'd0;
+            else if (adx_ld_q[ai]) adx[ai] <= vgx;
+        end
+        if (adx_rs_q && !adx_clr_q) begin
+            adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
+            adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
+        end
+    end
+
     integer i;
     always @(posedge clk) begin
         zn_we <= 1'b0; cn_we <= 1'b0; msk_we <= 1'b0;
@@ -876,7 +901,6 @@ module rdp_top (
                         t_tile <= cmd_data[18:16];
                         t_lvl <= cmd_data[21:19];
                         t_yl <= cmd_data[13:0];
-                        for (i = 0; i < 8; i = i + 1) adx[i] <= 0;
                     end
                 end else begin
                     widx <= widx + 6'd1;
@@ -1058,7 +1082,6 @@ module rdp_top (
                     4'd6: begin vs <= 4'd7; vr_ra <= vgb + 6'd10 + {5'd0, vi[1]}; end
                     4'd7: begin vs <= 4'd15; vr_ra <= vgb + 6'd14 + {5'd0, vi[1]}; end
                     default: begin                   // 15: the attribute's registers
-                        adx[vi] <= vgx;
                         if (!vz) case (vi)
                             3'd4: ldy_s[16:1] <= vhalf;
                             3'd5: ldy_t[16:1] <= vhalf;
@@ -1171,8 +1194,6 @@ module rdp_top (
                     // texrect: t_xl = S T, t_dxl = DsDx DtDy; copy mode steps 4x
                     begin : rect_setup
                         shS <= rs_ds;
-                        adx[4] <= (op == 6'h25 || op == 6'h36) ? 32'd0 : r_dsdx;
-                        adx[5] <= (op == 6'h25) ? r_dtdy : 32'd0;
                         mi <= mi + 5'd1;
                         if (mi == 5'd4) st <= S_PIX;
                     end
