@@ -95,7 +95,7 @@ With GameShark chosen in "Expansion Pak/Gameshark", a list of the game's cheats 
 or the stick move, left and right change a cheat's option, A turns it on and off, L/Z and R page, C-down turns all off; **Start** saves your choice and plays with the cheats, **B** saves it and plays without cheats.
 The choice is the file `<the game's name>.gs` in `Saves/n64/common/` (for the ROM `Assets/n64/common/Some Game (U).z64`, `Saves/n64/common/Some Game (U).gs`), the same one the Game Shark core writes: text, one code in each line,
 `80123456 0063`, with `#` lines for the cheats' names (it can be written by hand too); the types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`.
-The codes run in every video field, as a GameShark does, only when you pressed Start in the list ([docs/mips.md](docs/mips.md#the-picker)).
+The codes run in every video field, as a GameShark does, only when you pressed Start in the list ([docs/mips.md](docs/mips.md#the-picker)). The database is the file `Assets/n64/common/gameshark.gsdz` (data slot 11: the Pocket loads it with the core's files at every launch, about 0.7 MB; a missing file shows "The cheat database is not loaded." and the game starts with no cheats); the older `gameshark.gsdb` of the standalone Game Shark core is not used here. Settings that matter: **Expansion Pak/Gameshark** must be "Exp Pak and GameShark" (the Expansion Pak stays in: 8 MiB) or "GameShark" (no Pak: 4 MiB) for the list to appear; with "Exp Pak" (the default) or "None" the start is as it always was. The choice is saved even with B; only Start runs the cheats.
 
 ## Building from source
 
