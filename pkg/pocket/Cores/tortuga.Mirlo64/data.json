@@ -102,6 +102,23 @@
         ],
         "size_maximum": "0x300000",
         "address": "0x06E00000"
+      },
+      {
+        "name": "Gameshark choice file",
+        "id": 10,
+        "required": false,
+        "parameters": "0x0",
+        "size_maximum": "0x400000",
+        "address": "0x07800000"
+      },
+      {
+        "name": "Gameshark cheat database",
+        "id": 11,
+        "required": false,
+        "parameters": "0x08",
+        "filename": "gameshark.gsdz",
+        "size_maximum": "0xF0000",
+        "address": "0x07110000"
       }
     ]
   }

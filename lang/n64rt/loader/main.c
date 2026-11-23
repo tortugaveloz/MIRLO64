@@ -145,5 +145,12 @@ int main(void)
      * core starts): without it the console has 4 MiB */
     if ((apf_interact_interact1_read() >> 24) & 1u) g.mem_size = 0x400000u;
     g.cic = cic;
+    /* "GameShark" in the same setting (INTERACT1's bit 25, the list's values 2 and 3): the player picks the game's cheats first, and the game starts when Start is pressed
+     * (n64rt_gspick.c). Nothing else of the start is different: the picker is not run, nor its scan-out set up, without the setting. */
+    if ((apf_interact_interact1_read() >> 25) & 1u) {
+        u8 head[0x40];
+        for (u32 i = 0; i < 0x40u; i++) head[i] = (u8)(ROM[i >> 2] >> (24 - 8 * (i & 3u)));
+        n64rt_gspick(head);
+    }
     n64rt_boot_rom(&g, size);
 }

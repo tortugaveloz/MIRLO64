@@ -1622,6 +1622,16 @@ void n64rt_mon_dump(void)
 #endif
 #endif
 
+/* The CPU's Count after a wait in the GameShark picker, put back by the wait (cycles of the SoC's uptime, which Count counts at s_count_q8 / 512 each): the game starts with the age a console that did not
+ * wait would have. Only called when the picker ran. */
+void n64rt_os_count_rewind(u64 cycles)
+{
+    const u32 d = (u32)((cycles * s_count_q8) >> 9);
+    u32 c;
+    __asm__ volatile("mfc0 %0, $9" : "=r"(c));
+    __asm__ volatile("mtc0 %0, $9\n\tnop\n\tnop" :: "r"(c - d));
+}
+
 /* ---- start: the boot "thread" becomes the game's first ----------------------------- */
 void n64rt_os_init(void)
 {

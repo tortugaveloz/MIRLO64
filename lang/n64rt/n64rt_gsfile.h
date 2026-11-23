@@ -26,4 +26,14 @@ static inline int n64rt_gsfile_path(const char *rom, char *out, unsigned outsize
     return 1;
 }
 
+/* The parameter struct of the Pocket's OPENFILE (docs/mips.md): the path (NUL-ended, at most 255 bytes) in the first 256 bytes, then the flags and the size as 32-bit words at 0x100 and 0x104, and nothing else:
+ * all 0x110 bytes are cleared first, so that no tail of an earlier, longer path stays in the struct (n64rt_gspick.c, n64rt_cheat.c). `ps` is the struct's memory (the CPU's words: big-endian on the target). */
+static inline void n64rt_open_param(volatile unsigned char *ps, const char *path, unsigned flags, unsigned size)
+{
+    for (unsigned i = 0; i < 0x110u; i++) ps[i] = 0;
+    for (unsigned i = 0; i < 255u && path[i]; i++) ps[i] = (unsigned char)path[i];
+    *(volatile unsigned *)(void *)(ps + 0x100u) = flags;
+    *(volatile unsigned *)(void *)(ps + 0x104u) = size;
+}
+
 #endif

@@ -115,6 +115,9 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42D4_0000` | up to 64 KiB | The game's GameShark codes, a text file |
 | `0x42DD_0000` | 8 KiB | The runtime's `.data` as it was when the program started, which [Restart Game](#restart-game) puts back |
 | `0x4310_0000` | 64 KiB | The save-type database, `n64savedb.txt` |
+| `0x4311_0000` - `0x431F_FFFF` | up to 960 KiB | The GameShark cheat database, `gameshark.gsdz` (about 0.7 MB), loaded by the Pocket with the core's files ([The picker](#the-picker)) |
+| `0x42C7_0000` - `0x42CF_FFFF` | 576 KiB | The tail of the save states' block, which a state never reaches (the largest is `0x97_0000` bytes): the picker's picture and the list of codes it hands to the engine |
+| `0x4380_0000` (RDRAM) | 448 KiB | The picker's buffers and tables while it runs, before the game boots; zeroed when it leaves |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
 | `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: a byte for each pixel of a 16-bit colour image, some of the low bits of its channels and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
@@ -171,6 +174,8 @@ A read of a save or Controller Pak slot is routed to PSRAM. The slots
 | 7 | Gameshark codes | no file at the start: the runtime opens one by path, read-only, at most 64 KiB | `0x06D4_0000` | `0x42D4_0000` |
 | 8 | Transfer Pak 1 | `.gb`, `.gbc`, optional, user-reloadable, at most 3 MiB | `0x0740_0000` | `0x4340_0000` |
 | 9 | Transfer Pak 2 | the same, for controller 2's pak | `0x06E0_0000` | `0x42E0_0000` |
+| 10 | Gameshark choice file | no file: the picker opens the game's `.gs` by path, writable (slot 7 is read-only); size_maximum 4 MiB, at most 64 KiB used | `0x0780_0000` | `0x4380_0000` (RDRAM) |
+| 11 | Gameshark cheat database | `gameshark.gsdz`, optional (a missing file is a size of 0), at most 960 KiB: loaded by the Pocket at every launch of the core | `0x0711_0000` | `0x4311_0000` |
 
 The Pocket loads the slots while the core waits, and reads the nonvolatile ones back into their files when the core
 quits: as many bytes as the slot's file size in the core's table. The runtime sets that size (`APF_BRIDGE.FILE_SIZE`)
@@ -1056,29 +1061,46 @@ The same setting's values 4, 5 and 6 (Transfer Pak SD P2, Transfer Pak SD P1P2, 
 
 ### GameShark codes
 
-The setting "Expansion Pak/Gameshark" with the codes on (the other half of that list; off by default) makes the runtime run the game's GameShark codes (`lang/n64rt/n64rt_cheat.c`,
-`n64rt_gs.c`). They are a text file on the SD card, written by the Game Shark core (`tortuga.gameshark`): `Saves/n64/common/<the ROM's name without its extension>.gs`
-(`n64rt_gsfile.h`; the ROM's path is what the Pocket answers to `REQUEST_GETFILE` for the data slot 0). Only the codes to run are in it: the core writes the ones the user
-turned on, with a `#` line before each cheat that has its name. Every line that is a code is run, in the file's order, in every video field, as a GameShark does
-from its hook on the vertical retrace. `n64rt_gs.h` has the format
-(`80123456 0063  a description`; lines that are not a code and `#`, `;` and `//` comments are skipped) and the types: `80`/`81` (8- and 16-bit
-writes), `A0`/`A1`, `D0` to `D3` (the next line runs if the byte or half-word at the address is, or is not, the value), `50` (the repeater), and
-`F0`/`F1` (as `80`/`81`). The GS button's `88` and `89` and the types that are not known are skipped. A write that would not change a value is not made;
-one that does is made visible to the game's data cache, and the instruction cache is dropped in the field if any did. With 4 MiB of RDRAM (the
-Expansion Pak setting off) writes above it are ignored. `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host and `gsfile_host.c` the file's path.
-There is no other place the runtime looks in: a game without that file runs no codes.
+With "GameShark" chosen in the setting "Expansion Pak/Gameshark" (the list's values 2 and 3, `INTERACT1[25]`) the runtime shows the **picker** before the game starts, and the codes the player
+Starts in it are what the cheat engine runs. Nothing else chooses codes: a game runs none when GameShark is not chosen (the picker is not run and the start is what it was), when B was
+pressed in the picker, or when no cheat was chosen.
 
-The file is read by the Pocket at the runtime's request, with the bridge's target commands (`APF_BRIDGE`, [control.md](control.md)); the
-core's hardware already has them. The runtime writes the open command's parameter struct (the path, 256 bytes, then the flags and the size,
-0) at `0x42D3_0000`, sets `SLOT_ID` to 7 and `RAM_DATA_ADDRESS` to it, and writes `REQUEST_OPENFILE`; the Pocket reads the struct from the
-SDRAM through the bridge and opens the file. Then `DATA_OFFSET` 0, `TRANSFER_LENGTH` the file's size (`FILE_SIZE`), `RAM_DATA_ADDRESS` `0x42D4_0000` and
-`REQUEST_READ`. Each command's end is `STATUS`; the result is `COMMAND_RESULT_CODE` (0 done; the Pocket answers 4 for a path it does not find).
-**The path has to start with a slash and be the card's own** (`/Saves/n64/common/Some Game (U).gs`): measured on a Pocket, the same path
-without the slash, relative to `common/`, to `n64/common/` or alone, all fail with 4.
+**The engine** (`lang/n64rt/n64rt_cheat.c`, `n64rt_gs.c`): the list the picker built (`n64rt_gsact.h`: in SDRAM at `0x4318_8000`, taken when the game's start sets the engine up; no file is read for it) is run in
+every video field, in order, as a GameShark does from its hook on the vertical retrace. `n64rt_gs.h` has the format (`80123456 0063  a description`) and the types: `80`/`81` (8- and 16-bit writes),
+`A0`/`A1`, `D0` to `D3` (the next line runs if the byte or half-word at the address is, or is not, the value), `50` (the repeater), and `F0`/`F1` (as `80`/`81`). The GS button's `88` and `89` and the
+types that are not known are skipped. A write that would not change a value is not made; one that does is made visible to the game's data cache, and the instruction cache is dropped in the field if any
+did. With 4 MiB of RDRAM (the Expansion Pak setting off) writes above it are ignored. Up to 2,048 codes. What it does is written to a status file, `Saves/n64/common/<ROM name>.gslog`, after the first
+field, after 10 s and after a minute: the number of codes and of fields, the writes that changed a value, and the RDRAM's value at each of the first codes' addresses (a way to see what the codes do on a
+Pocket with no cable). `lang/n64rt/test/gs_host.c` tests the parse and the codes on the host and `gsfile_host.c` the file's path.
 
-The setting is looked at in every field (a box that is on and has no codes loads the file; off drops them) because the Pocket does
-not send a setting to the core at a fixed time. A setting's `address` in `interact.json` has to be one no other setting has: the setting
-table's n = 8, `0x1000_0120`, is the Start macro's, and a second setting there overwrote the first (the codes were never on).
+**The file**, `Saves/n64/common/<the ROM's name without its extension>.gs` (`n64rt_gsfile.h`; the ROM's path is what the Pocket answers to `REQUEST_GETFILE` for the data slot 0), is the choice
+remembered: the picker reads it when it opens, to show the cheats already chosen, and writes it when the player leaves with Start or B. The Game Shark core (`tortuga.gameshark`) writes and reads the same
+file. It is text, the cheats on with a `#` line before each that has its name and its codes under it, one in a line (a code with options has the chosen option's value in place of the code's), written
+as long as the file was (comment lines after the choice) because a Pocket that does not shorten a file must not keep a tail of old cheats. A file written by hand reads too.
+
+#### The picker
+
+`n64rt_gspick.c`, called from `loader/main.c` once the ROM is known, so it comes at the start of the core and again at "Restart Game", which runs `main()` again. The game is found in the cheat database, `Assets/n64/common/gameshark.gsdz` (the Game Shark database project's format 2: an index of 20 bytes a game, sorted by the ROM header's two CRC words and country byte, and each game's block of cheats as one zlib stream, about 0.7 MB for some 800 games), by those three. It is a data slot with a file name (11), like the save-type database: the Pocket loads it into the SDRAM with the core's files at every launch of the core (about 2 s at the Pocket's 1 MB/s), and the picker reads it in place -- the binary search of the index in memory, then the game's block inflated into 64 KiB of the RDRAM (`gsdz/`: the project's reader and tinf, the zlib-licensed inflate, `NOTICE`; 2.4 KB of code, 1.4 KB of stack, no window) -- so no command of the Pocket is made for it and nothing can fail at a Load Game but the file's absence, which is a size of 0 in the Pocket's table and shows "The cheat database is not loaded." Nothing writes the range: not the save states (they end at most `0x97_0000` bytes into their block), not the restart's snapshot, not the game's boot, and "Restart Game" does not reload it (the Pocket does at a launch). The list is a text screen of 39 x 17 characters (margins of 3 pixels at the
+sides and 8 lines above and below) on the scan-out's CSR framebuffer (320 x 240, at `0x4313_8000`). A cheat's row that does not fit in the window scrolls smoothly while the cursor is on it (35 pixels a second
+to the end of the text after 1 s, 2 s there, back at the same speed, again; the cursor moving starts it over: `n64rt_gsscroll.h`, host-tested by `test/gsscroll_host.c`); the other rows are cut.
+
+The buttons are read as the N64 controller is (`n64rt_pad_map`, through `n64rt_gspad.h`, host-tested by `test/gspad_host.c`), so the Controls menu's mapping and the core's Start, C-button and R-modifier
+settings are the player's own: **D-pad or stick** (the Pocket's D-pad, the N64's D-pad setting, the left or the right analog stick with the "Stick dead zone", one move for a diagonal, repeating while held): up and
+down move through the cheats, left and right change the option of a cheat that has one; **L or Z** (the same): a page up; **R**: a page down; **A**: on and off; **C-down** (the Pocket's Select): all off;
+**Start**: save the choice and play **with** its cheats; **B**: save the choice and play **without** cheats (to remember the choice without using it this time). Saving is only done if something changed, with the same
+commands as the Game Shark core (`OPENFILE` with the create and set-size flags into the writable data slot 10, then `WRITE`; the Pocket's Start key always counts, whatever the "Start button" setting does with it).
+The N64 has no X, Y or Select: X and Y are C-right and C-left, and do nothing here. The last lines of the screen are the legend ("Start: play w/ cheats B: play no cheats", the D-pad and stick, the other buttons). A game with no entry in the database, or no database, shows that and starts by itself
+after 3 s or at A, B or Start, with no cheats. If the write fails, the screen says so and the same key again plays without the file.
+
+Every target command of the picker (the .gs's open, read and write, and the ROM's path) is tried once and given 500 ms (a well Pocket answers in tens of milliseconds: GETFILE in 20; a write to the card is given 2 s): the screen says at once what the Pocket answered. After a write the picker reads the file back (the slot opened again), counting its codes: "N codes saved" on the screen means that the file holds them, and a count that
+differs is an error shown at the top. Start then hands the codes to the engine from the picker's own list (the file as the engine's parser reads it); the picture goes black when the picker returns and stays so until the
+game's first frame (the scan-out is not switched off). What the game's clock sees: the SoC's uptime and the game CPU's Count run from the core's launch, so a wait in the picker would make the game start "older". The start therefore puts Count back by the picker's whole time (`n64rt_os_count_rewind`, only when the picker ran: every other start, and a Restart Game without the picker, is untouched). What else counts from the uptime: the runtime's own OSTime and timers (`n64rt_time`: only in a build without `N64RT_OWN`, which is not the shipped one: the game's own libultra reads Count), the audio sweeps' ticks (from the game's start, above), the field and DPC clocks (set when the game's video starts or its RDP is cleared) and the restart's and the Transfer Pak's timeouts (differences). The engine drops the one instruction cache line of a word a code changed (a hit invalidate), not the whole cache. The picker's tables are in the SDRAM above, not in the runtime's `.data` and `.bss`; it turns the save-state flag off while it runs.
+`lang/n64rt/test/gsdb_host.c` tests the database and file code on the host and `sim/mips_soc/gspick_check.sh` the whole thing on the SoC with a pad script.
+
+The picker's files are moved by the Pocket at the runtime's request, with the bridge's target commands (`APF_BRIDGE`, [control.md](control.md)); the core's hardware already has them. The runtime writes the open command's parameter struct (the path, 256 bytes, then the flags and the size) at
+`0x42D3_0000`, sets `SLOT_ID` and `RAM_DATA_ADDRESS` to it, and writes `REQUEST_OPENFILE`; the Pocket reads the struct from the SDRAM through the bridge and opens the file. Then `DATA_OFFSET`, `TRANSFER_LENGTH`, `RAM_DATA_ADDRESS` and `REQUEST_READ` or `REQUEST_WRITE`.
+Each command's end is `STATUS`; the result is `COMMAND_RESULT_CODE` (0 done; the Pocket answers 4 for a path it does not find). **The path has to start with a slash and be the card's own** (`/Saves/n64/common/Some Game (U).gs`): measured on a Pocket, the same path
+without the slash, relative to `common/`, to `n64/common/` or alone, all fail with 4. A setting's `address` in `interact.json` has to be one no other setting has: the setting table's n = 8, `0x1000_0120`, is the Start macro's, and a second setting there overwrote the first (the codes were never on).
 
 ### Save states
 
