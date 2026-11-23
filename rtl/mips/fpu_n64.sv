@@ -184,7 +184,13 @@ logic        sub_eff;                                    // add: the signs diffe
 logic [7:0]  ad;                                         // add: the exponent difference
 logic [31:0] ir;                                         // div / sqrt: the remainder
 logic [4:0]  icnt;
-logic [55:0] mp;                                         // sqrt: the radicand's bits to come
+logic [1:0]  mpp;                                        // sqrt: the radicand's next two bits (the radicand is ax's: its pairs, in order, by the iteration's number)
+// the radicand M * 2^30, M = m (t even) or m << 1 (t odd), m = {1, fraction}, as 56 bits: its n-th pair from the top (the iterations' number, 0 to 27)
+function automatic logic [1:0] sq_pair(input logic [22:0] f, input logic e0, input logic [5:0] n);
+    logic [55:0] r;
+    r = e0 ? {1'd0, 1'b1, f, 31'd0} : {2'd0, 1'b1, f, 30'd0};
+    return n > 6'd27 ? 2'd0 : r[6'd55 - {n[4:0], 1'b0} -: 2];
+endfunction
 // mul's product, taken every clock and read in S_NORM, the state after S_MUL
 // (which took it into mp before): a register with nothing but the multiplier
 // in front of it, which the fitter can make the DSP block's output register
@@ -262,7 +268,7 @@ wire [34:0] sh_o = rshift(sh_v, sh_n);
 wire [31:0] za_b = FAST ? zmag : sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]};   // (the shifted-out bits as a sticky LSB)
 
 // the iteration's subtractor (div: r - divisor; sqrt: (r << 2 | next) - (q << 2 | 1))
-wire [31:0] it_a = kind == K_DIV ? ir : {ir[29:0], mp[55:54]};
+wire [31:0] it_a = kind == K_DIV ? ir : {ir[29:0], mpp};
 wire [31:0] it_b = kind == K_DIV ? {8'd0, 1'b1, ay.f} : {2'd0, zmag[27:0], 2'b01};
 wire [32:0] it_d = {1'b0, it_a} - {1'b0, it_b};
 wire        it_ge = !it_d[32];
@@ -586,8 +592,7 @@ always_ff @(posedge clk) begin
                 icnt <= 5'd27; zs <= 0;
                 // value = m * 2^t, t = e - 150 (as odd as e is); the radicand M * 2^30, M = m (t even) or m << 1 (t odd): a 28-bit
                 // root, whose exponent is t / 2 rounded down, + 143: e / 2 rounded down, + 68
-                if (ax.e[0]) mp <= {1'd0, 1'b1, ax.f, 31'd0};
-                else         mp <= {2'd0, 1'b1, ax.f, 30'd0};
+                mpp <= {1'b0, ax.e[0]};                               // (the first pair of the radicand: 01 for t odd, 00 for t even)
                 st <= S_ITER;
             end
         end
@@ -609,7 +614,7 @@ always_ff @(posedge clk) begin
         st <= S_NORM;
     end
     S_ITER: begin
-        if (kind != K_DIV) mp <= {mp[53:0], 2'b00};
+        if (kind != K_DIV) mpp <= sq_pair(ax.f, ax.e[0], 6'd28 - 6'(icnt));      // (the next pair: the iteration after this one)
         icnt <= icnt - 5'd1;
         if (icnt == 5'd0) st <= S_NORM;
     end
