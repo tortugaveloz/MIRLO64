@@ -1754,7 +1754,7 @@ generate if (W64) begin : g_hx
         rfq_ah <= rf_hx[rf_rinsn[25:21]]; rfq_bh <= rf_hx[rf_rinsn[20:16]];
         rfq_aw <= rf_hw[rf_rinsn[25:21]]; rfq_bw <= rf_hw[rf_rinsn[20:16]];
         if (w_wr) begin rf_hx[w_c.rd] <= w_hx; rf_hw[w_c.rd] <= w_hx != 32'd0; end
-        rf_xw <= wideprod(w_c);
+        rf_xw <= FAST ? w_k_wprod : wideprod(w_c);
     end
 end else begin : g_nohx
     always_comb begin rfq_ah = 32'd0; rfq_bh = 32'd0; rfq_aw = 1'b0; rfq_bw = 1'b0; rf_xw = 1'b0; end
