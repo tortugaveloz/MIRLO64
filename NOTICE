@@ -154,6 +154,6 @@ The picker's database is built by the Game Shark database project (its script is
     (Emucheats, https://emucheats.emulation64.com/); the others come from libretro's users and from people who shared codes on the web;
   - the lists of choices of Gent's Project64 1.6 Official Cheats Database (2005), which has no licence of its own;
   - the No-Intro DAT shipped in libretro-database, only to say which game a cheat file is for;
-  - the identification tables of mupen64plus-core (GPL-2.0-or-later, Copyright (C) 2008 Gent): the MD5 and header CRCs of each ROM, to find a game in the database.
-Thanks to Gent and Emucheats, to everyone who contributed cheats to libretro-database, to the No-Intro project and to the mupen64plus project. The cheat data keeps
+  - public ROM identification tables (the MD5 and the header CRCs of each ROM), only to find a game in the database.
+Thanks to Gent and Emucheats, to everyone who contributed cheats to libretro-database, and to the No-Intro project. The cheat data keeps
 the terms of its sources; the database is distributed with this credit.
