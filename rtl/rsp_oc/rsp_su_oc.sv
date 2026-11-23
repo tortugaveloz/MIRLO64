@@ -450,8 +450,8 @@ wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
 // (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder.
-// The offset, registered with the instruction (e_ao, and with 16 more, e_ao16), is the scalar load's or store's immediate, or a vector
-// load's or store's offset scaled by its size: the same adders make the vector unit's addresses)
+// The offset (e_ao, and with 16 more, e_ao16) is the scalar load's or store's immediate, or a vector load's or store's offset scaled by its
+// size, both registered with the instruction: the same adders make the vector unit's addresses)
 function automatic logic [11:0] offs(input logic [31:0] i);      // the vector offset scaled by the access's size
     logic [11:0] of;
     of = {{5{i[6]}}, i[6:0]};
@@ -463,9 +463,16 @@ function automatic logic [11:0] offs(input logic [31:0] i);      // the vector o
     default:          return {of[7:0], 4'b0};
     endcase
 endfunction
-logic [11:0] e_ao, e_ao16;
-wire  [11:0] ao_d = (s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A) ? offs(s_ins_d) : s_ins_d[11:0];
-always_ff @(posedge clk) if (!stall_e) begin e_ao <= ao_d; e_ao16 <= ao_d + 12'd16; end
+// (the immediate is E's instruction's own low bits; the vector offset is a register of its own, and E's registered choice, e_vls, is between them after
+// the registers, so that no choice stands between the instruction word and a register, nor after the adder that makes the offset with 16 more: the next line's.
+// The low four bits of that are the offset's, bits 11 .. 4 are two registers, the immediate's and the vector offset's)
+logic        e_vls;                                         // (E's instruction is a vector load or store: registered below)
+logic [11:0] e_off;
+logic [11:4] e_imm16, e_off16;
+wire  [11:0] im_16 = s_ins_d[11:0] + 12'd16, of_16 = offs(s_ins_d) + 12'd16;
+always_ff @(posedge clk) if (!stall_e) begin e_off <= offs(s_ins_d); e_imm16 <= im_16[11:4]; e_off16 <= of_16[11:4]; end
+wire  [11:0] e_ao   = e_vls ? e_off : e_ins[11:0];
+wire  [11:0] e_ao16 = {e_vls ? e_off16 : e_imm16, e_ao[3:0]};
 wire [11:0] ad_m = m_res[11:0] + e_ao, ad_w = w_res[11:0] + e_ao, ad_r = rf_qam[11:0] + e_ao;
 wire [11:0] adh_m = m_res[11:0] + e_ao16, adh_w = w_res[11:0] + e_ao16, adh_r = rf_qam[11:0] + e_ao16;
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
@@ -492,7 +499,6 @@ assign c_lins = e_ins;
 assign c_ins_n = c_ins_d;
 assign c_lins_n = s_ins_d;
 assign c_adv = !stall_e;
-logic e_vls;
 always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
 assign c_vls = e_vls;
 assign c_a = ea;
