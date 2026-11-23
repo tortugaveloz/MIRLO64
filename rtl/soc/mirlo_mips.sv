@@ -629,15 +629,11 @@ generate if (RDP_OC) begin : oc_rdp
     logic        rc_valid, rc_ready, rr_cmd_valid, rr_cmd_we, rr_cmd_ready, rr_wvalid, rr_wready, rr_rvalid, rr_idle, rr_tm, rr_ev;
     logic [31:0] rc_data, rr_wdata, rr_rdata, rr_load;
     logic [15:0] rr_sync;
-    logic [31:0] rr_addr;
+    logic [23:0] rr_addr;
     logic [3:0]  rr_wwe;
     logic [15:0] rr_unk;
-    logic [24:2] xm_addr;
-    // the 32-bit option (a setting that changes seldom, from clk_sys's registers): two flip-flops into the RDP's clock
-    logic [1:0]  o32_c;
-    always_ff @(posedge clk_cpu) o32_c <= {o32_c[0], vid_out32};
-    wire         vid_out32_c = o32_c[1];
-    rdp_top rdp (.clk(clk_cpu), .rst(rst_cpu), .dither_off(vid_out32_c), .shadow_en(vid_out32_c),
+    logic [23:2] xm_addr;
+    rdp_top rdp (.clk(clk_cpu), .rst(rst_cpu),
         .cmd_valid(rc_valid), .cmd_ready(rc_ready), .cmd_data(rc_data),
         .m_cmd_valid(rr_cmd_valid), .m_cmd_ready(rr_cmd_ready), .m_cmd_we(rr_cmd_we), .m_cmd_addr(rr_addr),
         .m_wdata_valid(rr_wvalid), .m_wdata_ready(rr_wready), .m_wdata(rr_wdata), .m_wdata_we(rr_wwe),
@@ -646,7 +642,7 @@ generate if (RDP_OC) begin : oc_rdp
         .tmem_busy(rr_tm));
     rdp_xing rxing (.clk_r(clk_cpu), .rst_r(rst_cpu),
         .c_valid(rc_valid), .c_data(rc_data), .c_ready(rc_ready),
-        .rm_cmd_valid(rr_cmd_valid), .rm_cmd_we(rr_cmd_we), .rm_cmd_addr(rr_addr[24:2]), .rm_cmd_ready(rr_cmd_ready),
+        .rm_cmd_valid(rr_cmd_valid), .rm_cmd_we(rr_cmd_we), .rm_cmd_addr(rr_addr[23:2]), .rm_cmd_ready(rr_cmd_ready),
         .rm_wdata_valid(rr_wvalid), .rm_wdata(rr_wdata), .rm_wdata_we(rr_wwe), .rm_wdata_ready(rr_wready),
         .rm_rdata_valid(rr_rvalid), .rm_rdata(rr_rdata),
         .r_idle(rr_idle), .r_tmem_busy(rr_tm), .r_sync_ev(rr_ev), .r_sync_count(rr_sync), .r_load_count(rr_load), .r_unknown_ops(rr_unk),
@@ -657,9 +653,9 @@ generate if (RDP_OC) begin : oc_rdp
         .m_rdata_valid, .m_rdata, .q_empty(pq_empty),
         .idle(rdp_idle), .tmem_busy(rdp_tmem_busy), .sync_ev(mon_dp),
         .sync_count(rdp_sync), .load_count(rdp_load), .unknown_ops(rdp_unknown));
-    assign rdp_addr = {7'd0, xm_addr, 2'b00};
+    assign rdp_addr = {8'd0, xm_addr, 2'b00};
 end else begin : rdp_sys
-    rdp_top rdp (.clk, .rst, .dither_off(vid_out32), .shadow_en(vid_out32),
+    rdp_top rdp (.clk, .rst,
         .cmd_valid, .cmd_ready, .cmd_data,
         .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
         .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
@@ -668,14 +664,7 @@ end else begin : rdp_sys
         .tmem_busy(rdp_tmem_busy));
 end endgenerate
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
-// (bit 24: the shadow plane of a 16-bit colour image, a byte for each pixel: a plane word, number rdp_addr[21:2] = the colour image's byte
-// address / 8, is for four pixels, two colour words. 2 MiB at SDRAM 0x0320_0000: the number's top bit exclusive-ored into its bit 18, so that
-// two images 4 MiB apart share plane space; the bank of a plane word is the other of its colour words' (the colour word's bank is the
-// address's bits 12:11, the number's 9:8; the number's bit 10 is the column's top bit), so that the scan-out, which reads a plane word
-// and the colour words it serves by turns, has them in two banks, and neither is the hidden plane's. n64_video.sv has the same map.)
-wire [19:0] sh_n = rdp_addr[21:2];
-wire [18:0] sh_w = {sh_n[18:11] ^ {sh_n[19], 7'd0}, sh_n[9:8] ^ 2'b01, sh_n[10], sh_n[7:0]};
-assign m_cmd_addr = {6'd0, rdp_addr[24] ? 24'hC8_0000 + {5'd0, sh_w} : rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
+assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
