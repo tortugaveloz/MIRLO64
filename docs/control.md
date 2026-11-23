@@ -133,3 +133,4 @@ each setting has an address of its own and needs no mask.
 | 13 | `0x1000_0134` | `INTERACT1[23:22]` | D-pad |
 | 14 | `0x1000_0138` | `INTERACT1[24]` | Free (it was Expansion Pak, now in the field 7) |
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Free (it was Enable Gameshark codes, now in the field 7). A variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
+| 17 | `0x1000_0144` | (two flip-flops of `mirlo_regs.sv`) | Video settings: bit 0 the 32-bit output, bit 1 Deblur ([video_options.md](video_options.md)) |

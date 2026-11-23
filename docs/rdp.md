@@ -401,6 +401,10 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
   is read with IM_RD, and 7 otherwise.
 * **CVG_DST**: clamp, wrap, zap (7) or save (the memory's).
 
+### The shadow plane
+
+With the "Video settings" 32-bit option the RDP keeps, beside a 16-bit colour image, a plane of a byte a pixel (the blender's low colour bits and a check of the 5551 word), written with the colour words and read with them, and its RGB dither is off: [video_options.md](video_options.md).
+
 ### Depth
 
 The depth is the N64's 18 bits: the interpolated Z shifted right by 13 and
