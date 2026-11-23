@@ -220,15 +220,16 @@ function automatic logic [127:0] rot16(input logic [127:0] pre, input logic [3:0
     for (int b = 0; b < 16; b++) w4[127 - 8 * b -: 8] = r[3] ? w3[127 - 8 * ((b + 8) & 15) -: 8] : w3[127 - 8 * b -: 8];
     return w4;
 endfunction
+// (x_wd is where a write is made, x_be16 enabling bytes of it: the DMA's word, else the store's rotation -- a read's cycles do not care)
 always_comb begin
     if (dm_valid)    begin x_valid = 1'b1; x_we = dm_we; x_be16 = 16'h000F << {dm_addr[3:2], 2'b00};
                            x_wd = {4{dm_wdata}}; x_rot_n = dm_addr[3:0]; end
     else if (sw_v)   begin x_valid = 1'b1; x_we = 1'b1; x_be16 = sw_be;
                            x_wd = rot16(sw_pre, sw_rot); x_rot_n = 4'd0; end
     else if (vu_own) begin x_valid = vm_valid && !vm_we; x_we = 1'b0; x_be16 = 16'd0;
-                           x_wd = '0; x_rot_n = vm_rot; end
+                           x_wd = rot16(sw_pre, sw_rot); x_rot_n = vm_rot; end
     else             begin x_valid = sm_valid && !sm_we; x_we = 1'b0; x_be16 = 16'd0;
-                           x_wd = '0; x_rot_n = sa; end
+                           x_wd = rot16(sw_pre, sw_rot); x_rot_n = sa; end
 end
 // The address -- and the next line's -- is the same choice, made as an AND-OR whose selects are decodes of registers (the DMA's request, a
 // store waiting, whose unit's access it is) and whose last terms are the late ones: the scalar unit's sum from the register file, and the
@@ -374,7 +375,7 @@ wire         d_rd0   = p_rd0;
 wire  [9:0]  sp_word = {sp_addr[11:3], d_half};
 assign dma_busy = ds != D_IDLE;
 assign rd_cnt   = ds == D_IDLE ? 8'd0 : g_rows;
-assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : g_words[9:1] - 9'd1 + {8'd0, g_words[0]};
+assign rd_len   = ds == D_IDLE ? (dma_any ? 9'h1FF : 9'h000) : (g_words - 10'd1) >> 1;
 
 assign r_valid  = (ds == D_IN && !q_done) || (ds == D_OUT && ob_n != 2'd0);
 assign r_we     = ds == D_OUT;
@@ -497,7 +498,7 @@ always_ff @(posedge clk) begin
             iq <= o_load ? 2'd0 : iq == 2'd2 ? 2'd2 : iq + 2'd1;
             // (DMEM: a read's pair into the FIFO the cycle after; the head to ob as it empties)
             pf_rd <= dm_rd;
-            if (pf_rd) pf[pf_h ^ pf_n[0]] <= m_rdata16[127:64];
+            if (pf_rd) pf[pf_h ^ pf_n[0]] <= q_s;
             pf_n <= pf_n + 2'(pf_rd) - 2'(o_load && !d_im);
             if (o_load && !d_im) pf_h <= !pf_h;
             if (d_im ? o_load : dm_rd) np <= np + 9'd1;

@@ -318,6 +318,26 @@ function automatic logic [2:0] lane_pk(input logic [5:0] f, input logic [15:0] s
     return {1'b0, !cond ? 2'd0 : !negside ? 2'd1 : (f == 6'h26) ? 2'd3 : 2'd2};
 endfunction
 
+// EX1, a compare or a clip: what its flags will be -- VLT / VGE's result (cs), VCL / VCH / VCR's two conditions (le_f, ge_f) -- from the
+// same adder flags and flag registers as pk, registered with it (cfl_r) as {ge_f, le_f, cs}: EX2 takes them and has no compare of its own
+// (the flag registers are the ones EX1 read, nothing writes them between a computation's EX1 and its EX2)
+function automatic logic [2:0] lane_cf(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input logic [3:0] fr,
+                                       input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce);
+    logic sign, cout, b16, zero, ones, cs, le_f, ge_f, z17;
+    sign = s[15] ^ t[15];
+    {cout, b16, zero, ones} = fr;
+    z17 = zero && !b16;
+    cs = f == 6'h20 ? (b16 || (zero && co_hi && co_lo)) : (!b16 && !zero) || (zero && !(co_hi && co_lo));      // VLT, VGE
+    if (f == 6'h24) begin                                    // VCL: by VCO, the unsigned compare (cout is s >= t)
+        le_f = (co_lo && !co_hi) ? (ce ? (zero || !cout) : (zero && !cout)) : cc_lo;
+        ge_f = (!co_lo && !co_hi) ? cout : cc_hi;
+    end else begin                                           // VCH, VCR: by the signs
+        le_f = sign ? (b16 || z17) : t[15];
+        ge_f = sign ? t[15] : !b16;
+    end
+    return {ge_f, le_f, cs};
+endfunction
+
 // EX1, VADD, VSUB and VABS: whether the result is a clamp's constant (the sum overflowed; -t of -8000), from the adder's flags and
 // sum of this cycle, registered (kc_r)
 function automatic logic lane_kc(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t, input add_t a);
@@ -381,10 +401,10 @@ endfunction
 function automatic lane_t lane_x2(input logic [5:0] f, input logic [15:0] s, input logic [15:0] t,
                                   input logic [15:0] lo, input logic [47:0] accm, input logic [2:0] pk_in, input logic kc_in, input ydec_t yd,
                                   input logic co_lo, input logic co_hi, input logic cc_lo, input logic cc_hi, input logic ce,
-                                  input logic [3:0] fr);
+                                  input logic [3:0] fr, input logic [2:0] cf_in);
     lane_t o = '0;
     logic eq, sign;
-    logic cs, negside, cond, le_f, ge_f, abs_sat, ovf, a_nt;
+    logic cs, le_f, ge_f, abs_sat, ovf, a_nt;
     logic [1:0] pk;
     logic [3:0] tt;
     logic [15:0] accl;
@@ -405,24 +425,8 @@ function automatic lane_t lane_x2(input logic [5:0] f, input logic [15:0] s, inp
     // is a function of the lane's two bits: a table of its four values (tt, the same
     // for the lane's sixteen bits), beside the adder's sum and -t.
     o.accl_w = f != 6'h1D;
-    // the compares: b16 is s < t (signed)
-    unique case (f)
-    6'h20:   cs = b16 || (eq && co_hi && co_lo);
-    6'h23:   cs = (!b16 && !eq) || (eq && !(co_hi && co_lo));
-    default: cs = cc_lo;                                     // VMRG
-    endcase
-    // VCH, VCL, VCR: s or t (or -t, ~t) by what the compare found. A lane's
-    // conditions: le (s <= -t) and ge (s >= t), and which of them decides
-    if (f == 6'h24) begin                                    // VCL: by VCO, the unsigned compare (cout is s >= t)
-        le_f = (co_lo && !co_hi) ? (ce ? (zero || !cout) : (zero && !cout)) : cc_lo;
-        ge_f = (!co_lo && !co_hi) ? cout : cc_hi;
-        negside = co_lo;
-    end else begin                                           // VCH, VCR: by the signs
-        le_f = sign ? (b16 || z17_c) : t[15];
-        ge_f = sign ? t[15] : !b16;
-        negside = sign;
-    end
-    cond = negside ? le_f : ge_f;
+    // the compares' results and the clips' conditions were made in EX1 (cf_in)
+    cs = cf_in[0]; le_f = cf_in[1]; ge_f = cf_in[2];
     // (what s and t give: the table of the function, or of the choice -- VMRG's is by VCC)
     pk = yd.usepk ? pk_in[1:0] : yd.vmrg ? (cc_lo ? 2'd0 : 2'd1) : 2'd1;
     unique case (pk)
@@ -537,8 +541,10 @@ logic [15:0]        lo_r [LANES];             // the adder's sum, and its flags 
 logic [3:0]         fl_r [LANES];
 logic [LANES-1:0]   kc_r;                     // the clamp's constant is the result
 logic [2:0]         pk_r [LANES];             // a compare's or a clip's choice among s, t and -t
+logic [2:0]         cfl_r [LANES];            // ... and its flags' conditions (lane_cf)
 add_t               ad [LANES];
 logic [2:0]         pk1 [LANES];
+logic [2:0]         cfl1 [LANES];
 logic [LANES-1:0]   kc1;
 logic [47:0]        mac [LANES];
 always_comb
@@ -546,6 +552,7 @@ always_comb
         ad[l]  = lane_x1(x_am, s_r[l], t_r[l], vco[l]);
         kc1[l] = lane_kc(x_fn, s_r[l], t_r[l], ad[l]);
         pk1[l] = lane_pk(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
+        cfl1[l] = lane_cf(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
         mac[l] = lane_mac(x_fn, p_r[l], {acc_h[l], acc_m[l], acc_l[l]});
     end
 wire x_nm  = x_v && !x_mul;                   // a computation that is not a multiply is in EX1
@@ -563,9 +570,16 @@ logic [15:0] mres [LANES];
 logic [LANES-1:0] mgt_r, mlt_r;               // a multiply's sum is above / below what a word holds (made as it was: EX1)
 always_comb
     for (int l = 0; l < LANES; l++) begin
-        ex2[l]  = lane_x2(y_fn, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l]);
+        ex2[l]  = lane_x2(y_fn, s_y[l], t_y[l], lo_r[l], {acc_h[l], acc_m[l], acc_l[l]}, pk_r[l], kc_r[l], y_yd, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l], fl_r[l], cfl_r[l]);
         mres[l] = mul_res(y_yd.mk1, y_yd.mklo, {acc_h[l], acc_m[l], acc_l[l]}, mgt_r[l], mlt_r[l]);
     end
+`ifdef VERILATOR
+// (simulation) EX1's flag conditions are what EX2's flags and flag registers give: nothing wrote them between
+always @(posedge clk) if (!rst && y_v && !y_mul && (y_fn == 6'h20 || y_fn == 6'h23 || y_fn == 6'h24 || y_fn == 6'h25 || y_fn == 6'h26))
+    for (int l = 0; l < LANES; l++)
+        if (lane_cf(y_fn, s_y[l], t_y[l], fl_r[l], vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]) !== cfl_r[l])
+            $fatal(1, "rsp_vu_oc: lane %0d's flag conditions made in EX1 differ from EX2's", l);
+`endif
 logic [15:0] hold [8];                        // EX2's results, for a write put off
 logic [15:0] hold_be_w;                       // ... and the bytes it writes
 // a write put off behind a load's: the registers' one write port is the load's, and vd is written a cycle on, from `hold` (wp)
@@ -963,7 +977,7 @@ always_ff @(posedge clk) begin
             end else begin
                 for (int l = 0; l < LANES; l++) begin
                     lo_r[l] <= ad[l].lo;
-                    if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; end
+                    if (!x_sec) begin fl_r[l] <= ad[l].fl; pk_r[l] <= pk1[l]; cfl_r[l] <= cfl1[l]; end
                     kc_r[l] <= kc1[l];    // (a clip's second cycle makes -t: its flags are the first's)
                 end
             end

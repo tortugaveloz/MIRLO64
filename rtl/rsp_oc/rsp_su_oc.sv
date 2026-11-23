@@ -364,11 +364,16 @@ wire [31:0] op_b   = e_c.b_imm ? (e_c.imm_zx ? {16'h0, e_ins[15:0]} : imm_sx) : 
 wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
 (* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
 wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
-// two shifters: SLL, and SRL / SRA (a right shift of the sign-extended value)
-wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], eb};
+// one shifter, to the right: SLL's operand and result are reversed in bit order (a left shift is a right shift of the reversed word),
+// the sign-extended value for SRA
+wire        sh_rev  = e_c.alu == A_SLL;
+logic [31:0] eb_rv, sh_y, sh_yr;
+always_comb for (int i = 0; i < 32; i++) begin eb_rv[i] = eb[31 - i]; sh_yr[i] = sh_y[31 - i]; end
+wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], sh_rev ? eb_rv : eb};
 wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
-wire [31:0] sh_r    = sh_out[31:0];
-wire [31:0] sh_l    = eb << shamt;
+assign      sh_y    = sh_out[31:0];
+wire [31:0] sh_r    = sh_y;
+wire [31:0] sh_l    = sh_yr;
 // one adder for add, subtract and both compares: ea + op_b, or ea - op_b = ea + ~op_b + 1,
 // whose carry out is "no borrow" (ea >= op_b unsigned) and whose sign decides a signed
 // compare when the signs agree
@@ -449,7 +454,9 @@ assign m_addr_r   = ad_r;
 assign m_addr16_r = adh_r;
 assign m_sel_r    = !(fa_m | fa_w);
 assign m_n = e_c.size;
-assign m_wdata = e_c.size == 2'd0 ? {eb[7:0], 24'h0} : e_c.size == 2'd1 ? {eb[15:0], 16'h0} : eb;
+// (the store's bytes, the first of them the word's first: a byte or a half-word is the register's low byte or bytes there; the bytes after the size's are not
+// written -- no enable -- and are what the word's choice leaves)
+assign m_wdata = {e_c.size == 2'd3 ? eb[31:24] : e_c.size == 2'd1 ? eb[15:8] : eb[7:0], e_c.size[1] ? eb[23:16] : eb[7:0], eb[15:0]};
 
 // the coprocessors (a pair's computation goes when its scalar instruction can: neither waits on a load nor on DMEM)
 wire        s_mwait /* verilator public_flat_rd */ = (m_stall && e_c.load) || (m_stall_st && e_c.store);
@@ -536,7 +543,7 @@ always_ff @(posedge clk) begin
         m_we_r <= e_go && e_c.we;
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
-            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= s2_d ? decode(i_data2) : decode(ins_d);
+            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= decode(s_ins_d);
             e_spc <= (pair_d && v_first) ? d_pc + 12'd4 : d_pc;
             v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
