@@ -95,6 +95,10 @@ module rdp_top (
     initial for (ti = 0; ti < 8; ti = ti + 1) begin tl_attr[ti] = 47'd0; tl_size[ti] = 48'd0; end
 
     wire [1:0] cyc = other_h[21:20];
+    // (its tests are registers, as rdp_pix's: cyc changes only between primitives, and a state command is followed by the next command's words
+    // before anything reads them; other_h is far from the pixel issue's and the rectangles' bounds)
+    reg        cyc1_q, cyc2_q, cyc3_q;              // 2-cycle, copy, fill
+    always @(posedge clk) begin cyc1_q <= cyc == 2'd1; cyc2_q <= cyc == 2'd2; cyc3_q <= cyc == 2'd3; end
     wire [9:0] sc_x0 = sc_xh[11:2], sc_x1 = sc_xl[11:2];
     wire [9:0] sc_y0 = sc_yh[11:2], sc_y1 = sc_yl[11:2];
 
@@ -385,7 +389,7 @@ module rdp_top (
         .rd_ldst(rq_ldst), .rd_ln(rq_ln), .rd_lmode(rq_lmode), .rd_ldxt(rq_ldxt), .rd_lodd(rq_lodd),
         .z_have(z_have), .c_have(c_have), .h_done(h_done), .hlbw_we(hl_we), .hlbw_addr(hl_wa),
         .lbw_z_we(mw_z_we), .lbw_c_we(mw_c_we), .lbw_s_we(mw_s_we), .lbw_addr(mw_addr), .lbw_data(mw_data),
-        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc == 2'd3),
+        .wr_valid(wq_pend), .wr_ready(wr_ready), .wr_fill(wq_fill), .wr_z(wq_z), .wr_c8(cimg8), .wr_c32(cimg32), .wr_fmode(cyc3_q),
         .wr_cbase(wq_cbase), .wr_zbase(wq_zbase), .wr_x0(wq_x0), .wr_x1(wq_x1), .wr_fillc(fill), .wr_set(wq_set), .wr_sh(sh_on), .lbr_sdata(snew_rd),
         .res_a(res_q[0]), .res_b(res_q[1]),
         .lbr_addr(mem_lb_ra), .lbr_zdata(znew_rd), .lbr_cdata(cnew_rd), .lbr_zmask(zm_rd), .lbr_cmask(cm_rd),
@@ -425,7 +429,7 @@ module rdp_top (
     // all on the same parity of a free-running count, so that a first pass never meets another pixel's second
     reg        ph_t;
     always @(posedge clk) ph_t <= ~ph_t;
-    wire       pix_slot = !((two_pass || lod_on) && pix_valid) && (cyc != 2'd1 || ph_t);
+    wire       pix_slot = !((two_pass || lod_on) && pix_valid) && (!cyc1_q || ph_t);
     // The LOD: a pixel's next pixel goes through the perspective divide two clocks after it when the walk goes to the
     // right (pix_fol: rdp_pix takes its step from the next pass A), so the pixel issued then is the next one, or -- its
     // memory not in, or the span ended -- a ghost of it (through the perspective divide, never drawn; the pixel itself
@@ -764,7 +768,7 @@ module rdp_top (
     // route-through LUT a bit: 170 of them, and a mux).
     wire        cur_stp = st == S_PIX && row_wq && (pix_gh || pix_go) && pix_stp;
     // (a texrect's S and T are t_xl's halves, shifted, plus the product: the same adder as a triangle's e + the product)
-    wire [2:0]  rs_ds = (cyc == 2'd2) ? 3'd7 : 3'd5;
+    wire [2:0]  rs_ds = cyc2_q ? 3'd7 : 3'd5;
     wire signed [31:0] rs_sv = {{16{t_xl[31]}}, t_xl[31:16]}, rs_tv = {{16{t_xl[15]}}, t_xl[15:0]};
     wire [31:0] cur_ldv = (kind_tri ? e_q : mi[0] ? (rs_tv <<< 5) : (rs_sv <<< rs_ds)) + (kind_tri ? mul_p[47:16] : mul_p[33:2]);
     // (the value, e + the product, and which attribute it is for are registered, and the attribute is loaded the clock after: the
@@ -904,7 +908,7 @@ module rdp_top (
             S_IDLE: if (exec_go) begin
                 exec_go <= 1'b0;
                 busy_exec <= 1'b1;
-                if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && (!cimg_ok || (cimg32 && cyc == 2'd2))) begin
+                if ((is_tri || op == 6'h24 || op == 6'h25 || op == 6'h36) && (!cimg_ok || (cimg32 && cyc2_q))) begin
                     busy_exec <= 1'b0;          // a 4-bit colour image, or copy mode into a 32-bit one: nothing drawn
                 end else if (is_tri) begin
                     kind_tri <= 1'b1; kind_texrect <= 1'b0; kind_rect <= 1'b0; kind_fillmode <= 1'b0;
@@ -930,13 +934,13 @@ module rdp_top (
                         kind_tri <= 1'b0;
                         p_aa <= 1'b0; p_aaen <= 1'b0;
                         kind_texrect <= op != 6'h36;
-                        kind_fillmode <= op == 6'h36 && cyc == 2'd3;
+                        kind_fillmode <= op == 6'h36 && cyc3_q;
                         kind_rect <= 1'b1;
                         p_shade <= 1'b0; p_tex <= op != 6'h36; p_zbuf <= 1'b0; p_direct <= 1'b1;
                         p_tile <= w1[26:24];
                         lod_lft <= 1'b1; lod_lvl <= 3'd0;       // (walked left to right; the far level is level 0)
                         rx0 <= w1[23:14];
-                        rxf <= (cyc != 2'd2) ? w1[13:12] : 2'd0;
+                        rxf <= !cyc2_q ? w1[13:12] : 2'd0;
                         ry0 <= {2'b00, w1[11:2]};
                         begin : rect_bounds
                             // copy mode (texrect), fill mode (fill rectangle): the corners' whole pixels, the lower
@@ -945,7 +949,7 @@ module rdp_top (
                             reg [10:0] x0c, y0c, x1c, y1c;
                             reg [10:0] xa_c, ya_c;
                             reg incl;
-                            incl = (op == 6'h36) ? (cyc == 2'd3) : (cyc == 2'd2);
+                            incl = (op == 6'h36) ? cyc3_q : cyc2_q;
                             x0c = incl ? {1'b0, w1[23:14]} : ({1'b0, w1[23:12]} + 13'd3) >> 2;
                             y0c = incl ? {1'b0, w1[11:2]}  : ({1'b0, w1[11:0]}  + 13'd3) >> 2;
                             x1c = incl ? {1'b0, w0[23:14]} + 11'd1 : ({1'b0, w0[23:12]} + 13'd3) >> 2;

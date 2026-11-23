@@ -251,6 +251,13 @@ module rdp_pix (
     // decoded modes
     // ======================================================================
     wire [1:0] cyc      = other_h[21:20];
+    // (the cycle type's tests are registers, one for each use's fanout: cyc is the primitive's, steady while its pixels are in the pipe -- a
+    // state command waits for the pipe to drain -- and its tests, with other_h's register behind them and far from the datapath, were the start
+    // of the worst paths into bo13a, o11a, cvgmul and the output stage)
+    reg        cyc0_q, cyc1_q, cyc2_q, cyc3_q, cyc23_q;     // 1-cycle (0), 2-cycle (1), copy (2), fill (3), copy or fill
+    always @(posedge clk) begin
+        cyc0_q <= cyc == 2'd0; cyc1_q <= cyc == 2'd1; cyc2_q <= cyc == 2'd2; cyc3_q <= cyc == 2'd3; cyc23_q <= cyc[1];
+    end
     wire       persp    = other_h[19];
     wire       tlut_ia  = other_h[14];
     // TEXEL1 read by the first combiner cycle (rdp.c cc0_uses_texel1: the same fields)
@@ -270,8 +277,8 @@ module rdp_pix (
     wire       point    = other_h[13:12] == 2'd0 || other_h[21:20] == 2'd2;    // (copy mode has no filter)
     wire       a_cmp    = other_l[0];
     wire       z_src_p  = other_l[2];
-    wire       z_cmp    = other_l[4] && !cyc[1] && !c8;    // (copy and fill mode have no depth, nor an 8-bit image)
-    wire       z_upd    = other_l[5] && !cyc[1] && !c8;
+    wire       z_cmp    = other_l[4] && !cyc23_q && !c8;    // (copy and fill mode have no depth, nor an 8-bit image)
+    wire       z_upd    = other_l[5] && !cyc23_q && !c8;
     wire       decal    = other_l[11:10] == 2'd3;
     wire       cvg_x_a  = other_l[12];
     wire       force_bl = other_l[14];
@@ -724,7 +731,7 @@ module rdp_pix (
         u5p_masks <= t_masks; u5p_maskt <= t_maskt;
         c5p_tmem <= t_tmem; c5p_line <= t_line; c5p_size <= t_size; c5p_pal <= t_pal; c5p_fmt <= t_fmt;
         c5p_yuv <= t_fmt == 3'd1 && t_size == 2'd2;
-        conv5p <= !cyc[1] && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
+        conv5p <= !cyc23_q && !(tl_p2 ? other_h[10] : other_h[11]) && yuv_vec[(tl_p2 && other_h[9]) ? tl_rq - 3'd1 : tl_rq];
         tcp_sr <= tcp_s; tcp_tr <= tcp_t;
         // P5m
         v5 <= v5p & ~rst; ph5 <= ph5p; conv5 <= conv5p;
@@ -837,7 +844,7 @@ module rdp_pix (
     end
     // (copy mode copies a 16-bit texel's or a TLUT entry's bits as they are: read as RGBA 5551 they are written back
     // unchanged, an IA or I texel and an IA entry too -- the corner, the one texel copy mode takes)
-    wire        cp_raw = cyc == 2'd2;
+    wire        cp_raw = cyc2_q;
     wire [31:0] tx0 = tlut_on ? tex16(tlut_ia && !cp_raw, tl_q0)
                               : texel((cp_raw && u8t_size == 2'd2 && u8t_fmt != 3'd1) ? 3'd0 : u8t_fmt, u8t_size, q0t, h0t, sl0_t);
     wire [31:0] tx1 = tlut_on ? tex16(tlut_ia, tl_q1) : texel(u8t_fmt, u8t_size, q1t, h1t, sl1_t);
@@ -1166,7 +1173,7 @@ module rdp_pix (
             // (C's two fractions, the colour's 13 and 14, the alpha's 0 and 6, are one input of each C select: which of the
             // two is chosen here, once for the three channels)
             // (1-cycle mode: a level count of 0, without sharpen and detail, gives all ones whatever the steps)
-            lfx = lod_on ? {lf[8], lf} : (cyc == 2'd0 && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
+            lfx = lod_on ? {lf[8], lf} : (cyc0_q && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             c_com = rgb_c_com(mul_r, tex, tex1, sh, cm, fr_c);
@@ -1240,7 +1247,7 @@ module rdp_pix (
     wire [8:0]  nz9 = {nlfsr[10:8], 6'h20};
     always @(posedge clk) begin
         if (rst) nlfsr <= 23'd0;
-        else if (v9 && cv9 != 4'd0 && cyc != 2'd3) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
+        else if (v9 && cv9 != 4'd0 && !cyc3_q) nlfsr <= {nlfsr[21:0], ~(nlfsr[22] ^ nlfsr[18])};
         nz10 <= nz9x;
     end
     // The one combiner (the console's: a 2-cycle pixel goes through it twice, RDP_SHARE of the faithful build). A 2-cycle pixel's first
@@ -1297,8 +1304,6 @@ module rdp_pix (
     // (cyc is the primitive's, steady while its pixels are in the pipe: its test is a register, and the choice between the first cycle's
     // operands and the second's -- 300 bits of multiplexers in front of the subtractions -- is a register too: u_e is v9x && 2-cycle,
     // made a stage ahead. other_h -> o11a was -0.24 to -0.41 ns at 10.667 ns)
-    reg          cyc1_q;
-    always @(posedge clk) cyc1_q <= cyc == 2'd1;
     reg          u_e;
     always @(posedge clk) u_e <= v9 & ~rst & cyc1_q;
     reg  [35:0]  cm_r;                                  // the first cycle's result, 9 raw bits a channel (cc_eval1), held
@@ -1361,8 +1366,8 @@ module rdp_pix (
     reg [31:0] mem11;
     always @(posedge clk) begin
         v11 <= v11m & ~rst; x11 <= x11m; bs11 <= bs11m;
-        comb11 <= (cyc == 2'd2) ? tex11m : { cc_clamp(c1m[35:27]), cc_clamp(c1m[26:18]), cc_clamp(c1m[17:9]), cc_clamp(c1m[8:0]) };
-        af11 <= (cyc != 2'd2) && cc_a256(c1m[8:0]);
+        comb11 <= cyc2_q ? tex11m : { cc_clamp(c1m[35:27]), cc_clamp(c1m[26:18]), cc_clamp(c1m[17:9]), cc_clamp(c1m[8:0]) };
+        af11 <= !cyc2_q && cc_a256(c1m[8:0]);
         shade11 <= shade11m; depth11 <= depth11m;
         dlo11 <= dlo11m; dhi11 <= dhi11m;
         zold11 <= zold11m; mem11 <= mem11m;
@@ -1399,10 +1404,10 @@ module rdp_pix (
     reg  [22:0] lfsr;
     always @(posedge clk)
         if (rst) lfsr <= 23'd0;
-        else if (v11 && cvg11 != 4'd0 && cyc != 2'd3) lfsr <= {lfsr[21:0], ~(lfsr[22] ^ lfsr[18])};
+        else if (v11 && cvg11 != 4'd0 && !cyc3_q) lfsr <= {lfsr[21:0], ~(lfsr[22] ^ lfsr[18])};
     wire [2:0] ad_d;
     rdp_dither_tab adtab (.off(1'b0), .bayer(other_h[6]), .y(dy11), .x(x11[1:0]), .dt(ad_d));
-    wire [2:0] adith = (cyc == 2'd2) ? 3'd0 : (other_h[5:4] == 2'd0) ? ad_d : (other_h[5:4] == 2'd1) ? ~ad_d
+    wire [2:0] adith = cyc2_q ? 3'd0 : (other_h[5:4] == 2'd0) ? ad_d : (other_h[5:4] == 2'd1) ? ~ad_d
                      : (other_h[5:4] == 2'd2) ? lfsr[10:8] : 3'd0;
     function automatic [7:0] sat9;
         input [8:0] v;
@@ -1419,7 +1424,7 @@ module rdp_pix (
     // the registers of P11b was -0.2 to -0.24 ns at 10.667 ns in 0 C: comb11 -> pa11b, cvg_sb and ca11b)
     reg  [11:0] cvgmul, cvgmul0;
     always @(posedge clk) begin
-        cvgmul  <= ((cyc == 2'd2) ? tex11m[7:0] : cc_clamp(c1m[8:0])) * cv11m + 12'd4;
+        cvgmul  <= (cyc2_q ? tex11m[7:0] : cc_clamp(c1m[8:0])) * cv11m + 12'd4;
         cvgmul0 <= c0a11m * cv11m + 12'd4;
     end
     wire        cx_m    = cvg_x_a & ~af11;
@@ -1427,13 +1432,13 @@ module rdp_pix (
     wire [3:0]  cvg_s   = cx_m ? cvgmul[11:8] : cvg11;
     wire [7:0]  pa11 = !a_cvg_s ? sat9({1'b0, comb11[7:0]} + {6'd0, adith})
                      : cx_m ? sat9(cvgmul[11:3]) : sat9({cvg11, 5'd0});
-    wire [7:0]  ca11 = (cyc != 2'd1) ? pa11
+    wire [7:0]  ca11 = !cyc1_q ? pa11
                      : !a_cvg_s ? sat9({1'b0, c0a11} + {6'd0, adith})
                      : cx_m0 ? sat9(cvgmul0[11:3]) : sat9({cvg11, 5'd0});
     // the shade's alpha is 9 bits (0..511): plus the dither, 255 from 256 up
     wire [9:0]  sha_s = {1'b0, shade11[8:0]} + {7'd0, adith};
     wire [7:0]  sha11 = (sha_s[9] | sha_s[8]) ? 8'hFF : sha_s[7:0];
-    wire [7:0]  athr  = (cyc == 2'd2) ? 8'd128 : a_dith ? lfsr[7:0] : blend[7:0];   // (copy: the texel's alpha bit)
+    wire [7:0]  athr  = cyc2_q ? 8'd128 : a_dith ? lfsr[7:0] : blend[7:0];   // (copy: the texel's alpha bit)
     // the memory's coverage: 6 where the colour image's pixel is complete, 7
     // where it is not read, else what this pixel leaves uncovered (rdp.h: storage)
     wire [2:0]  memcvg = !(im_rd && need_mem) ? 3'd7 : {memb11, hid11};
@@ -1606,8 +1611,8 @@ module rdp_pix (
     reg [3:0]  cvg12a;
     reg        zinter12a, zpass12a, arej12a, k012a, blend12a;
     wire [3:0] cvg_i12 = (z_cmp && zinter12a) ? zcm12a[6:3] : cvg12a;
-    wire       kill12 = k012a || (cvg_i12 == 4'd0 && aa_en && cyc != 2'd2);
-    wire       pass12w = (cyc == 2'd3) ? !k012a : (zpass12a && !arej12a && !kill12);
+    wire       kill12 = k012a || (cvg_i12 == 4'd0 && aa_en && !cyc2_q);
+    wire       pass12w = cyc3_q ? !k012a : (zpass12a && !arej12a && !kill12);
     wire [4:0] csum12 = {1'b0, cvg_i12} + {2'd0, mcvg12a};
     reg  [2:0] cvo12;
     always @(*) begin
@@ -1618,7 +1623,7 @@ module rdp_pix (
             default: cvo12 = mcvg12a;
         endcase
     end
-    wire [2:0] cv312w = (cyc == 2'd2) ? {3{comb12a[7]}} : cvo12;
+    wire [2:0] cv312w = cyc2_q ? {3{comb12a[7]}} : cvo12;
     always @(posedge clk) begin
         v12a <= v11b & ~rst; x12a <= x11b; bs12a <= bs11b;
         comb12a <= comb11b; mem12a <= mem11b; pa12a <= pa11b; sha12a <= sha11b; mcvg12a <= mcvg11b;
@@ -1655,7 +1660,7 @@ module rdp_pix (
     reg        bu_e;
     always @(posedge clk) bu_e <= v11 & ~rst & cyc1_q;
     reg [23:0] b0_r;                         // 2-cycle: the first cycle always blends, >> 5 (8 bits: the sum wraps)
-    wire [63:0] bo1_w = bl_sel(!bu_e && cyc == 2'd1, bu_e ? comb11b : (cyc == 2'd1) ? { b0_r, comb12b[7:0] } : comb12b,
+    wire [63:0] bo1_w = bl_sel(!bu_e && cyc1_q, bu_e ? comb11b : cyc1_q ? { b0_r, comb12b[7:0] } : comb12b,
                                bu_e ? mem11b : mem12b, bu_e ? pa11b : pa12b, bu_e ? sha11b : sha12b, bu_e ? mcvg11b : mcvg12b, shb);
     reg        be13a;
 
@@ -1712,7 +1717,7 @@ module rdp_pix (
     wire [23:0] bl_w = { bl_out(fsum[41:28], fpm[47:40], fpm[23:16]),
                          bl_out(fsum[27:14], fpm[39:32], fpm[15:8]),
                          bl_out(fsum[13:0],  fpm[31:24], fpm[7:0]) };
-    wire [31:0] fin = (cyc == 2'd3) ? 32'd0 : (cyc == 2'd2) ? comb13b : {bl_w, 8'd0};
+    wire [31:0] fin = cyc3_q ? 32'd0 : cyc2_q ? comb13b : {bl_w, 8'd0};
     // The RGB dither (the N64's: RGB_DITHER_SEL, other_h[7:6]): the blender's
     // 8 bits go to 5 by truncation, after the three low bits are compared with
     // a 3-bit threshold -- where the threshold is below them the channel goes
@@ -1728,12 +1733,12 @@ module rdp_pix (
     // bits and the thresholds go on to the output (out_color is their sum, a
     // 5-bit step and a compare behind the registers: not on the blender's path).
     wire [2:0] dt13;
-    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1] || dither_off), .bayer(other_h[6]),
+    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc23_q || dither_off), .bayer(other_h[6]),
                          .y(dy13), .x(x13b[1:0]), .dt(dt13));
     // the noise: the LFSR at the pixel's P11 (the sample before its step), six clocks to P13b (P12b is one of them)
     reg [8:0] nz1, nz2, nz3, nz4, nz5, nz6;
     always @(posedge clk) begin nz1 <= lfsr[8:0]; nz2 <= nz1; nz3 <= nz2; nz4 <= nz3; nz5 <= nz4; nz6 <= nz5; end
-    wire dnoise = other_h[7:6] == 2'd2 && !cyc[1] && !dither_off;
+    wire dnoise = other_h[7:6] == 2'd2 && !cyc23_q && !dither_off;
     reg [14:0] col_t;                           // R5 G5 B5, truncated
     reg [8:0]  col_lo;                          // the low three bits of R, G, B
     reg        col_rep;                         // a copy or a fill: the plane's bits are the pixel's own top ones
@@ -1757,13 +1762,13 @@ module rdp_pix (
     always @(posedge clk) begin
         out_valid <= v13b & ~rst;
         out_x <= x13b; out_set <= bs13b;
-        col_t  <= (cyc == 2'd3) ? (x13b[0] ? fill[15:1] : fill[31:17])
+        col_t  <= cyc3_q ? (x13b[0] ? fill[15:1] : fill[31:17])
                                 : { fin[31:27], fin[23:19], fin[15:11] };
-        col_a  <= (cyc == 2'd3) ? (x13b[0] ? fill[0] : fill[16]) : cv313b[2];
-        out_hid <= (cyc == 2'd3) ? {2{x13b[0] ? fill[0] : fill[16]}} : cv313b[1:0];
-        col_rep <= cyc[1];
-        col_lo <= (cyc == 2'd3) ? 9'd0 : { fin[26:24], fin[18:16], fin[10:8] };
-        out_r8 <= (cyc == 2'd3) ? fill[{~x13b[1:0], 3'd0} +: 8] : fin[31:24];
+        col_a  <= cyc3_q ? (x13b[0] ? fill[0] : fill[16]) : cv313b[2];
+        out_hid <= cyc3_q ? {2{x13b[0] ? fill[0] : fill[16]}} : cv313b[1:0];
+        col_rep <= cyc23_q;
+        col_lo <= cyc3_q ? 9'd0 : { fin[26:24], fin[18:16], fin[10:8] };
+        out_r8 <= cyc3_q ? fill[{~x13b[1:0], 3'd0} +: 8] : fin[31:24];
         col_dt <= dnoise ? nz6[2:0] : dt13;
         col_dg <= dnoise ? nz6[5:3] : dt13;
         col_db <= dnoise ? nz6[8:6] : dt13;
