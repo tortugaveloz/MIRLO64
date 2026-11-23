@@ -59,9 +59,9 @@ module rdp_top (
     output wire        m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,
     output wire        m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we,
     input  wire        m_rdata_valid, input wire [31:0] m_rdata,
-    output wire [31:0] sync_count, output wire sync_ev, output wire [31:0] load_count, output wire [15:0] unknown_ops, output wire idle, output wire tmem_busy
+    output wire [15:0] sync_count, output wire sync_ev, output wire [31:0] load_count, output wire [15:0] unknown_ops, output wire idle, output wire tmem_busy
 );
-localparam int N = 1 + 1 + 1 + 32 + 1 + 32 + 4 + 32 + 1 + 32 + 16 + 1 + 1;
+localparam int N = 1 + 1 + 1 + 32 + 1 + 32 + 4 + 16 + 1 + 32 + 16 + 1 + 1;
 logic [N-1:0] s;
 always_ff @(posedge clk) s <= {s[N-2:0], ^{rst, cmd_valid, cmd_data, m_cmd_ready, m_wdata_ready, m_rdata_valid, m_rdata}};
 assign {cmd_ready, m_cmd_valid, m_cmd_we, m_cmd_addr, m_wdata_valid, m_wdata, m_wdata_we, sync_count, sync_ev, load_count, unknown_ops, idle, tmem_busy} = s;

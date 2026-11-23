@@ -409,7 +409,8 @@ logic [31:0] br_wdata;
 logic        su_valid, su_ready;
 logic [31:0] su_data;
 logic        cmd_valid, cmd_ready;
-logic [31:0] cmd_data, rdp_sync, rdp_load;
+logic [31:0] cmd_data, rdp_load;
+logic [15:0] rdp_sync;                      // (the SYNC FULLs counted, modulo 65,536)
 logic [15:0] rdp_unknown;
 logic        rdp_idle, rdp_tmem_busy;
 logic        r_uart_we, uart_rx_pop, uart_rxempty, uart_txfull;
@@ -625,7 +626,8 @@ logic        pq_empty;                // port_rdp's queue holds nothing
 generate if (RDP_OC) begin : oc_rdp
     // the RDP on clk_cpu: its command words, its memory channels and its status cross in rdp_xing
     logic        rc_valid, rc_ready, rr_cmd_valid, rr_cmd_we, rr_cmd_ready, rr_wvalid, rr_wready, rr_rvalid, rr_idle, rr_tm, rr_ev;
-    logic [31:0] rc_data, rr_wdata, rr_rdata, rr_sync, rr_load;
+    logic [31:0] rc_data, rr_wdata, rr_rdata, rr_load;
+    logic [15:0] rr_sync;
     logic [23:0] rr_addr;
     logic [3:0]  rr_wwe;
     logic [15:0] rr_unk;

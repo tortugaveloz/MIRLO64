@@ -42,7 +42,7 @@ module rdp_top (
 
 
     // status
-    output reg  [31:0] sync_count,      // SYNC FULLs completed (everything before in DRAM)
+    output reg  [15:0] sync_count,      // SYNC FULLs completed (everything before in DRAM), modulo 65,536
     output reg         sync_ev,         // (a cycle) one has just completed: the DP interrupt
     output reg  [31:0] load_count,      // loads completed
     output reg  [15:0] unknown_ops,
@@ -1315,7 +1315,7 @@ module rdp_top (
 
             // ---- SYNC FULL: every earlier write accepted by the memory
             S_SYNC: if (all_quiet && !mem_wpend) begin
-                sync_count <= sync_count + 32'd1;
+                sync_count <= sync_count + 16'd1;
                 sync_ev <= 1'b1;
                 st <= S_IDLE;
                 busy_exec <= 1'b0;

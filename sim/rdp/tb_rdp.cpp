@@ -565,7 +565,7 @@ int main(int argc, char **argv)
             if (memcmp(rtl_mem + o, mdl_mem + o, 2)) { if (!diff) first = o; diff++; }
         printf("%s: %llu commands, RTL %llu cycles (%llu reads, %llu writes), sync %u/%u loads %u/%u unknown %u/%u, %llu pixels: %s",
                argv[ai], (unsigned long long)ncmd, (unsigned long long)(cycles - c0), (unsigned long long)n_rd, (unsigned long long)n_wr,
-               top->sync_count, mdl.sync_count, top->load_count, mdl.load_count, top->unknown_ops, mdl.unknown_ops,
+               top->sync_count, mdl.sync_count & 0xFFFFu, top->load_count, mdl.load_count, top->unknown_ops, mdl.unknown_ops,
                (unsigned long long)mdl.pixels_drawn, diff ? "MISMATCH" : "RTL == model\n");
         if (diff) printf(", %llu 16-bit words differ, first at %06x\n", (unsigned long long)diff, first);
         if (sdram) { printf("\n    SDRAM: %llu row misses, %llu cycles lost turning between reads and writes, %llu of the other master's accesses", (unsigned long long)sd.n_miss, (unsigned long long)sd.n_turn, (unsigned long long)sd.n_cpu); sd.n_miss = sd.n_turn = sd.n_cpu = 0; }
@@ -582,7 +582,7 @@ int main(int argc, char **argv)
             for (unsigned v : kinds) printf(" %04x", v);
             printf("\n");
         }
-        if (diff || top->sync_count != mdl.sync_count || !rtl_idle()) bad = 1;
+        if (diff || top->sync_count != (mdl.sync_count & 0xFFFFu) || !rtl_idle()) bad = 1;
         if (prefix && cimg) {
             char path[1024];
             snprintf(path, sizeof path, "%s_%d_rtl.ppm", prefix, k); write_ppm(path, rtl_mem, cimg, width, csize);

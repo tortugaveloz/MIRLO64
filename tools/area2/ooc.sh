@@ -65,6 +65,20 @@ endmodule
 SV
 ;;
 rdp)  top=rdp_top ;;
+rdpt) cat > top.sv <<SV
+// rdp_top as the SoC uses it: the memory address only in bits 23:2 (mirlo_mips.sv: rdp_addr[23:2] and the 24 bits of rr_addr), so that
+// the address logic above them, which the whole design's synthesis removes, is not counted
+module ooc_rdpt (input wire clk, rst, cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
+    output wire m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [23:2] m_cmd_addr,
+    output wire m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we, input wire m_rdata_valid, input wire [31:0] m_rdata,
+    output wire [15:0] sync_count, output wire sync_ev, output wire [31:0] load_count, output wire [15:0] unknown_ops, output wire idle, tmem_busy);
+    wire [31:0] a;
+    rdp_top rdp (.clk, .rst, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(a), .m_wdata_valid, .m_wdata_ready,
+        .m_wdata, .m_wdata_we, .m_rdata_valid, .m_rdata, .sync_count, .sync_ev, .load_count, .unknown_ops, .idle, .tmem_busy);
+    assign m_cmd_addr = a[23:2];
+endmodule
+SV
+top=ooc_rdpt ;;
 regs) top=mirlo_regs ;;
 soc)  top=mirlo_mips ;;
 glue) top=mirlo_mips                    # (mirlo_mips with the CPU, the RSP and the RDP as glue_stubs.sv's stubs: minutes, not twenty)
@@ -88,7 +102,8 @@ module ooc_dpc (input wire clk, rst, start_we0, end_we, status_we, input wire [3
 endmodule
 SV
 ;;
-xing|xingpll) cp $W/tools/area2/xing_top.sv top.sv; top=ooc_$unit ;;       # (rsp_clk, rsp_gate and rsp_xing with stand-ins on both sides; CLK_C_NS=10.667)
+xing|xingpll) cp $W/tools/area2/xing_top.sv top.sv; top=ooc_$unit ;;
+rdpx) cp $W/tools/area2/rdpx_top.sv top.sv; top=ooc_rdpx ;;       # (rdp_xing alone: the RDP's crossings with clk_sys)       # (rsp_clk, rsp_gate and rsp_xing with stand-ins on both sides; CLK_C_NS=10.667)
 ports) cat > top.sv <<SV
 module ooc_ports (input wire clk, rst,
     input wire m_cmd_valid, m_cmd_we, input wire [31:0] m_cmd_addr, output wire m_cmd_ready, input wire m_wdata_valid, input wire [31:0] m_wdata,
@@ -104,7 +119,7 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
+*) echo "unit: cpu rdp rdpt rdpx rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
