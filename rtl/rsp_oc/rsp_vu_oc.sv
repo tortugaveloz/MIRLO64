@@ -47,9 +47,16 @@ module rsp_vu_oc #(
     input  wire  [31:0] ins_n,
     input  wire  [31:0] lins_n,
     input  wire         adv,
-    input  wire  [11:0] la_m,           // rs's low 12 bits, the base of a load / store, from each source -- the scalar unit's writer in M, the one in W, the register file's --
-    input  wire  [11:0] la_w,           // ... and the choice (la_fm, la_fw; else the file's): the address is made from each and chosen
-    input  wire  [11:0] la_r,
+    input  wire  [3:0]  la_m,           // rs's low 4 bits, the base of a store, from each source -- the scalar unit's writer in M, the one in W, the register file's --
+    input  wire  [3:0]  la_w,           // ... and the choice (la_fm, la_fw; else the file's)
+    input  wire  [3:0]  la_r,
+    input  wire  [11:0] ls_m,           // the address of a load or store from each source, with its offset scaled (the scalar unit's adders: rs + the offset) ...
+    input  wire  [11:0] ls_w,
+    input  wire  [11:0] ls_r,
+    input  wire  [11:0] lt_m,           // ... and with 16 more (the next line's)
+    input  wire  [11:0] lt_w,
+    input  wire  [11:0] lt_r,
+    input  wire  [3:0]  la_o4,          // the offset's low 4 bits
     input  wire         la_fm,
     input  wire         la_fw,
     input  wire         l_valid,        // (LPAIR) a load, store or move paired with the computation on ins
@@ -624,23 +631,10 @@ wire  [31:0] r_res  = r_zero ? 32'h7FFF_FFFF : r_min ? 32'hFFFF_0000 : (r_val >>
 //                   runs them often)
 typedef enum logic { V_IDLE, V_TV } vst_t;
 vst_t st;
-function automatic logic [11:0] offs(input logic [31:0] i);      // the offset scaled by the access's size
-    logic [11:0] of;
-    of = {{5{i[6]}}, i[6:0]};
-    unique case (i[15:11])
-    5'd0:             return of;
-    5'd1:             return {of[10:0], 1'b0};
-    5'd2:             return {of[9:0], 2'b0};
-    5'd3, 5'd6, 5'd7: return {of[8:0], 3'b0};
-    default:          return {of[7:0], 4'b0};
-    endcase
-endfunction
-logic [11:0] off_sh, off_sh16;              // ... and 16 more: registered with the instruction, so that the address and the next line's are two adders after rs
-always_ff @(posedge clk) if (adv) begin off_sh <= offs(lins_n); off_sh16 <= offs(lins_n) + 12'd16; end
-// (the offset scaled first, so that the address is one adder after rs: the
+// (the address from each source, and the next line's, are the scalar unit's adders': the offset scaled first, so that the address is one adder after rs: the
 // store's rotation hangs off its low bits)
-wire  [11:0] lsa_m = la_m + off_sh, lsa_w = la_w + off_sh, lsa_r = la_r + off_sh;
-wire  [11:0] lsb_m = la_m + off_sh16, lsb_w = la_w + off_sh16, lsb_r = la_r + off_sh16;
+wire  [11:0] lsa_m = ls_m, lsa_w = ls_w, lsa_r = ls_r;
+wire  [11:0] lsb_m = lt_m, lsb_w = lt_w, lsb_r = lt_r;
 wire  [11:0] ls_addr   = la_fm ? lsa_m : la_fw ? lsa_w : lsa_r;
 wire  ls_packed = ld.packed_;
 wire  ls_tv     = ld.tv;                                           // LTV, STV
@@ -717,7 +711,7 @@ wire         in_tv   = st == V_TV;
 // the low two of them first
 logic [7:0]  sarr [16];
 wire         st_pk  = swc2 && ls_packed;
-wire  [3:0]  st_eo  = el - off_sh[3:0];
+wire  [3:0]  st_eo  = el - la_o4;
 wire  [3:0]  st_rot = in_tv ? tv_idx - tv_addr[3:0] : swc2 ? st_eo - (la_fm ? la_m[3:0] : la_fw ? la_w[3:0] : la_r[3:0]) : el;
 // (byte i one of four, by a select the bytes share -- st_sel[0] for the first eight, [1] for the others: 0 its byte, 1 SHV's,
 // 2 the packed top 8 bits, 3 the packed bits 14..7; SFV's bytes are only the four i a multiple of 4, the others no matter)

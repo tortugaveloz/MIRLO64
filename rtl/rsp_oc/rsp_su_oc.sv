@@ -96,11 +96,19 @@ module rsp_su_oc #(
     output logic        c_valid,
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
-    // ... and its low 12 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
-    // else the file's), for the vector unit's load and store addresses, made from each source as the scalar unit's own are
-    output logic [11:0] c_bm,
-    output logic [11:0] c_bw,
-    output logic [11:0] c_br,
+    // ... and its low 4 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
+    // else the file's), for a vector store's rotation; and the vector unit's load and store addresses, the scalar unit's own adders' sums with the
+    // vector offset (c_om: the base from M, c_ow, c_or, and c_hm, c_hw, c_hr with 16 more: the next line's), and that offset's low 4 bits (c_o4)
+    output logic [3:0]  c_bm,
+    output logic [3:0]  c_bw,
+    output logic [3:0]  c_br,
+    output logic [11:0] c_om,
+    output logic [11:0] c_ow,
+    output logic [11:0] c_or,
+    output logic [11:0] c_hm,
+    output logic [11:0] c_hw,
+    output logic [11:0] c_hr,
+    output logic [3:0]  c_o4,
     output logic        c_fm,
     output logic        c_fw,
     output logic [31:0] c_b,            // rt
@@ -438,11 +446,25 @@ always_ff @(posedge clk) hazard <= !rst && e_go && e_c.we && (e_c.load || e_c.cf
 wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
-// (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
-wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qam[11:0] + imm_sx[11:0];
-logic [31:0] imm16;                            // (the offset + 16, registered with the instruction)
-always_ff @(posedge clk) if (!stall_e) imm16 <= {{16{s_ins_d[15]}}, s_ins_d[15:0]} + 32'd16;
-wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qam[11:0] + imm16[11:0];
+// (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder.
+// The offset, registered with the instruction (e_ao, and with 16 more, e_ao16), is the scalar load's or store's immediate, or a vector
+// load's or store's offset scaled by its size: the same adders make the vector unit's addresses)
+function automatic logic [11:0] offs(input logic [31:0] i);      // the vector offset scaled by the access's size
+    logic [11:0] of;
+    of = {{5{i[6]}}, i[6:0]};
+    unique case (i[15:11])
+    5'd0:             return of;
+    5'd1:             return {of[10:0], 1'b0};
+    5'd2:             return {of[9:0], 2'b0};
+    5'd3, 5'd6, 5'd7: return {of[8:0], 3'b0};
+    default:          return {of[7:0], 4'b0};
+    endcase
+endfunction
+logic [11:0] e_ao, e_ao16;
+wire  [11:0] ao_d = (s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A) ? offs(s_ins_d) : s_ins_d[11:0];
+always_ff @(posedge clk) if (!stall_e) begin e_ao <= ao_d; e_ao16 <= ao_d + 12'd16; end
+wire [11:0] ad_m = m_res[11:0] + e_ao, ad_w = w_res[11:0] + e_ao, ad_r = rf_qam[11:0] + e_ao;
+wire [11:0] adh_m = m_res[11:0] + e_ao16, adh_w = w_res[11:0] + e_ao16, adh_r = rf_qam[11:0] + e_ao16;
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
@@ -471,9 +493,12 @@ logic e_vls;
 always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
 assign c_vls = e_vls;
 assign c_a = ea;
-assign c_bm = m_res[11:0];
-assign c_bw = w_res[11:0];
-assign c_br = rf_qam[11:0];
+assign c_bm = m_res[3:0];
+assign c_bw = w_res[3:0];
+assign c_br = rf_qam[3:0];
+assign c_om = ad_m;  assign c_ow = ad_w;  assign c_or = ad_r;
+assign c_hm = adh_m; assign c_hw = adh_w; assign c_hr = adh_r;
+assign c_o4 = e_ao[3:0];
 assign c_fm = fa_m;
 assign c_fw = fa_w;
 assign c_b = eb;
