@@ -18,7 +18,7 @@
 //                    is, at the bridge's 1 MiB, and prog.bin a slot of its
 //                    own (3) at 0. The core's table has the ROM's size for
 //                    slot 0 and the program's for slot 3
-//   SLOT<n>=<file>   slot n's file (1 the save, 2 the Controller Pak, 4 the save-type database), after
+//   SLOT<n>=<file>   slot n's file (1 the save, 2 the Controller Pak, 4 the save-type database, 10 the GameShark picker's cheat database), after
 //                    the others --
 //                    SLOTS_FIRST=1: before them
 //   INTERACT=<address>:<value>[,...]  the Pocket writes the core's settings (interact.json addresses, 0x10000108 is "Controller 1 pak")
@@ -26,7 +26,9 @@
 //                    changed while the game runs, or an action chosen: 0x10000130:1 is "Restart Game")
 //   POCKET_FS=<dir> the Pocket's target commands for files the program asks by path (the Transfer Pak (SD)'s Game Boy saves,
 //                    n64rt_gbvirt.c): GETFILE gives the path of the file in slots 8 and 9 (SLOT<n>_PATH=<path>, else /Assets/gbc/common/
-//                    <the file's name>), OPENFILE opens <dir><path> into the slot (created by flag 1), READ and WRITE move it
+//                    <the file's name>) and of the game's slot 0 (SLOT0_PATH=<path>, else /Assets/n64/common/<the ROM= file's name>), OPENFILE opens <dir><path> into the slot (created by flag 1), READ and WRITE move it
+//   (an OPENFILE of a file larger than its slot's data.json size_maximum prints "[pocket: ERROR File id [k] too large ...]": the framework's error)
+//   POCKET_NO_TRUNC=1  an OPENFILE of a file that exists with the set-size flag leaves its size alone (a Pocket that does not shorten it: a shorter write leaves the old tail)
 //   SLOT_AT=<frame>:<slot>:<file>[,...]  a slot's file the Pocket loads while the game runs (the core menu's "Load Transfer Pak 1":
 //                    slot 8 or 9), when that scan-out frame is over, through the bridge's port
 //   SLOTS_OUT=<dir>  when the run ends the Pocket quits the core: each
@@ -469,8 +471,8 @@ static void cpu_stat_step(long sys)
 #include "con_model.h"
 
 // ---- the Pocket's data slots (data.json) and its side of the bridge
-struct Slot { uint32_t addr = 0, size = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
-static Slot slots[10];                              // (0-7 as data.json has them, 8 and 9 the Transfer Paks' ROMs; the program's state is read back from slot 7's place)
+struct Slot { uint32_t addr = 0, size = 0, maxsize = 0; bool there = false, nv = false; std::vector<uint8_t> data, back; };
+static Slot slots[12];                              // (0-7 as data.json has them, 8 and 9 the Transfer Paks' ROMs, 10 the GameShark picker's database, 11 its file; the program's state is read back from slot 7's place)
 static std::vector<uint8_t> &img = slots[0].data;   // slot 0: the program / the game file (with ROM=: the ROM)
 static const uint32_t FILE_PSRAM_END = 31u << 20;   // (lang/mips/include/layout.h's LAYOUT_FILE_PSRAM
 static const uint32_t FILE_ROM_END = 65u << 20;     // and LAYOUT_FILE_MAX)
@@ -502,9 +504,10 @@ static bool read_data_json(const std::string &path)
         std::string o = j.substr(lo, hi - lo);
         size_t a = o.find("\"address\"");
         unsigned id = (unsigned)strtoul(o.c_str() + o.find(':', o.find("\"id\"")) + 1, nullptr, 0);
-        if (a == std::string::npos || id >= 10) continue;
+        if (a == std::string::npos || id >= 12) continue;
         slots[id].addr = (uint32_t)strtoul(o.c_str() + o.find('"', o.find(':', a)) + 1, nullptr, 0);
         slots[id].nv = o.find("\"nonvolatile\": true") != std::string::npos;
+        { size_t m = o.find("\"size_maximum\""); if (m != std::string::npos) slots[id].maxsize = (uint32_t)strtoul(o.c_str() + o.find('"', o.find(':', m)) + 1, nullptr, 0); }
         slots[id].there = true;
     }
     return slots[0].there;
@@ -697,7 +700,7 @@ int main(int argc, char **argv)
         printf("ROM: %zu bytes at bridge 0x%08x\n", slots[0].data.size(), slots[0].addr);
     }
     if (!read_file(argv[1], slots[prog].data)) return 2;
-    for (int k = 1; k < 10; k++) {
+    for (int k = 1; k < 12; k++) {
         char name[16]; snprintf(name, sizeof name, "SLOT%d", k);
         const char *f = getenv(name);
         if (!f) continue;
@@ -714,7 +717,7 @@ int main(int argc, char **argv)
         for (uint32_t i = 0; i < (1u << 22); i++) psm[d][c][i] = (uint16_t)(i * 2654435761u >> 13 ^ (0xC3A5u << c));   // (never written: not zeros)
     }
     for (int pass = 0; pass < 2 && !noload; pass++)
-        for (int k = 0; k < 10; k++) {
+        for (int k = 0; k < 12; k++) {
             const std::vector<uint8_t> &d = slots[k].data;
             if (d.empty() || ((k == 0 || k == prog) != (pass == (slots_first ? 1 : 0)))) continue;
             slots[k].size = (uint32_t)d.size();
@@ -845,7 +848,7 @@ int main(int argc, char **argv)
         if (sys_edge) {
             t->clk_sys = 1;
             if (sys == 20) t->reset = 0;
-            t->file_size = slots[t->br_slot < 10 ? t->br_slot : 7].size;         // the core's table, by the slot the program selected
+            t->file_size = slots[t->br_slot < 12 ? t->br_slot : 7].size;         // the core's table, by the slot the program selected
             { const long k = (sys - 200) / 4; t->ia_wr = 0;                            // (the settings: one write each, from 200 cycles in)
               if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 31u; t->ia_data = ia_list[k].second; }
               else if ((sys & 3) == 0 && k >= (long)ia_list.size() && !ia_q.empty()) {
@@ -1044,7 +1047,7 @@ int main(int argc, char **argv)
                 else { putchar(t->uart_byte); if (t->uart_byte == '\n') fflush(stdout); }
             }
             if (t->file_size_wr) {
-                slots[t->br_slot < 10 ? t->br_slot : 7].size = t->file_size_new;
+                slots[t->br_slot < 12 ? t->br_slot : 7].size = t->file_size_new;
                 printf("[bridge: slot %u's file size set to %u]\n", t->br_slot, t->file_size_new);
             }
             if (t->audio_wr) {
@@ -1111,8 +1114,9 @@ int main(int argc, char **argv)
             }
             if (pocket_fs && t->br_req_getfile) {
                 const int k = t->br_slot;
-                const char *e = k == 8 ? getenv("SLOT8_PATH") : getenv("SLOT9_PATH");
+                const char *e = k == 0 ? getenv("SLOT0_PATH") : k == 8 ? getenv("SLOT8_PATH") : getenv("SLOT9_PATH");
                 std::string path = e ? e : "", f = k == 8 ? (getenv("SLOT8") ? getenv("SLOT8") : "") : (getenv("SLOT9") ? getenv("SLOT9") : "");
+                if (k == 0 && path.empty() && getenv("ROM")) path = std::string("/Assets/n64/common/") + (strrchr(getenv("ROM"), '/') ? strrchr(getenv("ROM"), '/') + 1 : getenv("ROM"));   // (the game's slot: the ROM= file's name)
                 if (path.empty() && !f.empty()) path = "/Assets/gbc/common/" + f.substr(f.rfind('/') + 1);
                 if (path.empty() && !slot_at.empty()) for (const auto &w : slot_at) if (w.slot == k) path = "/Assets/gbc/common/" + w.file.substr(w.file.rfind('/') + 1);
                 for (uint32_t i = 0; i < 256; i += 4) {
@@ -1130,11 +1134,13 @@ int main(int argc, char **argv)
                 const std::string f = std::string(pocket_fs) + path;
                 int r = 3;
                 long fs = file_size_of(f);
-                if (fs >= 0) { r = 0; }
+                if (fs >= 0) { r = 0; if ((flags & 2) && (uint32_t)fs != size && !getenv("POCKET_NO_TRUNC")) { if (truncate(f.c_str(), size) == 0) fs = (long)size; } }       // (bit 1: the file's size is set)
                 else if (flags & 1) {
                     std::string d = f.substr(0, f.rfind('/'));
                     if (system(("mkdir -p '" + d + "'").c_str()) == 0) { std::vector<uint8_t> z((flags & 2) ? size : 0, 0); if (FILE *o = fopen(f.c_str(), "wb")) { fwrite(z.data(), 1, z.size(), o); fclose(o); r = 1; fs = (long)z.size(); } }
                 }
+                // the Pocket's framework checks a file open in a slot against the slot's size_maximum (a bigger one: "File id [k] too large", and a later reset or Load Game fails)
+                if (r <= 1 && slots[k].maxsize && (uint32_t)fs > slots[k].maxsize) { printf("[pocket: ERROR File id [%d] too large: %ld bytes, size_maximum %u]\n", k, fs, slots[k].maxsize); fflush(stdout); }
                 if (r <= 1) { opened[k] = f; slots[k].size = (uint32_t)fs; }
                 printf("[pocket: OPENFILE slot %d %s flags %u -> %d, %ld bytes]\n", k, path.c_str(), flags, r, r <= 1 ? fs : -1L); fflush(stdout);
                 cmd_done(r, 0);

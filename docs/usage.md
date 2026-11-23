@@ -10,7 +10,7 @@ The core's own menu on the Pocket.
 |---|---|---|
 | Crop Vertical | None, **8 lines**, 12 lines | Blanks that many lines at the top and the bottom of the picture |
 | Crop Horizontal | None, 1 to 3 columns, 1 to 3 columns left, **1 column right**, 2 to 3 columns right | Blanks columns at the sides of the picture |
-| Expansion Pak/Gameshark | Exp Pak and GameShark, **Exp Pak**, GameShark, None | The Expansion Pak gives the console 8 MiB of RAM, without it 4 MiB; it takes effect when the game is started again. GameShark runs the game's codes ([GameShark codes](#gameshark-codes)) |
+| Expansion Pak/Gameshark | Exp Pak and GameShark, **Exp Pak**, GameShark, None | The Expansion Pak gives the console 8 MiB of RAM, without it 4 MiB; it takes effect when the game is started again. GameShark shows the game's cheats before it starts and runs the ones you choose ([GameShark codes](#gameshark-codes)) |
 | Controller paks | **None**, Controller Pak, Transfer Pak cartridge, Transfer Pak SD, Transfer Pak SD P2, Transfer Pak SD P1P2, TPak cart P1, SD P2 | The accessories in controllers 1 and 2 ([Transfer Paks](#transfer-paks)) |
 | Stick | None, **D-pad**, L stick, R stick | What moves the joystick |
 | D-pad | **None**, D-pad, L stick, R stick | What moves the Nintendo 64's D-pad |
@@ -46,9 +46,8 @@ A Transfer Pak SD uses the Game Boy game's own `<game>.sav`, in the same Saves f
 
 ## GameShark codes
 
-With the codes on in "Expansion Pak/Gameshark", the core looks in `Assets/n64/common/gameshark/` for a text file named after the game, `<ID>.txt`, where `<ID>`
-is the four characters of the ROM's header that say its game and its region (for example `NSME`), and runs every code in it, in every video
-field, as a GameShark does. `<ID>.<version>.txt` (the header's version byte, in decimal) is used first, for a revision whose codes differ. There is no
-choosing among the codes: put in the file the ones to run. A code is a line of `80123456 0063`, with anything after it as its description; the
-types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`. The codes are read when the
-game starts. The file `PUT_CODES_HERE.txt` in that folder says it too.
+With GameShark chosen in "Expansion Pak/Gameshark", a list of the game's cheats (from `Assets/n64/common/gameshark.gsdz`, which the Game Shark database project builds) appears when the core starts and at "Restart Game". The D-pad
+or the stick move, left and right change a cheat's option, A turns it on and off, L/Z and R page, C-down turns all off; **Start** saves your choice and plays with the cheats, **B** saves it and plays without cheats.
+The choice is the file `<the game's name>.gs` in `Saves/n64/common/` (for the ROM `Assets/n64/common/Some Game (U).z64`, `Saves/n64/common/Some Game (U).gs`), the same one the Game Shark core writes: text, one code in each line,
+`80123456 0063`, with `#` lines for the cheats' names (it can be written by hand too); the types are `80` and `81` (writes), `A0` and `A1`, `D0` to `D3` (conditions on the next line), `50` (the repeater) and `F0` and `F1`.
+The codes run in every video field, as a GameShark does, only when you pressed Start in the list ([mips.md](mips.md#the-picker)). The database is the file `Assets/n64/common/gameshark.gsdz` (data slot 11: the Pocket loads it with the core's files at every launch, about 0.7 MB; a missing file shows "The cheat database is not loaded." and the game starts with no cheats); the older `gameshark.gsdb` of the standalone Game Shark core is not used here. Settings that matter: **Expansion Pak/Gameshark** must be "Exp Pak and GameShark" (the Expansion Pak stays in: 8 MiB) or "GameShark" (no Pak: 4 MiB) for the list to appear; with "Exp Pak" (the default) or "None" the start is as it always was. The choice is saved even with B; only Start runs the cheats.

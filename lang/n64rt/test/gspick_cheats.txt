@@ -1,0 +1,14 @@
+crc 0000C0DE-0000FEED-C:45
+gn GSPICK TEST (U)
+//----
+ cn Alpha 16-bit
+  81300100 1234
+ cn Beta 8-bit
+  80300104 0055
+ cn Gamma level
+  80300108 ???? 0011:"One",0022:"Two",0033:"Three"
+ cn Delta two codes
+  8030010C 00AA
+  8030010D 00BB
+ cn Epsilon a long name that scrolls in a row!
+  8030011C 0001

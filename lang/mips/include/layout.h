@@ -45,7 +45,7 @@
 #define LAYOUT_GBROM2       0x42E00000      /* slot 9: cartridge 2's ROM, up to 3 MiB, at the bridge's 0x06E0_0000 (to the save-type database's 0x4310_0000) */
 #define LAYOUT_GBROM2_SLOT  9
 /* the GameShark codes of the game (lang/n64rt/n64rt_cheat.c): data.json's slot LAYOUT_GS_SLOT, a file the runtime asks the Pocket to open by
- * its path (Assets/n64/common/gameshark/<the cartridge's ID>.txt) and to read to LAYOUT_GS; LAYOUT_GS_PARAM holds the open command's
+ * its path (Saves/n64/common/<the ROM's name>.gs, the Game Shark core's file) and to read to LAYOUT_GS; LAYOUT_GS_PARAM holds the open command's
  * parameter struct (the path, 256 bytes, then its flags and its size). The bridge's 0x06D3_0000 and 0x06D4_0000. The Transfer Pak (SD)'s
  * import of a Game Boy game's own save (n64rt_gbvirt.c) uses the same three (the two never run at once: both are made from the video field's hook). */
 #define LAYOUT_GS_PARAM     0x42D30000
@@ -56,6 +56,29 @@
                                              * of a 16-bit image (some of its low colour bits and a check), the image's address folded into it
                                              * (rtl/soc/mirlo_mips.sv); no program reads it */
 #define LAYOUT_SHADOW_BYTES 0x00200000
+/* The GameShark picker (lang/n64rt/n64rt_gspick.c), before the game starts, from the Pocket's "Expansion Pak/Gameshark" setting.
+ * The cheat database is a data slot like the save-type database's, loaded by the Pocket with the core's files at every launch of the core: Assets/n64/common/gameshark.gsdz (the Game Shark database
+ * project's format 2: an index and one zlib stream for each game, about 0.7 MB), slot LAYOUT_GSDB_SLOT, at LAYOUT_GSDB, in the hole above the save-type database up to the RDP's shadow plane. It is
+ * read in place and nothing commands the Pocket for it. Nothing of the runtime writes there: not the save states (their block ends at most 0x97_0000 bytes in), not the restart's snapshot, not the game. The
+ * game's file, <ROM name>.gs, is read and written through a slot with no file that is not read-only (LAYOUT_GSIO_SLOT, size_maximum 4 MiB so that no file left associated with the slot by an older
+ * runtime is "too large" to the framework; the picker uses at most 64 KiB of it), whose buffer is the RDRAM's first 64 KiB. The rest of the picker's memory is the RDRAM, which holds nothing of the
+ * game's while the picker runs (the picker zeroes what it used before the game's boot), and the tail of the save states' block: a copy of the file's text (the parse keeps lines of it), the game's cheats, the
+ * parse's tables and the game's block of the database; the picture the scan-out shows while the picker runs (320 x 240 pixels of RGBA5551) and the codes handed to the cheat engine, which must outlive the game's boot, are
+ * in the save states' tail (a state is at most 0x97_0000 bytes: n64rt_state.c). */
+#define LAYOUT_GSDB         0x43110000      /* the database as the Pocket loaded it: at most LAYOUT_GSDB_MAX bytes (the bridge's 0x0711_0000) */
+#define LAYOUT_GSDB_SLOT    11
+#define LAYOUT_GSDB_MAX     0x000F0000      /* up to the shadow plane at 0x4320_0000 (960 KiB; the database is some 0.7 MB) */
+#define LAYOUT_GSIO         0x43800000      /* slot LAYOUT_GSIO_SLOT's buffer: the file as it is read or written, 64 KiB (the bridge's 0x0780_0000: the RDRAM's start) */
+#define LAYOUT_GSIO_SLOT    10
+#define LAYOUT_GSIO_MAX     0x00010000
+#define LAYOUT_GSP_TXT      0x43810000      /* a copy of the file's text, 64 KiB */
+#define LAYOUT_GSP_GAME     0x43820000      /* the game's cheats and the choice (n64rt_gspick.c), 32 KiB */
+#define LAYOUT_GSP_WORK     0x43830000      /* the file parse's tables, 144 KiB (n64rt_gsdb.c) */
+#define LAYOUT_GSP_BLOB     0x43860000      /* the game's block of the database inflated, up to 64 KiB (a block's length is 16 bits) */
+#define LAYOUT_GSP_BLOB_MAX 0x00010000
+#define LAYOUT_GSP_SCRATCH_END 0x43870000   /* the picker's use of the RDRAM ends here: it is zeroed from LAYOUT_GSIO to here on the way out */
+#define LAYOUT_GSP_FB       0x42C70000      /* the picture: 150 KiB, in the save states' tail (0x42C7_0000 - 0x42CF_FFFF) */
+#define LAYOUT_GSP_ACTIVE   0x42CF0000      /* the codes the picker hands to the cheat engine (n64rt_gsact.h), 16.5 KiB */
 #define LAYOUT_HID          0x43700000      /* the RDP's hidden-bit plane: the N64's other two coverage bits of each
                                              * 16-bit word of RDRAM, 1 MiB (lang/c/rdp/rdp.h; the scan-out reads it) */
 #define LAYOUT_RDRAM        0x43800000

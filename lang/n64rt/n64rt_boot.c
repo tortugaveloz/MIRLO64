@@ -286,6 +286,7 @@ void n64rt_run(const n64rt_game_t *g)
 #endif
 
     n64rt_os_init();
+    if (n64rt_picker_cycles) n64rt_os_count_rewind(n64rt_picker_cycles);       /* (a wait in the picker is not the game's age) */
     n64rt_io_init();
     n64rt_os_start(entry, N64RT_K0(g->mem_size - 0x10u));     /* (the RDRAM's top: 8 MiB is not an address of the window) */
 }
