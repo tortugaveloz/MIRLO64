@@ -38,10 +38,6 @@
 #define LAYOUT_GBSAVE_MAX   0x00021000
 #define LAYOUT_GBSAVE2      0x42D50000      /* slot 6: cartridge 2's RAM, at the bridge's 0x06D5_0000; likewise */
 #define LAYOUT_GBSAVE2_SLOT 6
-#define LAYOUT_SHADOW       0x43200000      /* the RDP's shadow plane (the core's "Video settings" 32-bit option, docs/video_options.md): 2 MiB, a byte for each pixel
-                                             * of a 16-bit image (some of its low colour bits and a check), the image's address folded into it
-                                             * (rtl/soc/mirlo_mips.sv); no program reads it */
-#define LAYOUT_SHADOW_BYTES 0x00200000
 #define LAYOUT_GBROM        0x43400000      /* slot 8: cartridge 1's ROM, up to 3 MiB, at the bridge's 0x0740_0000. Below it the bridge's
                                              * 0x0730_0000 - 0x073F_FFFF are the PSRAM's, not the SDRAM's */
 #define LAYOUT_GBROM_SLOT   8
@@ -58,7 +54,7 @@
 #define LAYOUT_GS_MAX       0x00010000
 /* The GameShark picker (lang/n64rt/n64rt_gspick.c), before the game starts, from the Pocket's "Expansion Pak/Gameshark" setting.
  * The cheat database is a data slot like the save-type database's, loaded by the Pocket with the core's files at every launch of the core: Assets/n64/common/gameshark.gsdz (the Game Shark database
- * project's format 2: an index and one zlib stream for each game, about 0.7 MB), slot LAYOUT_GSDB_SLOT, at LAYOUT_GSDB, in the hole above the save-type database up to the RDP's shadow plane. It is
+ * project's format 2: an index and one zlib stream for each game, about 0.7 MB), slot LAYOUT_GSDB_SLOT, at LAYOUT_GSDB, in the hole above the save-type database up to 0x4320_0000. It is
  * read in place and nothing commands the Pocket for it. Nothing of the runtime writes there: not the save states (their block ends at most 0x97_0000 bytes in), not the restart's snapshot, not the game. The
  * game's file, <ROM name>.gs, is read and written through a slot with no file that is not read-only (LAYOUT_GSIO_SLOT, size_maximum 4 MiB so that no file left associated with the slot by an older
  * runtime is "too large" to the framework; the picker uses at most 64 KiB of it), whose buffer is the RDRAM's first 64 KiB. The rest of the picker's memory is the RDRAM, which holds nothing of the
@@ -67,7 +63,7 @@
  * in the save states' tail (a state is at most 0x97_0000 bytes: n64rt_state.c). */
 #define LAYOUT_GSDB         0x43110000      /* the database as the Pocket loaded it: at most LAYOUT_GSDB_MAX bytes (the bridge's 0x0711_0000) */
 #define LAYOUT_GSDB_SLOT    11
-#define LAYOUT_GSDB_MAX     0x000F0000      /* up to the shadow plane at 0x4320_0000 (960 KiB; the database is some 0.7 MB) */
+#define LAYOUT_GSDB_MAX     0x000F0000      /* up to 0x4320_0000 (960 KiB; the database is some 0.7 MB) */
 #define LAYOUT_GSIO         0x43800000      /* slot LAYOUT_GSIO_SLOT's buffer: the file as it is read or written, 64 KiB (the bridge's 0x0780_0000: the RDRAM's start) */
 #define LAYOUT_GSIO_SLOT    10
 #define LAYOUT_GSIO_MAX     0x00010000

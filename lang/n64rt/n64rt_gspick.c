@@ -53,7 +53,7 @@ _Static_assert(LAYOUT_GSIO + LAYOUT_GSIO_MAX <= LAYOUT_GSP_TXT && LAYOUT_GSP_TXT
                LAYOUT_GSP_BLOB + LAYOUT_GSP_BLOB_MAX <= LAYOUT_GSP_SCRATCH_END && LAYOUT_GSP_SCRATCH_END <= LAYOUT_RDRAM + 0x100000u, "the picker's scratch in the RDRAM does not overlap");
 _Static_assert(LAYOUT_GSP_FB >= LAYOUT_STATE + 0x970000u && LAYOUT_GSP_FB + 320u * 240u * 2u <= LAYOUT_GSP_ACTIVE && LAYOUT_GSP_ACTIVE + 0x4200u <= LAYOUT_GBSAVE,
                "the picture and the codes' list are in the save states' tail (a state is at most 0x97_0000 bytes)");
-_Static_assert(LAYOUT_GSDB + LAYOUT_GSDB_MAX <= 0x43200000u && LAYOUT_GSDB >= LAYOUT_SAVEDB + LAYOUT_SAVEDB_MAX, "the database is in the hole between the save-type database and the shadow plane");
+_Static_assert(LAYOUT_GSDB + LAYOUT_GSDB_MAX <= 0x43200000u && LAYOUT_GSDB >= LAYOUT_SAVEDB + LAYOUT_SAVEDB_MAX, "the database is in the hole between the save-type database and 0x4320_0000");
 
 /* The time a target command is given: a Pocket that is well answers in tens of milliseconds (the GETFILE in 20 ms: n64rt_cheat.c), so half a second is generous for a command
  * that opens or reads, and an error is shown at once instead of the picker waiting; a write to the card is given 2 s (n64rt_gbvirt.c gives its writes 2 s too). One try, no more. */

@@ -856,10 +856,10 @@ int main(int argc, char **argv)
             if (sys == 20) t->reset = 0;
             t->file_size = slots[t->br_slot < 12 ? t->br_slot : 7].size;         // the core's table, by the slot the program selected
             { const long k = (sys - 200) / 4; t->ia_wr = 0;                            // (the settings: one write each, from 200 cycles in)
-              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 31u; t->ia_data = ia_list[k].second; }
+              if (sys >= 200 && (sys & 3) == 0 && k < (long)ia_list.size()) { t->ia_wr = 1; t->ia_address = (uint32_t)(ia_list[k].first >= 0x10000000 ? (ia_list[k].first - 0x10000100) >> 2 : ia_list[k].first) & 15u; t->ia_data = ia_list[k].second; }
               else if ((sys & 3) == 0 && k >= (long)ia_list.size() && !ia_q.empty()) {
                   const auto w = ia_q.front(); ia_q.pop_front();
-                  t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 31u; t->ia_data = w.second;
+                  t->ia_wr = 1; t->ia_address = (uint32_t)(w.first >= 0x10000000 ? (w.first - 0x10000100) >> 2 : w.first) & 15u; t->ia_data = w.second;
               } }
             // the bridge: an access (as apf_wishbone_master hands it on: the address's
             // bits 26-2, bit 28 set), its ack awaited; the reset's end after the load
@@ -1534,14 +1534,6 @@ int main(int argc, char **argv)
             std::vector<uint8_t> ram(8u << 20);
             for (uint32_t a = 0; a < (8u << 20); a += 4) { uint32_t w = rd_word((0x03800000u + a) >> 2); ram[a] = w >> 24; ram[a + 1] = w >> 16; ram[a + 2] = w >> 8; ram[a + 3] = w; }
             fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
-        }
-    }
-    // SHDUMP=<file>: the RDP's shadow plane (docs/video_options.md; SDRAM 0x0320_0000, 2 MiB) as the run ends, its words as they are
-    if (const char *f = getenv("SHDUMP")) {
-        if (FILE *pf = fopen(f, "wb")) {
-            std::vector<uint8_t> pl(2u << 20);
-            for (uint32_t a = 0; a < (2u << 20); a += 4) { uint32_t w = rd_word((0x03200000u + a) >> 2); pl[a] = w >> 24; pl[a + 1] = w >> 16; pl[a + 2] = w >> 8; pl[a + 3] = w; }
-            fwrite(pl.data(), 1, pl.size(), pf); fclose(pf);
         }
     }
     if (const char *f = getenv("GPCPROF")) {
