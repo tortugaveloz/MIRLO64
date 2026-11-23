@@ -26,6 +26,7 @@ MIRLO 64 is experimental and not every game works. What is known of v0.7:
 * ROMs of up to 64 MiB (the first 30 MiB in the Pocket's PSRAM, the rest in its SDRAM).
 * Rumble Pak is not supported. This is currently a limitation in the Dock.
 * Only controllers 1 and 2 can have a pak, and controller 2's can only be a Transfer Pak SD.
+* The Transfer Pak only loads Game Boy games and their saves if no other game was loaded after the core started: once a game has been loaded and then another one is loaded with "Load Game", the Pocket no longer lets the Transfer Pak load Game Boy games for the rest of the session. It looks like a limit of the way the Pocket loads files into the core after the first load; the cause is not known and it may not be fixable. To use a Transfer Pak, start the core with the N64 game that uses it (for example Pokémon Stadium) as the first game you load, then use "Load Transfer Pak 1" (or 2) for the Game Boy games and, if the game needs it, **Restart Game**. To change to another N64 game, quit the core and start it again.
 * The size of a cartridge's EEPROM comes from a list on the SD card (`n64savedb.txt`). A game that is not in it gets a 4 Kbit one.
 
 ## Installing on the Pocket
