@@ -96,11 +96,19 @@ module rsp_su_oc #(
     output logic        c_valid,
     output logic [31:0] c_ins,
     output logic [31:0] c_a,            // rs
-    // ... and its low 12 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
-    // else the file's), for the vector unit's load and store addresses, made from each source as the scalar unit's own are
-    output logic [11:0] c_bm,
-    output logic [11:0] c_bw,
-    output logic [11:0] c_br,
+    // ... and its low 4 bits from each source -- the writer in M, the one in W, the register file's (c_bm, c_bw, c_br) -- with the choice (c_fm: M, c_fw: W,
+    // else the file's), for a vector store's rotation; and the vector unit's load and store addresses, the scalar unit's own adders' sums with the
+    // vector offset (c_om: the base from M, c_ow, c_or, and c_hm, c_hw, c_hr with 16 more: the next line's), and that offset's low 4 bits (c_o4)
+    output logic [3:0]  c_bm,
+    output logic [3:0]  c_bw,
+    output logic [3:0]  c_br,
+    output logic [11:0] c_om,
+    output logic [11:0] c_ow,
+    output logic [11:0] c_or,
+    output logic [11:0] c_hm,
+    output logic [11:0] c_hw,
+    output logic [11:0] c_hr,
+    output logic [3:0]  c_o4,
     output logic        c_fm,
     output logic        c_fw,
     output logic [31:0] c_b,            // rt
@@ -322,16 +330,13 @@ wire         pair_go = pair_d && !stall_e;
 // ---- the register file: two copies, read with the instruction arriving in D
 logic [31:0] rf_qa, rf_qb;               // (the operands')
 logic [31:0] rf_qac, rf_qbc;             // (the branch condition's: copies of the file, one for each use, so that a word has few loads)
-logic [31:0] rf_qam;                     // (the address adders')
+logic [11:0] rf_qam;                     // (the address adders': the low 12 bits)
 wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
 // (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
 wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
-rsp_rfram_oc rfa (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qa));
-rsp_rfram_oc rfb (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qb));
-rsp_rfram_oc rfac (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qac));
-rsp_rfram_oc rfbc (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(rb_d), .q(rf_qbc));
-rsp_rfram_oc rfam (.clk, .we(w_we), .wa(w_wr), .wd(w_res), .ra_n(ra_d), .q(rf_qam));
+rsp_rfram_oc #(.W(76)) rfa3 (.clk, .we(w_we), .wa(w_wr), .wd({w_res, w_res, w_res[11:0]}), .ra_n(ra_d), .q({rf_qa, rf_qac, rf_qam}));   // (the three copies read at rs: one memory)
+rsp_rfram_oc #(.W(64)) rfb2 (.clk, .we(w_we), .wa(w_wr), .wd({w_res, w_res}), .ra_n(rb_d), .q({rf_qb, rf_qbc}));
 
 // ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
 // in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which
@@ -365,13 +370,19 @@ wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
 (* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
 wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
 // one shifter, to the right: SLL's operand and result are reversed in bit order (a left shift is a right shift of the reversed word),
-// the sign-extended value for SRA
+// the sign-extended value for SRA. The shifts by 16, 8, 4, 2 and 1 are stages in this order, the first with the operand's reversal in it (a stage
+// of two words and the choice of reversing is six inputs), so that the word is three LUTs deep and not four
 wire        sh_rev  = e_c.alu == A_SLL;
-logic [31:0] eb_rv, sh_y, sh_yr;
-always_comb for (int i = 0; i < 32; i++) begin eb_rv[i] = eb[31 - i]; sh_yr[i] = sh_y[31 - i]; end
-wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], sh_rev ? eb_rv : eb};
-wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
-assign      sh_y    = sh_out[31:0];
+wire        sh_fill = e_c.alu == A_SRA && eb[31];
+logic [31:0] eb_rv, sh_y, sh_yr, sh_a, sh_b, sh_c, sh_d;
+always_comb for (int i = 0; i < 32; i++) eb_rv[i] = eb[31 - i];
+always_comb for (int i = 0; i < 32; i++) sh_yr[i] = sh_y[31 - i];
+wire [31:0] sh_x    = sh_rev ? eb_rv : eb;
+always_comb for (int i = 0; i < 32; i++) sh_a[i] = shamt[4] ? (i + 16 < 32 ? sh_x[(i + 16) & 31] : sh_fill) : sh_x[i];
+always_comb for (int i = 0; i < 32; i++) sh_b[i] = shamt[3] ? (i + 8  < 32 ? sh_a[(i + 8)  & 31] : sh_fill) : sh_a[i];
+always_comb for (int i = 0; i < 32; i++) sh_c[i] = shamt[2] ? (i + 4  < 32 ? sh_b[(i + 4)  & 31] : sh_fill) : sh_b[i];
+always_comb for (int i = 0; i < 32; i++) sh_d[i] = shamt[1] ? (i + 2  < 32 ? sh_c[(i + 2)  & 31] : sh_fill) : sh_c[i];
+always_comb for (int i = 0; i < 32; i++) sh_y[i] = shamt[0] ? (i + 1  < 32 ? sh_d[(i + 1)  & 31] : sh_fill) : sh_d[i];
 wire [31:0] sh_r    = sh_y;
 wire [31:0] sh_l    = sh_yr;
 // one adder for add, subtract and both compares: ea + op_b, or ea - op_b = ea + ~op_b + 1,
@@ -438,11 +449,32 @@ always_ff @(posedge clk) hazard <= !rst && e_go && e_c.we && (e_c.load || e_c.cf
 wire        redirect = e_go && (bt || e_c.j || e_c.jr);
 
 // memory
-// (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder)
-wire [11:0] ad_m = m_res[11:0] + imm_sx[11:0], ad_w = w_res[11:0] + imm_sx[11:0], ad_r = rf_qam[11:0] + imm_sx[11:0];
-logic [31:0] imm16;                            // (the offset + 16, registered with the instruction)
-always_ff @(posedge clk) if (!stall_e) imm16 <= {{16{s_ins_d[15]}}, s_ins_d[15:0]} + 32'd16;
-wire [11:0] adh_m = m_res[11:0] + imm16[11:0], adh_w = w_res[11:0] + imm16[11:0], adh_r = rf_qam[11:0] + imm16[11:0];
+// (the address is made from each source and chosen, as the branch's condition is: the operand's choice is not in front of the adder.
+// The offset (e_ao, and with 16 more, e_ao16) is the scalar load's or store's immediate, or a vector load's or store's offset scaled by its
+// size, both registered with the instruction: the same adders make the vector unit's addresses)
+function automatic logic [11:0] offs(input logic [31:0] i);      // the vector offset scaled by the access's size
+    logic [11:0] of;
+    of = {{5{i[6]}}, i[6:0]};
+    unique case (i[15:11])
+    5'd0:             return of;
+    5'd1:             return {of[10:0], 1'b0};
+    5'd2:             return {of[9:0], 2'b0};
+    5'd3, 5'd6, 5'd7: return {of[8:0], 3'b0};
+    default:          return {of[7:0], 4'b0};
+    endcase
+endfunction
+// (the immediate is E's instruction's own low bits; the vector offset is a register of its own, and E's registered choice, e_vls, is between them after
+// the registers, so that no choice stands between the instruction word and a register, nor after the adder that makes the offset with 16 more: the next line's.
+// The low four bits of that are the offset's, bits 11 .. 4 are two registers, the immediate's and the vector offset's)
+logic        e_vls;                                         // (E's instruction is a vector load or store: registered below)
+logic [11:0] e_off;
+logic [11:4] e_imm16, e_off16;
+wire  [11:0] im_16 = s_ins_d[11:0] + 12'd16, of_16 = offs(s_ins_d) + 12'd16;
+always_ff @(posedge clk) if (!stall_e) begin e_off <= offs(s_ins_d); e_imm16 <= im_16[11:4]; e_off16 <= of_16[11:4]; end
+wire  [11:0] e_ao   = e_vls ? e_off : e_ins[11:0];
+wire  [11:0] e_ao16 = {e_vls ? e_off16 : e_imm16, e_ao[3:0]};
+wire [11:0] ad_m = m_res[11:0] + e_ao, ad_w = w_res[11:0] + e_ao, ad_r = rf_qam[11:0] + e_ao;
+wire [11:0] adh_m = m_res[11:0] + e_ao16, adh_w = w_res[11:0] + e_ao16, adh_r = rf_qam[11:0] + e_ao16;
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
 assign m_valid = e_valid && (e_c.load || e_c.store) && !hazard;
 assign m_we = e_c.store;
@@ -467,13 +499,15 @@ assign c_lins = e_ins;
 assign c_ins_n = c_ins_d;
 assign c_lins_n = s_ins_d;
 assign c_adv = !stall_e;
-logic e_vls;
 always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
 assign c_vls = e_vls;
 assign c_a = ea;
-assign c_bm = m_res[11:0];
-assign c_bw = w_res[11:0];
-assign c_br = rf_qam[11:0];
+assign c_bm = m_res[3:0];
+assign c_bw = w_res[3:0];
+assign c_br = rf_qam[3:0];
+assign c_om = ad_m;  assign c_ow = ad_w;  assign c_or = ad_r;
+assign c_hm = adh_m; assign c_hw = adh_w; assign c_hr = adh_r;
+assign c_o4 = e_ao[3:0];
 assign c_fm = fa_m;
 assign c_fw = fa_w;
 assign c_b = eb;

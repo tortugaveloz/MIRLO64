@@ -106,7 +106,8 @@ logic [31:0] m_rdata;
 logic [127:0] m_rdata16;
 logic        c_valid, c_done;
 logic [31:0] c_ins, c_a, c_b, c_res, c_lins, c_ins_n, c_lins_n;
-logic [11:0] c_bm, c_bw, c_br;
+logic [3:0]  c_bm, c_bw, c_br, c_o4;
+logic [11:0] c_om, c_ow, c_or, c_hm, c_hw, c_hr;
 logic        c_fm, c_fw;
 logic [11:0] sm_addr_e, sm_addr16_e, sm_addr_r, sm_addr16_r;
 logic        sm_sel_r;
@@ -120,7 +121,7 @@ logic        tr_e_mem;
 rsp_su_oc #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
     .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_addr_e(sm_addr_e), .m_addr16_e(sm_addr16_e), .m_addr_r(sm_addr_r), .m_addr16_r(sm_addr16_r), .m_sel_r(sm_sel_r), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
-    .c_valid, .c_ins, .c_a, .c_bm, .c_bw, .c_br, .c_fm, .c_fw, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
+    .c_valid, .c_ins, .c_a, .c_bm, .c_bw, .c_br, .c_om, .c_ow, .c_or, .c_hm, .c_hw, .c_hr, .c_o4, .c_fm, .c_fw, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
 
 // (what is not a computation -- COP0, a vector load, store or move -- is never a pair's computation: E's own instruction,
@@ -131,7 +132,7 @@ logic        v_done;
 logic [31:0] v_res;
 logic [9:0]  rom_addr;
 logic [15:0] rom_q;
-rsp_vu_oc #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .la_m(c_bm), .la_w(c_bw), .la_r(c_br), .la_fm(c_fm), .la_fw(c_fw), .b(c_b),
+rsp_vu_oc #(.LANES(LANES), .MULW(MULW)) vu (.clk, .rst, .valid(c_valid && (c_pr || !is_cop0)), .ins_n(c_ins_n), .lins_n(c_lins_n), .adv(c_adv), .la_m(c_bm), .la_w(c_bw), .la_r(c_br), .ls_m(c_om), .ls_w(c_ow), .ls_r(c_or), .lt_m(c_hm), .lt_w(c_hw), .lt_r(c_hr), .la_o4(c_o4), .la_fm(c_fm), .la_fw(c_fw), .b(c_b),
     .l_valid(c_valid && c_pr && l_vu), .ra_n(c_ra_n), .rb_n(c_rb_n), .rd_n(c_rd_n), .rd(c_rd), .done(v_done), .res(v_res), .res_l(v_res_l),
     .m_valid(vm_valid), .m_we(vm_we), .m_addr(vm_addr), .m_addr16(vm_addr16), .m_be(vm_be), .m_wpre(vm_wpre), .m_wsh(vm_wsh), .m_rot(vm_rot), .m_rdata(m_rdata16), .m_stall_ld(dm_valid || sw_v), .m_stall_st(dm_valid),
     .rom_addr, .rom_q, .unimpl, .commit(tr_v), .commit_part(tr_vp));
@@ -162,19 +163,19 @@ assign i_data2 = ia_q;
 // word, read with the second port's word. A word written after the previous address's, with the previous word, has the rule's
 // answer; a word alone has none, nor does the word after the last one a transfer wrote (its answer was of the word before,
 // which is not the same now) -- a pair lost for the performance, never a wrong one
-// (iw_prev: the word written last, and its address)
-logic [9:0]  iw_pa;
+// (iw_prev: the word written last. The words of a transfer are written in order, each at the address after the one before's, and the pointer
+// is on the word after the last when the transfer is over: iw_pv, that a word was written in this transfer, is what the compare of addresses was)
 logic        iw_pv, im_dma_q;
 logic        pair_mem [0:1023];
 logic        p2_q;
 wire         iw_zero = !iw_we && im_dma_q && !im_dma && iw_pv;      // the transfer is over: the word after its last
 always_ff @(posedge clk) begin
-    if (iw_we) pair_mem[iw_addr] <= iw_pv && iw_pa == iw_addr - 10'd1 && pw_ok;
-    else if (iw_zero) pair_mem[iw_pa + 10'd1] <= 1'b0;
+    if (iw_we) pair_mem[iw_addr] <= iw_pv && pw_ok;
+    else if (iw_zero) pair_mem[iw_addr] <= 1'b0;
     p2_q <= pair_mem[ib_addr];
     im_dma_q <= im_dma;
     if (rst) iw_pv <= 1'b0;
-    else if (iw_we) begin iw_prev <= iw_data; iw_pa <= iw_addr; iw_pv <= 1'b1; end
+    else if (iw_we) begin iw_prev <= iw_data; iw_pv <= 1'b1; end
     else if (iw_zero) iw_pv <= 1'b0;
 end
 assign p2_ok = p2_q;
