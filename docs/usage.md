@@ -29,6 +29,10 @@ The core's own menu on the Pocket.
 
 If a game only looks for its Transfer Pak when it starts, load the Game Boy game while it runs and choose **Restart Game**.
 
+**Known limitation: "Load Game" and the Transfer Pak.** The Transfer Pak only loads Game Boy games and their saves if no other game was loaded after the core started. Once a game has been loaded and then another one is loaded from the core's menu with "Load Game", the Pocket no longer lets the Transfer Pak load Game Boy games (and their saves) for the rest of the session. It looks like a limit of the way the Pocket loads files into the core after the first load; the cause is not known yet and it may not be fixable.
+
+To use a Transfer Pak, start the core with the N64 game that uses it as the first game you load (for example Pokémon Stadium), then choose "Load Transfer Pak 1" (or 2) for the Game Boy games and, if the game only looks for its Transfer Pak when it starts, **Restart Game**. That sequence works. To change to another N64 game, quit the core and start it again.
+
 ## Saves
 
 Saves are in `Saves/n64/common/`, written when you quit the core.
