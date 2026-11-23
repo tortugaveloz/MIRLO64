@@ -66,19 +66,22 @@ module rsp_lutram_oc (
 `endif
 endmodule
 
-// rsp_rfram_oc: the scalar register file's memory (rsp_su_oc) -- 32 words of 32 bits in LUT RAM, one clocked write, the read in
-// the cycle at an address the memory registers itself (ra_n: the address of the cycle to come), as rsp_lutram_oc's
+// rsp_rfram_oc: the scalar register file's memory (rsp_su_oc) -- 32 words of W bits (32: a copy of the file) in LUT RAM, one clocked write, the read in
+// the cycle at an address the memory registers itself (ra_n: the address of the cycle to come), as rsp_lutram_oc's. Copies read at the same address
+// are one memory of their widths' sum (a LAB of LUT RAM is 20 bits wide: the sum is rounded up once, not for each copy)
 `default_nettype none
-module rsp_rfram_oc (
+module rsp_rfram_oc #(
+    parameter W = 32
+) (
     input  wire         clk,
     input  wire         we,
     input  wire [4:0]   wa,
-    input  wire [31:0]  wd,
+    input  wire [W-1:0] wd,
     input  wire [4:0]   ra_n,
-    output wire [31:0]  q
+    output wire [W-1:0] q
 );
 `ifdef VERILATOR
-    reg [31:0] m [0:31];
+    reg [W-1:0] m [0:31];
     reg [4:0]  ra;
     always @(posedge clk) begin
         if (we) m[wa] <= wd;
@@ -87,7 +90,7 @@ module rsp_rfram_oc (
     assign q = m[ra];
 `else
     altdpram #(
-        .width                              (32),
+        .width                              (W),
         .widthad                            (5),
         .numwords                           (32),
         .lpm_type                           ("altdpram"),
