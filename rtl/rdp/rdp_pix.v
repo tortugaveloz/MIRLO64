@@ -1345,21 +1345,23 @@ module rdp_pix (
     reg [35:0]  c1m;
     reg [31:0]  tex11m, mem11m;
     reg [35:0]  shade11m;
-    reg [17:0]  depth11m, zold11m, dlo11m, dhi11m;
+    reg [17:0]  depth11m, zold11m;
+    reg [6:0]   zfl11m;
     reg         memb11m;
     reg [1:0]   hid11m;
     reg [7:0]   c0a11m;
     reg         c0f11m;
     // the tolerance: the primitive's step (16-bit units: its two low bits set) and no less than what the memory's word has lost
-    wire [17:0] ztol11a = {z_tol, 2'b11} | {11'd0, zfl11a};
-    wire [18:0] dsum11a = {1'b0, depth11a} + {1'b0, ztol11a};
-    wire [18:0] ddif11a = {1'b0, depth11a} - {1'b0, ztol11a};     // (the borrow: the depth is below the tolerance)
+    // (found in P11m's clock, from the depth and the lost bits it has there, and registered where it is used: the stage after had them as
+    // a register of their own, 36 flip-flops, to carry them one clock)
+    wire [17:0] ztol11m = {z_tol, 2'b11} | {11'd0, zfl11m};
+    wire [18:0] dsum11m = {1'b0, depth11m} + {1'b0, ztol11m};
+    wire [18:0] ddif11m = {1'b0, depth11m} - {1'b0, ztol11m};     // (the borrow: the depth is below the tolerance)
     always @(posedge clk) begin
         v11m <= v11a & ~rst; x11m <= x11a; bs11m <= bs11a;
         c1m <= c1_w;
         tex11m <= tex11a; shade11m <= shade11a; depth11m <= depth11a;
-        dlo11m <= ddif11a[18] ? 18'd0 : ddif11a[17:0];
-        dhi11m <= (dsum11a[18]) ? 18'h3FFFF : dsum11a[17:0];
+        zfl11m <= zfl11a;
         zold11m <= zold11a; mem11m <= mem11a;
         memb11m <= memb11a; c0a11m <= c0a11a; c0f11m <= c0f11a; hid11m <= hid11a;
     end
@@ -1376,7 +1378,8 @@ module rdp_pix (
         comb11 <= cyc2_q ? tex11m : { cc_clamp(c1m[35:27]), cc_clamp(c1m[26:18]), cc_clamp(c1m[17:9]), cc_clamp(c1m[8:0]) };
         af11 <= !cyc2_q && cc_a256(c1m[8:0]);
         shade11 <= shade11m; depth11 <= depth11m;
-        dlo11 <= dlo11m; dhi11 <= dhi11m;
+        dlo11 <= ddif11m[18] ? 18'd0 : ddif11m[17:0];
+        dhi11 <= dsum11m[18] ? 18'h3FFFF : dsum11m[17:0];
         zold11 <= zold11m; mem11 <= mem11m;
         memb11 <= memb11m; c0a11 <= c0a11m; c0f11 <= c0f11m; hid11 <= hid11m;
     end
