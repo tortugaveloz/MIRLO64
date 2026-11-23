@@ -99,6 +99,10 @@ module rdp_top (
     // before anything reads them; other_h is far from the pixel issue's and the rectangles' bounds)
     reg        cyc1_q, cyc2_q, cyc3_q;              // 2-cycle, copy, fill
     always @(posedge clk) begin cyc1_q <= cyc == 2'd1; cyc2_q <= cyc == 2'd2; cyc3_q <= cyc == 2'd3; end
+    // (a rectangle's corners are the whole pixels' in copy mode for a texture rectangle, in fill mode for a fill rectangle: the command's op and
+    // the mode, made as the command's words come in)
+    reg        incl_q;
+    always @(posedge clk) incl_q <= (w0[29:24] == 6'h36) ? cyc3_q : cyc2_q;
     wire [9:0] sc_x0 = sc_xh[11:2], sc_x1 = sc_xl[11:2];
     wire [9:0] sc_y0 = sc_yh[11:2], sc_y1 = sc_yl[11:2];
 
@@ -973,7 +977,7 @@ module rdp_top (
                             reg [10:0] x0c, y0c, x1c, y1c;
                             reg [10:0] xa_c, ya_c;
                             reg incl;
-                            incl = (op == 6'h36) ? cyc3_q : cyc2_q;
+                            incl = incl_q;
                             x0c = incl ? {1'b0, w1[23:14]} : ({1'b0, w1[23:12]} + 13'd3) >> 2;
                             y0c = incl ? {1'b0, w1[11:2]}  : ({1'b0, w1[11:0]}  + 13'd3) >> 2;
                             x1c = incl ? {1'b0, w0[23:14]} + 11'd1 : ({1'b0, w0[23:12]} + 13'd3) >> 2;

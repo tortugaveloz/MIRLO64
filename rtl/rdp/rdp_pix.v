@@ -255,6 +255,10 @@ module rdp_pix (
     // state command waits for the pipe to drain -- and its tests, with other_h's register behind them and far from the datapath, were the start
     // of the worst paths into bo13a, o11a, cvgmul and the output stage)
     reg        cyc0_q, cyc1_q, cyc2_q, cyc3_q, cyc23_q;     // 1-cycle (0), 2-cycle (1), copy (2), fill (3), copy or fill
+    // (and the walk's direction, a copy beside the pixel pipe's stages that take it: rdp_top's lod_lft is a register of the sequencer's fanout,
+    // and its path through the LOD's subtractions into mn_m / ml_m was -0.08 ns at 10.667 ns)
+    reg        lft_q;
+    always @(posedge clk) lft_q <= lod_lft;
     always @(posedge clk) begin
         cyc0_q <= cyc == 2'd0; cyc1_q <= cyc == 2'd1; cyc2_q <= cyc == 2'd2; cyc3_q <= cyc == 2'd3; cyc23_q <= cyc[1];
     end
@@ -393,7 +397,7 @@ module rdp_pix (
     // where the stages' registers were (and Quartus's shift registers made of them).
     wire [17:0] depth_c = z_src_p ? {prim_z, 2'b00} : p_zbuf ? dz : 18'd0;     // (a primitive without Z coefficients -- a rectangle -- has Z 0, the nearest, not the primitive depth: rdp_exact.md)
     reg  [4:0]  sb_wa;
-    wire [4:0]  sb_ra = sb_wa - (lod_on ? (lod_lft ? 5'd17 : 5'd16) : 5'd12);
+    wire [4:0]  sb_ra = sb_wa - (lod_on ? (lft_q ? 5'd17 : 5'd16) : 5'd12);
     // (the shade's channels are bytes -- sr9 and the others clamp them -- so their ninth bits are not kept)
     (* ramstyle = "M10K, no_rw_check" *) reg [66:0] sb_ram [0:31];
     reg  [66:0] sb_q;
@@ -580,7 +584,7 @@ module rdp_pix (
     (* ramstyle = "M10K, no_rw_check" *) reg [31:0] st_ram [0:15];
     wire        l3_v;
     // (P4 loads a pixel's first pass at D, its second at D + 1: read at D - 2 and D - 1, the second in L3's clock)
-    wire [3:0]  st_ra = rw_a - (lod_lft ? 4'd4 : 4'd3) - {3'd0, l3_v};
+    wire [3:0]  st_ra = rw_a - (lft_q ? 4'd4 : 4'd3) - {3'd0, l3_v};
     always @(posedge clk) begin
         v4 <= v3 & ~rst; ph4 <= ph3; g4 <= g3;
         s4 <= lod_on ? st_q[31:16] : s4n; t4 <= lod_on ? st_q[15:0] : t4n;
@@ -606,7 +610,7 @@ module rdp_pix (
     // more, or a point out of range: the far level.
     reg  [16:0] pa_s, pa_t;          // the last pass A's
     reg         pa_o;
-    wire        l1_ci = !ph4 && !lod_lft;
+    wire        l1_ci = !ph4 && !lft_q;
     wire [17:0] l1_ds = {s17_4[16], s17_4} - {pa_s[16], pa_s} - {17'd0, l1_ci};
     wire [17:0] l1_dt = {t17_4[16], t17_4} - {pa_t[16], pa_t} - {17'd0, l1_ci};
     wire [16:0] l1_ms = l1_ds[17] ? ~l1_ds[16:0] : l1_ds[16:0];
@@ -629,9 +633,9 @@ module rdp_pix (
     reg  [6:1]  av;
     wire        av0 = v4 && !ph4 && !g4 && lod_on;
     always @(posedge clk) av <= rst ? 6'd0 : {av[5:1], av0};
-    assign      l3_v = lod_lft ? av[4] : av[3];
-    wire        p5_a = lod_lft ? av[5] : av[4];
-    wire        p5_b = (lod_lft ? av[6] : av[5]) && two_pass;
+    assign      l3_v = lft_q ? av[4] : av[3];
+    wire        p5_a = lft_q ? av[5] : av[4];
+    wire        p5_b = (lft_q ? av[6] : av[5]) && two_pass;
     // L2. The distance, the larger step (the model's lod: under 0x4000 here, else far); its level, the top bit's place in
     // its texels (bits 12:5, the ninth dropped as the model does), taken by the same compare from each step's own; under a
     // texel, magnified
@@ -1151,6 +1155,11 @@ module rdp_pix (
 
     // one combiner cycle's operands {A, B, C, D}, each RGBA: A, B, C of 10 bits (extended, see cc_xab; R in [155:146], [115:106], [75:66]),
     // D of 9 (R in [35:27])
+    // (the 1-cycle mode's LOD fraction without the LOD: all ones where there is a level count of 0 and neither sharpen nor detail, a register --
+    // the primitive's modes are steady while its pixels are in the pipe -- not four compares in front of the combiner's C choices:
+    // other_h -> o11a, -0.23 ns at 10.667 ns)
+    reg         lf_one_q;
+    always @(posedge clk) lf_one_q <= other_h[21:20] == 2'd0 && lod_lvl == 3'd0 && !other_h[17] && !other_h[18];
     function automatic [155:0] cc_sel;
         input        cy;              // 0: cycle 0 settings, 1: cycle 1
         input [31:0] tex, tex1;           // TEXEL0, TEXEL1
@@ -1173,7 +1182,7 @@ module rdp_pix (
             // (C's two fractions, the colour's 13 and 14, the alpha's 0 and 6, are one input of each C select: which of the
             // two is chosen here, once for the three channels)
             // (1-cycle mode: a level count of 0, without sharpen and detail, gives all ones whatever the steps)
-            lfx = lod_on ? {lf[8], lf} : (cyc0_q && lod_lvl == 3'd0 && !sharpen && !detail) ? 10'h0FF : 10'd0;
+            lfx = lod_on ? {lf[8], lf} : lf_one_q ? 10'h0FF : 10'd0;
             fr_c = mul_r[0] ? lfx : {2'b00, prim_lod_frac};
             fr_a = mul_a[1] ? {2'b00, prim_lod_frac} : lfx;
             c_com = rgb_c_com(mul_r, tex, tex1, sh, cm, fr_c);
