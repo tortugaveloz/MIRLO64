@@ -445,7 +445,7 @@ module rdp_pix (
     reg        c5_yuv, u6_yuv;             // a YUV 16-bit tile: a pixel pair a word in each half, as a 32-bit one
     // the pass converts YUV instead of filtering (rdp.c texture_pass): copy mode never; its BI_LERP bit (other_h 11 for the
     // tile's pass, 10 for the next tile's) off; the texel a YUV tile's -- the pass's own, or with CONVERT_ONE (other_h 9) the
-    // second pass converts the first's texel (texA9), and the tile checked is the one before the pass's (the first pass's
+    // second pass converts the first's texel (tex9, a clock after), and the tile checked is the one before the pass's (the first pass's
     // without the LOD; with it, as the model, the tile before TEXEL1's whatever TEXEL0's is)
     reg        conv5, conv6, conv7, conv8, conv8t, conv8b;
     reg        u8_size0, u8_size1;
@@ -931,7 +931,7 @@ module rdp_pix (
     wire [9:0]  hw8c = (bs8c ? rwb1 : rwb0) + {1'b0, x8c[9:1]};
     // YUV -> RGB (rdp.c yuv_convert): from a texel (U, V, Y, Y), U and V less 128, the K's as 2K + 1 in 1/256ths --
     // R = Y + K0 V, G = Y + K1 U + K2 V, B = Y + K3 U, each clamped to a byte; A = Y. Beside the filter, from the corner
-    // (a converted pass's is (s0, t0)), or with CONVERT_ONE the first pass's texel in the second (texA9).
+    // (a converted pass's is (s0, t0)), or with CONVERT_ONE the first pass's texel in the second (tex9 the clock after it).
     function automatic [7:0] cv_ch;
         input [7:0]         y;
         input signed [19:0] p;              // the products' sum, + 128
@@ -964,10 +964,9 @@ module rdp_pix (
             yuv_fin = { cv_ch(8'd0, pp[59:40]), cv_ch(8'd0, pp[39:20]), cv_ch(8'd0, pp[19:0]), y };
         end
     endfunction
-    reg  [31:0] texA9;
     wire        dep8c = conv8c && ph8c && other_h[9];       // a second pass that converts the first pass's texel (CONVERT_ONE)
     wire [31:0] conv9 = yuv_fin(ta8c[15:8], pa8c);
-    // the texel the pass gives: filtered, or the corner's, or converted; a two_pass pixel's first pass is kept (texA9) for
+    // the texel the pass gives: filtered, or the corner's, or converted; a two_pass pixel's first pass is kept (tex19) for
     // its second, which gives TEXEL1 (tex19; TEXEL0 is tex9)
     wire [31:0] tex_cur = conv8c ? conv9 : point ? ta8c : filt9;      // (a dependent conversion is made in P9x: its texel here is not used)
     reg  [31:0] tex19;
@@ -980,13 +979,12 @@ module rdp_pix (
     reg [17:0] depth9;
     always @(posedge clk) begin
         v9 <= v8c & ~rst & (!two_pass | ph8c); x9 <= x8c; bs9 <= bs8c;
-        if (!ph8c) texA9 <= tex_cur;
-        tex9 <= (two_pass & ph8c) ? texA9 : tex_cur;
+        tex9 <= (two_pass & ph8c) ? tex19 : tex_cur;       // (the second pass takes the first's texel, tex19 the clock after it: the passes are in consecutive clocks)
         tex19 <= tex_cur; dep9 <= dep8c;
         shade9 <= shade8c; depth9 <= depth8c;
     end
-    // The dependent conversion (a second pass that converts the first pass's texel, texA9): the products are made from texA9's
-    // register in the pass's own P9 clock and the sum and the clamp in the clock after, P9x. The other conversions have their
+    // The dependent conversion (a second pass that converts the first pass's texel): the products are made from tex9's
+    // register (the first pass's texel, taken as the second pass's TEXEL0) in the pass's own P9 clock and the sum and the clamp in the clock after, P9x. The other conversions have their
     // source in P8b and are made in P8c (pa8c) and P9. P9x also holds the pixel's other registers a clock: the combiner's
     // selection takes them from here, and the line buffers' addresses are issued from P9's, a clock later than they were.
     reg [59:0] pb9;
@@ -1001,7 +999,7 @@ module rdp_pix (
     reg [1:0]  y9x;
     wire [9:0] hw9 = (bs9 ? rwb1 : rwb0) + {1'b0, x9[9:1]};
     always @(posedge clk) begin
-        pb9 <= yuv_prod(texA9); yb9 <= texA9[15:8];
+        pb9 <= yuv_prod(tex9); yb9 <= tex9[15:8];     // (tex9 the clock after the second pass has the first pass's texel)
         v9x <= v9 & ~rst; x9x <= x9; bs9x <= bs9;
         lb_raddr <= {bs9, x9[9:1]};             // line buffers: data after the next edge, captured at P10b
         clb_raddr <= {bs9, c32 ? x9[8:0] : x9[9:1]};
