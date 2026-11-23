@@ -5,6 +5,7 @@
 #include <string.h>
 #include <system.h>
 #include <generated/csr.h>
+#include <generated/soc.h>
 #include <layout.h>
 #include <notice.h>
 #include "n64rt.h"
@@ -245,7 +246,13 @@ void n64rt_ul_tick(void)
     static const u16 s_at[] = { 600u, 1310u, 2620u };
     static u32 s_ticks, s_next;
     if (!s_ul_late_on) return;
-    if (s_next < sizeof s_at / sizeof s_at[0] && ++s_ticks == s_at[s_next]) { s_next++; n64rt_ul_late(); }
+    if (s_next < sizeof s_at / sizeof s_at[0] && ++s_ticks == s_at[s_next]) {
+        s_next++; n64rt_ul_late();
+#ifdef N64RT_ULTRACE
+        timer0_uptime_latch_write(1);
+        n64rt_log("n64rt: ul: late sweep %lu begins at tick %lu, uptime %lu ms\n", (unsigned long)s_next, (unsigned long)s_ticks, (unsigned long)(timer0_uptime_cycles_read() / (CONFIG_CLOCK_FREQUENCY / 1000u)));
+#endif
+    }
     if (!s_ul_pos) return;
     const u32 top = 0x80000000u + (n64rt_game->mem_size < UL_TOP ? n64rt_game->mem_size : UL_TOP);
     const u32 end = s_ul_pos + UL_CHUNK;
@@ -539,11 +546,19 @@ void n64rt_run(const n64rt_game_t *g)
 #endif
 
     n64rt_os_init();
+    if (n64rt_picker_cycles) n64rt_os_count_rewind(n64rt_picker_cycles);       /* (a wait in the picker is not the game's age) */
+#ifdef N64RT_ULTRACE
+    {   u32 cnt; __asm__ volatile("mfc0 %0, $9" : "=r"(cnt)); timer0_uptime_latch_write(1);
+        printf("n64rt: ul: the game's start: Count %lu, uptime %lu ms, the picker took %lu ms\n", (unsigned long)cnt, (unsigned long)(timer0_uptime_cycles_read() / (CONFIG_CLOCK_FREQUENCY / 1000u)), (unsigned long)(n64rt_picker_cycles / (CONFIG_CLOCK_FREQUENCY / 1000u))); }
+#endif
 #ifdef N64RT_OWN
     /* (the game's code is its own but for two functions that compute in doubles, which the FPU does as floats) */
     if (g->ipl3 != N64RT_IPL3_ELF) {                   /* (an ELF's segments are not a libultra's boot segment) */
         ul_patch(g->boot_vram, g->boot_len);           /* (the audio library's envelope rate) */
         s_ul_late_on = 1;                              /* (and again later: n64rt_ul_late) */
+#ifdef N64RT_ULTRACE
+        { timer0_uptime_latch_write(1); printf("n64rt: ul: the patches are applied and the late sweeps armed at uptime %lu ms\n", (unsigned long)(timer0_uptime_cycles_read() / (CONFIG_CLOCK_FREQUENCY / 1000u))); }
+#endif
         mf_patch(g->boot_vram, g->boot_len);           /* (and a matrix conversion through a double's mantissa) */
     }
     flush_cpu_dcache();

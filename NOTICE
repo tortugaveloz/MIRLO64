@@ -137,3 +137,10 @@ code or data is included, and no game or ROM: the games are the user's own.
 
 Nintendo 64 is a trademark of Nintendo. This project is not affiliated with or
 endorsed by Nintendo or by Analogue.
+
+-------------------------------------------------------------------------------
+tinf (https://github.com/jibsen/tinf), version 1.2.1
+
+lang/n64rt/gsdz/tinf/tinflate.c and tinf.h inflate the compressed cheat database of the GameShark picker (lang/n64rt/n64rt_gspick.c). They are used under the zlib License
+(lang/n64rt/gsdz/tinf/LICENSE.tinf), unchanged: Copyright (c) 2003-2019 Joergen Ibsen. lang/n64rt/gsdz/gsdz.[ch] (the reader of the database's format 2) come from the Game Shark
+database project, Apache-2.0 like this repository.

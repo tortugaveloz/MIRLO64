@@ -319,6 +319,12 @@ void n64rt_pak_state_end(void);
 void n64rt_pak_state_resumed(void);        /* after a state is put back: the Transfer Paks look for their cartridges again */
 /* the GameShark codes (n64rt_cheat.c): read once, when the game starts, and run in every field */
 void n64rt_cheat_init(void);
+/* how long the GameShark picker ran, in the SoC's uptime cycles (0 when it did not): the game's start puts the CPU's Count back by it (n64rt_os_count_rewind), so that a wait in the picker is
+ * not part of the console's age when the game starts: the game sees the Count it would have seen without the picker. Zero in every other start. */
+extern u64 n64rt_picker_cycles;
+void n64rt_os_count_rewind(u64 cycles);
+/* the GameShark picker (n64rt_gspick.c): the ROM's first 0x40 bytes, a .z64's; returns when the game is to start */
+void n64rt_gspick(const u8 *head);
 void n64rt_cheat_field(void);
 u32  n64rt_slot_size(u32 slot, u32 want);  /* a data slot's file size in the core's table (0: no file); want != 0 sets it (n64rt_pak.c) */
 /* the Transfer Paks (SD)' Game Boy cartridges, n = 0 (controller 1's) and 1 (controller 2's), each made of a data.json ROM slot and the Game Boy game's own save file (n64rt_gbvirt.c) */
