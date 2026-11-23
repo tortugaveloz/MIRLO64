@@ -163,19 +163,19 @@ assign i_data2 = ia_q;
 // word, read with the second port's word. A word written after the previous address's, with the previous word, has the rule's
 // answer; a word alone has none, nor does the word after the last one a transfer wrote (its answer was of the word before,
 // which is not the same now) -- a pair lost for the performance, never a wrong one
-// (iw_prev: the word written last, and its address)
-logic [9:0]  iw_pa;
+// (iw_prev: the word written last. The words of a transfer are written in order, each at the address after the one before's, and the pointer
+// is on the word after the last when the transfer is over: iw_pv, that a word was written in this transfer, is what the compare of addresses was)
 logic        iw_pv, im_dma_q;
 logic        pair_mem [0:1023];
 logic        p2_q;
 wire         iw_zero = !iw_we && im_dma_q && !im_dma && iw_pv;      // the transfer is over: the word after its last
 always_ff @(posedge clk) begin
-    if (iw_we) pair_mem[iw_addr] <= iw_pv && iw_pa == iw_addr - 10'd1 && pw_ok;
-    else if (iw_zero) pair_mem[iw_pa + 10'd1] <= 1'b0;
+    if (iw_we) pair_mem[iw_addr] <= iw_pv && pw_ok;
+    else if (iw_zero) pair_mem[iw_addr] <= 1'b0;
     p2_q <= pair_mem[ib_addr];
     im_dma_q <= im_dma;
     if (rst) iw_pv <= 1'b0;
-    else if (iw_we) begin iw_prev <= iw_data; iw_pa <= iw_addr; iw_pv <= 1'b1; end
+    else if (iw_we) begin iw_prev <= iw_data; iw_pv <= 1'b1; end
     else if (iw_zero) iw_pv <= 1'b0;
 end
 assign p2_ok = p2_q;
