@@ -370,13 +370,19 @@ wire        sa_r   = !e_c.sh_imm && !fa_m && !fa_w;
 (* keep *) wire [4:0] sa_e = e_c.sh_imm ? e_ins[10:6] : (fa_m ? m_res[4:0] : 5'd0) | (fa_w ? w_res[4:0] : 5'd0);
 wire [4:0]  shamt  = sa_e | ({5{sa_r}} & rf_qa[4:0]);
 // one shifter, to the right: SLL's operand and result are reversed in bit order (a left shift is a right shift of the reversed word),
-// the sign-extended value for SRA
+// the sign-extended value for SRA. The shifts by 16, 8, 4, 2 and 1 are stages in this order, the first with the operand's reversal in it (a stage
+// of two words and the choice of reversing is six inputs), so that the word is three LUTs deep and not four
 wire        sh_rev  = e_c.alu == A_SLL;
-logic [31:0] eb_rv, sh_y, sh_yr;
-always_comb for (int i = 0; i < 32; i++) begin eb_rv[i] = eb[31 - i]; sh_yr[i] = sh_y[31 - i]; end
-wire [32:0] sh_in   = {e_c.alu == A_SRA && eb[31], sh_rev ? eb_rv : eb};
-wire [32:0] sh_out  = $signed(sh_in) >>> shamt;
-assign      sh_y    = sh_out[31:0];
+wire        sh_fill = e_c.alu == A_SRA && eb[31];
+logic [31:0] eb_rv, sh_y, sh_yr, sh_a, sh_b, sh_c, sh_d;
+always_comb for (int i = 0; i < 32; i++) eb_rv[i] = eb[31 - i];
+always_comb for (int i = 0; i < 32; i++) sh_yr[i] = sh_y[31 - i];
+wire [31:0] sh_x    = sh_rev ? eb_rv : eb;
+always_comb for (int i = 0; i < 32; i++) sh_a[i] = shamt[4] ? (i + 16 < 32 ? sh_x[(i + 16) & 31] : sh_fill) : sh_x[i];
+always_comb for (int i = 0; i < 32; i++) sh_b[i] = shamt[3] ? (i + 8  < 32 ? sh_a[(i + 8)  & 31] : sh_fill) : sh_a[i];
+always_comb for (int i = 0; i < 32; i++) sh_c[i] = shamt[2] ? (i + 4  < 32 ? sh_b[(i + 4)  & 31] : sh_fill) : sh_b[i];
+always_comb for (int i = 0; i < 32; i++) sh_d[i] = shamt[1] ? (i + 2  < 32 ? sh_c[(i + 2)  & 31] : sh_fill) : sh_c[i];
+always_comb for (int i = 0; i < 32; i++) sh_y[i] = shamt[0] ? (i + 1  < 32 ? sh_d[(i + 1)  & 31] : sh_fill) : sh_d[i];
 wire [31:0] sh_r    = sh_y;
 wire [31:0] sh_l    = sh_yr;
 // one adder for add, subtract and both compares: ea + op_b, or ea - op_b = ea + ~op_b + 1,
