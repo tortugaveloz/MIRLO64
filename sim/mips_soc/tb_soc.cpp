@@ -474,6 +474,180 @@ static void cpu_stat_step(long sys)
     if (out || mark0) { for (int i = 0; i < C_N; i++) c[i] = 0; n = ret = idle = 0; f_n = f_sum = f_max = 0; }
 }
 
+
+// ---- GELOG=<file>: a game study's counters (instrumentation only). A line for each field boundary (F: the field's sums), and events
+// (X: the bus's accesses to the RCP's registers, R: the RSP's runs, S: the RDP's full syncs, B: the scan-out's base changes, D: RDP idle edges)
+static void ge_step(FILE *gl, long sys, long frames)
+{
+    enum { C_RUN, C_DMISS, C_SLOW, C_FPU, C_MD, C_WBFULL, C_TLB, C_MOTHER, C_IMISS, C_ISLOW, C_FOTHER, C_HAZ, C_N };
+    static long n, rsp_run, rsp_ins, rdp_busy, rdp_ivl, cpu_idle, cpu_ret, c[C_N], mp[6], mwords, mact, mrow, mturn, mwait, mswitch, last_dir = -1, rdp_last_idle_t, rdp_first_busy_t;
+    static long exc[32], xr;
+    static bool vb_was, init, rdp_was_idle = true, rsp_was_halt = true, ack_was; static uint32_t ilo, ihi, sync_last, base_last, x_la, x_ld; static bool x_lw;
+    static long t_rsp0; static uint32_t rty, rfl;
+    static long last_ev;
+    if (!init) { init = true; if (const char *e = getenv("CPUSTAT_IDLE")) { ilo = strtoul(e, 0, 0); ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : ilo + 8; } sync_last = t->rdp_sync; base_last = t->fb_base; }
+    n++;
+    const unsigned s = t->cpu_stat;
+    const bool in_idle = ihi && t->cpu_pc >= ilo && t->cpu_pc < ihi;
+    if (in_idle) cpu_idle++;
+    else {
+        unsigned ms = (s >> 2) & 7, fs = (s >> 5) & 7; int k = C_RUN;
+        if (s & 2) { if (ms == 1 || ms == 2) k = C_DMISS; else if (ms == 3 || ms == 4 || ms == 5) k = C_SLOW; else if (ms == 6 || ms == 7) k = C_TLB;
+            else if (s & 0x400) k = C_FPU; else if (s & 0x800) k = C_MD; else if (s & 0x1000) k = C_WBFULL; else k = C_MOTHER; }
+        else if (s & 0x200) k = C_HAZ;
+        else if (!(s & 0x100)) { if (fs == 1) k = C_IMISS; else if (fs == 2 || fs == 4 || fs == 5) k = C_ISLOW; else k = C_FOTHER; }
+        c[k]++; if (s & 1) cpu_ret++;
+    }
+    if (t->tr_exc) exc[t->tr_exc_code & 31]++;
+    if (t->rsp_stat & 1) rsp_run++;
+    if (t->rsp_stat & 8) rsp_ins++;
+    const bool idle = t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle;
+    if (!idle) rdp_busy++;
+    if (rdp_was_idle && !idle) { rdp_ivl++; if (rdp_first_busy_t == 0) rdp_first_busy_t = sys; }
+    if (!rdp_was_idle && idle) rdp_last_idle_t = sys;
+    rdp_was_idle = idle;
+    unsigned m = t->mem_stat;
+    for (int i = 0; i < 6; i++) if (m & (1u << i)) mp[i]++;
+    unsigned cc = (m >> 6) & 7, ba = (m >> 9) & 3; (void)ba;
+    if (cc == 3) mact++;
+    if (cc == 5 || cc == 4) { mwords++; if (last_dir >= 0 && last_dir != (long)cc) mswitch++; last_dir = cc; }
+    if (m & 0x2000) mwait++;
+    if ((m & 0x1000) && !(m & 0x800)) { if (cc == 7 && t->mem_hit) mturn++; else mrow++; }
+
+    // GEBIN=<cycles>: a line every <cycles> sys cycles -- B: the bin's RSP running, RDP busy, words of each port, words moved, CPU idle cycles
+    {
+        static long bw = -1, bn, b_rsp, b_rdp, b_idle, b_w, b_p[6], b_act, b_row, b_turn, b_wait; static FILE *bl;
+        if (bw < 0) { const char *e = getenv("GEBIN"); bw = e ? atol(e) : 0; if (bw) bl = fopen(getenv("GEBINLOG"), "w"); }
+        if (bw) {
+            bn++; if (t->rsp_stat & 1) b_rsp++; if (!idle) b_rdp++; if (in_idle) b_idle++;
+            for (int i = 0; i < 6; i++) if (m & (1u << i)) b_p[i]++;
+            if (cc == 5 || cc == 4) b_w++; if ((m & 0x1000) && !(m & 0x800)) b_row++; if (m & 0x2000) b_wait++;
+            if (bn == bw) {
+                fprintf(bl, "B %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld\\n", sys, frames, b_rsp, b_rdp, b_idle, b_w, b_p[0], b_p[1], b_p[2], b_p[3], b_p[4], b_p[5], b_row, b_wait);
+                bn = b_rsp = b_rdp = b_idle = b_w = b_row = b_wait = 0; for (int i = 0; i < 6; i++) b_p[i] = 0; fflush(bl);
+            }
+        }
+    }
+    // RSP runs
+    const int halt = t->audio_state & 1;
+    if (rsp_was_halt && !halt) { auto &dm = t->rootp->RSP_DMEM; t_rsp0 = sys; rty = dm[0x3F0]; rfl = dm[0x3F1]; }
+    if (!rsp_was_halt && halt) fprintf(gl, "R %ld %ld %u %x %x\n", t_rsp0, sys, rty, rfl, (unsigned)t->rsp_sig);
+    rsp_was_halt = halt;
+
+    // GETHR=<addr>,... GEQ=<addr>,...: the game's OSThreads' state and OSMesgQueues' validCount (RDRAM vaddrs 0x80xxxxxx), polled every 64 cycles; a line when one changes
+    {
+        static std::vector<uint32_t> th, mq; static std::vector<uint32_t> th_s, mq_v; static bool pi;
+        if (!pi) { pi = true;
+            for (int k = 0; k < 2; k++) { const char *e = getenv(k ? "GEQ" : "GETHR"); while (e && *e) { uint32_t a = strtoul(e, (char **)&e, 16); (k ? mq : th).push_back(a); if (*e == ',') e++; } }
+            th_s.assign(th.size(), 0xFFFFFFFFu); mq_v.assign(mq.size(), 0xFFFFFFFFu); }
+        if ((sys & 63) == 0) {
+            auto rw = [](uint32_t a) { return rd_word((0x03800000u + (a & 0x7FFFFFu)) >> 2); };
+            for (size_t i = 0; i < th.size(); i++) { uint32_t v = rw(th[i] + 0x10) >> 16; if (v != th_s[i]) { th_s[i] = v; fprintf(gl, "T %ld %08x %u\n", sys, th[i], v); } }
+            for (size_t i = 0; i < mq.size(); i++) { uint32_t v = rw(mq[i] + 8); if (v != mq_v[i]) { mq_v[i] = v; fprintf(gl, "Q %ld %08x %u\n", sys, mq[i], v); } }
+        }
+    }
+    // RDP full syncs, scan-out base
+    if (t->rdp_sync != sync_last) { fprintf(gl, "S %ld %u\n", sys, t->rdp_sync); sync_last = t->rdp_sync; }
+    if (t->fb_base != base_last) { fprintf(gl, "B %ld %08x\n", sys, t->fb_base); base_last = t->fb_base; }
+    // the bus's accesses to the RCP: SP (0x0404/0x0408), DPC (0x041), MI (0x043), VI (0x044), AI (0x045), SI (0x048)
+    const bool ack = t->x_ack;
+    if (ack && (!ack_was || t->x_addr != x_la || t->x_we != x_lw)) {
+        const uint32_t a = t->x_addr; const uint32_t hi = (a >> 20) & 0x1FF;
+        if (!(a >> 30) && (hi == 0x040 || hi == 0x041 || hi == 0x043 || hi == 0x044 || hi == 0x045 || hi == 0x048) && !(a >> 31 && 0)) {
+            uint32_t d = t->x_we ? t->x_wdata : t->x_rdata;
+            // reads of the same register with the same value as its last read are polling: counted, not logged
+            static std::map<uint32_t, uint32_t> lastrd; 
+            bool skip = false;
+            if (!t->x_we) { auto it = lastrd.find(a); if (it != lastrd.end() && it->second == d) skip = true; lastrd[a] = d; } else lastrd.erase(a);
+            if (skip) xr++;
+            else fprintf(gl, "X %ld %c %08x %08x %08x\n", sys, t->x_we ? 'W' : 'R', a, d, t->cpu_pc);
+        }
+    }
+    x_la = t->x_addr; x_lw = t->x_we; ack_was = ack;
+    if (t->vblank && !vb_was) {
+        fprintf(gl, "F %ld %ld n %ld rsp %ld rspins %ld rdp %ld rdpivl %ld rdpfirst %ld rdplast %ld idle %ld ret %ld", frames, sys, n, rsp_run, rsp_ins, rdp_busy, rdp_ivl, rdp_first_busy_t, rdp_last_idle_t, cpu_idle, cpu_ret);
+        fprintf(gl, " cat"); for (int i = 0; i < C_N; i++) fprintf(gl, " %ld", c[i]);
+        fprintf(gl, " ports"); for (int i = 0; i < 6; i++) fprintf(gl, " %ld", mp[i]);
+        fprintf(gl, " mem words %ld act %ld row %ld turn %ld wait %ld sw %ld pollreads %ld exc", mwords, mact, mrow, mturn, mwait, mswitch, xr);
+        for (int i = 0; i < 32; i++) fprintf(gl, " %ld", exc[i]);
+        fprintf(gl, " base %08x pc %08x\n", t->fb_base, t->cpu_pc);
+        fflush(gl);
+        n = rsp_run = rsp_ins = rdp_busy = rdp_ivl = cpu_idle = cpu_ret = mwords = mact = mrow = mturn = mwait = mswitch = xr = 0; rdp_last_idle_t = rdp_first_busy_t = 0;
+        for (int i = 0; i < C_N; i++) c[i] = 0; for (int i = 0; i < 6; i++) mp[i] = 0; for (int i = 0; i < 32; i++) exc[i] = 0;
+    }
+    vb_was = t->vblank; (void)last_ev;
+}
+
+
+// ---- RDPLOSS=<file>: where the memory's cycles go while the RDP is busy (instrumentation only). A line every RDPLOSS_EVERY fields (default
+// 1): the field's cycles, the RDP busy ones, and in those the controller's cycle sorted -- a word taken (by port; RDP reads / writes), the
+// RDP's own request waiting (a row to precharge, a row to activate, tRCD, a bus turnaround, the refresh), another port's request
+// waiting, no request at the controller (the RDP asking and not served: the arbiter's choice; the RDP not asking: its own work).
+static void rdploss_step(FILE *lf, long frames)
+{
+    static long n, busy, f_last = -1, every = -1, last_p = -1, run_len, grants[8], gwords[8];
+    static long tk[8][2], wt[8][5], no_ask, no_idle, tk_all, sw[8][8], fl[8][3], conf[8][8], own[4] = {7, 7, 7, 7}; static bool pv_wait;
+    static bool hdr;
+    if (every < 0) { const char *e = getenv("RDPLOSS_EVERY"); every = e ? atol(e) : 1; }
+    n++;
+    const bool b = !t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle;
+    {   // RDPTRACE=<file>: every request the controller takes in field RDPTRACE_FIELD: cycle, port, we, word address (instrumentation)
+        static FILE *tf; static bool ti; static long tfield = -1;
+        if (!ti) { ti = true; const char *e = getenv("RDPTRACE"); if (e) tf = fopen(e, "w"); tfield = getenv("RDPTRACE_FIELD") ? atol(getenv("RDPTRACE_FIELD")) : 0; }
+        const unsigned q = t->mem_rq;
+        static long c0;
+        if (tf && frames == tfield) { if (!c0) c0 = n; if ((q >> 11 & 1) && (q >> 10 & 1)) fprintf(tf, "%ld %u %u %06x\n", n - c0, q >> 4 & 7, q >> 9 & 1, (unsigned)t->mem_ra); }
+    }
+    {   // (every cycle: a request's first look at the controller -- a row hit, a closed bank, another row open there -- and who had the bank)
+        const unsigned q = t->mem_rq;
+        const bool rv = q >> 11 & 1, rr = q >> 10 & 1, hit = q >> 3 & 1, op = q >> 2 & 1;
+        const unsigned tag = q >> 4 & 7, bank = q >> 7 & 3;
+        if (rv && !pv_wait) {
+            fl[tag][hit ? 0 : op ? 1 : 2]++;
+            if (!hit) conf[tag][own[bank]]++;
+        }
+        pv_wait = rv && !rr;
+        if (rv && rr) own[bank] = tag;
+    }
+    if (b) {
+        busy++;
+        const unsigned q = t->mem_rq;
+        // {valid[11], ready[10], we[9], bank[8:7], tag[6:4], hit[3], open[2], run[1], rcd_done[0]}
+        const bool rv = q >> 11 & 1, rr = q >> 10 & 1, we = q >> 9 & 1, hit = q >> 3 & 1, op = q >> 2 & 1, run = q >> 1 & 1, rcd = q & 1;
+        const unsigned tag = q >> 4 & 7;
+        const bool pv2 = t->mem_pv >> 2 & 1;
+        if (rv && rr) {
+            tk[tag][we]++; tk_all++;
+            if ((long)tag != last_p) { if (last_p >= 0) sw[last_p][tag]++; last_p = tag; grants[tag]++; }
+            gwords[tag]++;
+        } else if (rv) {
+            // 0 row to precharge, 1 row to activate, 2 tRCD, 3 turnaround (or the timers of a hit), 4 refresh
+            wt[tag][!run ? 4 : hit ? (!rcd ? 2 : 3) : op ? 0 : 1]++;
+        } else {
+            if (pv2) no_ask++; else no_idle++;
+        }
+    }
+    if (frames != f_last) {
+        if (f_last >= 0 && frames % every == 0) {
+            fprintf(lf, "L %ld n %ld busy %ld taken %ld noreq_rdp_asking %ld noreq_rdp_not_asking %ld |", frames, n, busy, tk_all, no_ask, no_idle);
+            for (int p = 0; p < 6; p++) {
+                fprintf(lf, " p%d: rd %ld wr %ld grants %ld wait pre %ld act %ld rcd %ld turn %ld ref %ld |", p, tk[p][0], tk[p][1], grants[p], wt[p][0], wt[p][1], wt[p][2], wt[p][3], wt[p][4]);
+            }
+            fprintf(lf, "\n");
+            fprintf(lf, "M %ld first-look [hit open-miss closed]:", frames);
+            for (int p = 0; p < 6; p++) fprintf(lf, " p%d %ld %ld %ld |", p, fl[p][0], fl[p][1], fl[p][2]);
+            fprintf(lf, " conflicts [port <- last user of its bank]:");
+            for (int p = 0; p < 6; p++) for (int o = 0; o < 8; o++) if (conf[p][o]) fprintf(lf, " p%d<-p%d %ld", p, o, conf[p][o]);
+            fprintf(lf, "\n");
+            fflush(lf);
+            for (int p = 0; p < 8; p++) { fl[p][0] = fl[p][1] = fl[p][2] = 0; for (int o = 0; o < 8; o++) conf[p][o] = 0; }
+            n = busy = tk_all = no_ask = no_idle = 0;
+            for (int p = 0; p < 8; p++) { grants[p] = gwords[p] = 0; tk[p][0] = tk[p][1] = 0; for (int r = 0; r < 5; r++) wt[p][r] = 0; for (int r = 0; r < 8; r++) sw[p][r] = 0; }
+        }
+        f_last = frames;
+    }
+}
+
 #include "con_model.h"
 
 // ---- the Pocket's data slots (data.json) and its side of the bridge
@@ -1462,6 +1636,8 @@ int main(int argc, char **argv)
             // RCPSTAT=n [RCPSTAT_IDLE=lo,hi]: every n fields, what the RCP and the CPU did in them -- the time the RSP ran, the
             // time the RDP was not idle (a command under way or waiting), the RDP's full syncs (a frame each), and the CPU's
             // time outside the game's idle loop (the range of its pc)
+            { static FILE *gl; static bool gi; if (!gi) { gi = true; const char *e = getenv("GELOG"); if (e) gl = fopen(e, "w"); } if (gl) ge_step(gl, sys, frames); }
+            { static FILE *rl; static bool ri; if (!ri) { ri = true; const char *e = getenv("RDPLOSS"); if (e) rl = fopen(e, "w"); } if (rl) rdploss_step(rl, frames); }
             if (o_rcpstat) {
                 static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
                 n_cyc++;

@@ -53,6 +53,9 @@ module soc_sim_top (
     // its request taken, [12] a request at it, [13] a port asking, [14] the
     // RDP at work, [15] the RSP running
     output wire  [15:0] mem_stat,
+    output wire  [23:0] mem_ra,            // the controller's request's address
+    output wire  [5:0]  mem_pv,            // the ports asking the arbiter
+    output wire  [11:0] mem_rq,            // the controller's request: {valid, ready, we, bank(2), tag(3), row hit, bank open, running, tRCD done} (RDPLOSS)
     output wire  [5:0]  mem_hidden, mem_save,
     output wire [31:0] diag_vi, diag_vid_addr, diag_vid_data,
     output wire [7:0] diag_vid_flags, diag_vid_tag,
@@ -192,6 +195,10 @@ assign diag_vi = {20'd0, soc.video.hid_f, soc.vi_aa, soc.mon_vi, soc.fb_en,
                   soc.video.running, soc.video.h_next, soc.p_valid[0], soc.p_ready[0],
                   soc.p_rvalid[0], soc.video.hires, soc.video.px32_n, soc.video.all};
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
+assign mem_pv    = soc.p_valid;
+assign mem_ra    = soc.sdram.req_addr;
+assign mem_rq    = {soc.sdram.req_valid, soc.sdram.req_ready, soc.sdram.req_we, soc.sdram.q_bank, soc.sdram.req_tag, mem_hit, soc.sdram.open[soc.sdram.q_bank],
+                    soc.sdram.st == 4'd7, soc.sdram.c_act[soc.sdram.q_bank] >= 2};
 assign mem_stat  = {!soc.rsp_halted, soc.cmd_valid || !soc.rdp_idle, |soc.p_valid, soc.sdram.req_valid, soc.sdram.req_ready,
                     soc.sdram.cmd_ba, soc.sdram.cmd, 6'(soc.p_valid & soc.p_ready)};
 `ifdef MIRLO_RSP_OC
