@@ -335,8 +335,8 @@ wire  [4:0]  e_rs = e_ins[25:21], e_rt = e_ins[20:16];
 // (the read address is E's own while it waits: the file is read again, and has by then every result older than the one in W)
 wire  [4:0]  ra_d = stall_e ? e_rs : s_ins_d[25:21];
 wire  [4:0]  rb_d = stall_e ? e_rt : s_ins_d[20:16];
-rsp_rfram_oc #(.W(76)) rfa3 (.clk, .we(w_we), .wa(w_wr), .wd({w_res, w_res, w_res[11:0]}), .ra_n(ra_d), .q({rf_qa, rf_qac, rf_qam}));   // (the three copies read at rs: one memory)
-rsp_rfram_oc #(.W(64)) rfb2 (.clk, .we(w_we), .wa(w_wr), .wd({w_res, w_res}), .ra_n(rb_d), .q({rf_qb, rf_qbc}));
+rsp_rfram_oc #(.W(76)) rfa3 (.clk, .we(w_we), .wa(w_wr), .wd({w_res[11:0], w_res, w_res}), .ra_n(ra_d), .q({rf_qam, rf_qac, rf_qa}));   // (the three copies read at rs: one memory, cut in slices of 16 bits)
+rsp_rfram_oc #(.W(64)) rfb2 (.clk, .we(w_we), .wa(w_wr), .wd({w_res, w_res}), .ra_n(rb_d), .q({rf_qbc, rf_qb}));
 
 // ---- E: the operands. Where each comes from is chosen by registers set the cycle before for the instruction that will be
 // in E (D's, or E's own if it waits): the writer in M (its result is m_res), the one in W (w_res), or the register file, which

@@ -69,9 +69,13 @@ endmodule
 // rsp_rfram_oc: the scalar register file's memory (rsp_su_oc) -- 32 words of W bits (32: a copy of the file) in LUT RAM, one clocked write, the read in
 // the cycle at an address the memory registers itself (ra_n: the address of the cycle to come), as rsp_lutram_oc's. Copies read at the same address
 // are one memory of their widths' sum (a LAB of LUT RAM is 20 bits wide: the sum is rounded up once, not for each copy)
+// On the FPGA the memory is cut in slices of SL bits (16: a LAB of LUT RAM), each with a read-address register of its own (preserved, so that it is
+// not merged back into one): a register that drove the 64 or 76 bits of the whole memory sat a LAB or two from the first of its loads, 2 ns of
+// routing in front of the register file's word in every seed's slowest scalar-unit paths (branch condition -> pc_f, the ALU's result)
 `default_nettype none
 module rsp_rfram_oc #(
-    parameter W = 32
+    parameter W  = 32,
+    parameter SL = 16
 ) (
     input  wire         clk,
     input  wire         we,
@@ -89,43 +93,51 @@ module rsp_rfram_oc #(
     end
     assign q = m[ra];
 `else
-    altdpram #(
-        .width                              (W),
-        .widthad                            (5),
-        .numwords                           (32),
-        .lpm_type                           ("altdpram"),
-        .ram_block_type                     ("MLAB"),
-        .indata_reg                         ("INCLOCK"),
-        .indata_aclr                        ("OFF"),
-        .wraddress_reg                      ("INCLOCK"),
-        .wraddress_aclr                     ("OFF"),
-        .wrcontrol_reg                      ("INCLOCK"),
-        .wrcontrol_aclr                     ("OFF"),
-        .rdaddress_reg                      ("OUTCLOCK"),
-        .rdaddress_aclr                     ("OFF"),
-        .rdcontrol_reg                      ("UNREGISTERED"),
-        .rdcontrol_aclr                     ("OFF"),
-        .outdata_reg                        ("UNREGISTERED"),
-        .outdata_aclr                       ("OFF"),
-        .read_during_write_mode_mixed_ports ("DONT_CARE"),
-        .intended_device_family             ("Cyclone V")
-    ) ram (
-        .inclock        (clk),
-        .outclock       (clk),
-        .wren           (we),
-        .data           (wd),
-        .wraddress      (wa),
-        .rdaddress      (ra_n),
-        .q              (q),
-        .aclr           (1'b0),
-        .sclr           (1'b0),
-        .inclocken      (1'b1),
-        .outclocken     (1'b1),
-        .rdaddressstall (1'b0),
-        .wraddressstall (1'b0),
-        .rden           (1'b1),
-        .byteena        (1'b1)
-    );
+    localparam NS = (W + SL - 1) / SL;
+    genvar g;
+    generate for (g = 0; g < NS; g = g + 1) begin : sl
+        localparam LO = g * SL;
+        localparam WS = (W - LO < SL) ? W - LO : SL;
+        (* preserve *) reg [4:0] ra_q;
+        always @(posedge clk) ra_q <= ra_n;
+        altdpram #(
+            .width                              (WS),
+            .widthad                            (5),
+            .numwords                           (32),
+            .lpm_type                           ("altdpram"),
+            .ram_block_type                     ("MLAB"),
+            .indata_reg                         ("INCLOCK"),
+            .indata_aclr                        ("OFF"),
+            .wraddress_reg                      ("INCLOCK"),
+            .wraddress_aclr                     ("OFF"),
+            .wrcontrol_reg                      ("INCLOCK"),
+            .wrcontrol_aclr                     ("OFF"),
+            .rdaddress_reg                      ("UNREGISTERED"),
+            .rdaddress_aclr                     ("OFF"),
+            .rdcontrol_reg                      ("UNREGISTERED"),
+            .rdcontrol_aclr                     ("OFF"),
+            .outdata_reg                        ("UNREGISTERED"),
+            .outdata_aclr                       ("OFF"),
+            .read_during_write_mode_mixed_ports ("DONT_CARE"),
+            .intended_device_family             ("Cyclone V")
+        ) ram (
+            .inclock        (clk),
+            .outclock       (clk),
+            .wren           (we),
+            .data           (wd[LO +: WS]),
+            .wraddress      (wa),
+            .rdaddress      (ra_q),
+            .q              (q[LO +: WS]),
+            .aclr           (1'b0),
+            .sclr           (1'b0),
+            .inclocken      (1'b1),
+            .outclocken     (1'b1),
+            .rdaddressstall (1'b0),
+            .wraddressstall (1'b0),
+            .rden           (1'b1),
+            .byteena        (1'b1)
+        );
+    end endgenerate
 `endif
 endmodule
 `default_nettype wire
