@@ -41,6 +41,12 @@ module sdr_arb #(
     input  wire              req_ready,
     output logic             la_valid,
     output logic [23:0]      la_addr,
+    // `fut_*`: an address a port will ask for some requests from now (the RDP's queue, a few places down); `la2_*`: it as the controller
+    // wants it (placed as the plane's words are, a cycle old), for a row to be opened ahead whoever the arbiter serves next
+    input  wire              fut_valid,
+    input  wire  [23:0]      fut_addr,
+    output logic             la2_valid,
+    output logic [23:0]      la2_addr,
     input  wire              rd_valid,
     input  wire  [31:0]      rd_data,
     input  wire  [2:0]       rd_tag
@@ -97,6 +103,8 @@ always_comb begin
     ro = ring((|urgent_oth) ? urgent_oth : p_oth, cur);
 end
 always_ff @(posedge clk) begin
+    la2_valid <= !rst && fut_valid;
+    la2_addr  <= hmap(fut_addr);
     la_valid <= !rst && ro[IW];
     la_addr  <= p_phys[ro[IW-1:0]];
 end

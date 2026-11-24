@@ -21,13 +21,13 @@ logic rst2x;
 always_ff @(posedge clk2x) rst2x <= rst;
 wire rq_valid, rq_we, rq_ready, rd_valid;
 wire [23:0] rq_addr; wire [31:0] rq_wdata, rd_data; wire [3:0] rq_be; wire [2:0] rq_tag, rd_tag;
-wire la_valid; wire [23:0] la_addr;
+wire la_valid, la2_valid; wire [23:0] la_addr, la2_addr;
 `define AHEAD 1
-sdr_arb #(.N(4)) arb (.clk, .rst, .p_valid, .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .apf_force(1'b0), .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
+sdr_arb #(.N(4)) arb (.clk, .rst, .p_valid, .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .apf_force(1'b0), .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr, .fut_valid(1'b0), .fut_addr(24'd0), .la2_valid, .la2_addr,
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
     .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag);
 wire [1:0] ras_n, cas_n, we_n; wire [25:0] a; wire [3:0] ba, wm; wire cke, wren, rden, phy_rv; wire [31:0] wd, phy_rd;
-sdr_ctrl #(.T_INIT(100), .RL(`RL), .AHEAD(`AHEAD)) ctrl (.clk, .rst, .ready, .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .la_valid, .la_addr,
+sdr_ctrl #(.T_INIT(100), .RL(`RL), .AHEAD(`AHEAD)) ctrl (.clk, .rst, .ready, .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .la_valid, .la_addr, .la2_valid, .la2_addr,
     .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag), .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag,
     .dfi_ras_n(ras_n), .dfi_cas_n(cas_n), .dfi_we_n(we_n), .dfi_addr(a), .dfi_ba(ba), .dfi_cke(cke),
     .dfi_wrdata_en(wren), .dfi_wrdata(wd), .dfi_wrdata_mask(wm), .dfi_rddata_en(rden),

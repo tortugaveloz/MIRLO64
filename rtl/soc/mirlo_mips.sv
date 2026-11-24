@@ -178,8 +178,8 @@ logic [23:0] rq_addr;
 logic [31:0] rq_wdata, rd_data;
 logic [3:0]  rq_be;
 logic [2:0]  rq_tag, rd_tag;
-logic        la_valid;
-logic [23:0] la_addr;
+logic        la_valid, la2_valid;
+logic [23:0] la_addr, la2_addr;
 // The other masters' writes, for the game CPU's D-cache (mips_core's SNOOP: it drops the line of each): sn_t turns over
 // when the arbiter grants the RDP, the RSP's DMA or the bridge (the PI's engine, the SI's DMA) a write, whose word is
 // then in its register stage (rq_addr). Both are taken across to the CPU's clock as cpu_port's read words are, a value
@@ -191,6 +191,7 @@ always_ff @(posedge clk) begin
     if (rst) sn_t <= 1'b0; else if (|(p_ready & p_we & SN_PORTS)) sn_t <= !sn_t;
 end
 sdr_arb #(.N(NP), .APF_PREEMPT(1)) arb (.clk, .rst, .p_valid(p_valid & ~(p_we & SN_PORTS & {NP{sn_hold_s}})), .p_we, .p_addr, .p_wdata, .p_be, .p_urgent, .apf_force(wishbone_master_cyc || wishbone_master_pending), .p_ready, .p_rvalid, .p_rdata, .la_valid, .la_addr,
+    .fut_valid(rdp_fut_valid), .fut_addr(rdp_fut_addr), .la2_valid, .la2_addr,
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
     .req_ready(rq_ready), .rd_valid, .rd_data, .rd_tag);
 logic [1:0]  dfi_ras_n, dfi_cas_n, dfi_we_n;
@@ -204,7 +205,7 @@ logic        rd_next;
 logic [2:0]  rd_next_tag;
 sdr_ctrl #(.T_INIT(SDR_T_INIT), .AHEAD(SDR_AHEAD)) sdram (.clk, .rst, .ready(sdr_ready),
     .req_valid(rq_valid), .req_we(rq_we), .req_addr(rq_addr), .req_wdata(rq_wdata), .req_be(rq_be), .req_tag(rq_tag),
-    .req_ready(rq_ready), .la_valid, .la_addr, .rd_valid, .rd_data, .rd_tag, .rd_next, .rd_next_tag,
+    .req_ready(rq_ready), .la_valid, .la_addr, .la2_valid, .la2_addr, .rd_valid, .rd_data, .rd_tag, .rd_next, .rd_next_tag,
     .dfi_ras_n, .dfi_cas_n, .dfi_we_n, .dfi_addr, .dfi_ba, .dfi_cke, .dfi_wrdata_en(dfi_wren), .dfi_wrdata(dfi_wd),
     .dfi_wrdata_mask(dfi_wm), .dfi_rddata_en(dfi_rden), .dfi_rddata(dfi_rd), .dfi_rddata_valid(dfi_rv));
 sdr_phy phy (.clk, .rst, .clk2x(clk_sys2x), .rst2x, .clk2x_90(clk_sys2x_90deg),
@@ -623,6 +624,8 @@ logic [3:0]  m_wdata_we;
 // N64's, in the 8 MiB of RDRAM at SDRAM 0x4380_0000
 logic [31:0] rdp_addr;
 logic        pq_empty;                // port_rdp's queue holds nothing
+logic        rdp_fut_valid;           // ... and holds a request some places behind its head, at rdp_fut_addr (the controller opens its row ahead)
+logic [23:0] rdp_fut_addr;
 generate if (RDP_OC) begin : oc_rdp
     // the RDP on clk_cpu: its command words, its memory channels and its status cross in rdp_xing
     logic        rc_valid, rc_ready, rr_cmd_valid, rr_cmd_we, rr_cmd_ready, rr_wvalid, rr_wready, rr_rvalid, rr_idle, rr_tm, rr_ev;
@@ -654,20 +657,26 @@ generate if (RDP_OC) begin : oc_rdp
         .sync_count(rdp_sync), .load_count(rdp_load), .unknown_ops(rdp_unknown));
     assign rdp_addr = {8'd0, xm_addr, 2'b00};
 end else begin : rdp_sys
+    // (port_rdp's queue takes the RDP's commands ahead of the memory: the RDP is idle, and its SYNC FULL's interrupt is given, when the
+    // queue has gone empty -- the words are in the arbiter's hands, in order before anything the CPU asks for after the interrupt)
+    logic sync_ev_r, sync_pend, idle_r;
     rdp_top rdp (.clk, .rst,
         .cmd_valid, .cmd_ready, .cmd_data,
         .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
         .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we,
         .m_rdata_valid, .m_rdata,
-        .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(rdp_idle),
+        .sync_count(rdp_sync), .sync_ev(sync_ev_r), .load_count(rdp_load), .unknown_ops(rdp_unknown), .idle(idle_r),
         .tmem_busy(rdp_tmem_busy));
+    always_ff @(posedge clk) sync_pend <= !rst && (sync_ev_r || sync_pend) && !pq_empty;
+    assign mon_dp = (sync_ev_r || sync_pend) && pq_empty;
+    assign rdp_idle = idle_r && pq_empty;
 end endgenerate
 // (bit 23: the RDP's hidden-bit plane, 1 MiB below the RDRAM -- lang/c/rdp/rdp.h, layout.h)
 assign m_cmd_addr = {6'd0, rdp_addr[23] ? 24'hDC_0000 + {6'd0, rdp_addr[19:2]} : 24'hE0_0000 + {3'd0, rdp_addr[22:2]}, 2'b00};
 port_rdp pm (.clk, .rst, .m_cmd_valid, .m_cmd_we, .m_cmd_addr, .m_cmd_ready, .m_wdata_valid, .m_wdata, .m_wdata_we,
     .m_wdata_ready, .m_rdata_valid, .m_rdata,
     .p_valid(p_valid[2]), .p_we(p_we[2]), .p_addr(p_addr[2]), .p_wdata(p_wdata[2]), .p_be(p_be[2]),
-    .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata), .q_empty(pq_empty));
+    .p_ready(p_ready[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata), .q_empty(pq_empty), .fut_valid(rdp_fut_valid), .fut_addr(rdp_fut_addr));
 assign p_urgent[2] = 0;
 
 // ---------------------------------------------------------------- the Pocket's bridge

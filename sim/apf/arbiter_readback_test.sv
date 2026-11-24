@@ -19,7 +19,7 @@ module apf_arbiter_test #(parameter bit APF_PREEMPT=0, parameter integer WORDS=5
     wire [5:0] p_ready, p_rvalid;
     wire [31:0] p_rdata;
     wire port_valid, port_we; wire [23:0] port_addr; wire [31:0] port_wdata; wire [3:0] port_be;
-    wire req_valid, req_we, la_valid; wire [23:0] req_addr, la_addr; wire [31:0] req_data; wire [3:0] req_be; wire [2:0] req_tag;
+    wire req_valid, req_we, la_valid, la2_valid; wire [23:0] req_addr, la_addr, la2_addr; wire [31:0] req_data; wire [3:0] req_be; wire [2:0] req_tag;
     logic [LATENCY-1:0] pipe_v='0;
     logic [2:0] pipe_tag[0:LATENCY-1];
     logic [31:0] pipe_data[0:LATENCY-1];
@@ -48,7 +48,7 @@ module apf_arbiter_test #(parameter bit APF_PREEMPT=0, parameter integer WORDS=5
     sdr_arb #(.N(6), .APF_PREEMPT(APF_PREEMPT)) arb(.clk(clk), .rst(rst), .p_valid(p_valid), .p_we(p_we), .p_addr(p_addr), .p_wdata(p_wdata),
       .p_be(p_be), .p_urgent(p_urgent), .apf_force(fix && bridge_cyc), .p_ready(p_ready), .p_rvalid(p_rvalid), .p_rdata(p_rdata),
       .req_valid(req_valid), .req_we(req_we), .req_addr(req_addr), .req_wdata(req_data), .req_be(req_be), .req_tag(req_tag),
-      .req_ready(memory_ready), .la_valid(la_valid), .la_addr(la_addr), .rd_valid(pipe_v[LATENCY-1]),
+      .req_ready(memory_ready), .la_valid(la_valid), .la_addr(la_addr), .fut_valid(1'b0), .fut_addr(24'd0), .la2_valid(la2_valid), .la2_addr(la2_addr), .rd_valid(pipe_v[LATENCY-1]),
       .rd_data(pipe_data[LATENCY-1]), .rd_tag(pipe_tag[LATENCY-1]));
     always @(posedge clk) begin
         memory_cycle <= memory_cycle + 1;

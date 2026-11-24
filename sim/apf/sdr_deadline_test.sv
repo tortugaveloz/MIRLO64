@@ -16,8 +16,8 @@ module sdr_deadline_test #(parameter integer WORDS=8192, RL=5);
     wire [5:0] p_ready, p_rvalid;
     wire [31:0] p_rdata;
     wire pv, pw; wire [23:0] pa; wire [31:0] pd; wire [3:0] pb;
-    wire req_valid, req_we, req_ready, la_valid, rd_valid, ready;
-    wire [23:0] req_addr, la_addr;
+    wire req_valid, req_we, req_ready, la_valid, la2_valid, rd_valid, ready;
+    wire [23:0] req_addr, la_addr, la2_addr;
     wire [31:0] req_data, rd_data;
     wire [3:0] req_be;
     wire [2:0] req_tag, rd_tag;
@@ -73,10 +73,10 @@ module sdr_deadline_test #(parameter integer WORDS=8192, RL=5);
     sdr_arb #(.N(6), .APF_PREEMPT(1)) arb(.clk(clk), .rst(rst), .p_valid(p_valid), .p_we(p_we), .p_addr(p_addr),
       .p_wdata(p_wdata), .p_be(p_be), .p_urgent(p_urgent), .apf_force((wb_cyc || (protect_pending && wb_pending)) && (!pa_dma || drain_dma)), .p_ready(p_ready), .p_rvalid(p_rvalid), .p_rdata(p_rdata),
       .req_valid(req_valid), .req_we(req_we), .req_addr(req_addr), .req_wdata(req_data), .req_be(req_be), .req_tag(req_tag),
-      .req_ready(req_ready), .la_valid(la_valid), .la_addr(la_addr), .rd_valid(rd_valid), .rd_data(rd_data), .rd_tag(rd_tag));
+      .req_ready(req_ready), .la_valid(la_valid), .la_addr(la_addr), .fut_valid(1'b0), .fut_addr(24'd0), .la2_valid(la2_valid), .la2_addr(la2_addr), .rd_valid(rd_valid), .rd_data(rd_data), .rd_tag(rd_tag));
     sdr_ctrl #(.T_INIT(100), .RL(RL)) ctrl(.clk(clk), .rst(rst), .ready(ready), .req_valid(req_valid), .req_we(req_we),
       .req_addr(req_addr), .req_wdata(req_data), .req_be(req_be), .req_tag(req_tag), .req_ready(req_ready),
-      .la_valid(la_valid), .la_addr(la_addr), .rd_valid(rd_valid), .rd_data(rd_data), .rd_tag(rd_tag), .rd_next(), .rd_next_tag(),
+      .la_valid(la_valid), .la_addr(la_addr), .la2_valid(la2_valid), .la2_addr(la2_addr), .rd_valid(rd_valid), .rd_data(rd_data), .rd_tag(rd_tag), .rd_next(), .rd_next_tag(),
       .dfi_ras_n(dfi_ras), .dfi_cas_n(dfi_cas), .dfi_we_n(dfi_we), .dfi_addr(dfi_addr), .dfi_ba(dfi_ba), .dfi_cke(dfi_cke),
       .dfi_wrdata_en(dfi_wren), .dfi_wrdata(dfi_wdata), .dfi_wrdata_mask(dfi_mask), .dfi_rddata_en(dfi_rden),
       .dfi_rddata(data_pipe[RL-1]), .dfi_rddata_valid(1'b1));

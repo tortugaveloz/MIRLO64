@@ -32,15 +32,16 @@ module sdr_ctrl #(
     parameter int T_INIT = 12600,       // 200 us of power-up wait
     parameter int T_REFI = 480,
     parameter int T_RFC  = 6,
-    parameter int T_RP   = 2,
-    parameter int T_RCD  = 2,
-    parameter int T_RAS  = 4,
+    parameter int T_RP  = 2,
+    parameter int T_RCD = 2,
+    parameter int T_RAS = 4,
     parameter int T_WR   = 2,
-    parameter int T_R2W  = 3,
-    parameter int T_W2R  = 2,
+    parameter int T_R2W = 3,
+    parameter int T_W2R = 2,
     parameter int T_MRD  = 3,
     parameter int T_IDLE = 6,
     parameter bit AHEAD  = 1,           // phase 1's row opening (0: as before it)
+    parameter bit LA2    = 1,           // ... also for the stream further off (la2_*)
     parameter int RL     = 5,           // sys cycles from rddata_en to the word on dfi_rddata (sdr_phy)
     parameter int TAGW   = 3
 ) (
@@ -58,6 +59,9 @@ module sdr_ctrl #(
     // the request to come (a hint: its row is opened ahead)
     input  wire              la_valid,
     input  wire  [23:0]      la_addr,
+    // a request some way off, of a stream that is not the one served now (the RDP's): its row is opened first, when it is not open
+    input  wire              la2_valid,
+    input  wire  [23:0]      la2_addr,
     // read data, in request order
     output logic             rd_valid,
     output logic [31:0]      rd_data,
@@ -113,6 +117,8 @@ logic [CW-1:0] c_rd, c_wrany;
 logic [CW-1:0] c_use [4];           // since a READ or a WRITE there
 logic        act1_d;                // phase 1 of the last cycle was an ACTIVATE
 wire [12:0] l_row  = la_addr[23:11];
+wire [12:0] l2_row = la2_addr[23:11];
+wire [1:0]  l2_bank = la2_addr[10:9];
 wire [1:0]  l_bank = la_addr[10:9];
 function automatic logic [CW-1:0] sat(input logic [CW-1:0] v); return &v ? v : v + 1'b1; endfunction
 
@@ -153,9 +159,18 @@ always_comb begin
     default: ;
     endcase
 end
+// what phase 1 does for the request to come of the stream (la2, the one further off: its row first) or of the next port's (la)
+logic [2:0]  cmd2;
 always_comb begin
-    cmd1 = C_NOP; cmd1_a = '0; cmd1_ba = l_bank;
-    if (AHEAD && st == S_RUN && wait_c == 0 && !ref_due && la_valid && !(req_valid && q_bank == l_bank)) begin
+    cmd1 = C_NOP; cmd1_a = '0; cmd1_ba = l_bank; cmd2 = C_NOP;
+    if (AHEAD && LA2 && st == S_RUN && wait_c == 0 && !ref_due && la2_valid && !(req_valid && q_bank == l2_bank)) begin
+        if (open[l2_bank]) begin
+            if (row[l2_bank] != l2_row && c_use[l2_bank] >= T_IDLE && c_act[l2_bank] >= T_RAS && c_wr[l2_bank] >= T_WR) cmd2 = C_PRE;
+        end else if (c_pre[l2_bank] >= T_RP && cmd != C_ACT) cmd2 = C_ACT;
+    end
+    if (cmd2 != C_NOP) begin
+        cmd1 = cmd2; cmd1_ba = l2_bank; cmd1_a = (cmd2 == C_ACT) ? l2_row : '0;
+    end else if (AHEAD && st == S_RUN && wait_c == 0 && !ref_due && la_valid && !(req_valid && q_bank == l_bank)) begin
         if (open[l_bank]) begin
             if (row[l_bank] != l_row && c_use[l_bank] >= T_IDLE && c_act[l_bank] >= T_RAS && c_wr[l_bank] >= T_WR) cmd1 = C_PRE;
         end else if (c_pre[l_bank] >= T_RP && cmd != C_ACT) begin

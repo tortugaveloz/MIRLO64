@@ -75,7 +75,10 @@ endmodule
 // ---- RDP's memory port (LiteDRAM-native-like: a command, and a write's data
 // on its own channel after it). Commands queue here (4) so RDP is not held
 // to one in flight; a write goes to the arbiter with its data.
-module port_rdp (
+module port_rdp #(
+    parameter int QA = 4,                   // the queue holds 2^QA commands
+    parameter int FK = 4                    // fut_*: the request FK places behind the head
+) (
     input  wire         clk, rst,
     input  wire         m_cmd_valid, m_cmd_we,
     input  wire  [31:0] m_cmd_addr,         // byte address on RDP's bus (SDRAM at 0x4000_0000)
@@ -92,14 +95,18 @@ module port_rdp (
     output logic [3:0]  p_be,
     input  wire         p_ready, p_rvalid,
     input  wire  [31:0] p_rdata,
-    output wire         q_empty             // the queue holds nothing (rdp_xing: the SYNC FULL's interrupt waits for it)
+    output wire         q_empty,            // the queue holds nothing (rdp_xing: the SYNC FULL's interrupt waits for it)
+    output wire         fut_valid,          // the queue holds a request FK places behind the head: fut_addr, for the controller's row opened ahead
+    output wire  [23:0] fut_addr
 );
-logic [24:0] q [4];                         // {we, word address}
-logic [2:0]  qw, qr;
-wire  [2:0]  qn = qw - qr;
-assign m_cmd_ready = qn != 3'd4;
-assign q_empty = qn == 3'd0;
-wire  [24:0] head = q[qr[1:0]];
+logic [24:0] q [1 << QA];                   // {we, word address}
+logic [QA:0] qw, qr;
+wire  [QA:0] qn = qw - qr;
+assign m_cmd_ready = qn != (QA+1)'(1 << QA);
+assign q_empty = qn == '0;
+wire  [24:0] head = q[qr[QA-1:0]];
+assign fut_valid = qn > (QA+1)'(FK);
+assign fut_addr  = q[(qr[QA-1:0] + QA'(FK))][23:0];
 assign p_we    = head[24];
 assign p_addr  = head[23:0];
 assign p_wdata = m_wdata;
@@ -111,8 +118,8 @@ assign m_rdata = p_rdata;
 always_ff @(posedge clk) begin
     if (rst) begin qw <= 0; qr <= 0; end
     else begin
-        if (m_cmd_valid && m_cmd_ready) begin q[qw[1:0]] <= {m_cmd_we, m_cmd_addr[25:2]}; qw <= qw + 3'd1; end
-        if (p_valid && p_ready) qr <= qr + 3'd1;
+        if (m_cmd_valid && m_cmd_ready) begin q[qw[QA-1:0]] <= {m_cmd_we, m_cmd_addr[25:2]}; qw <= qw + 1'b1; end
+        if (p_valid && p_ready) qr <= qr + 1'b1;
     end
 end
 endmodule
