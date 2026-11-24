@@ -592,7 +592,8 @@ always_ff @(posedge clk) begin
         m_we_r <= e_go && e_c.we;
         if (!stall_e) begin
             e_valid <= d_valid && (run || redirect) && !brk;   // (a taken branch's delay slot always runs)
-            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= decode(s_ins_d);
+            // (E's decode: of the word the pair's choice picks -- made on each word, and chosen last: pair_d, from a bit of IMEM and the pair memory's, and s2_d are in front of the choice, not of the decode)
+            e_pc <= d_pc; e_ins <= s_ins_d; e_c <= s2_d ? decode(i_data2) : decode(ins_d);
             e_spc <= (pair_d && v_first) ? d_pc + 12'd4 : d_pc;
             v_e <= pair_d && !brk; v_ins <= v_ins_d;
         end
