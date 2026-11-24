@@ -1168,12 +1168,13 @@ wire e_misalign = (e_al2 && e_ea[0]) || (e_al4 && e_ea[1:0] != 0) || (e_al8 && e
 // N64WIN: the game touching what is not RDRAM (Mirlo's runtime emulates it)
 // (MI: the MI's and PI_STATUS' word accesses, in KSEG0 or KSEG1, are the device port's. The address error they would
 // be is taken back at M (m_exc_v): this compare feeds one flop, m_hwx, and no other logic of E)
-wire e_hwx = MI && mon_mi && !e_fexc && !e_misalign && e_ea[31] && !e_ea[30] && (e_c.ld == M_LW || e_c.st == S_SW) &&
+wire e_hwx_x = MI && mon_mi && !e_fexc && e_ea[31] && !e_ea[30] && (e_c.ld == M_LW || e_c.st == S_SW) &&
              (e_ea[28:20] == 9'h043 || (VIW && e_ea[28:20] == 9'h044) || (AIW && e_ea[28:20] == 9'h045) || (PIW && e_ea[28:20] == 9'h046 && e_ea[19:2] == 18'd4) ||
               (SIW && (e_ea[28:20] == 9'h048 || (e_ea[28:20] == 9'h1FC && e_ea[10:6] == 5'h1F))) ||
               (PI2W && ((e_ea[28:27] == 2'b01 && !e_ea[16]) || (e_ea[28:26] == 3'b100 && (ROM64W || !(e_ea[25] && e_ea[24]))))) ||
               (SPW && mon_sp && (e_ea[28:5] == 24'h20_2000 || e_ea[28:2] == 27'h102_0000 ||
                                  (e_ea[28:4] == 25'h41_0000 && !(e_c.st == S_SW && e_ea[3:2] == 2'd3)))));
+wire e_hwx = e_hwx_x && !e_misalign;
 // (MCTL bit 10, mon_mem4: a console without the Expansion Pak -- the upper 4 MiB of the window are nothing of the game's either,
 // and the monitor answers as the console does: a game that sizes the memory itself finds 4 MiB)
 wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22])) && kseg01(e_ea, game_view);   // (a mapped address is the TLB's)
@@ -1188,7 +1189,8 @@ wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22
 wire e_cpu1 = !c0_status[29] && e_isfp;
 logic [4:0] e_exc_code; logic [31:0] e_badv;
 // (e_exc is one OR of the causes, not the end of the priority chain that picks the code)
-wire e_exc = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
+wire e_exc_x = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_n64dev;
+wire e_exc = e_exc_x || e_misalign;
 always_comb begin
     e_badv = e_ea; e_exc_code = 5'd0;
     if (e_fexc) begin e_exc_code = e_fexc_code; e_badv = e_pc; end
@@ -2263,7 +2265,7 @@ always_ff @(posedge clk) begin
             m_a_lo <= e_a;
             m_a_hx <= e_ra_hx; m_st_hx <= e_rb_hx;
             m_exc <= e_exc; m_exc_code <= e_exc_code; m_badv <= e_badv;
-            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx; m_exc_vq <= e_exc && !(e_hwx && N64WIN && e_n64dev);
+            m_dev <= N64WIN && e_n64dev; m_hwx <= e_hwx; m_exc_vq <= e_misalign || (e_exc_x && !(e_hwx_x && N64WIN && e_n64dev));   // (= e_exc && !(e_hwx && ..): the misalignment, from the adder's low bits, is the last term)
         end
         // FAST: the load of the wrong line, and what came in behind it, go;
         // the line is read (ms, below) and the fetch made again from the load
