@@ -18,6 +18,8 @@ rm -rf $R/projects/db $R/projects/incremental_db $R/projects/output_files
 ln -s $R/projects $W/projects_a2_$tag
 D=$R/projects
 sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED $seed/" $D/mirlo.qsf
+# (a revision's own SEED -- projects/mirlo_oc.qsf's, the one it closes with -- comes after mirlo.qsf's in the compile and would win: the seed asked for goes there too)
+[ -f $D/$REV.qsf ] && sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED $seed/" $D/$REV.qsf
 for m in RSP_LANES=8 ${EXTRA_MACROS:-}; do
   case " ${DROP:-} " in *" ${m%%=*} "*) continue;; esac
   # (RSP_LANES=8 set again in EXTRA_MACROS: left out, the qsf has the one definition)
