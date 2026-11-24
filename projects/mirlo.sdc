@@ -79,3 +79,14 @@ set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_start[*]}]
 set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_end[*]}]
 set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_current[*]}]
 set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_status[*]}]
+
+# ==============================================================================
+# cpu_port's request (rtl/soc/cpu_port.sv): rq_addr, rq_dev, rq_line, rq_half are clk_c's registers, written as rq_t turns over and held until the read is
+# done, and clk takes them (a_*) at every edge together with rq_t (t_s): the request is used when t_s says it is new, so a_* that came an edge early is the
+# same value used a cycle later, and that is all a hold violation can be here (setup, at the closest edges, stays). The fitter left -0.05 ns in the fast
+# corner in tm3_6 (rq_addr -> a_addr).
+# ==============================================================================
+set_false_path -hold -from [get_registers {*cpu_port:pc|rq_addr[*]}]
+set_false_path -hold -from [get_registers {*cpu_port:pc|rq_dev}]
+set_false_path -hold -from [get_registers {*cpu_port:pc|rq_line}]
+set_false_path -hold -from [get_registers {*cpu_port:pc|rq_half}]
