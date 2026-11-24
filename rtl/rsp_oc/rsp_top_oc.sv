@@ -119,7 +119,7 @@ logic        dm_valid /* verilator public_flat_rd */, dm_we;       logic [11:0] 
 logic        tr_e_mem;
 
 rsp_su_oc #(.LPAIR(LANES == 8)) su (.clk, .rst, .run(su_run), .pc_load, .pc_in(h_wdata[11:0]), .pc_next, .brk(su_brk), .idle(su_idle),
-    .i_addr, .i_addr1, .i_data, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
+    .i_addr, .i_addr1, .i_data, .i_vc, .i_data2, .i2_ok, .p2_ok, .pw_a(iw_prev), .pw_b(iw_data), .pw_ok,
     .m_valid(sm_valid), .m_we(sm_we), .m_addr(sm_addr), .m_addr16(sm_addr16), .m_addr_e(sm_addr_e), .m_addr16_e(sm_addr16_e), .m_addr_r(sm_addr_r), .m_addr16_r(sm_addr16_r), .m_sel_r(sm_sel_r), .m_n(sm_n), .m_wdata(sm_wdata), .m_rdata, .m_stall(dm_valid || sw_v), .m_stall_st(dm_valid),
     .c_valid, .c_ins, .c_a, .c_bm, .c_bw, .c_br, .c_om, .c_ow, .c_or, .c_hm, .c_hw, .c_hr, .c_o4, .c_fm, .c_fw, .c_b, .c_pr, .c_lins, .c_done, .c_res, .c_res_l(v_res_l), .c_ra_n, .c_rb_n, .c_rd_n, .c_rd, .c_ins_n, .c_lins_n, .c_adv, .c_vls,
     .tr_e, .tr_e_pc, .tr_e2, .tr_e_mem, .tr_e_we, .tr_e_wr, .tr_we, .tr_wr, .tr_val);
@@ -146,18 +146,19 @@ always_ff @(posedge clk) rom_q <= div_rom[rom_addr];
 // two ports: the fetch's, and the DMA's -- its writes (a transfer in) and
 // its reads (a transfer out of IMEM: a word a cycle). With no DMA of IMEM's
 // the second reads the word after the fetch's, for the scalar unit's pairs
-logic [31:0] imem [0:1023];
+logic [32:0] imem [0:1023];                 // (bit 32: the word is a vector computation -- is_vc, v_first of the scalar unit -- made as it is written: M10K's blocks are 40 bits wide)
+logic        i_vc;
 logic        iw_we;
 logic [9:0]  iw_addr;
 logic [31:0] ia_q;
 logic        im_dma;                  // (below: a DMA of IMEM runs)
 wire  [9:0]  ib_addr = im_dma ? iw_addr : i_addr1;    // (one address for the port: a write is a DMA's, im_dma)
 always_ff @(posedge clk) begin
-    if (iw_we) begin imem[ib_addr] <= iw_data; ia_q <= iw_data; end
-    else ia_q <= imem[ib_addr];
+    if (iw_we) begin imem[ib_addr] <= {iw_data[31:26] == 6'h12 && iw_data[25], iw_data}; ia_q <= iw_data; end
+    else ia_q <= imem[ib_addr][31:0];
     i2_ok <= !rst && !im_dma && !iw_we;
 end
-always_ff @(posedge clk) i_data <= imem[i_addr];
+always_ff @(posedge clk) {i_vc, i_data} <= imem[i_addr];
 assign i_data2 = ia_q;
 // Whether a word and the one before can be a pair, made as the word is written (the DMA writes IMEM in order): one bit a
 // word, read with the second port's word. A word written after the previous address's, with the previous word, has the rule's

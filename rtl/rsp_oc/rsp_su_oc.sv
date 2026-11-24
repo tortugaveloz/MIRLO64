@@ -66,6 +66,7 @@ module rsp_su_oc #(
     output logic [9:0]  i_addr,         // IMEM word address
     output logic [9:0]  i_addr1,        // ... and the next word's (IMEM's second port)
     input  wire  [31:0] i_data,
+    input  wire         i_vc,           // the word is a vector computation (is_vc, made when it was written)
     input  wire  [31:0] i_data2,        // the word after i_data's (IMEM's second port) ...
     input  wire         i2_ok,          // ... when that port read it (not the DMA's)
     input  wire         p2_ok,          // ... and the two words can be a pair (by the rule alone: pw_ok of the two when IMEM was written)
@@ -311,7 +312,7 @@ function automatic logic pair_xc(input logic [31:0] x, input logic [31:0] c);
 endfunction
 wire  [31:0] ins_d = i_data;
 logic        stall_e /* verilator public_flat_rd */;
-wire         v_first = is_vc(ins_d);
+wire         v_first = i_vc;      // (is_vc(ins_d): IMEM has the bit with the word, made as the word was written -- not a decode of the word behind the memory)
 // The rule for two words to be a pair is a function of the two (pair_rule): the IMEM's second port brings its result with
 // the second word (p2_ok, made when the word was written), so that it is not in front of the fetch's address. What is left is
 // the unit's own state: D holds an instruction and IMEM's second port read the next, the unit runs, and D's instruction is not
