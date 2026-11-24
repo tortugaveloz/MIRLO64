@@ -64,3 +64,18 @@
 # (projects/mirlo.qsf) held for whole cycles of clk_sys -- 96 ns from the address to the data taken, against the chips'
 # 70 -- and their clock is never started: nothing to constrain.
 # ==============================================================================
+
+# ==============================================================================
+# rsp_xing's held values (rtl/soc/rsp_xing.sv): clk_r's registers that a value is announced with and held in -- a DPC write's word (ds_wd, ds_k: held
+# while the RSP's clock waits for the write to go in), an answer to the host port (hr_q) -- and the status the RSP reads from clk's registers (dq_*:
+# sampled, any of the values it takes will do) are taken by registers on the other clock, which the clocks arrive at 1.2 ns apart (clk_cpu first). Setup is
+# timed at the closest edges, 5.3 ns, as ever; hold is not asked: the value is not changing in the cycle it is taken (or any of them may be), and the
+# fitter's delay of the data -- 0.0 to 0.2 ns, seed by seed -- is what left -0.02 ns of hold in the fast corner in tm2_3 (ds_wd -> rdp_dpc's xbus).
+# ==============================================================================
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|ds_wd[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|ds_k[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|hr_q[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_start[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_end[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_current[*]}]
+set_false_path -hold -from [get_registers {*rsp_xing:oc.xing|dq_status[*]}]
