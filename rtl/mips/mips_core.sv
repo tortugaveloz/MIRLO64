@@ -262,6 +262,7 @@ module mips_core #(
     output logic [3:0]  mem_wstrb,
     output logic        mem_line,           // an 8-word line read (the I-cache's; the D-cache's with mem_half: its 4 words)
     output logic        mem_half,           // (DHALF) mem_line is of the 4 words that start at mem_addr, a D-cache line
+    output logic [2:0]  mem_cls,            // mem_addr's class, made from each source's address beside the choice of it: {SDRAM, boot ROM page, address bits [11:6] all ones}
     output wire         mem_wrun,           // a write of the write buffer's run (the next may follow it at once)
     // XWB: the stores
     output wire         st_valid,
@@ -1882,6 +1883,22 @@ always_comb begin
 end
 assign mem_wrun = !XWB && port == P_WB;
 wire port_done = (port == P_SLOW || port == P_WB) ? ((mem_we && mem_ack) || (!mem_we && mem_rvalid)) : 1'b0;
+// (the class of the request's address -- the SDRAM, the boot ROM's page, the hardware window's -- is the compare of each source's address, chosen by the same
+// port and slow_is_d: mips_sys decides who answers and who is asked from it, and the compare of the chosen address came behind the choice (and, for M's, behind
+// m_addr's translation), in front of the request's enable in cpu_port. The sources' bits 31:6 are the address's in every case.)
+function automatic logic [2:0] a_cls(input logic [31:0] a);
+    return {a[31:26] == 6'b010000, a[31:12] == 20'h1FC00, a[11:6] == 6'h1F};
+endfunction
+always_comb begin
+    mem_cls = 3'd0;
+    case (port)
+    P_WB:    if (!XWB) mem_cls = a_cls(wb_addr[wb_rp[2:0]]);
+    P_ILINE: mem_cls = a_cls(f_fill_pa);
+    P_DLINE: mem_cls = a_cls(m_fpa);
+    P_SLOW:  mem_cls = slow_is_d ? (m_kseg ? a_cls(m_pk) : a_cls(m_pt)) : a_cls(f_fill_pa);
+    default: ;
+    endcase
+end
 
 // =============================================================== the page registers (PG; see above F)
 // (TLB_EN: the page is valid, in the RDRAM -- the registers keep pa[22:12] -- and the search was not overtaken by a write)
