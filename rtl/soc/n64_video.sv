@@ -260,6 +260,7 @@ logic [9:0]  yacc;                 // the row step's fraction
 logic        rs_next;              // the next colour word is its row's first
 logic        wodd;                 // (a woven frame) the row being read is the second field's line
 localparam int FAW = 14;           // the FIFO: 2^14 words
+localparam int FILL_BATCH = 512;   // the scan-out asks for words again when this many are free (below)
 logic [9:0]  drop;                 // the last frame's reads still to come back (not written)
 logic [FAW:0] wlevel;              // the FIFO's fill as sys sees it (words)
 wire         keep = m_rvalid && !fb_sys && drop == 0;
@@ -358,7 +359,12 @@ always_ff @(posedge clk) begin f_we <= !rst && keep && !tq_h[3]; f_wd <= {tq_h[4
 // the margin to 512 covers)
 wire [15:0] inflight = 16'(infl);                        // (below 1024)
 logic       room, low;
-always_ff @(posedge clk) room <= (16'(wlevel) + inflight) < 16'((1 << FAW) - 64);
+// (room, with a hysteresis: asking starts when FILL_BATCH words are free and goes on until 64 are left -- not a word at a time as the
+// display takes one from a FIFO that is full, each a grant of its own with the bus turned for it and the rows closed behind it)
+always_ff @(posedge clk) begin
+    if ((16'(wlevel) + inflight) + 16'(FILL_BATCH) <= 16'(1 << FAW)) room <= 1'b1;
+    else if ((16'(wlevel) + inflight) + 16'd64 >= 16'(1 << FAW)) room <= 1'b0;
+end
 // urgent below a quarter of the FIFO -- at every frame's start, and wherever the other ports have left it behind: the CPU's and the
 // RSP's requests go first (mirlo_mips.sv), and a stream of them (a loop of uncached stores, a long DMA) kept the scan-out from the
 // memory while a frame's first rows were due: the lines found the FIFO empty and were black, the picture a few dozen lines lower
