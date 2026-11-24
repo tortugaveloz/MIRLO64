@@ -401,10 +401,6 @@ Colour and alpha are `((A - B) * C + D * 256 + 0x80) >> 8`, kept to 9 bits.
   is read with IM_RD, and 7 otherwise.
 * **CVG_DST**: clamp, wrap, zap (7) or save (the memory's).
 
-### The shadow plane
-
-With the "Video settings" 32-bit option the RDP keeps, beside a 16-bit colour image, a plane of a byte a pixel (the blender's low colour bits and a check of the 5551 word), written with the colour words and read with them, and its RGB dither is off: [video_options.md](video_options.md).
-
 ### Depth
 
 The depth is the N64's 18 bits: the interpolated Z shifted right by 13 and
@@ -524,6 +520,24 @@ writes. In the SoC the port is one of the SDRAM arbiter's.
 Nothing in the engine orders a read after a write of the same word. The
 sequencer starts a primitive's reads, and a load, only with the write engine
 idle.
+
+What the memory costs the RDP is the SDRAM's: one 16-bit chip, a word a system clock at best, a row to open
+whenever a stream leaves its row. Four things in the tree take less of it, none of which changes what is drawn:
+
+* The next command's words are read under the rows of the one before (the first two words and every word in the
+  staging RAM while the one before executes), and a triangle's setup runs under the drain of the primitive before.
+* The hidden coverage plane is placed in the SDRAM's banks so that an image row's hidden words are never in the bank of
+  its own colour row (`sdr_arb`: the plane's bank bits are the row's xor 2, an address bijection done on every port's address,
+  so what reads the plane sees one linear plane).
+* The RDP's request queue (`port_rdp`) holds 16 requests, and the controller opens, ahead of the request at the head, the
+  row of the one four places behind it (`sdr_arb`'s and `sdr_ctrl`'s look-ahead). The RDP's idle state and the SYNC FULL
+  interrupt wait for the queue to empty.
+* The scan-out (`n64_video`) asks for its words in batches: it tops its FIFO up when 512 words are free, in grants of 16 (it
+  took them a word at a time, each a grant of its own with the bus turned for it and the rows of the RDP's streams closed
+  behind it).
+
+`tb_soc`'s `RDPLOSS=<file>` writes, a field at a time, where the controller's cycles go while the RDP is busy (by port, and
+by what a waiting request waits for: a row to precharge or activate, tRCD, a bus turnaround, the refresh).
 
 ### The scan-out
 
