@@ -476,8 +476,9 @@ function automatic logic [7:0] inc8(input logic [7:0] x);        // x + 1, as th
 endfunction
 wire  [7:0]  im_16 = inc8(s_ins_d[11:4]), of_16 = inc8(of_d[11:4]);
 always_ff @(posedge clk) if (!stall_e) begin e_off <= of_d; e_imm16 <= im_16; e_off16 <= of_16; end
-wire  [11:0] e_ao   = e_vls ? e_off : e_ins[11:0];
-wire  [11:0] e_ao16 = {e_vls ? e_off16 : e_imm16, e_ao[3:0]};
+(* preserve *) logic e_vls_a;                               // (a copy of e_vls for the offset's choice: e_vls has the fan-out of the vector unit's decode, 225, in front of the address adders)
+wire  [11:0] e_ao   = e_vls_a ? e_off : e_ins[11:0];
+wire  [11:0] e_ao16 = {e_vls_a ? e_off16 : e_imm16, e_ao[3:0]};
 wire [11:0] ad_m = m_res[11:0] + e_ao, ad_w = w_res[11:0] + e_ao, ad_r = rf_qam[11:0] + e_ao;
 wire [11:0] adh_m = m_res[11:0] + e_ao16, adh_w = w_res[11:0] + e_ao16, adh_r = rf_qam[11:0] + e_ao16;
 wire [31:0] addr_v = {20'd0, fa_m ? ad_m : fa_w ? ad_w : ad_r};
@@ -504,7 +505,7 @@ assign c_lins = e_ins;
 assign c_ins_n = c_ins_d;
 assign c_lins_n = s_ins_d;
 assign c_adv = !stall_e;
-always_ff @(posedge clk) if (!stall_e) e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A;
+always_ff @(posedge clk) if (!stall_e) begin e_vls <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A; e_vls_a <= s_ins_d[31:26] == 6'h32 || s_ins_d[31:26] == 6'h3A; end
 assign c_vls = e_vls;
 assign c_a = ea;
 assign c_bm = m_res[3:0];
