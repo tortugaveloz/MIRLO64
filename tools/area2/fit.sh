@@ -20,6 +20,8 @@ D=$R/projects
 sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED $seed/" $D/mirlo.qsf
 for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9 ${EXTRA_MACROS:-}; do
   case " ${DROP:-} " in *" ${m%%=*} "*) continue;; esac
+  # (one of the three defaults that EXTRA_MACROS sets again, e.g. CPU_IC_LOG2=10: left out, the qsf has the one definition)
+  case "$m" in RSP_LANES=8|CPU_IC_LOG2=9|CPU_DC_LOG2=9) case " ${EXTRA_MACROS:-} " in *" ${m%%=*}="*) continue;; esac;; esac
   echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\"" >> $D/$REV.qsf
 done
 [ -n "$extra" ] && [ "$extra" != "-" ] && cat "$extra" >> $D/$REV.qsf
