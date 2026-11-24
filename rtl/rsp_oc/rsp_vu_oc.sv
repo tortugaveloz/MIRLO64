@@ -833,11 +833,12 @@ wire l_free   = !lw_v || (!lw_merge && lf_q);
 logic [4:0] l_reg;                                            // (the register a load or MTC2 writes: registered with the instruction)
 wire  mtc2_n = lins_n[31:26] == 6'h12 && !lins_n[25] && lins_n[24:21] == 4'd4;     // (MTC2, of the instruction entering E)
 always_ff @(posedge clk) if (adv) l_reg <= mtc2_n ? lins_n[15:11] : lins_n[20:16];
-wire  [4:0] l_reg_n = adv ? (mtc2_n ? lins_n[15:11] : lins_n[20:16]) : l_reg;
 logic lo_m, lo_x;
+// (the compares of each of the registers l_reg_n can be -- MTC2's rd, the instruction's vt, the register E holds -- and the choice among them the last
+// LUT: the instruction word comes from IMEM and the pair's choice, so that no decode of it (MTC2) and no choice of the register stands in front of the compare)
 always_ff @(posedge clk) begin
-    lo_m <= vdn      == l_reg_n;
-    lo_x <= x_vdn_nx == l_reg_n;
+    lo_m <= adv ? (mtc2_n ? vdn      == lins_n[15:11] : vdn      == lins_n[20:16]) : vdn      == l_reg;
+    lo_x <= adv ? (mtc2_n ? x_vdn_nx == lins_n[15:11] : x_vdn_nx == lins_n[20:16]) : x_vdn_nx == l_reg;
 end
 wire ld_ok    = !(m_v && lo_m) && !(x_v && lo_x) && !x_defer;
 wire ls_go    = ld.go;
