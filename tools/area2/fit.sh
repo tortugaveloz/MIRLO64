@@ -2,7 +2,7 @@
 # fit.sh <tag> <seed> [extra.qsf|-] [map]
 # Snapshots rtl/ platform/ target/ projects/ of this worktree into s_<tag>/ (so later edits cannot reach a run in
 # progress), adds the build's value macros + seed + extras, and compiles s_<tag>/projects (symlink: projects_a2_<tag>).
-# The macros are the ones the RTL still reads with a value (the RSP's lanes, the CPU's caches), at the values the RTL
+# The macros are the ones the RTL still reads with a value (the RSP's lanes; the CPU's caches -- MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: 9 and 9, 10 and 10 with RSP_OC -- only by EXTRA_MACROS), at the values the RTL
 # defaults to, so the bitstream is the one projects/mirlo.qsf alone builds. The
 # features that were once macros of their own are always in now.
 # REV=mirlo_oc compiles that revision (projects/mirlo_oc.qsf: the overclocked build, RSP_OC; its files are output_files/mirlo_oc.*; the macros and
@@ -18,10 +18,10 @@ rm -rf $R/projects/db $R/projects/incremental_db $R/projects/output_files
 ln -s $R/projects $W/projects_a2_$tag
 D=$R/projects
 sed -i "s/^set_global_assignment -name SEED .*/set_global_assignment -name SEED $seed/" $D/mirlo.qsf
-for m in RSP_LANES=8 CPU_IC_LOG2=9 CPU_DC_LOG2=9 ${EXTRA_MACROS:-}; do
+for m in RSP_LANES=8 ${EXTRA_MACROS:-}; do
   case " ${DROP:-} " in *" ${m%%=*} "*) continue;; esac
-  # (one of the three defaults that EXTRA_MACROS sets again, e.g. CPU_IC_LOG2=10: left out, the qsf has the one definition)
-  case "$m" in RSP_LANES=8|CPU_IC_LOG2=9|CPU_DC_LOG2=9) case " ${EXTRA_MACROS:-} " in *" ${m%%=*}="*) continue;; esac;; esac
+  # (RSP_LANES=8 set again in EXTRA_MACROS: left out, the qsf has the one definition)
+  case "$m" in RSP_LANES=8) case " ${EXTRA_MACROS:-} " in *" ${m%%=*}="*) continue;; esac;; esac
   echo "set_global_assignment -name VERILOG_MACRO \"MIRLO_$m\"" >> $D/$REV.qsf
 done
 [ -n "$extra" ] && [ "$extra" != "-" ] && cat "$extra" >> $D/$REV.qsf

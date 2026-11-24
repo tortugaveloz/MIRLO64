@@ -86,8 +86,8 @@ localparam bit CPU_W64_UA = 1'b1;       // ldl, ldr, sdl, sdr (with the d-shifts
 localparam bit CPU_W64_MD = 1'b1;
 localparam bit CPU_W64_DIV = 1'b1;
 localparam bit CPU_FAST = FAST;
-// MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: the caches' lines (the VR4300's are 512
-// and 512: 16 KiB and 8 KiB; more are block RAM only: mips_core)
+// MIRLO_CPU_IC_LOG2, MIRLO_CPU_DC_LOG2: the caches' lines as powers of two (the VR4300's are 512
+// and 512: 16 KiB and 8 KiB; more are block RAM only: mips_core). Default: 9 and 9; 10 and 10 with MIRLO_RSP_OC (the Enhanced build)
 // MIRLO_MON: mips_core's MON -- the monitor level and the game's own exception vector, for a game that
 // runs its own libultra (docs/mips.md)
 localparam bit CPU_MON = 1'b1;
@@ -111,11 +111,18 @@ localparam bit CPU_SPW = CPU_MI;
 `define MIRLO_CPU_SNOOP 0
 `endif
 localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
+// (the Enhanced build, MIRLO_RSP_OC, has twice the VR4300's caches -- 32 KiB and 16 KiB: block RAM it has to spare, a deliberate departure from the
+// console; the faithful build keeps 512 and 512 lines)
+`ifdef MIRLO_RSP_OC
+`define MIRLO_CPU_LOG2_DEF 10
+`else
+`define MIRLO_CPU_LOG2_DEF 9
+`endif
 `ifndef MIRLO_CPU_IC_LOG2
-`define MIRLO_CPU_IC_LOG2 9
+`define MIRLO_CPU_IC_LOG2 `MIRLO_CPU_LOG2_DEF
 `endif
 `ifndef MIRLO_CPU_DC_LOG2
-`define MIRLO_CPU_DC_LOG2 9
+`define MIRLO_CPU_DC_LOG2 `MIRLO_CPU_LOG2_DEF
 `endif
 mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JRP(0), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FAST(CPU_FAST),
             .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
