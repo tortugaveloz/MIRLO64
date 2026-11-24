@@ -469,8 +469,10 @@ endfunction
 logic        e_vls;                                         // (E's instruction is a vector load or store: registered below)
 logic [11:0] e_off;
 logic [11:4] e_imm16, e_off16;
-wire  [11:0] im_16 = s_ins_d[11:0] + 12'd16, of_16 = offs(s_ins_d) + 12'd16;
-always_ff @(posedge clk) if (!stall_e) begin e_off <= offs(s_ins_d); e_imm16 <= im_16[11:4]; e_off16 <= of_16[11:4]; end
+// (the offset with 16 more: its bits 11 .. 4 are the offset's plus one -- an incrementer of eight bits, not an adder of twelve behind the choice of the offset)
+wire  [11:0] of_d = offs(s_ins_d);
+wire  [7:0]  im_16 = s_ins_d[11:4] + 8'd1, of_16 = of_d[11:4] + 8'd1;
+always_ff @(posedge clk) if (!stall_e) begin e_off <= of_d; e_imm16 <= im_16; e_off16 <= of_16; end
 wire  [11:0] e_ao   = e_vls ? e_off : e_ins[11:0];
 wire  [11:0] e_ao16 = {e_vls ? e_off16 : e_imm16, e_ao[3:0]};
 wire [11:0] ad_m = m_res[11:0] + e_ao, ad_w = w_res[11:0] + e_ao, ad_r = rf_qam[11:0] + e_ao;
