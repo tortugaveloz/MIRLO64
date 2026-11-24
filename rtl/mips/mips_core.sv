@@ -2740,9 +2740,6 @@ module mips_ealu (
     output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq,
     output wire [31:0] pc8                                  // the link address, pc + 8 (the branch's not-taken target too)
 );
-function automatic logic [31:0] rev32(input logic [31:0] v);
-    for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
-endfunction
 assign a = ({32{sa_m}} & m_res) | ({32{sa_w}} & w_res) | ({32{sa_r}} & e_ra);
 assign b = ({32{sb_m}} & m_res) | ({32{sb_w}} & w_res) | ({32{sb_r}} & e_rb);
 assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
@@ -2751,9 +2748,11 @@ assign ltu = !cs[32];
 assign eq  = a == b;
 assign pc8 = e_pc + 32'd8;
 wire [4:0]  sh  = k_shv ? a[4:0] : shamt;
-wire [32:0] shx = {sra && b[31], sl ? rev32(b) : b};
-wire [32:0] shr = $signed(shx) >>> sh;
-wire [31:0] shv = sl ? rev32(shr[31:0]) : shr[31:0];
+// (two shifters, to the right and to the left, and the choice between them as the last step: sll as a right shift of the reversed word and the reversed
+// result were a LUT before the shifter's stages and another after them, on the operand forwarding's path to E's result)
+wire [32:0] shr = $signed({sra && b[31], b}) >>> sh;
+wire [31:0] shl = b << sh;
+wire [31:0] shv = sl ? shl : shr[31:0];
 logic [31:0] misc;
 always_comb begin
     case (k_op)
