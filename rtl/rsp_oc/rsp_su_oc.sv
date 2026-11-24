@@ -32,11 +32,13 @@
 // flags of every computation before it are in by then).
 `default_nettype none
 
-// A 32-bit compare as three LUT levels: the difference of each three bits (dg, kept: the synthesis, in area mode, would fold them into a
-// deeper tree), whether none of the first six differs (h1) and none of the other five (h2); a and b are equal when both are
+// A 32-bit compare of two words, for the branch condition, as two LUT levels and the choice: the difference of each three bits (dg, kept: the
+// synthesis, in area mode, would fold them into a deeper tree), whether none of the first five differs, with the compare's select (h1: the choice of
+// the sources is a term of the first of the two LUTs), and none of the other six (h2): the two words are equal, and are the ones chosen, when both are
 module rsp_eq32h (
     input  wire [31:0] a,
     input  wire [31:0] b,
+    input  wire        sel,
     output wire        h1,
     output wire        h2
 );
@@ -46,8 +48,8 @@ genvar g;
 generate for (g = 0; g < 11; g++) begin : grp
     assign dg[g] = |d[3 * g +: 3];
 end endgenerate
-assign h1 = ~|dg[5:0];
-assign h2 = ~|dg[10:6];
+assign h1 = sel & ~|dg[4:0];
+assign h2 = ~|dg[10:5];
 endmodule
 
 module rsp_su_oc #(
@@ -417,29 +419,26 @@ wire [31:0] e_res = e_res_a | ({32{r_shl}} & sh_l) | ({32{r_shr}} & sh_r);
 // are registers (the sources' one-hot: a_m, a_w, a_r for ea, b_* for eb; the condition's decode), not nested 2:1 choices, so that
 // the compare's result is two levels behind the register file's words (a compare of 32 bits is three, with the choice)
 wire a_m = fa_m, a_w = fa_w, a_r = !(fa_m | fa_w), b_m = fb_m, b_w = fb_w, b_r = !(fb_m | fb_w);
-wire eq_mw = m_res == w_res;
-wire h1_mr, h2_mr, h1_rm, h2_rm, h1_wr, h2_wr, h1_rw, h2_rw, h1_rr, h2_rr;
-rsp_eq32h c_mr (.a(m_res),  .b(rf_qbc), .h1(h1_mr), .h2(h2_mr));
-rsp_eq32h c_rm (.a(rf_qac), .b(m_res),  .h1(h1_rm), .h2(h2_rm));
-rsp_eq32h c_wr (.a(w_res),  .b(rf_qbc), .h1(h1_wr), .h2(h2_wr));
-rsp_eq32h c_rw (.a(rf_qac), .b(w_res),  .h1(h1_rw), .h2(h2_rw));
-rsp_eq32h c_rr (.a(rf_qac), .b(rf_qbc), .h1(h1_rr), .h2(h2_rr));
-(* keep *) wire ea_eq_eb = (a_m & b_m) | (a_w & b_w) | ((a_m & b_w | a_w & b_m) & eq_mw) | (a_m & b_r & h1_mr & h2_mr) | (a_r & b_m & h1_rm & h2_rm)
-              | (a_w & b_r & h1_wr & h2_wr) | (a_r & b_w & h1_rw & h2_rw) | (a_r & b_r & h1_rr & h2_rr);
+// (the pairs of sources' selects are registers of their own, made with a_m .. b_w from the same next-cycle choice (sp_*), so that the compare's select is
+// one input of its second LUT; the equal of M's and W's result is a pair like the others. The condition is then a LUT of the pairs' results and its code for
+// the compares (taken_e) and another of the sign and the zero (taken_z): the result is ready a level before the register's, as the fetch pointer's choice
+// -- the LUT of both, the two words and the reset -- is one)
+logic sp_mr, sp_rm, sp_wr, sp_rw, sp_rr, sp_mw, sp_same;
+wire h1_mr, h2_mr, h1_rm, h2_rm, h1_wr, h2_wr, h1_rw, h2_rw, h1_rr, h2_rr, h1_mw, h2_mw;
+rsp_eq32h c_mr (.a(m_res),  .b(rf_qbc), .sel(sp_mr), .h1(h1_mr), .h2(h2_mr));
+rsp_eq32h c_rm (.a(rf_qac), .b(m_res),  .sel(sp_rm), .h1(h1_rm), .h2(h2_rm));
+rsp_eq32h c_wr (.a(w_res),  .b(rf_qbc), .sel(sp_wr), .h1(h1_wr), .h2(h2_wr));
+rsp_eq32h c_rw (.a(rf_qac), .b(w_res),  .sel(sp_rw), .h1(h1_rw), .h2(h2_rw));
+rsp_eq32h c_rr (.a(rf_qac), .b(rf_qbc), .sel(sp_rr), .h1(h1_rr), .h2(h2_rr));
+rsp_eq32h c_mw (.a(m_res),  .b(w_res),  .sel(sp_mw), .h1(h1_mw), .h2(h2_mw));
+(* keep *) wire eq_a = (h1_mr & h2_mr) | (h1_rm & h2_rm) | (h1_wr & h2_wr);
+(* keep *) wire eq_b = (h1_rw & h2_rw) | (h1_rr & h2_rr) | (h1_mw & h2_mw);
 (* keep *) wire ea_zero  = (a_m & (m_res == 32'd0)) | (a_w & (w_res == 32'd0)) | (a_r & (rf_qac == 32'd0));
 (* keep *) wire ea31     = (a_m & m_res[31]) | (a_w & w_res[31]) | (a_r & rf_qac[31]);
-logic taken;                                                                                // (by the condition's code, a register, over the three: one LUT)
-always_comb begin
-    unique case (e_c.bcond)
-    3'd0: taken = ea_eq_eb;
-    3'd1: taken = !ea_eq_eb;
-    3'd2: taken = ea31 || ea_zero;               // blez
-    3'd3: taken = !ea31 && !ea_zero;             // bgtz
-    3'd4: taken = ea31;
-    3'd5: taken = !ea31;
-    default: taken = 1'b0;
-    endcase
-end
+wire ea_eq_eb = eq_a | eq_b | sp_same;                                                      // (the sources are the same register's result: M's or W's)
+(* keep *) wire taken_e = e_c.bcond == 3'd0 ? ea_eq_eb : e_c.bcond == 3'd1 ? !ea_eq_eb : 1'b0;      // beq, bne
+(* keep *) wire taken_z = e_c.bcond == 3'd2 ? (ea31 || ea_zero) : e_c.bcond == 3'd3 ? (!ea31 && !ea_zero) : e_c.bcond == 3'd4 ? ea31 : e_c.bcond == 3'd5 ? !ea31 : 1'b0;
+wire taken = taken_e || taken_z;
 wire bt    = taken;                                                                 // (a taken branch: the latest signal of the unit)
 wire [11:0] br_tgt = e_spc + 12'd4 + {imm_sx[9:0], 2'b00};
 wire [11:0] j_tgt  = {e_ins[9:0], 2'b00};
@@ -573,14 +572,19 @@ wire [9:0]  pf1_nr0 = brk0    ? (d_valid ? dp1 : pf1)
 // of one LUT in front of the register and not a term of the select of the two)
 (* keep *) wire [11:0] pc_bt = pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : e_go0 ? br_tgt : pc_nr0;
 (* keep *) wire [11:0] pc_nb = pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : jmp0 ? (e_c.jr ? {ea[11:2], 2'b00} : j_tgt) : pc_nr0;
+wire [1:0] nfa = fsel(s_ins_d[25:21], e_rs, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
+wire [1:0] nfb = fsel(s_ins_d[20:16], e_rt, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
 always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0; r_fix <= 1'b0;
         d_valid <= 1'b0; e_valid <= 1'b0; m_valid_r <= 1'b0; v_e <= 1'b0;
         m_we_r <= 1'b0; w_we <= 1'b0;
     end else begin
-        {fa_m, fa_w} <= fsel(s_ins_d[25:21], e_rs, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
-        {fb_m, fb_w} <= fsel(s_ins_d[20:16], e_rt, stall_e, e_valid && e_c.we, e_c.wr, m_we_r, m_c.wr);
+        {fa_m, fa_w} <= nfa;
+        {fb_m, fb_w} <= nfb;
+        sp_mr <= nfa[1] && !(nfb[1] | nfb[0]);  sp_rm <= !(nfa[1] | nfa[0]) && nfb[1];  sp_wr <= nfa[0] && !(nfb[1] | nfb[0]);
+        sp_rw <= !(nfa[1] | nfa[0]) && nfb[0];  sp_rr <= !(nfa[1] | nfa[0]) && !(nfb[1] | nfb[0]);
+        sp_mw <= (nfa[1] && nfb[0]) || (nfa[0] && nfb[1]);  sp_same <= (nfa[1] && nfb[1]) || (nfa[0] && nfb[0]);
         w_we <= m_valid_r && m_we_r; w_wr <= m_c.wr; w_res <= m_out;
         m_valid_r <= e_go;
         m_c <= e_c; m_res <= e_res;
