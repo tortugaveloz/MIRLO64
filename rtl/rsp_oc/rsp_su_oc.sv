@@ -565,6 +565,10 @@ wire [11:0] pc_nr0 = brk0     ? (d_valid ? d_pc : pc_f)
 wire [9:0]  pf1_nr0 = brk0    ? (d_valid ? dp1 : pf1)
                     : !run    ? (d_valid ? dp1 : pf1)
                     :           (pair_d ? pc_f[11:2] + 10'd3 : pf2);
+// (the pointer's two choices, a taken branch's and the rest's: both are made before the condition, and kept as two words, so that the condition is the select
+// of one LUT in front of the register and not a term of the select of the two)
+(* keep *) wire [11:0] pc_bt = pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : e_go0 ? br_tgt : pc_nr0;
+(* keep *) wire [11:0] pc_nb = pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : jmp0 ? (e_c.jr ? {ea[11:2], 2'b00} : j_tgt) : pc_nr0;
 always_ff @(posedge clk) begin
     if (rst) begin
         pc_f <= 12'd0; r_fix <= 1'b0;
@@ -605,8 +609,7 @@ always_ff @(posedge clk) begin
         // (the fetch pointer and the word after it: a taken branch's target over what the rest would make -- the branch's condition
         // is late, so it is the last choice. After a redirect pf1 is not made: r_fix has the next cycle's address from pc_f)
         pf1 <= pc_load ? pc_in[11:2] + 10'd1 : stall_e ? pf1 : pf1_nr0;
-        pc_f <= bt ? (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : e_go0 ? br_tgt : pc_nr0)
-                   : (pc_load ? {pc_in[11:2], 2'b00} : stall_e ? pc_f : jmp0 ? (e_c.jr ? {ea[11:2], 2'b00} : j_tgt) : pc_nr0);
+        pc_f <= bt ? pc_bt : pc_nb;
     end
 end
 
