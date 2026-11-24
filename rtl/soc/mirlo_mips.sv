@@ -234,7 +234,10 @@ logic        rst_cpu, irq_s, irq_mon_s, c_irq, c_irq_mon;
 logic        c_x_req, c_x_ack, st_valid, st_dev, st_full, st_done;
 logic [31:0] c_x_addr, c_x_rdata, st_addr, st_data;
 logic [3:0]  st_strb;
-always_ff @(posedge clk_cpu) rst_cpu <= reset;
+// (a register on each side of the crossing: the reset's flop sits by the reset's source, rst_cpu by its loads, and the path between the clocks was 4.1 ns
+// of the 5.3 less their skew, 3 of 40 seeds failing it by up to 0.6 ns)
+logic rst_cpu_m;
+always_ff @(posedge clk_cpu) begin rst_cpu_m <= reset; rst_cpu <= rst_cpu_m; end
 always_ff @(posedge clk) begin irq_s <= cpu_irq; irq_mon_s <= mon_irq; end
 mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(rst_cpu),
     .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
