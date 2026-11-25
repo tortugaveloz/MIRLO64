@@ -163,7 +163,7 @@ endfunction
 // S_IDLE unpacks fs, S_UNPY ft (one unpacker, a register between the RAM and
 // everything else); S_DECIDE takes the special cases and dispatches
 typedef enum logic [4:0] { S_IDLE, S_UNPY, S_DECIDE, S_ADD2, S_MUL, S_ITER, S_NORM, S_ROUND, S_F2W, S_DONE,
-                           S_UNPX, S_F2W2, S_ADDA, S_PRE, S_NORM2, S_LNEG, S_LNEG2, S_LSH1 } st_t;        // (FAST's)
+                           S_UNPX, S_F2W2, S_PRE, S_NORM2, S_LNEG, S_LNEG2, S_LSH1 } st_t;        // (FAST's)
 typedef enum logic [2:0] { K_ADD, K_MUL, K_DIV, K_SQRT, K_CVT, K_F2W, K_CMP, K_MOVE } kind_t;
 st_t   st;
 logic fnx, fny, fix, fiy, fzx, fzy, fmlt, fmeq;   // (FAST) S_PRE's: the operands' kinds, their magnitudes' order
@@ -197,7 +197,6 @@ endfunction
 logic [47:0] mprod;
 always_ff @(posedge clk) mprod <= {1'b1, ax.f} * {1'b1, ay.f};
 logic [1:0]  rmode;                                      // to int: the rounding
-logic        sw;                                         // (FAST) add: ay is the larger
 logic        fg;                                         // (FAST) to int: the guard bit
 logic        lcar;                                       // cvt.s.l: the lower word's negation carries
 
@@ -260,9 +259,9 @@ endfunction
 // the align shifter: add (the smaller significand, below the larger's at
 // [30:7]) or to-int ({1.f, 10'b0} >> (158 - e): the integer, a guard, a sticky)
 wire [7:0]  sh_n = (!FAST && st == S_F2W) ? 8'(8'd158 - ax.e) : ad;
-wire [22:0] add_lf = (FAST && sw) ? ay.f : ax.f;        // add: the larger's fraction, the smaller's
-wire [22:0] add_sf = (FAST && sw) ? ax.f : ay.f;
-wire [7:0]  add_le = (FAST && sw) ? ay.e : ax.e;
+wire [22:0] add_lf = (FAST && fmlt) ? ay.f : ax.f;        // add: the larger's fraction, the smaller's
+wire [22:0] add_sf = (FAST && fmlt) ? ax.f : ay.f;
+wire [7:0]  add_le = (FAST && fmlt) ? ay.e : ax.e;
 wire [33:0] sh_v = st == S_F2W ? {1'b1, ax.f, 10'd0} : {1'b0, 1'b1, add_sf, 9'd0};
 wire [34:0] sh_o = rshift(sh_v, sh_n);
 wire [31:0] za_b = FAST ? zmag : sh_o[34:3] | {31'd0, sh_o[2] | sh_o[1] | sh_o[0]};   // (the shifted-out bits as a sticky LSB)
@@ -302,7 +301,7 @@ wire        za_z = zs ? (lcar ? zmag == 32'd0 : zmag == 32'hFFFFFFFF) : zmag == 
 
 // (FAST) zmag's left shifts, one barrel: S_NORM2's by the count of leading zeros, and the shift by one of the quotient / root
 // (S_ITER: the bit of the iteration comes in) and of cvt.s.l's loop (S_LSH1: ir's top bit comes in)
-wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1 || !FAST) ? 6'd1 : nzc;
+wire [5:0]  zsh_n = (st == S_ITER || st == S_LSH1 || st == S_NORM || !FAST) ? 6'd1 : nzc;
 wire        zsh_in = (st == S_ITER && it_ge) || (st == S_LSH1 && ir[31]);
 wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
 
@@ -312,26 +311,30 @@ wire [31:0] zsh = (zmag << zsh_n) | {31'd0, zsh_in};
 //   xo     S_IDLE: cvt.s.l's upper word, a double's upper half
 //   ax     S_DECIDE, cvt.s.l of an unsigned word
 //   za     the adder's sum: the add (S_ADD2), an integer's magnitude (S_DECIDE), the upper word's (S_LNEG2)
-//   sh     the align shifter's output, with the sticky in bit 0 for the add (S_ADDA), as it is for to-int (S_F2W)
-//   zsh    the barrel (above)
+//   sh     the align shifter's output, with the sticky in bit 0 for the add (S_DECIDE: ad is S_PRE's), as it is for to-int (S_F2W)
+//   zsh    the barrel (above); (FAST) S_NORM's shift by one, where the top bit is clear and the next one is not (nq1)
 //   mq     (FAST) mul's product, normalised: its upper word, shifted left by one where its top bit is clear (S_DECIDE: the product of the
 //          operands S_IDLE took is in mprod by then)
 //   ir     S_LNEG2: the lower word when the upper one has none left
 //   nf     (!FAST) S_NORM's shift
 // S_DECIDE writes it for every operation that is not cvt.s.l (a cleared zmag is what div and sqrt start from; for the others it
 // is not read before it is written again)
+// (FAST) S_NORM: the magnitude's top bit is where it should be, or one place below it -- no count of leading zeros, no S_NORM2
+wire nq1 = !zmag[31] && zmag[30];
 logic z_xo, z_ax, z_za, z_sh, z_zsh, z_ir, z_nf, z_clr, z_mq;
 always_comb begin
     z_xo = 0; z_ax = 0; z_za = 0; z_sh = 0; z_zsh = 0; z_ir = 0; z_nf = 0; z_clr = 0; z_mq = 0;
     case (st)
     S_IDLE:   z_xo = FAST ? ar_q : is_arith;
-    S_DECIDE: if (!sel_l) begin z_za = sel_w; z_mq = FAST && !sel_w && fn == 6'h02; z_clr = !sel_w && !(FAST && fn == 6'h02); end
+    S_DECIDE: if (!sel_l) begin
+                  z_za = sel_w; z_mq = FAST && !sel_w && fn == 6'h02; z_sh = FAST && !sel_w && fn[5:1] == 5'd0;
+                  z_clr = !sel_w && !(FAST && (fn == 6'h02 || fn[5:1] == 5'd0));
+              end
               else if (zmag == 32'd0) z_ax = 1;
               else if (zmag == {32{ax[31]}}) z_za = 1;
-    S_ADDA:   z_sh = 1;
     S_ADD2:   z_za = 1;
     S_ITER:   z_zsh = 1;
-    S_NORM:   if (!FAST) z_nf = 1;
+    S_NORM:   if (FAST) z_zsh = nq1; else z_nf = 1;
     S_LNEG2:  if (za_z) z_ir = 1; else z_za = 1;
     S_LSH1:   z_zsh = !zmag[31];
     S_NORM2:  z_zsh = 1;
@@ -341,7 +344,7 @@ always_comb begin
 end
 wire [31:0] zm_nf = (kind == K_MUL ? mprod[47:16] : zmag);
 wire [31:0] zmag_d = ({32{z_xo}} & xo) | ({32{z_ax}} & ax) | ({32{z_za}} & za_s)
-                   | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | (st == S_ADDA && (sh_o[2] | sh_o[1] | sh_o[0]))})
+                   | ({32{z_sh}} & {sh_o[34:4], sh_o[3] | (st == S_DECIDE && (sh_o[2] | sh_o[1] | sh_o[0]))})
                    | ({32{z_zsh}} & zsh) | ({32{z_mq}} & (mprod[47] ? mprod[47:16] : {mprod[46:16], 1'b0})) | ({32{z_ir}} & ir) | ({32{z_nf}} & (zm_nf << lzc32(zm_nf)));
 always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mq || z_ir || z_nf || z_clr) zmag <= zmag_d;
 
@@ -351,7 +354,7 @@ always_ff @(posedge clk) if (z_xo || z_ax || z_za || z_sh || z_zsh || z_mq || z_
 //              and the constant of the second are the first's complement and 132)
 //   sq         sqrt's: e / 2 rounded down + 68
 //   a1         the add's: the larger operand's + 1 (S_ADD2)
-//   dec        less the count of the shift (S_NORM2), or by one (S_LSH1): zsh's count
+//   dec        less the count of the shift (S_NORM2), or by one (S_LSH1, FAST: S_NORM where nq1): zsh's count
 //   nf         (!FAST) S_NORM's: less the leading zeros
 logic x_158, x_md, x_sq, x_a1, x_190, x_dec, x_nf;
 always_comb begin
@@ -360,7 +363,7 @@ always_comb begin
     S_DECIDE: if (sel_l || sel_w) x_158 = 1;
               else begin x_md = fn[5:1] == 5'b00001; x_sq = fn == 6'h04; end
     S_ADD2:   x_a1 = 1;
-    S_NORM:   x_nf = !FAST;
+    S_NORM:   if (FAST) x_dec = nq1; else x_nf = 1;
     S_LNEG2:  x_190 = !za_z;
     S_LSH1:   x_dec = !zmag[31];
     S_NORM2:  x_dec = 1;
@@ -535,6 +538,7 @@ always_ff @(posedge clk) begin
     S_PRE: begin
         fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
         fmlt <= {ax.e, ax.f} < {ay.e, ay.f}; fmeq <= {ax.e, ax.f} == {ay.e, ay.f};
+        ad <= ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;          // add: the exponents' difference (equal: 0, whichever is the larger)
         st <= S_DECIDE;
     end
     S_DECIDE: begin
@@ -568,15 +572,11 @@ always_ff @(posedge clk) begin
             y = ay; y.s = ay.s ^ fn[0]; sy = y.s;
             kind <= K_ADD;
             if (!(nx || ny || ix || iy || zx || zy)) begin
-                if (FAST) begin
-                    sw <= fmlt;
-                    if (!fmlt) begin ad <= ax.e - ay.e; zs <= ax.s; end
-                    else begin ad <= ay.e - ax.e; zs <= sy; end
-                end
+                if (FAST) zs <= fmlt ? sy : ax.s;           // (ad, and the shift of the smaller operand, are S_PRE's and this state's)
                 else if ({ax.e, ax.f} >= {ay.e, ay.f}) begin ay <= y; ad <= ax.e - ay.e; zs <= ax.s; end
                 else begin ax <= y; ay <= ax; ad <= ay.e - ax.e; zs <= sy; end
                 sub_eff <= ax.s != sy;
-                st <= FAST ? S_ADDA : S_ADD2;
+                st <= S_ADD2;
             end
         end
         6'h02: begin                                      // mul
@@ -607,7 +607,6 @@ always_ff @(posedge clk) begin
         end
         endcase
     end
-    S_ADDA: st <= S_ADD2;
     S_ADD2: begin                                         // align, add: the larger at [30:7]
         zst <= 0;
         if (FAST) st <= S_NORM;                                   // (x - x: S_NORM's)
@@ -629,7 +628,7 @@ always_ff @(posedge clk) begin
         if (!FAST && kind == K_MUL) begin m = mprod[47:16]; sti = mprod[15:0] != 0; end
         else if (kind == K_DIV || kind == K_SQRT) begin m = zmag; sti = ir != 0; end
         else begin m = zmag; sti = zst; end
-        if (FAST) begin nzc <= lzc32(m); zst <= sti; st <= S_NORM2; end         // (the count, then the shift)
+        if (FAST) begin nzc <= lzc32(m); zst <= sti; st <= (zmag[31] || zmag[30]) ? S_ROUND : S_NORM2; end         // (the count, then the shift; by none or one: now)
         else begin zst <= sti; st <= S_ROUND; end
         if (FAST && kind == K_ADD && zmag == 32'd0) st <= S_DONE;
     end
