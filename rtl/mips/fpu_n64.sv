@@ -30,10 +30,18 @@
 // FAST (the core's, for its faster clock) cuts the longest of these: a
 // register is written a cycle after its instruction completes (from the
 // bypass's registers, which the next instruction reads as before); the
-// operands are taken from the registers as they are and unpacked from there,
-// one a cycle; add and sub leave the operands in place (the larger is chosen
-// where they are added) and align in a cycle of their own; the conversions
-// to an integer round a cycle after they shift.
+// operands are taken from the registers as they are -- a single's flushed as
+// they are taken, a double's unpacked from there (S_UNPX, S_UNPY) -- and
+// their flags found in a state of their own (S_PRE: NaN, infinity, zero, the
+// order of the magnitudes, the exponents' difference; a single's compare is
+// decided there); add and sub leave the operands in place (the larger is
+// chosen where they are added) and align in S_DECIDE; mul's product is
+// normalised there, by one place at most, from the multiplier's output
+// register (which S_PRE filled); an add's sum is shifted by one place, where it
+// carries or falls one short of the top, in S_NORM, and only a cancellation takes
+// S_NORM2; the conversions to an integer round a cycle after they shift. The
+// cycles a single's operation holds M (S_IDLE is the first): compare 2; mul 4;
+// add and sub 6; cvt.s.w 5; to int 5; div and sqrt 34 (28 iterations).
 `default_nettype none
 
 // (SAFE_STATE_MACHINE off for the state machines of this module: every one starts from its first state -- or is loaded before it is read --
