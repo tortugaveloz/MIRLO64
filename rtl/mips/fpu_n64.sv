@@ -206,7 +206,7 @@ wire         upy = st == S_UNPY;
 // (FAST: from the operands as S_IDLE took them -- fs in ax, a double's upper
 // half in zmag; ft in ay, its upper half in ir)
 fbits_t up_raw;
-assign up_raw = FAST ? (upy ? ay : ax) : upy ? rft : rfs;
+assign up_raw = FAST ? 32'd0 : upy ? rft : rfs;
 wire [31:0] up_lo = FAST ? (upy ? ay : ax) : upy ? ye : xe;
 wire [31:0] up_hi = FAST ? (upy ? ir : zmag) : upy ? yo : xo;
 fbits_t up;
@@ -215,7 +215,7 @@ fbits_t up;
 wire cmp_s = !sel_d && fn[5:4] == 2'b11;
 // (a double's float is d2f's, which is flushed already -- its exponent is 0 only where it made the whole word a signed 0 -- so ftz is not
 // in front of that choice: the unpacker's longest path was the double's exponent range, the rounding, then ftz's compare of the exponent)
-assign up = sel_d ? d2f(up_lo, up_hi) : (sel_w || sel_l || cmp_s) ? up_raw : ftz(up_raw);
+assign up = (FAST || sel_d) ? d2f(up_lo, up_hi) : (sel_w || sel_l || cmp_s) ? up_raw : ftz(up_raw);   // (FAST: only a double's, S_UNPX / S_UNPY: the rest took theirs in S_IDLE)
 
 // (FAST: without `live` -- the core asks only for an instruction in M, and
 // one that is not live is flushed)
@@ -516,8 +516,11 @@ always_ff @(posedge clk) begin
     S_IDLE: if (FAST ? ar_q : is_arith) begin
         ax <= up; st <= S_UNPY;
         if (FAST) begin
-            ax <= (isd_q || isl_q) ? xe : rfs; ay <= isd_q ? ye : rft;
-            st <= S_UNPX;
+            // (a single's operands are flushed here, as they come out of the register file: no state of their own for the unpacker --
+            // a compare's, a word's and cvt.s.l's are as they are; a double's are the even registers, the halves in zmag / ir, for d2f's two states)
+            ax <= (isd_q || isl_q) ? xe : (isw_q || cmp_s) ? rfs : ftz(fbits_t'(rfs));
+            ay <= isd_q ? ye : (isw_q || cmp_s) ? rft : ftz(fbits_t'(rft));
+            st <= isd_q ? S_UNPX : isw_q ? S_DECIDE : S_PRE;
         end
         dst_d <= (is_d && fn != 6'h20 && !(fn >= 6'h08 && fn <= 6'h0F) && fn != 6'h24 && fn != 6'h25 && fn < 6'h30) ||
                  ((is_s || is_w || is_l) && fn == 6'h21);
