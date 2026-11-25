@@ -299,7 +299,12 @@ VR4300 does (it neither flushes nor traps them there; software keeps pointers in
 0.0, and every KSEG0 address below 8 MiB is a denormal); a NaN result is `0x7FBFFFFF`, and the conversions to an integer
 saturate. There are no FPU exceptions and no cause or flag bits in FCR31. The moves, single and double arithmetic,
 `sqrt`, the conversions between S, D and W, and the compares are implemented, each over several cycles on one datapath
-(M waits): a 24 x 24 multiply on a DSP block, divide and square root by 28 restoring iterations. `dmfc1` and `dmtc1`
+(M waits): a 24 x 24 multiply on a DSP block, divide and square root by 28 restoring iterations. In the shortened paths of the
+`FAST` builds (the Enhanced core) a single's operation holds M for: a compare 2 CPU cycles, a multiply 4, an add or a subtract
+6 (two more when the sum cancels), `cvt.s.w` and the conversions to an integer 5, a divide or a square root 34; measured over a
+game's intro the averages are 2.0, 3.7, 4.9, 4.8, 4.5 and 31 (the special cases leave early). A double shares the single's
+states and takes a little more. The cycle counts are not the VR4300's (a compare 1, a multiply 4, an add 2, a divide 28) but
+the results are bit for bit: the lockstep bench of `sim/mips` (`GEN="-GFAST=1 ..."`) checks them against the model. `dmfc1` and `dmtc1`
 move a 64-bit register through a pair; `cvt.s.l` and `cvt.d.l` convert the pair's 64-bit integer exactly (a word's by
 `cvt.s.w`'s path, another shifted a bit a cycle); the conversions to `.l` are those to `.w`, the word sign-extended into
 the pair (beyond a word's range a value saturates as a word's).
