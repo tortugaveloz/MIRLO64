@@ -297,7 +297,12 @@ end
 wire [32:0] za_t = {za_x, 1'b1} + {za_y ^ {32{za_inv}}, za_cin};      // (the carry in as the low bit: one carry chain)
 wire [31:0] za_s = za_t[32:1];
 // S_LNEG2's sum is zero (the upper word is gone), found from zmag, not from the adder's sum: ~zmag + lcar, or zmag
-wire        za_z = zs ? (lcar ? zmag == 32'd0 : zmag == 32'hFFFFFFFF) : zmag == 32'd0;
+wire        za_z0 = zs ? (lcar ? zmag == 32'd0 : zmag == 32'hFFFFFFFF) : zmag == 32'd0;
+// (FAST: the tests of the integer {zmag, ax} that cvt.s.l's states ask, a state ahead -- registers, not a 32-bit compare in front of the selects of
+// zmag, ir, res and the state: zm0 / zms / zax0 are S_PRE's, zaz is S_LNEG's, from ir -- lcar is not yet set there)
+logic zm0, zms, zax0, zaz;
+wire        za_z = FAST ? zaz : za_z0;
+wire        zm_0 = FAST ? zm0 : zmag == 32'd0, zm_s = FAST ? zms : zmag == {32{ax[31]}}, ax_0 = FAST ? zax0 : ax == 32'd0;
 
 // (FAST) zmag's left shifts, one barrel: S_NORM2's by the count of leading zeros, and the shift by one of the quotient / root
 // (S_ITER: the bit of the iteration comes in) and of cvt.s.l's loop (S_LSH1: ir's top bit comes in)
@@ -330,8 +335,8 @@ always_comb begin
                   z_za = sel_w; z_mq = FAST && !sel_w && fn == 6'h02; z_sh = FAST && !sel_w && fn[5:1] == 5'd0;
                   z_clr = !sel_w && !(FAST && (fn == 6'h02 || fn[5:1] == 5'd0));
               end
-              else if (zmag == 32'd0) z_ax = 1;
-              else if (zmag == {32{ax[31]}}) z_za = 1;
+              else if (zm_0) z_ax = 1;
+              else if (zm_s) z_za = 1;
     S_ADD2:   z_za = 1;
     S_ITER:   z_zsh = 1;
     S_NORM:   if (FAST) z_zsh = nq1; else z_nf = 1;
@@ -389,7 +394,7 @@ always_comb begin
     i_yo = 0; i_ax = 0; i_dv = 0; i_it = 0; i_za = 0; i_sh = 0; i_clr = 0;
     case (st)
     S_IDLE:   i_yo = FAST && ar_q;
-    S_DECIDE: if (sel_l) i_ax = zmag != 32'd0 && zmag != {32{ax[31]}};
+    S_DECIDE: if (sel_l) i_ax = !zm_0 && !zm_s;
               else if (fn == 6'h03) i_dv = 1;
               else i_clr = 1;
     S_ITER:   i_it = 1;
@@ -425,7 +430,7 @@ always_comb begin
     r_ax = 0; r_y = 0; r_abs = 0; r_neg = 0; r_qnan = 0; r_satp = 0; r_satn = 0; r_inf = 0; r_zsg = 0; r_rb = 0; r_za = 0; r_nf = 0; r_zero = 0;
     case (st)
     S_DECIDE:
-        if (sel_l) r_zero = zmag == 32'd0 && ax == 32'd0;
+        if (sel_l) r_zero = zm_0 && ax_0;
         else if (sel_w) r_zero = ax == 32'd0;
         else if (fn >= 6'h30) ;
         else if (d_toint) begin
@@ -545,6 +550,7 @@ always_ff @(posedge clk) begin
     S_PRE: begin
         fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
         fmlt <= pre_lt; fmeq <= pre_eq;
+        zm0 <= zmag == 32'd0; zms <= zmag == {32{ax[31]}}; zax0 <= ax == 32'd0;
         ad <= ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;          // add: the exponents' difference (equal: 0, whichever is the larger)
         st <= S_DECIDE;
         // a single's compare is decided here, from the operands as they are (a double's, S_DECIDE's, from the register file's pairs)
@@ -559,9 +565,9 @@ always_ff @(posedge clk) begin
         st <= S_DONE;                                     // (the special cases: done now)
         if (sel_l) begin                                  // cvt.s.l: the integer {zmag, ax}
             kind <= K_CVT; zst <= 0;
-            if (zmag == 32'd0 && ax == 32'd0) ;
-            else if (zmag == 32'd0) begin zs <= 0; st <= S_NORM; end                    // an unsigned word
-            else if (zmag == {32{ax[31]}}) begin zs <= ax[31]; st <= S_NORM; end   // a word
+            if (zm_0 && ax_0) ;
+            else if (zm_0) begin zs <= 0; st <= S_NORM; end                    // an unsigned word
+            else if (zm_s) begin zs <= ax[31]; st <= S_NORM; end   // a word
             else begin zs <= zmag[31]; st <= S_LNEG; end                                  // 64 bits
         end else if (sel_w) begin                                  // cvt.s.w, cvt.d.w: ax is the integer
             kind <= K_CVT; zs <= ax.s; zst <= 0;
@@ -648,6 +654,7 @@ always_ff @(posedge clk) begin
     // word kept as the sticky
     S_LNEG: begin
         if (zs) lcar <= ir == 32'd0;
+        zaz <= zs ? (ir == 32'd0 ? zmag == 32'd0 : zmag == 32'hFFFFFFFF) : zmag == 32'd0;
         st <= S_LNEG2;
     end
     S_LNEG2: begin
