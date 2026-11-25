@@ -512,6 +512,13 @@ wire         dc_mlt = dc_mx < dc_my, dc_meq = dc_mx == dc_my;             // (th
 wire         dc_eq = !dc_un && ((dc_zx && dc_zy) || (dc_meq && rxh[31] == ryh[31]));
 wire         dc_lt = !dc_un && !(dc_zx && dc_zy) && (rxh[31] != ryh[31] ? rxh[31] : rxh[31] ? !dc_mlt && !dc_meq : dc_mlt);
 
+// S_PRE's compare of a single: c.cond on the operands in ax and ay (unflushed, a compare orders a denormal exactly)
+wire pre_lt = {ax.e, ax.f} < {ay.e, ay.f}, pre_eq = {ax.e, ax.f} == {ay.e, ay.f};
+wire pre_un = isnan(ax) || isnan(ay), pre_zz = iszero(ax) && iszero(ay);
+wire pre_c_eq = !pre_un && (pre_zz || (pre_eq && ax.s == ay.s));
+wire pre_c_lt = !pre_un && !pre_zz && (ax.s != ay.s ? ax.s : ax.s ? !pre_lt && !pre_eq : pre_lt);
+wire pre_rc = (fn[0] && pre_un) || (fn[1] && pre_c_eq) || (fn[2] && pre_c_lt);
+
 // ============================================================ the FSM
 always_ff @(posedge clk) begin
     if (rst) begin
@@ -537,9 +544,13 @@ always_ff @(posedge clk) begin
     // (FAST) what S_DECIDE asks of the two operands, as registers
     S_PRE: begin
         fnx <= isnan(ax); fny <= isnan(ay); fix <= isinf(ax); fiy <= isinf(ay); fzx <= iszero(ax); fzy <= iszero(ay);
-        fmlt <= {ax.e, ax.f} < {ay.e, ay.f}; fmeq <= {ax.e, ax.f} == {ay.e, ay.f};
+        fmlt <= pre_lt; fmeq <= pre_eq;
         ad <= ax.e >= ay.e ? ax.e - ay.e : ay.e - ax.e;          // add: the exponents' difference (equal: 0, whichever is the larger)
         st <= S_DECIDE;
+        // a single's compare is decided here, from the operands as they are (a double's, S_DECIDE's, from the register file's pairs)
+        if (!sel_d && !sel_w && !sel_l && fn >= 6'h30) begin
+            kind <= K_CMP; rcond <= pre_rc; st <= S_DONE;
+        end
     end
     S_DECIDE: begin
         logic nx, ny, ix, iy, zx, zy;
@@ -560,7 +571,7 @@ always_ff @(posedge clk) begin
             un = nx || ny;
             eq = !un && ((zx && zy) || (FAST ? fmeq && ax.s == ay.s : ax == ay));
             lt = !un && !(zx && zy) && (ax.s != ay.s ? ax.s : (ax.s ? (FAST ? !fmlt && !fmeq : {ax.e, ax.f} > {ay.e, ay.f}) : (FAST ? fmlt : {ax.e, ax.f} < {ay.e, ay.f})));
-            if (sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end
+            if (FAST || sel_d) begin un = dc_un; eq = dc_eq; lt = dc_lt; end                 // (FAST: only a double's gets here)
             kind <= K_CMP; rcond <= (fn[0] && un) || (fn[1] && eq) || (fn[2] && lt);
         end else if ((fn >= 6'h08 && fn <= 6'h0F) || fn == 6'h24 || fn == 6'h25) begin   // to int (.w, and .l as .w)
             kind <= K_F2W;
