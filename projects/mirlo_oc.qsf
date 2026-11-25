@@ -6,7 +6,3 @@
 # ==============================================================================
 source mirlo.qsf
 set_global_assignment -name VERILOG_MACRO "MIRLO_RSP_OC=1"
-
-# The seed this revision closes timing with (the sources as they are: all 128 slack lines of mirlo_oc.sta.summary >= 0, worst +0.046 ns,
-# 259 of 308 RAM blocks, ~17.4 k ALMs). A change of the hardware's sources makes it stale: tools/area2/fit.sh with other seeds, and the best here.
-set_global_assignment -name SEED 10
