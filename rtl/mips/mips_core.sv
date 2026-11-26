@@ -634,7 +634,7 @@ end
 // an entry's translation of va: {valid, dirty, pa}, and the page (for a micro-TLB)
 typedef struct packed {
     logic        v, d, c;                    // (c: the table's C bit; TLB_EN's entries: 0)
-    logic [19:0] vpage;                      // va[31:12] with the offset bits clear
+    logic [19:0] vpage;                      // va[31:12] (a micro-TLB's: the compare ignores the offset bits; the scanner's x has none: sc_va is it)
     logic [12:0] om;                         // the page offset's bits above 11 (va[24:12])
     logic [19:0] pfn;                        // pa[31:12], the offset bits clear
     logic        g;
@@ -649,7 +649,7 @@ function automatic tlbx_t tlb_xlat(input tlbe_t e, input logic [31:0] va);
     lo = (va[24:12] & pb) != 0 ? e.lo1 : e.lo0;
     x.v = lo[0]; x.d = lo[1]; x.c = lo[4:2] != 3'd2;         // EntryLo bits 1, 2, and the C field (5:3): 2 is uncached
     x.om = om;
-    x.vpage = va[31:12] & ~{7'd0, om};
+    x.vpage = '0;                                            // (the page of the search is sc_va, which the micro-TLB takes it from)
     x.pfn = lo[24:5] & ~{7'd0, om};                          // EntryLo[25:6]
     x.g = e.g; x.asid = e.asid;
     return x;
@@ -1873,7 +1873,7 @@ always_ff @(posedge clk) begin
         pg_inv_r <= tr_we_i || tr_we_d || tlb_chg;
         if (f_mhit1) pg_mru <= 1'b1; else if (f_mhit0) pg_mru <= 1'b0;
         if (pg_ld) begin
-            pg[pg_vic] <= '{vp: sc_va[31:12] & ~{8'd0, sc_x.om[11:0]}, om: sc_x.om[11:0], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
+            pg[pg_vic] <= '{vp: sc_va[31:12], om: sc_x.om[11:0], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
             pg_v[pg_vic] <= 1'b1; pg_mru <= pg_vic;
             if (sc_va[IW+1:12] != sc_ppg[IW-11:0]) ic_alias <= 1'b1;
         end
@@ -2400,7 +2400,7 @@ always_ff @(posedge clk) begin
                     fs <= FS_XLAT;
                     f_tlbq <= sc_hit ? utlb_res(sc_x, f_pc) : 35'd0;
                     f_tc <= sc_pgok;
-                    if (sc_hit) begin utlb_f.valid <= 1; utlb_f.x <= sc_x; end
+                    if (sc_hit) begin utlb_f.valid <= 1; utlb_f.x <= sc_x; utlb_f.x.vpage <= sc_va[31:12]; end
                 end
             end else if (!f_wq && !sc_start && (f_discard || f_kill)) fs <= FS_RUN;   // not started: just go
         end
@@ -2455,7 +2455,7 @@ always_ff @(posedge clk) begin
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
                     {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
-                    if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
+                    if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; utlb_m.x.vpage <= sc_va[31:12]; end
                 end
             end
         end
