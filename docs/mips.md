@@ -115,6 +115,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4311_0000` - `0x431F_FFFF` | up to 960 KiB | The GameShark cheat database, `gameshark.gsdz` (about 0.7 MB), loaded by the Pocket with the core's files ([The picker](#the-picker)) |
 | `0x42C7_0000` - `0x42CF_FFFF` | 576 KiB | The tail of the save states' block, which a state never reaches (the largest is `0x97_0000` bytes): the picker's picture and the list of codes it hands to the engine |
 | `0x4380_0000` (RDRAM) | 448 KiB | The picker's buffers and tables while it runs, before the game boots; zeroed when it leaves |
+| `0x4320_0000` | 2 MiB | The RDP's shadow plane of a 16-bit colour image, a byte a pixel, with the "Video settings" 32-bit option ([video_options.md](video_options.md)); no program reads it |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
@@ -232,7 +233,7 @@ upper words of their 64-bit values as they are (`hi_up`, `lo_up`), and `hx` is m
 Both caches are direct mapped with physical tags. The I-cache has 512 lines of 32 bytes (16 KiB); the
 D-cache has 512 lines of 16 bytes (8 KiB): the VR4300's. The overclocked build (`MIRLO_RSP_OC`, "The RSP's clock: two
 builds") has twice that, a deliberate departure from the console's sizes and only in that build: 1,024 lines each, 32 KiB of
-I-cache and 16 KiB of D-cache (`IC_LOG2` and `DC_LOG2` 10, 259 of the device's 308 block RAMs against 233; the faithful build
+I-cache and 16 KiB of D-cache (`IC_LOG2` and `DC_LOG2` 10, 295 of the device's 308 block RAMs with the Video settings' shadow plane (259 without it) against 233; the faithful build
 keeps 9 and 9). The cache operations keep the
 console's meaning at either size: an index operation drops every line its console index (16 KiB / 8 KiB) stands for, so the
 console's flush loops leave no stale line, and a hit operation drops the line of its address (`lang/mips/test/cache_size_test.c`
