@@ -1642,8 +1642,9 @@ wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong li
 // (the core's restructuring lengthens the tag compare's path to the write enables of the RAM)
 wire st_go = (m_commit_e || m_w0) && m_st && !m_sc_fail;      // a store's word completes this cycle
 wire st_dc_we, st_sb_we;
+wire [31:0] m_pk = kphys(m_addr), m_pt = tphys({m_tlbq[31:12], m_addr[11:0]});      // (m_pa's two sources: the D-cache's compare is made on each, and m_kseg chooses)
 mips_dchit #(.DC_LOG2(DC_LOG2)) dchit (
-    .dc_tq, .pa_tag(m_pa[28:13]), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
+    .dc_tq, .pa_tag_k(m_pk[28:13]), .pa_tag_m(m_pt[28:13]), .sel_k(m_kseg), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
     .go(st_go), .commit(m_commit_e && m_st && !m_sc_fail), .cached(m_cached),
     .hit(m_dc_hit), .dc_we(st_dc_we), .sb_we(st_sb_we)
 );
@@ -2793,7 +2794,8 @@ endmodule
 (* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
 module mips_dchit #(parameter int DC_LOG2 = 9) (
     input  wire [16:0]       dc_tq,
-    input  wire [15:0]       pa_tag,
+    input  wire [15:0]       pa_tag_k, pa_tag_m,   // the access's physical tag by an unmapped address (KSEG) and by the translation's page
+    input  wire              sel_k,        // ... and which is the access's: the choice of the address is behind the compare, not in front of it
     input  wire              tk_valid,
     input  wire [DC_LOG2-1:0] tk_idx, idx,
     input  wire              go,          // a store's word completes this cycle (not a failed sc)
@@ -2801,7 +2803,7 @@ module mips_dchit #(parameter int DC_LOG2 = 9) (
     input  wire              cached,
     output wire              hit, dc_we, sb_we
 );
-assign hit   = dc_tq[16] && dc_tq[15:0] == pa_tag && !(tk_valid && tk_idx == idx);
+assign hit   = dc_tq[16] && (sel_k ? dc_tq[15:0] == pa_tag_k : dc_tq[15:0] == pa_tag_m) && !(tk_valid && tk_idx == idx);
 assign dc_we = go && cached && hit;
 assign sb_we = commit && cached && hit;
 endmodule
