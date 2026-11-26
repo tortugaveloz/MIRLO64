@@ -105,9 +105,15 @@ wire [56:0] sum = xs + ys + {56'd0, cin};
 
 // the special cases
 wire f_ar     = !f_ab && !f_cmp;                    // add, sub, mul
-wire sp_nan   = f_ab ? nx : f_ar && (nx || ny || (f_mul ? ((ix && zy) || (zx && iy)) : f_div ? ((ix && iy) || (zx && zy)) : (ix && iy && seff)));
-wire sp_inf   = f_ar && (f_div ? (ix || zy) : (ix || iy));                 // (div: an infinite dividend or a zero divisor; an infinite divisor is a zero)
-wire sp_zero  = f_ar && (f_mul ? (zx || zy) : f_div && (zx || iy));
+// (registered in S_CLS with the operands' kinds: S_DEC's adder takes them as selects, which a decode of the kinds in front of the carry chain was
+// the path ny -> acc; add's seff is the same as S_CLS stores it)
+logic sp_nan, sp_inf, sp_zero;
+wire nx_c = ea == 11'h7FF && ma[54:3] != 52'd0, ix_c = ea == 11'h7FF && ma[54:3] == 52'd0, zx_c = ea == 11'd0;
+wire ny_c = eb == 11'h7FF && mb[54:3] != 52'd0, iy_c = eb == 11'h7FF && mb[54:3] == 52'd0, zy_c = eb == 11'd0;
+wire seff_c = !f_mul && (sa ^ sb ^ f_sub);
+wire sp_nan_c  = f_ab ? nx_c : f_ar && (nx_c || ny_c || (f_mul ? ((ix_c && zy_c) || (zx_c && iy_c)) : f_div ? ((ix_c && iy_c) || (zx_c && zy_c)) : (ix_c && iy_c && seff_c)));
+wire sp_inf_c  = f_ar && (f_div ? (ix_c || zy_c) : (ix_c || iy_c));         // (div: an infinite dividend or a zero divisor; an infinite divisor is a zero)
+wire sp_zero_c = f_ar && (f_mul ? (zx_c || zy_c) : f_div && (zx_c || iy_c));
 
 // the adder's operands by state
 always_comb begin
@@ -154,7 +160,7 @@ wire [12:0] Efp = E + {12'd0, acc[56]};
 always_ff @(posedge clk) begin
     if (rst || !live) st <= S_IDLE;
     else case (st)
-    S_IDLE: if (go) begin
+    S_IDLE: if (go && !dn) begin
         sa <= a[63]; ea <= a[62:52]; ma <= {|a[62:52], a[51:0], 3'b000};
         sb <= b[63]; eb <= b[62:52]; mb <= {|b[62:52], b[51:0], 3'b000};
         if (!(|a[62:52])) ma[54:3] <= 52'd0;                      // (a denormal is a zero: a clear of the register)
@@ -163,8 +169,8 @@ always_ff @(posedge clk) begin
     end
     S_CLS: begin
         logic [11:0] dd, dm; logic [12:0] em;
-        nx <= ea == 11'h7FF && ma[54:3] != 52'd0; ix <= ea == 11'h7FF && ma[54:3] == 52'd0; zx <= ea == 11'd0;
-        ny <= eb == 11'h7FF && mb[54:3] != 52'd0; iy <= eb == 11'h7FF && mb[54:3] == 52'd0; zy <= eb == 11'd0;
+        nx <= nx_c; ix <= ix_c; zx <= zx_c; ny <= ny_c; iy <= iy_c; zy <= zy_c;
+        sp_nan <= sp_nan_c; sp_inf <= sp_inf_c; sp_zero <= sp_zero_c;
         dd = {1'b0, ea} - {1'b0, eb};
         em = {2'b00, ea} + {2'b00, f_div ? ~eb : eb} + {12'd0, !f_div};   // (mul: - 1023: + 1 on one carry chain, then - 1024; div: ea - eb + 1023, the same way with ~eb)
         em[12:10] = em[12:10] - 3'd1;
@@ -244,12 +250,16 @@ always_ff @(posedge clk) begin
     S_CMP1: begin acc <= sum; st <= S_CMP2; end
     S_CMP2: begin acc <= sum; st <= S_CMPF; end
     S_CMPF: begin c_eq <= acc_z; c_lt <= sa ? (!acc[56] && !acc_z) : acc[56]; st <= S_DONE; end
-    S_DONE: if (take) st <= S_IDLE;
+    S_DONE: st <= S_IDLE;                              // (the result waits in dn for the core's take, which is no state's input but dn's)
     default: st <= S_IDLE;
     endcase
 end
 
-assign busy = go && st != S_DONE;
+// dn: the result is done and not yet taken (set as S_DONE is left, cleared by the core's take: the take is a late signal from the end of the core's
+// completion chain, and it is the input of this flip-flop alone, not of the state machine's logic)
+logic dn;
+always_ff @(posedge clk) dn <= (rst || !live) ? 1'b0 : (st == S_DONE || dn) && !take;
+assign busy = go && st != S_DONE && !dn;
 assign res = {rs, E[10:0], acc[54] & !qn, acc[53:3]};
 
 endmodule

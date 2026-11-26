@@ -105,6 +105,10 @@ int main(int argc, char **argv)
         do { tick(); n++; } while (m->busy && n < 400);
         if (n >= 400) { fprintf(stderr, "hang fn %d %016llx %016llx\n", fn, (unsigned long long)x, (unsigned long long)y); exit(2); }
         uint64_t r = m->res;
+        for (int w = rng() % 4 == 0 ? (int)(rng() % 4) : 0; w > 0; w--) {          // (the core takes the result some cycles later: it waits, the unit idle, go held)
+            tick();
+            if (m->busy || m->res != r) { fprintf(stderr, "result not held while waiting (fn %d %016llx %016llx)\n", fn, (unsigned long long)x, (unsigned long long)y); exit(2); }
+        }
         m->take = 1; tick(); m->take = 0; m->go = 0; tick();
         if (cls >= 0) { cyc[cls] += n; cnt[cls]++; if ((uint64_t)n > cmax[cls]) cmax[cls] = n; }
         return r;
