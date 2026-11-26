@@ -30,7 +30,7 @@ module rdp_xing #(
     output wire  [31:0] c_data,
     input  wire         c_ready,
     input  wire         rm_cmd_valid, rm_cmd_we,
-    input  wire  [23:2] rm_cmd_addr,
+    input  wire  [24:2] rm_cmd_addr,
     output wire         rm_cmd_ready,
     input  wire         rm_wdata_valid,
     input  wire  [31:0] rm_wdata,
@@ -48,7 +48,7 @@ module rdp_xing #(
     input  wire  [31:0] cmd_data,
     output wire         cmd_ready,
     output wire         m_cmd_valid, m_cmd_we,
-    output wire  [23:2] m_cmd_addr,
+    output wire  [24:2] m_cmd_addr,
     input  wire         m_cmd_ready,
     output wire         m_wdata_valid,
     output wire  [31:0] m_wdata,
@@ -94,7 +94,7 @@ always_ff @(posedge clk_r) begin
 end
 
 // ---------------------------------------------------------------- the memory's requests: clk_r -> clk
-localparam int QW = 1 + 22;
+localparam int QW = 1 + 23;
 logic [QW-1:0] qf [QD];
 logic [QA:0]   qw;                          // clk_r
 logic [QA:0]   qr_r;                        // clk_r: the clk side's read pointer
