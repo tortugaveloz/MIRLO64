@@ -7,8 +7,8 @@
 source mirlo.qsf
 set_global_assignment -name VERILOG_MACRO "MIRLO_RSP_OC=1"
 
-# The seed this revision closes timing with (the sources as they are, with the "Video settings" 32-bit output and Deblur: all 128 slack lines
-# of mirlo_oc.sta.summary >= 0, worst +0.069 ns, 295 of 308 RAM blocks, 18,056 ALMs of 18,480, 49 of 66 DSP blocks; 3 of 10 seeds closed it (6: +0.007, 9: +0.005, 10)
-# with the cycle-neutral path shortenings of the RSP's scalar unit and the CPU's, 0 of 12 without them). tools/area2/fit.sh writes the seed it
+# The seed this revision closes timing with (the sources as they are, with the arbiter's PRE and MAXB and the D-cache's 16-byte line fill: all 128 slack
+# lines of mirlo_oc.sta.summary >= 0, worst +0.061 ns, 295 of 308 RAM blocks, 17,752 ALMs of 18,480, 49 of 66 DSP blocks; of 9 seeds fitted, 1 closed it
+# (13), and the nearest others were -0.028 (2, a hold in the fast corner) and -0.035 ns (10)). tools/area2/fit.sh writes the seed it
 # is asked for here too, so a sweep is not overridden; a change of the hardware's sources makes this one stale.
-set_global_assignment -name SEED 10
+set_global_assignment -name SEED 13
