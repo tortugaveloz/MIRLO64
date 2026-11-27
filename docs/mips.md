@@ -804,7 +804,9 @@ kind, `mf_patch`, replaces a hand-written float-matrix conversion that reads a d
   and ROM (`0x0500_0000` - `0x07FF_FFFF`): nothing answers on the cartridge's bus, and a read gets the address's low
   half twice (`0x0500_0508` reads `0x0508_0508`), which is how software finds that no drive is there. RDRAM past the
   game's memory, below the RCP: a load is 0, as software that sizes the memory itself expects. A page that a TLB entry
-  maps onto no memory (libultra maps `0xC000_0000` onto a development board's debug port): the same.
+  maps onto no memory (libultra maps `0xC000_0000` onto a development board's debug port): the same. The cartridge's
+  bus past what the hardware answers (`0x1400_0000` - `0x1FBF_FFFF`): a store is ignored, as the ROM does, whatever its
+  width -- the console takes no exception for it, and a game that computes a stray pointer into that range goes on.
 - **Elsewhere**: the unused parts of the bus read 0, and writes to them are ignored.
 
 ## The RCP's blocks in hardware
@@ -1395,7 +1397,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
 | `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped, on either TLB), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
-| `xkphys_test`, `mirepeat_test` | The xkphys addresses of `io_read` / `io_write` (Status.KX), and MI's repeat mode (the stores after MI_MODE, the counts, the odd word that ends it); `sim/mips_soc/lld_check.sh` checks the runtime's `lld` / `scd` on the whole SoC |
+| `xkphys_test`, `mirepeat_test` | The xkphys addresses of `io_read` / `io_write` (Status.KX), and MI's repeat mode (the stores after MI_MODE, the counts, the odd word that ends it); `sim/mips_soc/lld_check.sh` checks the runtime's `lld` / `scd` on the whole SoC, and `sim/mips_soc/cartwr_check.sh` its taking of a store to the cartridge's bus past the ROM (`lang/n64rt/test/cartwr_game.S`) |
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | Each is one program that runs the checks for the CPU it finds (COP0 23), the tables' or the VR4300's own TLB (`<name>_real.c`). On the translation tables' CPU: the tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers (each says SKIPPED on a CPU with neither). On the real TLB: `tlbram_test`, the seven page sizes, the micro-TLBs, every register of the TLB exceptions and their vectors, `tlbp`, `tlbr`, Index, Wired, Random, the caches, `0x6000_0000`; `tlbmon_test`, the game's own TLB instructions with the monitor (no trap); `tlbgame_test`, its refill and general handlers; `tlbpg_test`, the cached fetches from mapped pages |
 | `tlbint_real_test` | An interrupt that comes while a fetch from a page no entry names is in M: it goes to the general vector (never the refill vector), with the fault coming again afterwards |
 | `tlbdev_test` | A page onto a device or past the RDRAM: the monitor's entry and COP0 22, the 4 MiB setting, the game's exceptions first, every range the game maps, the game's view |
