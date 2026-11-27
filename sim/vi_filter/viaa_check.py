@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """lang/mips/test/viaa_test.c's picture through vi_model.py's filters (AA + divot), against a frame the pads sent
-(sim/mips_soc VGA=1: vNNNNNN.ppm).   viaa_check.py <pads frame .ppm> [--off: the filters off] [--skip-last-column]"""
+(sim/mips_soc VGA=1: vNNNNNN.ppm).   viaa_check.py <pads frame .ppm> [--off: the filters off] [--deblur] [--out32] [--skip-last-column]
+(the core's "Picture" options, INTERACT=0x10000144:<1 32-bit, 2 Deblur, 3 both>: docs/video_options.md)"""
 import sys
 import numpy as np
 from PIL import Image
@@ -20,7 +21,7 @@ if '--off' in sys.argv:
     c = vi_model.channels(fb)
     want = vi_model.to_rgb(*[v << 3 for v in c])
 else:
-    want = vi_model.to_rgb(*vi_model.filt(fb, True, hid))
+    want = vi_model.to_rgb(*vi_model.filt(fb, True, hid, False, '--deblur' in sys.argv, '--out32' in sys.argv))
 got = np.asarray(Image.open(sys.argv[1]).convert('RGB'))
 if got.shape[1] == 2 * W and (got[:, 0::2] == got[:, 1::2]).all():     # (the pads' frame: each pixel two clocks)
     got = got[:, 0::2]

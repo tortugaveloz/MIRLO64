@@ -84,6 +84,10 @@ set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 256
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
+# ALM register packing at its highest effort (the default is Medium). It changes how the fitter packs the registers into the ALMs and so which
+# seeds close, not the size: with the Video settings and div.d in hardware the design is at 99 % of the ALMs (18,246 in the seed that closes), six
+# seeds at Medium failed the CPU's clock by 0.02 to 0.41 ns, and at High seed 3 closes (seeds 1 and 2 do not).
+set_global_assignment -name ALM_REGISTER_PACKING_EFFORT High
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON

@@ -642,6 +642,13 @@ before the VI's scale ([resolution.md](resolution.md)):
 
 A picture 512 wide or more is shown with the filters off.
 
+The core's "Video settings" setting ([video_options.md](video_options.md)) changes two things here: "Deblur" bypasses the
+anti-alias and the divot filters; "32-bit" turns the RDP's RGB dither off (`dither_off` of `rdp_pix.v`: whatever
+`RGB_DITHER_SEL` says), bypasses the dither filter and shows 8 bits a channel: a 32-bit picture's own, and a 16-bit
+picture's from the RDP's shadow plane (a byte a pixel with the high two of the low three bits of red and green the blender made, the high one of blue, and a
+check, written beside the colour image, and read by the blender and the scan-out where the check says they are the pixel's). Both are off by default, and
+then the scan-out and the RDP are what this section describes.
+
 A 32-bit picture (`VI_STATUS` type 3: RGBA8888, a pixel a word) goes through
 the same filters: each pixel is taken as its channels' top five bits, with
 the alpha byte's top three bits as its coverage, so the filters see what a
@@ -734,7 +741,9 @@ switches:
 * `TB_HREMAP=<k>` (with `TB_SDRAM=1`) places the hidden plane in the SDRAM's
   banks as `rtl/soc/sdr_arb.sv` does (k = 2: the bank two on from the image's
   row's); `TB_MISS=1` counts the SDRAM's row changes by what they are between
-  (colour, depth, hidden words of either).; `TB_WATCH=<byte address>`
+  (colour, depth, hidden words of either). With `TB_SHADOW` (the shadow plane,
+  [video_options.md](video_options.md)) its words are placed as `rtl/soc/mirlo_mips.sv` does
+  (`TB_SHFLAT=1`: at the colour words' own address, the first measurements'); `TB_WATCH=<byte address>`
   prints the writes that reach a word.
 
 `TB_ZDZ=1` makes streams of shaded, anti-aliased, depth-tested triangles that are points of a few planes (slopes of every dz code, now and then a step within a code's tolerance), the blender's B mostly the memory's coverage: the depth image's own dz.
