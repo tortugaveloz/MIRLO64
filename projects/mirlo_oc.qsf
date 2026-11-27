@@ -7,13 +7,13 @@
 source mirlo.qsf
 set_global_assignment -name VERILOG_MACRO "MIRLO_RSP_OC=1"
 
-# The seed this revision closes timing with (the sources as they are: the Analogizer's video -- RGBHV without the line doubler -- and the SNAC port
-# with the Video settings, the 2x caches, the arbiter's PRE and MAXB and the D-cache's 16-byte line fill: all 128 slack lines of mirlo_oc.sta.summary
-# >= 0, worst setup +0.167 ns and worst hold +0.105 ns, 298 of 308 RAM blocks, 18,179 ALMs of 18,480, 1,844 of 1,848 LABs, 54 of 66 DSP blocks).
-# The design is at the device's limit of LABs: most seeds stop in the fitter's packing ("requires 1,850 to 1,870 LABs", 1,848 on the device); of
-# the two seeds tried on this tree, 13 stopped there (1,850) and 14 placed and closed. tools/area2/fit.sh writes the seed it
-# is asked for here too, so a sweep is not overridden; a change of the hardware's sources makes this one stale.
-set_global_assignment -name SEED 14
+# The seed this revision closes timing with (the sources as they are: the Analogizer's video with the RGBHV line doubler and the SNAC port (an_snac_pif
+# with SCAN 0: the hardware's background scan, which the runtime never turns on, is left out), the Video settings, the 2x caches, the arbiter's PRE and
+# MAXB and the D-cache's 16-byte line fill: all 128 slack lines of mirlo_oc.sta.summary >= 0, worst setup +0.021 ns (the CPU's clock, slow 0C corner) and
+# worst hold +0.089 ns, 300 of 308 RAM blocks, 17,614 ALMs of 18,480, 54 of 66 DSP blocks). Of 10 seeds tried on this tree (1 to 10) seed 1 closed; 2 to 10 placed and
+# missed the CPU's clock by 0.07 to 0.45 ns. tools/area2/fit.sh writes the seed it is asked for here too, so a sweep is not overridden; a change of the
+# hardware's sources makes this one stale.
+set_global_assignment -name SEED 1
 
 # The synthesis shares the arithmetic units that are used one at a time (the RDP alone -22 ALUTs; seed 13 of the full design,
 # line doubler included, asked for 1,862 LABs of the fitter's packing without it and 1,853 with it).
@@ -22,5 +22,5 @@ set_global_assignment -name AUTO_RESOURCE_SHARING ON
 # No physical synthesis of combinational logic for performance (the fitter's boolean-division resynthesis of the paths that miss timing:
 # PHYSICAL_SYNTHESIS_COMBO_LOGIC ON in mirlo.qsf). In the fit of this design it made 1,175 LUTs and deleted 745 (+430 and the packing around them): the same
 # sources, seed 3, 18,300 ALMs and 1,851 LABs asked for with it (the fit stops: 1,848 on the device) and 17,613 ALMs (95 %) and 1,848 LABs placed
-# without it. The register duplication and the fitter's placement-time optimisations stay on. The netlist's function is the same either way.
+# without it (the 10 seeds above place in 1,835 to 1,848 LABs). The register duplication and the fitter's placement-time optimisations stay on. The netlist's function is the same either way.
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
