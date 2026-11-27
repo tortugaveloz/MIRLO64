@@ -18,3 +18,9 @@ set_global_assignment -name SEED 14
 # The synthesis shares the arithmetic units that are used one at a time (the RDP alone -22 ALUTs; seed 13 of the full design,
 # line doubler included, asked for 1,862 LABs of the fitter's packing without it and 1,853 with it).
 set_global_assignment -name AUTO_RESOURCE_SHARING ON
+
+# No physical synthesis of combinational logic for performance (the fitter's boolean-division resynthesis of the paths that miss timing:
+# PHYSICAL_SYNTHESIS_COMBO_LOGIC ON in mirlo.qsf). In the fit of this design it made 1,175 LUTs and deleted 745 (+430 and the packing around them): the same
+# sources, seed 3, 18,300 ALMs and 1,851 LABs asked for with it (the fit stops: 1,848 on the device) and 17,613 ALMs (95 %) and 1,848 LABs placed
+# without it. The register duplication and the fitter's placement-time optimisations stay on. The netlist's function is the same either way.
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
