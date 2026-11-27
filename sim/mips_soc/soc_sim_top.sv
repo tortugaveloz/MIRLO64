@@ -67,6 +67,9 @@ module soc_sim_top (
     // a multiply or divide, [12] a store at M with the write buffer full,
     // [13] a flush, [16:14] the memory port's state, [17] D holds an instruction
     output wire  [17:0] cpu_stat,
+    output wire  [15:0] arb_st,            // (MISSLAT) the arbiter: {load, held, cur(3), pick(3), beats(5)} and cpu_rv, the CPU's word in its clock
+    output wire         cpu_rv,
+    output wire  [23:0] cpu_pa,
     // (CPUTRACE) what the game CPU retires this cycle of its clock, and an exception it takes
     output wire         tr_retire, tr_wr, tr_exc,
     output wire  [31:0] tr_pc, tr_insn, tr_val, tr_exc_pc,
@@ -196,6 +199,9 @@ assign diag_vi = {20'd0, soc.video.hid_f, soc.vi_aa, soc.mon_vi, soc.fb_en,
                   soc.p_rvalid[0], soc.video.hires, soc.video.px32_n, soc.video.all};
 assign mem_hit   = soc.sdram.open[soc.sdram.q_bank] && soc.sdram.row[soc.sdram.q_bank] == soc.sdram.q_row;
 assign mem_pv    = soc.p_valid;
+assign arb_st    = {2'd0, soc.p_we[1], soc.arb.load, soc.arb.held, soc.arb.cur, soc.arb.pick, soc.arb.beats[4:0]};
+assign cpu_rv    = soc.sys.cpu.mem_rvalid;
+assign cpu_pa    = soc.p_addr[1];
 assign mem_ra    = soc.sdram.req_addr;
 assign mem_rq    = {soc.sdram.req_valid, soc.sdram.req_ready, soc.sdram.req_we, soc.sdram.q_bank, soc.sdram.req_tag, mem_hit, soc.sdram.open[soc.sdram.q_bank],
                     soc.sdram.st == 4'd7, soc.sdram.c_act[soc.sdram.q_bank] >= 2};

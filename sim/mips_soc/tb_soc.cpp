@@ -92,7 +92,7 @@ static Vsoc_sim_top *t;
 #define TB_SYS_KHZ (TB_SYS_HZ / 1000.0)
 // the SDRAM's clock period (ps), for the chip model's checks
 static const long SDR_PS = (long)(1e12 / (2.0 * TB_SYS_HZ) + 0.5);
-static long errors;
+static long errors, g_frames;
 #define ERR(...) do { if (errors++ < 20) { printf(__VA_ARGS__); printf("\n"); fflush(stdout); } } while (0)
 
 // ---- the chip (sys2x cycles): 4 banks x 8192 rows x 1024 columns x 16 bits
@@ -486,9 +486,11 @@ static void ge_step(FILE *gl, long sys, long frames)
     static long exc[32], xr;
     static bool vb_was, init, rdp_was_idle = true, rsp_was_halt = true, ack_was; static uint32_t ilo, ihi, sync_last, base_last, x_la, x_ld; static bool x_lw;
     static long t_rsp0; static uint32_t rty, rfl;
+    static long ps_busy, ps_acc, ps_cpurom; static bool ps_was;
     static long last_ev;
     if (!init) { init = true; if (const char *e = getenv("CPUSTAT_IDLE")) { ilo = strtoul(e, 0, 0); ihi = strchr(e, ',') ? strtoul(strchr(e, ',') + 1, 0, 0) : ilo + 8; } sync_last = t->rdp_sync; base_last = t->fb_base; }
     n++;
+    { const bool pce = (t->ps_ce_n & 3) != 3; if (pce) ps_busy++; if (pce && !ps_was) ps_acc++; ps_was = pce; }   // (the PSRAM's chip enable low: busy cycles, accesses begun)
     const unsigned s = t->cpu_stat;
     const bool in_idle = ihi && t->cpu_pc >= ilo && t->cpu_pc < ihi;
     if (in_idle) cpu_idle++;
@@ -570,11 +572,11 @@ static void ge_step(FILE *gl, long sys, long frames)
         fprintf(gl, "F %ld %ld n %ld rsp %ld rspins %ld rdp %ld rdpivl %ld rdpfirst %ld rdplast %ld idle %ld ret %ld", frames, sys, n, rsp_run, rsp_ins, rdp_busy, rdp_ivl, rdp_first_busy_t, rdp_last_idle_t, cpu_idle, cpu_ret);
         fprintf(gl, " cat"); for (int i = 0; i < C_N; i++) fprintf(gl, " %ld", c[i]);
         fprintf(gl, " ports"); for (int i = 0; i < 6; i++) fprintf(gl, " %ld", mp[i]);
-        fprintf(gl, " mem words %ld act %ld row %ld turn %ld wait %ld sw %ld pollreads %ld exc", mwords, mact, mrow, mturn, mwait, mswitch, xr);
+        fprintf(gl, " psram busy %ld acc %ld", ps_busy, ps_acc); fprintf(gl, " mem words %ld act %ld row %ld turn %ld wait %ld sw %ld pollreads %ld exc", mwords, mact, mrow, mturn, mwait, mswitch, xr);
         for (int i = 0; i < 32; i++) fprintf(gl, " %ld", exc[i]);
         fprintf(gl, " base %08x pc %08x\n", t->fb_base, t->cpu_pc);
         fflush(gl);
-        n = rsp_run = rsp_ins = rdp_busy = rdp_ivl = cpu_idle = cpu_ret = mwords = mact = mrow = mturn = mwait = mswitch = xr = 0; rdp_last_idle_t = rdp_first_busy_t = 0;
+        ps_busy = ps_acc = 0; n = rsp_run = rsp_ins = rdp_busy = rdp_ivl = cpu_idle = cpu_ret = mwords = mact = mrow = mturn = mwait = mswitch = xr = 0; rdp_last_idle_t = rdp_first_busy_t = 0;
         for (int i = 0; i < C_N; i++) c[i] = 0; for (int i = 0; i < 6; i++) mp[i] = 0; for (int i = 0; i < 32; i++) exc[i] = 0;
     }
     vb_was = t->vblank; (void)last_ev;
@@ -647,6 +649,172 @@ static void rdploss_step(FILE *lf, long frames)
             for (int p = 0; p < 8; p++) { grants[p] = gwords[p] = 0; tk[p][0] = tk[p][1] = 0; for (int r = 0; r < 5; r++) wt[p][r] = 0; for (int r = 0; r < 8; r++) sw[p][r] = 0; }
         }
         f_last = frames;
+    }
+}
+
+
+// ---- CPULAT=<file>: what a port's memory requests wait for (instrumentation only; ports 1, the game CPU, and 2, the RDP's colour / depth / texture
+// stream). A line every CPULAT_EVERY fields (default 1) for each port and each state of the RDP (busy, idle): the cycles the port asked and was not
+// taken, in episodes (a run of such cycles), sorted by what the controller was doing in them: a word for another port (which), another port's
+// request waiting (which; no cause kept), the port's own request waiting (a row to precharge, to activate, tRCD, a turnaround or timer, the
+// refresh), or no request at the controller (the arbiter's latency)
+struct LatPort { long ep[2] = {0, 0}, wc[2] = {0, 0}, words[2] = {0, 0}, cyc[2] = {0, 0}, other_word[2][6] = {}, other_wait[2][6] = {}, own[2][5] = {}, noreq[2] = {0, 0}, hist[2][8] = {}; bool was = false; long run = 0; };
+static void cpulat_one(FILE *lf, long frames, LatPort &L, int port, bool emit)
+{
+    const int b = !t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle ? 1 : 0;
+    const bool pv = t->mem_pv >> port & 1, rdy = t->mem_stat >> port & 1;
+    L.cyc[b]++; if (rdy) L.words[b]++;
+    const bool w = pv && !rdy;
+    if (w) {
+        if (!L.was) { L.ep[b]++; L.run = 0; }
+        L.run++; L.wc[b]++;
+        const unsigned q = t->mem_rq;
+        const bool rv = q >> 11 & 1, rr = q >> 10 & 1, hit = q >> 3 & 1, op = q >> 2 & 1, runn = q >> 1 & 1, rcd = q & 1;
+        const unsigned tag = q >> 4 & 7;
+        if (!rv) L.noreq[b]++;
+        else if (rr) { if (tag < 6) L.other_word[b][tag]++; }
+        else {
+            const int cause = !runn ? 4 : hit ? (!rcd ? 2 : 3) : op ? 0 : 1;
+            if ((int)tag == port) L.own[b][cause]++; else if (tag < 6) L.other_wait[b][tag]++;
+        }
+    }
+    if (L.was && !w) { const long r = L.run; int h = r <= 1 ? 0 : r <= 3 ? 1 : r <= 6 ? 2 : r <= 10 ? 3 : r <= 16 ? 4 : r <= 32 ? 5 : r <= 64 ? 6 : 7; L.hist[b][h]++; }
+    L.was = w;
+    if (emit) {
+        for (int bb = 1; bb >= 0; bb--) {
+            fprintf(lf, "C%d %ld rdp %s cycles %ld words %ld episodes %ld waitcyc %ld | word-for:", port, frames, bb ? "busy" : "idle", L.cyc[bb], L.words[bb], L.ep[bb], L.wc[bb]);
+            for (int k = 0; k < 6; k++) fprintf(lf, " %ld", L.other_word[bb][k]);
+            fprintf(lf, " | other-waits:"); for (int k = 0; k < 6; k++) fprintf(lf, " %ld", L.other_wait[bb][k]);
+            fprintf(lf, " | own pre act rcd turn ref:"); for (int k = 0; k < 5; k++) fprintf(lf, " %ld", L.own[bb][k]);
+            fprintf(lf, " | noreq %ld | hist(1,2-3,4-6,7-10,11-16,17-32,33-64,65+):", L.noreq[bb]); for (int k = 0; k < 8; k++) fprintf(lf, " %ld", L.hist[bb][k]);
+            fprintf(lf, "\n");
+        }
+        for (int bb = 0; bb < 2; bb++) { L.ep[bb] = L.wc[bb] = L.words[bb] = L.cyc[bb] = L.noreq[bb] = 0; for (int k = 0; k < 6; k++) L.other_word[bb][k] = L.other_wait[bb][k] = 0; for (int k = 0; k < 5; k++) L.own[bb][k] = 0; for (int k = 0; k < 8; k++) L.hist[bb][k] = 0; }
+    }
+}
+static void cpulat_step(FILE *lf, long frames)
+{
+    static LatPort L1, L2; static long f_last = -1, every = -1;
+    if (every < 0) { const char *e = getenv("CPULAT_EVERY"); every = e ? atol(e) : 1; }
+    const bool emit = frames != f_last && f_last >= 0 && frames % every == 0;
+    cpulat_one(lf, frames, L1, 1, emit); cpulat_one(lf, frames, L2, 2, emit);
+    if (emit) fflush(lf);
+    f_last = frames;
+}
+
+
+// ---- MISSLAT=<file>: what each game-CPU cache miss (a line read: the I-cache's, the D-cache's) waits for, in cycles of the CPU's clock from the
+// miss's start (the memory port leaving idle for a line) to its first word and to its last, with the cycles sorted by cause: nothing yet at the arbiter
+// (the clock crossing), another port's word being loaded (arb), another port's word in the controller's register waiting on a row (reg: the
+// register's port by the controller's state: pre act rcd turn/timer refresh), the CPU's own words moving (ours), the rest (data). Aggregated by
+// type (I, D) and by the RDP busy or idle at the miss's start; a line of sums and histograms every MISSLAT_EVERY fields (default 10)
+struct MissAgg {
+    long n = 0, sf = 0, sl = 0, mf = 0, ml = 0, hf[96] = {}, hl[96] = {};
+    long a[2][2 + 6 + 30 + 2] = {};      // window (to the first word, after it) x {xing, ours, arb[6], reg[6][5], data}
+    long nwf[2] = {}, dry = 0;
+};
+#ifdef TB_DHALF
+#define TB_DH 1
+#else
+#define TB_DH 0
+#endif
+static MissAgg MA[2][2];
+static long GR[6][18], GRs[6];
+static long RS[6][6][3];                // the controller's requests of each port, by the port that last used the request's bank, as the request first appears: row open and right, other row open, closed
+static long UND[2];                      // the scan-out's pixel FIFO empty while the picture is being drawn (sys cycles with vga_de), and the cycles with vga_de
+static long STP[3][8];                   // M's refill (MS_REFILL), M's re-read, F's refill (FS_REFILL): the CPU cycles by the memory port's state (idle, write buffer, I line, D line, slow)           // grants by port: histogram of words (1..16, 17+) -- per sys cycle (MISSLAT's arbiter side)
+static long CW[6][18];                   // the CPU's waits behind a port's grant: its words so far when the CPU began waiting
+static void misslat_cpu_step(FILE *lf, long frames)
+{
+    static bool act; static int ty, busy; static long tm, tf; static int nw; static bool seen;
+    static long cc[2][2 + 6 + 30 + 2];
+    static long f_last = -1, every = -1;
+    if (every < 0) { const char *e = getenv("MISSLAT_EVERY"); every = e ? atol(e) : 10; }
+    const unsigned port = (t->cpu_stat >> 14) & 7;
+    const bool isl = port == 2 || port == 3;
+    { const unsigned ms = (t->cpu_stat >> 2) & 7, fs = (t->cpu_stat >> 5) & 7; if (ms == 1) STP[0][port]++; else if (ms == 2) STP[1][port]++; if (fs == 1) STP[2][port]++; }
+    if (!act && isl) {
+        act = true; ty = port == 3; busy = !t->rootp->soc_sim_top__DOT__soc__DOT__rdp_idle ? 1 : 0; tm = 0; tf = 0; nw = 0; seen = false;
+        for (auto &r : cc) for (auto &x : r) x = 0;
+    }
+    if (act) {
+        if (!isl) act = false;   // (left without the 8 words: not counted)
+        else {
+            tm++;
+            const int w = seen ? 1 : 0;
+            const unsigned pv = t->mem_pv, srv = t->mem_stat & 63, q = t->mem_rq, as = t->arb_st;
+            const bool load = as >> 12 & 1; const unsigned pick = as >> 5 & 7;
+            const bool cwe = as >> 13 & 1;                 // the CPU's own request is a store (they go through the same port before a read)
+            int k;
+            // not asking: before the request is at the arbiter (xing) if none of its words went yet, else (waiting for the data) data
+            static bool asked; if (tm == 1) asked = false;
+            if (pv & 2) asked = true;
+            if (!(pv & 2)) k = asked ? 2 + 6 + 30 : 0;
+            else if (cwe) { asked = false; k = 2 + 6 + 31; }
+            else if (srv & 2) k = 1;
+            else if (!load) {
+                const bool rv = q >> 11 & 1, rr = q >> 10 & 1, hit = q >> 3 & 1, op = q >> 2 & 1, runn = q >> 1 & 1, rcd = q & 1;
+                const unsigned tag = q >> 4 & 7;
+                if (rv && !rr && tag < 6) { const int cause = !runn ? 4 : hit ? (!rcd ? 2 : 3) : op ? 0 : 1; k = 2 + 6 + tag * 5 + cause; }
+                else k = 2 + 6 + 30;
+            } else k = pick < 6 ? 2 + pick : 2 + 6 + 30;
+            // (to the first word: once the first of its words is taken, only its own row's waits are counted, the rest is the pipeline)
+            static bool fsrv; if (tm == 1) fsrv = false;
+            if (!seen && fsrv && !(k >= 2 + 6 + 5 && k < 2 + 6 + 10)) k = 2 + 6 + 30;
+            { static FILE *tf; static bool ti; if (!ti) { ti = true; if (const char *e = getenv("MISSTRACE")) tf = fopen(e, "wb"); }
+              if (tf && !fsrv && (pv & srv & 2) && !cwe && g_frames >= 130) { uint32_t rec = (t->cpu_pa & 0xFFFFFF) | (uint32_t)ty << 24 | (uint32_t)busy << 25; fwrite(&rec, 4, 1, tf); } }
+            if (pv & srv & 2) fsrv = true;
+            // (the CPU begins to wait behind a grant: its words so far)
+            static bool pw; if ((pv & 2) && !cwe && !(srv & 2) && !pw && load && pick != 1) { const int cur = as >> 8 & 7, held = as >> 11 & 1; if (cur < 6 && held && cur != 1) CW[cur][std::min<int>((as & 31), 17)]++; }
+            pw = (pv & 2) && !cwe && !(srv & 2);
+            cc[w][k]++;
+            if (t->cpu_rv) {
+                nw++;
+                if (nw == 1) { seen = true; tf = tm; }
+                if (nw == (ty && TB_DH ? 4 : 8)) {
+                    MissAgg &m = MA[ty][busy];
+                    m.n++; m.sf += tf; m.sl += tm; if (tf > m.mf) m.mf = tf; if (tm > m.ml) m.ml = tm;
+                    m.hf[std::min<long>(tf / 4, 95)]++; m.hl[std::min<long>(tm / 4, 95)]++;
+                    for (int ww = 0; ww < 2; ww++) for (int c = 0; c < 2 + 6 + 30 + 2; c++) m.a[ww][c] += cc[ww][c];
+                    act = false;
+                }
+            }
+        }
+    }
+    if (frames != f_last && f_last >= 0 && frames % every == 0) {
+        for (int y = 0; y < 2; y++) for (int b = 0; b < 2; b++) {
+            MissAgg &m = MA[y][b];
+            fprintf(lf, "M %ld %s rdp %s n %ld sumfirst %ld sumlast %ld maxfirst %ld maxlast %ld", frames, y ? "D" : "I", b ? "busy" : "idle", m.n, m.sf, m.sl, m.mf, m.ml);
+            fprintf(lf, " hf"); for (int i = 0; i < 96; i++) fprintf(lf, " %ld", m.hf[i]);
+            fprintf(lf, " hl"); for (int i = 0; i < 96; i++) fprintf(lf, " %ld", m.hl[i]);
+            for (int ww = 0; ww < 2; ww++) { fprintf(lf, " w%d", ww); for (int c = 0; c < 2 + 6 + 30 + 2; c++) fprintf(lf, " %ld", m.a[ww][c]); }
+            fprintf(lf, "\n");
+            m = MissAgg();
+        }
+        for (int p = 0; p < 6; p++) { fprintf(lf, "G %ld port %d grants", frames, p); for (int i = 0; i < 18; i++) fprintf(lf, " %ld", GR[p][i]); fprintf(lf, " cpuwait"); for (int i = 0; i < 18; i++) fprintf(lf, " %ld", CW[p][i]); fprintf(lf, "\n"); for (int i = 0; i < 18; i++) GR[p][i] = CW[p][i] = 0; }
+        for (int p = 0; p < 6; p++) { fprintf(lf, "R %ld port %d by-last-user(scan cpu rdp rsp br cmd):hit/conflict/closed", frames, p); for (int u = 0; u < 6; u++) fprintf(lf, " %ld/%ld/%ld", RS[p][u][0], RS[p][u][1], RS[p][u][2]); fprintf(lf, "\n"); for (int u = 0; u < 6; u++) RS[p][u][0] = RS[p][u][1] = RS[p][u][2] = 0; }
+        fprintf(lf, "U %ld fifo-empty-in-DE %ld of %ld\n", frames, UND[0], UND[1]); UND[0] = UND[1] = 0;
+        for (int k = 0; k < 3; k++) { fprintf(lf, "P %ld %s port-state(idle wb iline dline slow)", frames, k == 0 ? "Mrefill" : k == 1 ? "Mreread" : "Frefill"); for (int i = 0; i < 5; i++) fprintf(lf, " %ld", STP[k][i]); fprintf(lf, "\n"); for (int i = 0; i < 8; i++) STP[k][i] = 0; }
+        fflush(lf);
+    }
+    f_last = frames;
+}
+// the arbiter's grants (a sys cycle's): a port's words in a row
+static void misslat_sys_step()
+{
+    if (t->vga_de) { UND[1]++; if (t->diag_line >> 30 & 1) UND[0]++; }
+    {   // (ROWSTAT) a request appears at the controller's register: what state its bank is in, and who last used it
+        static bool prev_rv, prev_rr; static int last_user[4] = {-1, -1, -1, -1};
+        const unsigned q = t->mem_rq; const bool rv = q >> 11 & 1, rr = q >> 10 & 1, hit = q >> 3 & 1, op = q >> 2 & 1; const unsigned bank = q >> 7 & 3, tag = q >> 4 & 7;
+        if (rv && (!prev_rv || prev_rr) && tag < 6) { const int lu = last_user[bank] < 0 ? 0 : last_user[bank]; RS[tag][lu][hit ? 0 : op ? 1 : 2]++; }
+        if (rv && rr && tag < 6) last_user[bank] = tag;
+        prev_rv = rv; prev_rr = rr;
+    }
+    static int run_p = -1; static int run_n;
+    const unsigned as = t->arb_st; const bool load = as >> 12 & 1; const unsigned pick = as >> 5 & 7;
+    if (load && pick < 6) {
+        if ((int)pick == run_p) run_n++;
+        else { if (run_p >= 0) GR[run_p][std::min(run_n, 17)]++; run_p = pick; run_n = 1; }
     }
 }
 
@@ -1022,6 +1190,7 @@ int main(int argc, char **argv)
             if (rise && o_dump_pc && t->tr_retire && t->tr_pc == o_dump_pc) { ram_dump(getenv("RAMDUMP")); printf("[RAMDUMP_AT: the game CPU at %08x after %ld sys cycles]\n", t->tr_pc, sys); done = true; }
             if (rise && excstat) exc_stat_step();
             if (rise && o_cmodel) con_step();
+            if (rise) { static FILE *ml; static bool mi; if (!mi) { mi = true; const char *e = getenv("MISSLAT"); if (e) ml = fopen(e, "w"); } if (ml) misslat_cpu_step(ml, g_frames); }
             t->clk_cpu = rise;
             if (cpu_t < now) t->eval();
         }
@@ -1476,7 +1645,7 @@ int main(int argc, char **argv)
                            t->vi_dbg0 >> 31, (t->vi_dbg0 >> 30) & 1, (t->vi_dbg0 >> 29) & 1, t->vi_dbg0 & 0x7FFFFF, (t->vi_dbg1 >> 12) & 0x1FFFF, t->vi_dbg1 & 0xFFF,
                            (t->vi_dbg0 >> 28) & 1 ? "PAL" : "NTSC", (t->vi_dbg0 >> 27) & 1 ? ((t->vi_dbg0 >> 26) & 1 ? "625" : "525") : "-");
                 if (!outdir.empty() && frames % every == 0) dump_frame(outdir, frames);
-                frames++;
+                frames++; g_frames = frames;
                 for (const auto &w : ia_at) if (w.frame == frames) { ia_q.push_back({w.addr, w.val}); printf("[interact: 0x%08x <- 0x%x at field %ld, sys %ld]\n", w.addr, w.val, frames, sys); fflush(stdout); }
                 for (const auto &w : slot_at) if (w.frame == frames) {
                     Slot &sl = slots[w.slot];
@@ -1652,6 +1821,8 @@ int main(int argc, char **argv)
             // time outside the game's idle loop (the range of its pc)
             { static FILE *gl; static bool gi; if (!gi) { gi = true; const char *e = getenv("GELOG"); if (e) gl = fopen(e, "w"); } if (gl) ge_step(gl, sys, frames); }
             { static FILE *rl; static bool ri; if (!ri) { ri = true; const char *e = getenv("RDPLOSS"); if (e) rl = fopen(e, "w"); } if (rl) rdploss_step(rl, frames); }
+            { static const bool ml = getenv("MISSLAT") != nullptr; if (ml) misslat_sys_step(); }
+            { static FILE *cl; static bool ci; if (!ci) { ci = true; const char *e = getenv("CPULAT"); if (e) cl = fopen(e, "w"); } if (cl) cpulat_step(cl, frames); }
             if (o_rcpstat) {
                 static long rsp_run, rdp_busy, cpu_idle, n_cyc, f_last = -1; static uint32_t sync_last;
                 n_cyc++;
