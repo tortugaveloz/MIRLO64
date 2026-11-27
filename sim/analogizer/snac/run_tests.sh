@@ -13,3 +13,11 @@ VL="${VERILATOR:-$HOME/local/usr/bin/verilator}"
     "$A/an_joybus_m.sv" "$A/an_snac_pif.sv" "$HERE/jb_dev.sv" "$HERE/snac_top.sv" "$HERE/tb.cpp" -o tb > "$OBJ.log" 2>&1 \
     || { grep -E "%Error" "$OBJ.log" | head -20; tail -5 "$OBJ.log"; echo "build failed"; exit 1; }
 "$OBJ/tb"
+# the Enhanced build's SoC leaves the background scan out (an_snac_pif SCAN=0): the same bench with that parameter, its scan section replaced by what SCAN=0 promises
+OBJ0="$OBJ.noscan"; mkdir -p "$OBJ0"
+"$VL" --cc --exe --build -j 8 -O2 -Wall -Wno-fatal -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-MULTIDRIVEN \
+    -Wno-BLKSEQ -Wno-INITIALDLY -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-SYNCASYNCNET -GSCAN=0 \
+    --x-assign fast --x-initial fast --top-module snac_top -Mdir "$OBJ0" \
+    "$A/an_joybus_m.sv" "$A/an_snac_pif.sv" "$HERE/jb_dev.sv" "$HERE/snac_top.sv" "$HERE/tb.cpp" -o tb > "$OBJ0.log" 2>&1 \
+    || { grep -E "%Error" "$OBJ0.log" | head -20; tail -5 "$OBJ0.log"; echo "build (SCAN=0) failed"; exit 1; }
+"$OBJ0/tb" noscan

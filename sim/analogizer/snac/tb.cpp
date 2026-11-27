@@ -5,6 +5,7 @@
 #include "Vsnac_top.h"
 #include <verilated.h>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 #include <cstdint>
 #include <vector>
@@ -114,6 +115,7 @@ static void check_cells(int port, size_t from, const std::vector<uint8_t> &tx, c
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
+    bool noscan = argc > 1 && std::string(argv[1]) == "noscan";
     t = new Vsnac_top;
     t->rst = 1; t->sel_wr = t->sel_rd = 0; t->a = 0; t->wd = 0; t->own = 1;
     t->k_kind = 0; t->k_cell = 0; t->k_delay = 0; t->k_btn = 0; t->k_stick = 0;
@@ -261,7 +263,19 @@ int main(int argc, char **argv)
         CHECK(r.ok && r.cnt == 3, "after the wire is let go the port works again");
     }
 
-    // ---- the scan
+    // ---- the scan (SCAN=1, the unit's default); the build's SCAN=0 (run_tests.sh builds it too, with the argument noscan): the bit is ignored, the registers read 0
+    if (noscan) {
+        for (int p = 0; p < 4; p++) set_dev(p, p == 2 ? 0 : (p & 1) ? 2 : 1);
+        reg_wr(R_STAT, 0xF0);
+        unsigned sc0[4]; for (int p = 0; p < 4; p++) sc0[p] = ncmds(p);
+        reg_wr(R_CTRL, 3 | (64 << 8));
+        idle_us(30000);
+        CHECK((reg_rd(R_STAT) & 255) == 0, "SCAN=0: nothing present or changed after 30 ms with CTRL.SCAN set: %x", reg_rd(R_STAT) & 255);
+        for (int p = 0; p < 4; p++) CHECK(ncmds(p) == sc0[p], "SCAN=0: port %d polled %u times", p + 1, ncmds(p) - sc0[p]);
+        Res r = xfer(0, { 0x00 }, 3);
+        CHECK(r.ok && r.cnt == 3, "SCAN=0: a transaction still works");
+        reg_wr(R_CTRL, 1);
+    } else {
     for (int p = 0; p < 4; p++) set_dev(p, p == 2 ? 0 : (p & 1) ? 2 : 1);
     reg_wr(R_STAT, 0xF0);
     set_dev(2, 0);
@@ -319,6 +333,7 @@ int main(int argc, char **argv)
     unsigned c1 = ncmds(0);
     idle_us(10000);
     CHECK(ncmds(0) == c1, "no scan, no commands");
+    }
 
     // ---- a cartridge's pins: the adapter does not own the port (a Game Boy cartridge keeps it) and bank 0 carries its PHI clock. Even with ON and
     // SCAN set the scan must not run, no device may appear and nothing is driven

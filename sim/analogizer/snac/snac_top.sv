@@ -2,7 +2,7 @@
 // is pulled low by the master when its translator is outward and the FPGA's driver is on; ports 3 and 4 share bank 0, whose bits
 // are driven 1 together with the low pulse of the other (checked: never against a device pulling low).
 `default_nettype none
-module snac_top (
+module snac_top #(parameter bit SCAN = 1'b1) (
     input  wire         clk, rst,
     input  wire         sel_wr, sel_rd,
     input  wire  [3:0]  a,
@@ -30,7 +30,7 @@ module snac_top (
 wire p30_dir, p30_oe, p31_dir, p31_oe, b0_dir, b0_oe;
 wire [3:0] b0_o;
 wire [3:0] dq_in = wire_l;
-an_snac_pif pif (.clk, .rst, .sel_wr, .sel_rd, .a, .wd, .rd, .own, .en, .p30_dir, .p30_oe, .p31_dir, .p31_oe, .b0_dir, .b0_oe, .b0_o, .dq_in);
+an_snac_pif #(.SCAN(SCAN)) pif (.clk, .rst, .sel_wr, .sel_rd, .a, .wd, .rd, .own, .en, .p30_dir, .p30_oe, .p31_dir, .p31_oe, .b0_dir, .b0_oe, .b0_o, .dq_in);
 assign mlow[0] = p30_dir & p30_oe;
 assign mlow[1] = p31_dir & p31_oe;
 assign mlow[2] = b0_dir & b0_oe & ~b0_o[0];
