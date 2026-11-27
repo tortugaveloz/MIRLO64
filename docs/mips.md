@@ -86,6 +86,7 @@ hardware once the runtime has turned the pass-through on (COP0 register 7, bit 8
 
 | N64 physical address (through KSEG0 or KSEG1) | Block |
 |---|---|
+| `0x03F0_0000` | The RDRAM chips' registers (the runtime's: they read 0 and take writes; a game's start-up reads them, as `lwu` as well) |
 | `0x0430_0000` | MI (the registers repeat through the megabyte) |
 | `0x0440_0000` | VI |
 | `0x0450_0000` | AI |
@@ -192,7 +193,8 @@ back unchanged. The same notice, with its own text, refuses a core whose CPU lac
 `rtl/mips/mips_core.sv` executes the VR4300's instructions with 32-bit addresses: MIPS II, the 64-bit integers by
 levels (below), `eret`, `ll` / `sc`, the trap instructions, the cache instruction and COP1. `rtl/soc/mips_sys.sv`
 instantiates it with the boot ROM and these parameters. The CPU does the instructions a game uses, the 64-bit
-integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below); the runtime does none of them on its behalf.
+integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below); the runtime does none of them on its behalf,
+except `lld` and `scd`, which it does as a compare-and-swap (below).
 
 | Parameter | Value | Meaning |
 |---|---|---|
@@ -335,7 +337,11 @@ not have and the runtime does not ask for); the runtime checks at start-up that 
 is not, stops with a notice on the screen (as for a missing layout mark) and starts no game. It keeps no copy of a
 register's upper half, has no soft HI and LO and does no 64-bit instruction itself. What the CPU does not have is a
 Reserved Instruction, and a Reserved Instruction stops the game with a message on the UART like any exception the
-runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand, `lld`, `scd`.
+runtime does not handle: a trap instruction (`teq`, `tge` ...) on a 64-bit operand. `lld` and `scd` are also a Reserved Instruction in the CPU,
+but the runtime's exception monitor does them: `lld` loads the doubleword and remembers its address and value, and the `scd` of that address
+stores only if the doubleword is still the value (a compare-and-swap, 1 in the register on success and 0 on failure), as a game's
+library that updates a 64-bit state in a loop of the two needs (a random number generator, its global constructors); only a doubleword-aligned
+address of the RDRAM through KSEG0 or KSEG1 is handled (`lang/n64rt/test/lld_game.S`, `sim/mips_soc/lld_check.sh`).
 
 ### The FPU
 
@@ -414,6 +420,11 @@ of the remainder) of the exponents' difference + the same for the cancellation o
 are 3 (add, sub), 8 (mul) and 58 (div). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
 
 ### Address translation
+
+A 64-bit address in the xkphys, as a game's `io_read` / `io_write` use to reach the RCP (Status.KX set, the base register's upper word
+`0x9000_0000` for uncached or `0x9800_0000` for cached, its lower word below `0x2000_0000`), reaches its physical address as KSEG1 or KSEG0 does
+(two flip-flops loaded in D and a few bits of the address mux in E; `lang/mips/test/xkphys_test.c`). Any other xkphys address is an address
+error as before.
 
 The CPU has the VR4300's TLB (`TLB_EN`): 32 entries, each a pair of pages of 4 KiB to 16 MiB (PageMask), fully associative
 on VPN2 and the ASID (a global entry matches any), with the Valid, Dirty, Global and C fields of EntryLo0 and EntryLo1, in
@@ -782,7 +793,8 @@ kind, `mf_patch`, replaces a hand-written float-matrix conversion that reads a d
 - **DPC**: reads come from the RDP's registers; writes of DPC_START, DPC_END and DPC_STATUS are forwarded to them.
   DPC_CLOCK is a 24-bit counter of system clocks, cleared by DPC_STATUS bit 9; it reads 0 with a CIC-6105 boot code,
   as on those consoles. The busy counters read 0.
-- **PI**: PI_DRAM_ADDR is 24 bits and PI_CART_ADDR 32, both even; a DMA leaves them past what it moved; PI_RD_LEN
+- **PI**: PI_DRAM_ADDR is 24 bits and PI_CART_ADDR 32, both even; a DMA leaves them past what it moved, and while the engine works PI_DRAM_ADDR reads the
+  address it has got to (its end less the words PI_*_LEN still has, rounded to 8: a library that decompresses in place while its DMA goes on reads it); PI_RD_LEN
   reads `0x7F`, and PI_WR_LEN `0x7F` after a DMA into the RDRAM. The other registers read back what was written.
   A DMA into the RDRAM from where nothing answers (past the ROM's end, or outside the ROM and domain 2) gets the open
   bus, each half word the low half of its own address (`0x1FFF_E000` reads `E000 E002 E004 ...`): the RDRAM is written,
@@ -811,7 +823,12 @@ instruction.
 
 ### MI
 
-MI_MODE's bits, MI_VERSION (`0x0202_0102`), MI_INTR and MI_MASK with its set / clear pairs are as the console's. SP is
+MI_MODE's bits, MI_VERSION (`0x0202_0102`), MI_INTR and MI_MASK with its set / clear pairs are as the console's.
+MI's repeat mode works: after MI_MODE is written with its init bit (bit 8) and n - 1 in bits 6:0, the next doubleword the CPU stores to the
+RDRAM is written over n bytes (up to 128, the address advancing a word each time) and the init bit clears itself, as the console's does (a game's
+library fills memory with it and tests it at start-up). `rcp_mi.sv` gives the init bit and the count to `cpu_port.sv`, which makes the repeated
+writes on its SoC-clock side, where the store FIFO's head is made (a 2-bit state, a 7-bit counter and the two held words); nothing is in `mips_core`.
+A first store that is a word at an odd address ends the mode and is a store as ever (`lang/mips/test/mirepeat_test.c`). SP is
 the RSP's interrupt as it is. VI is set by the VI's V_INTR, DP by the RDP's SYNC FULL, AI and SI by their blocks, PI by
 the engine. The game clears VI with a write to VI_CURRENT, AI with one to AI_STATUS, SI with one to SI_STATUS, PI with
 bit 1 of PI_STATUS and DP with MI_MODE's bit 11, each in the cycle of the store. The runtime can set and clear bits
@@ -1378,6 +1395,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `int64_test`, `ddiv64_test` | The 64-bit levels against a table; `ddiv(u)` and `div(u)` against a table of exact quotients and remainders (`ddiv64_vec.py`) |
 | `ualn_test` | `ldl`, `ldr`, `sdl`, `sdr` at every byte address (cached, uncached, mapped, on either TLB), in delay slots and behind stores to the same doubleword, block moves at every alignment, and their cost |
 | `n64win_test`, `mon_test` | The RDRAM window and its trap; the monitor level beside a game's own handler |
+| `xkphys_test`, `mirepeat_test` | The xkphys addresses of `io_read` / `io_write` (Status.KX), and MI's repeat mode (the stores after MI_MODE, the counts, the odd word that ends it); `sim/mips_soc/lld_check.sh` checks the runtime's `lld` / `scd` on the whole SoC |
 | `tlbram_test`, `tlbmon_test`, `tlbgame_test`, `tlbpg_test` | Each is one program that runs the checks for the CPU it finds (COP0 23), the tables' or the VR4300's own TLB (`<name>_real.c`). On the translation tables' CPU: the tables; the game's TLB instructions; TLB exceptions delivered to the game; the fetch page registers (each says SKIPPED on a CPU with neither). On the real TLB: `tlbram_test`, the seven page sizes, the micro-TLBs, every register of the TLB exceptions and their vectors, `tlbp`, `tlbr`, Index, Wired, Random, the caches, `0x6000_0000`; `tlbmon_test`, the game's own TLB instructions with the monitor (no trap); `tlbgame_test`, its refill and general handlers; `tlbpg_test`, the cached fetches from mapped pages |
 | `tlbint_real_test` | An interrupt that comes while a fetch from a page no entry names is in M: it goes to the general vector (never the refill vector), with the fault coming again afterwards |
 | `tlbdev_test` | A page onto a device or past the RDRAM: the monitor's entry and COP0 22, the 4 MiB setting, the game's exceptions first, every range the game maps, the game's view |

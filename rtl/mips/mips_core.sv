@@ -830,6 +830,7 @@ logic        e_valid, e_dly, e_fexc, e_serial;
 ctl_t        e_c;
 logic [31:0] e_pc, e_insn, e_ra, e_rb;     // operands as captured in D
 logic [31:0] e_ra_hx, e_rb_hx;
+logic        e_xku, e_xkc;      // (W64) the base register's upper word is the xkphys' uncached / cached one (0x9000_0000 / 0x9800_0000): see e_ea
 logic        e_aw, e_hxeq;                  // (FAST: a branch's) rs's hx is not zero; rs's and rt's are equal
 logic [4:0]  e_rs, e_rt, e_fexc_code;
 
@@ -1122,7 +1123,14 @@ always_comb begin
     endcase
 end
 
-wire [31:0] e_ea = e_a + sx16(e_insn[15:0]);
+wire [31:0] e_ea0 = e_a + sx16(e_insn[15:0]);
+// A 64-bit address in the xkphys, with Status.KX set (the open-source libdragon's io_read / io_write make theirs from a physical address, 0x9000_0000_0000_0000 |
+// it, uncached: the same access in the 32-bit view is KSEG1's): its physical address is the address's low 29 bits -- the RCP's and the cartridge's, the RDRAM's,
+// all below 0x2000_0000 -- and it is KSEG1's (CCA 2) or KSEG0's (CCA 3), which is how the rest of the core goes on from here. The base register's upper word is
+// read at D (e_xku / e_xkc: it is 0x9000_0000 / 0x9800_0000 and the register is no 32-bit value in flight), its low word is below 0x2000_0000. The
+// carry of the low word's sum into the upper is not looked at: an offset that leaves the physical 4 GiB is no address a game has.
+wire e_xk = W64 && c0_status[7] && (e_xku || e_xkc) && e_a[31:29] == 3'd0;
+wire [31:0] e_ea = e_xk ? {e_xku ? 3'b101 : 3'b100, e_ea0[28:0]} : e_ea0;
 // What the instruction's kind says about its memory access is known as it leaves D, and registered with it (e_c's):
 // the address's alignment requirement (halfword, word, doubleword), whether it is a memory access, a 64-bit FPU access,
 // and whether the instruction is an FPU one (Coprocessor Unusable) -- so E's exception cone starts from flops, not from a decode of e_insn.
@@ -1200,16 +1208,19 @@ wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22
 wire e_cpu1 = !c0_status[29] && e_isfp;
 logic [4:0] e_exc_code; logic [31:0] e_badv;
 // (e_exc is one OR of the causes, not the end of the priority chain that picks the code)
-wire e_exc = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
+// (the causes known early, in their priority, are one code and one flag; the trap's compare and the address's -- the late ones, from the forwarded
+// operands through the adder -- come last, each one level: they exclude each other, a trap is no access)
+wire e_exc_early = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk;
+wire e_exc = e_exc_early || e_trap || e_misalign || e_n64dev;
+logic [4:0] e_exc_ec;
 always_comb begin
-    e_badv = e_ea; e_exc_code = 5'd0;
-    if (e_fexc) begin e_exc_code = e_fexc_code; e_badv = e_pc; end
-    else if (e_cpu1) e_exc_code = 5'd11;
-    else if (e_c.ri) e_exc_code = 5'd10;
-    else if (e_c.sys) e_exc_code = 5'd8;
-    else if (e_c.brk) e_exc_code = 5'd9;
-    else if (e_trap) e_exc_code = 5'd13;
-    else if (e_misalign || e_n64dev) e_exc_code = e_c.st != S_NONE ? 5'd5 : 5'd4;
+    e_badv = e_ea;
+    if (e_fexc) begin e_exc_ec = e_fexc_code; e_badv = e_pc; end
+    else if (e_cpu1) e_exc_ec = 5'd11;
+    else if (e_c.ri) e_exc_ec = 5'd10;
+    else if (e_c.sys) e_exc_ec = 5'd8;
+    else e_exc_ec = 5'd9;
+    e_exc_code = e_exc_early ? e_exc_ec : ({5{e_trap}} & 5'd13) | ({5{e_misalign || e_n64dev}} & (e_c.st != S_NONE ? 5'd5 : 5'd4));
 end
 
 // multiply / divide (runs in the background; HI/LO interlocked)
@@ -1631,8 +1642,9 @@ wire m_commit = m_commit_e && !m_lmiss;     // (FAST: but a load of the wrong li
 // (the core's restructuring lengthens the tag compare's path to the write enables of the RAM)
 wire st_go = (m_commit_e || m_w0) && m_st && !m_sc_fail;      // a store's word completes this cycle
 wire st_dc_we, st_sb_we;
+wire [31:0] m_pk = kphys(m_addr), m_pt = tphys({m_tlbq[31:12], m_addr[11:0]});      // (m_pa's two sources: the D-cache's compare is made on each, and m_kseg chooses)
 mips_dchit #(.DC_LOG2(DC_LOG2)) dchit (
-    .dc_tq, .pa_tag(m_pa[28:13]), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
+    .dc_tq, .pa_tag_k(m_pk[28:13]), .pa_tag_m(m_pt[28:13]), .sel_k(m_kseg), .tk_valid, .tk_idx, .idx(m_addr[DW+1:4]),
     .go(st_go), .commit(m_commit_e && m_st && !m_sc_fail), .cached(m_cached),
     .hit(m_dc_hit), .dc_we(st_dc_we), .sb_we(st_sb_we)
 );
@@ -1765,9 +1777,8 @@ always_comb begin
     else f_next = f_pc;
 end
 // FAST: the next fetch, when there is one -- F holds an instruction D cannot
-// take (f_hold) with the I-cache's read kept, so whether D's branch leaves
+// take (f_have, and D valid, without d_adv) with the I-cache's read kept, so whether D's branch leaves
 // now is not asked here: if it does not, nothing is fetched
-wire f_hold = f_have && !f_take;
 logic [31:0] f_nx;
 always_comb begin
     if (flush) f_nx = flush_pc;
@@ -1778,8 +1789,12 @@ always_comb begin
     else if (d_ok && d_k_cti) f_nx = d_k_pred ? d_ptarget : f_pc + 32'd4;
     else f_nx = f_pc + 32'd4;
 end
+// (ic_ren as D's advance, the last signal of the pipeline's stall chain, meets it: the read is kept when F holds an instruction that D cannot
+// take -- ic_ren0 is everything else, and f_pc is one choice by d_adv between f_nx and what ic_ren0 leaves, not by ic_ren, a level behind d_adv)
+wire ic_ren0 = !FAST || !f_have || !d_valid || flush || d_imiss || b_redir;
+wire [31:0] f_pc_h = ic_ren0 ? f_nx : f_pc;
 always_comb begin
-    ic_ren = !FAST || !f_hold || flush || d_imiss || b_redir;
+    ic_ren = ic_ren0 || d_adv;
     ic_raddr = FAST ? f_nx[IW+1:2] : f_next[IW+1:2];
 end
 
@@ -2031,6 +2046,8 @@ end
 // D -> E: the registers' upper words, cleared when the register is in flight (rf_ah, rf_bh: the register file's word, or zero)
 wire e_ld_d = !rst && !flush && e_adv;
 mips_ldr #(32) e_rah (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah), .q(e_ra_hx));
+mips_ldr #(1) e_rxku (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah == 32'h9000_0000), .q(e_xku));
+mips_ldr #(1) e_rxkc (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah == 32'h9800_0000), .q(e_xkc));
 mips_ldr #(32) e_rbh (.clk, .en(e_ld_d), .clr(!W64 || d_rt == 0 || inflight_rt), .d(rfq_bh), .q(e_rb_hx));
 
 // =============================================================== COP0's registers that only take values (mips_c0r, below)
@@ -2380,7 +2397,7 @@ always_ff @(posedge clk) begin
 
         // ---------------------------------------------------- F
         if (!FAST) f_pc <= f_next;
-        else if (ic_ren) f_pc <= f_nx;
+        else f_pc <= d_adv ? f_nx : f_pc_h;
         f_ok <= fs == FS_RUN || fs == FS_READY;
         case (fs)
         FS_RUN: if (f_ok && !f_have && !f_kill) begin
@@ -2736,9 +2753,6 @@ module mips_ealu (
     output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq,
     output wire [31:0] pc8                                  // the link address, pc + 8 (the branch's not-taken target too)
 );
-function automatic logic [31:0] rev32(input logic [31:0] v);
-    for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
-endfunction
 assign a = ({32{sa_m}} & m_res) | ({32{sa_w}} & w_res) | ({32{sa_r}} & e_ra);
 assign b = ({32{sb_m}} & m_res) | ({32{sb_w}} & w_res) | ({32{sb_r}} & e_rb);
 assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
@@ -2747,9 +2761,11 @@ assign ltu = !cs[32];
 assign eq  = a == b;
 assign pc8 = e_pc + 32'd8;
 wire [4:0]  sh  = k_shv ? a[4:0] : shamt;
-wire [32:0] shx = {sra && b[31], sl ? rev32(b) : b};
-wire [32:0] shr = $signed(shx) >>> sh;
-wire [31:0] shv = sl ? rev32(shr[31:0]) : shr[31:0];
+// (two shifters, to the right and to the left, and the choice between them as the last step: sll as a right shift of the reversed word and the reversed
+// result were a LUT before the shifter's stages and another after them, on the operand forwarding's path to E's result)
+wire [32:0] shr = $signed({sra && b[31], b}) >>> sh;
+wire [31:0] shl = b << sh;
+wire [31:0] shv = sl ? shl : shr[31:0];
 logic [31:0] misc;
 always_comb begin
     case (k_op)
@@ -2781,7 +2797,8 @@ endmodule
 (* altera_attribute = "-name MUX_RESTRUCTURE OFF" *)
 module mips_dchit #(parameter int DC_LOG2 = 9) (
     input  wire [16:0]       dc_tq,
-    input  wire [15:0]       pa_tag,
+    input  wire [15:0]       pa_tag_k, pa_tag_m,   // the access's physical tag by an unmapped address (KSEG) and by the translation's page
+    input  wire              sel_k,        // ... and which is the access's: the choice of the address is behind the compare, not in front of it
     input  wire              tk_valid,
     input  wire [DC_LOG2-1:0] tk_idx, idx,
     input  wire              go,          // a store's word completes this cycle (not a failed sc)
@@ -2789,7 +2806,7 @@ module mips_dchit #(parameter int DC_LOG2 = 9) (
     input  wire              cached,
     output wire              hit, dc_we, sb_we
 );
-assign hit   = dc_tq[16] && dc_tq[15:0] == pa_tag && !(tk_valid && tk_idx == idx);
+assign hit   = dc_tq[16] && (sel_k ? dc_tq[15:0] == pa_tag_k : dc_tq[15:0] == pa_tag_m) && !(tk_valid && tk_idx == idx);
 assign dc_we = go && cached && hit;
 assign sb_we = commit && cached && hit;
 endmodule

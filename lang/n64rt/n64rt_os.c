@@ -733,6 +733,7 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 /* An access to the RCP's side of the bus is a 32-bit one, whatever the instruction. What the hardware does with the others
  * (n64-systemtest's spmem / pifram / cart_memory groups; the same for every RCP register):
  *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here; the cartridge's: n64rt_cart.h)
+ *   lwu             the word, zero-extended
  *   lwl lwr         the aligned word, merged into the register
  *   sb sh           the WHOLE word is written, the register shifted to the byte's or half's lane and zeros below it -- the other
  *                   lanes are not left alone: sb of 0x12345678 at offsets 0, 1, 2, 3 writes 0x78000000, 0x56780000, 0x34567800,
@@ -766,6 +767,10 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     case 0x26:                                                          /* lwr: from the word's start to the address, at the bottom */
         if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
         if (rt) gset(x, rt, (x->g[rt].l & ~(0xFFFFFFFFu >> (8u * (3u - k)))) | (v >> (8u * (3u - k))));
+        return 1;
+    case 0x27:                                                          /* lwu: the word, zero-extended (the 64-bit register's upper word 0) */
+        if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
+        if (rt) gset64(x, rt, (u64)v);
         return 1;
     case 0x37: {                                                        /* ld */
         u32 lo;
@@ -1560,6 +1565,36 @@ static void exc_deliver(n64rt_ctx_t *x, u32 code, u32 bd)
     x->status |= 2u;                                    /* (EXL; the eret to the vector clears ERL) */
     x->epc = 0x80000180u;
 }
+/* LLD and SCD, which the CPU does not have (a Reserved Instruction): an open-source libdragon's rand() and its entropy pool (run by the global
+ * constructors before main) make their 64-bit state's update a loop of `lld`, the new value, `scd`. They are done here on the game's behalf, the
+ * pair as a compare-and-swap: LLD remembers the doubleword's address and value, and SCD stores (and tells 1) when that is still the address and
+ * the doubleword still has the value, else leaves it and tells 0; any SCD ends the link. The console's link is a bit that an ERET clears, which here
+ * would be every return from this very entry; the value says the same for all that a program on one CPU can tell (a doubleword that was written and
+ * written back to what it was between the two is the one difference). The address is the game's own KSEG0 or KSEG1 one inside its RDRAM, aligned;
+ * anything else (an address error, a mapped page) is left as a Reserved Instruction. */
+static u32 s_lld_addr; static u64 s_lld_val; static int s_lld_on;
+static int emulate_lld_scd(n64rt_ctx_t *x, u32 bd)
+{
+    u32 pc = x->epc + (bd ? 4u : 0u), next = pc + 4u, insn;
+    if (!insn_at(pc, &insn)) return 0;
+    const u32 op = insn >> 26, rt = (insn >> 16) & 31u;
+    if (op != 0x34u && op != 0x3Cu) return 0;                   /* lld, scd */
+    const u32 ea = g32(x, (insn >> 21) & 31u) + (u32)(s32)(s16)insn;
+    if ((ea & 7u) || ((ea >> 29) != 4u && (ea >> 29) != 5u) || (ea & 0x1FFFFFFFu) + 8u > n64rt_game->mem_size) return 0;
+    if (bd && !branch_next(x, x->epc, &next)) return 0;         /* (in a delay slot: through the branch) */
+    volatile u64 *p = (volatile u64 *)(uintptr_t)ea;
+    if (op == 0x34u) {
+        s_lld_val = *p; s_lld_addr = ea; s_lld_on = 1;
+        gset64(x, rt, s_lld_val);
+    } else {
+        const int ok = s_lld_on && s_lld_addr == ea && *p == s_lld_val;
+        if (ok) *p = g64(x, rt);
+        s_lld_on = 0;
+        gset(x, rt, ok ? 1u : 0u);
+    }
+    x->epc = next;
+    return 1;
+}
 void n64rt_mon_exception(void)
 {
     n64rt_ctx_t *x = &n64rt_mon_ctx;
@@ -1585,6 +1620,8 @@ void n64rt_mon_exception(void)
         /* the game's own tlbwi / tlbwr / tlbr / tlbp */
     } else if (code == 10 && !bd && own_tlb_call(x)) {
         /* osMapTLB / osUnmapTLB / osUnmapTLBAll, the runtime's (n64rt_boot.c: a core that does not take the TLB instructions) */
+    } else if (code == 10 && emulate_lld_scd(x, bd)) {
+        /* the game's lld or scd */
     } else if (code == 10 || code == 4 || code == 5) {
         exc_deliver(x, code, bd);
     } else {

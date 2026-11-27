@@ -133,8 +133,25 @@ wire [31:0] xl_ = FAST ? (hx_l ? lw_dl : gx_l ? l2_dl : qxl) : (lw_l && lw_idx =
 wire [31:0] xh_ = FAST ? (hx_h ? lw_dh : gx_h ? l2_dh : qxh) : (lw_h && lw_idx == rx_m) ? lw_dh : qxh;
 wire [31:0] yl_ = FAST ? (hy_l ? lw_dl : gy_l ? l2_dl : qyl) : (lw_l && lw_idx == ry_m) ? lw_dl : qyl;
 wire [31:0] yh_ = FAST ? (hy_h ? lw_dh : gy_h ? l2_dh : qyh) : (lw_h && lw_idx == ry_m) ? lw_dh : qyh;
-wire [31:0] rfs = !frm && insn[11] ? xh_ : xl_;         // f[fs]
-wire [31:0] rft = !frm && insn[16] ? yh_ : yl_;         // f[ft]
+// (FAST: the odd-register choices and the moves to the integer registers' and the writes' selects are flip-flops that took them from E's
+// instruction as it entered M -- a word that fans out to the whole core, whose decode in front of these multiplexers was the path
+// m_insn -> fpu -> gpr_out -> w_res, and res -> wd_h -> lw_dh through a chain of the decode's cases)
+logic fs_o, ft_o, g_mf, g_dmf, g_31, g_0, g_sd;                         // fs, ft odd; mfc1; dmfc1; cfc1 of FCR31; of FCR0; sdc1
+logic ws_g, ws_m, ws_gh, ws_mh, ws_mov, ws_movd, ws_ar;                 // the write's data: mtc1 / dmtc1's gpr_in, lwc1's word, dmtc1's upper word, ldc1's, a move (a double's), the datapath's
+function automatic logic [13:0] gdec(input logic [31:0] i);
+    logic cop1, mf, dmf, mtc, dmt, lw, ld, mov, o;
+    cop1 = i[31:26] == 6'h11;
+    mf = cop1 && i[25:21] == 5'h00; dmf = cop1 && i[25:21] == 5'h01;
+    mtc = cop1 && i[25:21] == 5'h04; dmt = cop1 && i[25:21] == 5'h05;
+    lw = i[31:26] == 6'h31; ld = i[31:26] == 6'h35;
+    mov = cop1 && (i[25:21] == 5'h10 || i[25:21] == 5'h11) && i[5:0] == 6'h06;
+    o = d64_of(i) || mtc || dmt || lw || ld || mov;
+    return {i[11], i[16], mf, dmf, !mf && !dmf && i[15:11] == 5'd31, !mf && !dmf && i[15:11] == 5'd0, i[31:26] == 6'h3D,
+            mtc, lw, dmt, ld, mov, mov && i[25:21] == 5'h11, !o};
+endfunction
+always_ff @(posedge clk) if (adv) {fs_o, ft_o, g_mf, g_dmf, g_31, g_0, g_sd, ws_g, ws_m, ws_gh, ws_mh, ws_mov, ws_movd, ws_ar} <= gdec(insn_e);
+wire [31:0] rfs = (FAST ? fs_o : insn[11]) && !frm ? xh_ : xl_;         // f[fs]
+wire [31:0] rft = (FAST ? ft_o : insn[16]) && !frm ? yh_ : yl_;         // f[ft]
 
 logic [31:0] fcr31;                                     // RM, C (bit 23), FS and the enables (as written)
 
@@ -749,6 +766,10 @@ always_comb begin
     gpr_out = is_mfc1 ? rfs : is_dmfc1 ? xl_ : (insn[15:11] == 5'd31 ? fcr31 : insn[15:11] == 5'd0 ? 32'h00000A00 : 32'd0);
     gpr_out_hi = xh_;
     mem_out = is_sdc1 ? {yh_, yl_} : {32'd0, rft};
+    if (FAST) begin
+        gpr_out = ({32{g_mf}} & rfs) | ({32{g_dmf}} & xl_) | ({32{g_31}} & fcr31) | ({32{g_0}} & 32'h00000A00);
+        mem_out = g_sd ? {yh_, yl_} : {32'd0, rft};
+    end
     cond = is_ctc1 ? gpr_in[23] : (is_arith && kind == K_CMP) ? rcond : (is_d64 && d64_cmp) ? d64_rcond : fcr31[23];
 
     // which register, and which words, from M's instruction (and the datapath's state) alone: `valid`, which comes late, only
@@ -780,6 +801,21 @@ always_comb begin
     else if (is_mov) wd_h = is_d ? xh_ : rfs;
     else if (is_d64) wd_h = d64_res[63:32];
     else wd_h = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
+    // (FAST: the same chains, on the flip-flops' selects: the cases are disjoint, the order is the one above)
+    if (FAST) begin
+        if (ws_g || ws_gh) wd_l = gpr_in;
+        else if (ws_m || ws_mh) wd_l = mem_in[31:0];
+        else if (ws_mov) wd_l = ws_movd ? xl_ : rfs;
+        else if (d64_q) wd_l = d64_res[31:0];
+        else wd_l = dst_d ? res_d[63:32] : res;
+        if (ws_g) wd_h = gpr_in;
+        else if (ws_m) wd_h = mem_in[31:0];
+        else if (ws_gh) wd_h = gpr_in_hi;
+        else if (ws_mh) wd_h = mem_in[63:32];
+        else if (ws_mov) wd_h = ws_movd ? xh_ : rfs;
+        else if (d64_q) wd_h = d64_res[63:32];
+        else wd_h = dst_l ? {32{res[31]}} : dst_d ? res_d[31:0] : res;
+    end
 end
 
 // the trace: registered with the write, so it lines up with the core's retire (W)

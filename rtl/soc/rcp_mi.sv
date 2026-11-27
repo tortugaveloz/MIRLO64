@@ -3,7 +3,8 @@
 //
 // MI, 0x0430_0000 (the game's lw / sw reach it as a device access: mips_core's MI,
 // mirlo_mips.sv's decode; the 1 MiB of its block is the registers, repeated):
-//   +0 MODE     read {upper, ebus, init, count[6:0]}; write: [6:0] count, 7/8 clear/set init, 9/10 clear/set
+//   +0 MODE     read {upper, ebus, init, count[6:0]}; write: [6:0] count, 7/8 clear/set init (the repeat mode: cpu_port repeats the next doubleword
+//               the CPU stores to the RDRAM over count + 1 bytes, and the mode ends), 9/10 clear/set
 //               ebus test, 11 clear the DP interrupt, 12/13 clear/set upper mode
 //   +4 VERSION  0x02020102
 //   +8 INTR     read: the pending interrupts [0] SP [1] SI [2] AI [3] VI [4] PI [5] DP
@@ -73,7 +74,12 @@ module rcp_mi #(
     input  wire         io_ps,                  // ROM64: the read is the PSRAM's
     input  wire  [31:0] io_wd,
     input  wire  [3:0]  io_be,
-    output wire         io_ack
+    output wire         io_ack,
+    // MI's repeat mode (MI_MODE's init bit, with its count: bytes less one) for cpu_port, which repeats the next doubleword the CPU
+    // stores to the SDRAM over that many bytes and tells rep_done, which ends the mode
+    output wire         rep_on,
+    output wire  [6:0]  rep_cnt,
+    input  wire         rep_done
 );
 
 typedef enum logic [2:0] { P_IDLE, P_RD, P_WR, P_PRIME, P_IO } pst_t;
@@ -83,6 +89,8 @@ logic [6:0] count;
 logic       init_m, ebus, upper;
 assign intr   = {pend[5:1], sp_lvl};
 assign mask_o = mask;
+assign rep_on = init_m;
+assign rep_cnt = count;
 assign line   = |(intr & mask);
 
 wire mi_wr = w_mi && w_we, pi_wr = w_pi && w_we;
@@ -107,6 +115,7 @@ always_ff @(posedge clk) begin
     if (rst) begin pend <= '0; mask <= '0; count <= '0; init_m <= 1'b0; ebus <= 1'b0; upper <= 1'b0; end
     else begin
         pend <= (pend & ~clr_b) | set_b;
+        if (rep_done) init_m <= 1'b0;                         // (a write to MI_MODE in the same cycle wins, below)
         if (mi_wr && w_a == 2'd3)
             for (int i = 0; i < 6; i++) begin
                 if (w_wd[2*i])     mask[i] <= 1'b0;

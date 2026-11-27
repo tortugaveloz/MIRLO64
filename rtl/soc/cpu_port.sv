@@ -65,6 +65,9 @@ module cpu_port #(
     input  wire  [31:0] p_rdata,
     input  wire         rd_next,            // sdr_ctrl's: a read word is on p_rdata in the next cycle,
     input  wire  [2:0]  rd_next_tag,        // for the port of this tag
+    input  wire         rep_on,             // MI's repeat mode (rcp_mi.sv): the next doubleword stored to the SDRAM goes over rep_cnt + 1 bytes
+    input  wire  [6:0]  rep_cnt,
+    output wire         rep_done,           // ... and has: the mode ends
     output wire         x_req, x_we,        // the device port, as mips_sys gave it: held until x_ack
     output wire  [31:0] x_addr, x_wdata,
     output wire  [3:0]  x_strb,
@@ -135,6 +138,18 @@ logic        w_run;                         // the SDRAM's stores are going out
 logic [4:0]  w_age;
 logic        dv_s;                          // dv_out as the last edge found it
 wire         w_dev = w_head[66];
+// MI's repeat mode (the words of the doubleword being repeated, which of them is next, and how many words are still to go)
+logic [1:0]  rg_st;                         // 0 none, 1 the doubleword's first word has gone, 2 the words that follow are being made
+logic [31:0] rg_d0, rg_d1;
+logic [3:0]  rg_b0, rg_b1;
+logic        rg_ph, rg_done;
+logic [6:0]  rg_rem;
+wire  [7:0]  rg_cnt1 = {1'b0, rep_cnt} + 8'd1;
+wire  [6:0]  rg_nw = {1'b0, rg_cnt1[7:2]};          // the words in rep_cnt + 1 bytes
+wire         rg_load = w_pop && !w_dev && ((rg_st == 2'd1 && rg_nw > 7'd2) || (rg_st == 2'd2 && rg_rem != 7'd0));
+wire  [31:0] rg_nd = rg_st == 2'd2 && rg_ph ? rg_d1 : rg_d0;
+wire  [3:0]  rg_nb = rg_st == 2'd2 && rg_ph ? rg_b1 : rg_b0;
+assign       rep_done = rg_done;
 wire         a_out = t_s != seen;           // a read is out
 wire  [FA:0] w_n = wp_s - rp;
 wire         w_pop = w_valid && (w_dev ? x_ack : w_run && p_ready);
@@ -159,11 +174,32 @@ always_ff @(posedge clk) begin
     wp_s <= wp; dv_s <= dv_out;
     if (rst) begin
         rp <= '0; wp_s <= '0; w_valid <= 1'b0; t_s <= 1'b0; seen <= 1'b0; r_rv <= 1'b0; r_seq <= 1'b0;
-        issued <= 4'd0; got <= 4'd0; w_run <= 1'b0; w_age <= '0;
+        issued <= 4'd0; got <= 4'd0; w_run <= 1'b0; w_age <= '0; rg_st <= 2'd0; rg_done <= 1'b0;
     end else begin
-        // the FIFO's head
-        if ((!w_valid || w_pop) && rp != wp_s) begin w_head <= wf[rp[FA-1:0]]; rp <= rp + 1'b1; w_valid <= 1'b1; end
+        // the FIFO's head, or (rg_load) the next word MI's repeat mode makes of a doubleword, below
+        if (rg_load) begin w_head <= {1'b0, rg_nb, rg_nd, w_head[29:0] + 30'd1}; w_valid <= 1'b1; end
+        else if ((!w_valid || w_pop) && rp != wp_s) begin w_head <= wf[rp[FA-1:0]]; rp <= rp + 1'b1; w_valid <= 1'b1; end
         else if (w_pop) w_valid <= 1'b0;
+        // MI's repeat mode: the first doubleword the CPU stores to the SDRAM after it is set (two words in the FIFO, the even one first) goes
+        // out as it is and its two words again, alternately, to the end of rep_cnt + 1 bytes: the pattern a memset fills the RDRAM with in one
+        // store. The head is made of the held words, in place of the FIFO's next entry, until the last one has gone; then the mode ends.
+        // A first store that is a word at an odd address is no doubleword: it ends the mode and is a store as ever.
+        rg_done <= 1'b0;
+        if (w_pop && !w_dev) begin
+            if (rg_st == 2'd0) begin
+                if (rep_on) begin
+                    if (w_head[0]) rg_done <= 1'b1;
+                    else begin rg_st <= 2'd1; rg_d0 <= w_head[61:30]; rg_b0 <= w_head[65:62]; end
+                end
+            end else if (rg_st == 2'd1) begin
+                rg_d1 <= w_head[61:30]; rg_b1 <= w_head[65:62];
+                if (rg_nw > 7'd2) begin rg_st <= 2'd2; rg_rem <= rg_nw - 7'd3; rg_ph <= 1'b1; end
+                else begin rg_st <= 2'd0; rg_done <= 1'b1; end
+            end else begin
+                if (rg_rem == 7'd0) begin rg_st <= 2'd0; rg_done <= 1'b1; end
+                else begin rg_rem <= rg_rem - 7'd1; rg_ph <= !rg_ph; end
+            end
+        end
         // a run of the SDRAM's stores: to the last one waiting
         if (!w_valid && rp == wp_s) begin w_run <= 1'b0; w_age <= '0; end
         else begin
