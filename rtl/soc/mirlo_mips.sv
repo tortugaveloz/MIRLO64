@@ -223,6 +223,8 @@ logic        cpu_irq, mon_irq, mon_own, mon_rcp, mon_sp, mon_field, mon_dp;
 localparam bit CPU_FAST = 1'b1;
 logic        rst_cpu, irq_s, irq_mon_s, c_irq, c_irq_mon;
 logic        c_x_req, c_x_ack, st_valid, st_dev, st_full, st_done;
+logic        mi_rep_on, mi_rep_done;                   // MI's repeat mode (rcp_mi.sv) and its end, for cpu_port
+logic  [6:0] mi_rep_cnt;
 logic [31:0] c_x_addr, c_x_rdata, st_addr, st_data;
 logic [3:0]  st_strb;
 always_ff @(posedge clk_cpu) rst_cpu <= reset;
@@ -238,7 +240,7 @@ cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .c_x_req, .c_x_addr, .c_x_ack, .c_x_rdata, .c_irq, .c_irq_mon,
     .clk, .rst,
     .p_valid(p_valid[1]), .p_we(p_we[1]), .p_addr(p_addr[1]), .p_wdata(p_wdata[1]), .p_be(p_be[1]),
-    .p_ready(p_ready[1]), .p_rdata, .rd_next, .rd_next_tag,
+    .p_ready(p_ready[1]), .p_rdata, .rd_next, .rd_next_tag, .rep_on(mi_rep_on), .rep_cnt(mi_rep_cnt), .rep_done(mi_rep_done),
     .x_req, .x_we, .x_addr, .x_wdata, .x_strb, .x_ack, .x_rdata, .irq(irq_s), .irq_mon(irq_mon_s));
 assign s_busy = 1'b0;
 // (the CPU's reads go first, with the RSP's DMA: it waits for each line it misses)
@@ -467,6 +469,7 @@ mirlo_regs regs (.clk, .rst,
     .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq,
     .mon_mi, .mi_line, .mi_w_mi(mi_op && x_mi), .mi_w_pi(mi_op && x_pi), .mi_w_we(x_we), .mi_w_a(x_addr[3:2]), .mi_w_wd(x_wdata), .mi_w_rd,
     .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata(pa_dat_r), .d_ack,
+    .mi_rep_on, .mi_rep_cnt, .mi_rep_done,
     .io_req(xs == X_CART), .io_we(x_we), .io_adr, .io_ps(io_ps && (x_rom || x_psw || x_psh || x_d2)), .io_wd(x_wdata), .io_be(x_strb), .io_ack, .d2_flash, .ps_ready,
     .mon_vi, .vi_thr, .vi_irq, .vi_chg, .vi_clr,
     .mon_ai, .ai_irq, .ai_clr, .ai_chg, .ai_dac, .ai_step_we, .ai_step_wd,
