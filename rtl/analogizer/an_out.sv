@@ -36,9 +36,8 @@ wire         cs_ypbpr = csync_n;
 // picture on a clock later otherwise (its `woven` input is high), with the colour 0 outside the picture
 wire  [23:0] sd_rgb;
 wire         sd_hs_n, sd_vs_n, sd_de;
-logic [23:0] sd_rgb_r; logic sd_hs_r, sd_vs_r, sd_de_r;
-always_ff @(posedge clk) begin sd_rgb_r <= de ? rgb : 24'd0; sd_hs_r <= ~hs; sd_vs_r <= ~vs; sd_de_r <= de; end   // EXPERIMENT: no line doubler
-assign sd_rgb = sd_rgb_r; assign sd_hs_n = sd_hs_r; assign sd_vs_n = sd_vs_r; assign sd_de = sd_de_r;
+an_scandbl scandbl (.clk(clk), .rst(rst), .woven(woven || mode != 3'd6), .rgb(rgb), .hs(hs), .vs(vs), .de(de), .skip(skip),
+                    .rgb_o(sd_rgb), .hs_o(sd_hs_n), .vs_o(sd_vs_n), .de_o(sd_de));
 
 // ---- the pins, by mode
 logic [5:0] r6, g6, b6;
