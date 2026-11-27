@@ -335,6 +335,7 @@ static void psram_step(bool neg)
 // (CPUTRACE, EXCSTAT, CPUSTAT, XTRACE, PCTOP: read by opts_load, at the start and again by a run resumed from a checkpoint -- CKPT)
 static long ct_from = -1, ct_count, ct_n, o_exc_per = 60, o_xtrace, o_pctop;
 static bool o_cstat, o_ctrace, o_excstat, o_pcprof, o_cmodel;
+static uint32_t o_dump_pc;                       // RAMDUMP_AT
 static long o_pcprof_from, o_rcpstat;
 static uint32_t o_rcp_ilo, o_rcp_ihi;
 static bool ck_run;                     // this is a run from a checkpoint
@@ -345,6 +346,7 @@ static bool ss_bridge;
 static void opts_load()
 {
     o_cmodel = getenv("CONMODEL") != nullptr;
+    o_dump_pc = getenv("RAMDUMP") && getenv("RAMDUMP_AT") ? (uint32_t)strtoul(getenv("RAMDUMP_AT"), 0, 16) : 0;
     o_ss_save = getenv("SS_SAVE") ? atol(getenv("SS_SAVE")) : -1;
     o_ss_load_at = getenv("SS_LOAD_AT") ? atol(getenv("SS_LOAD_AT")) : 60;
     ss_bridge = getenv("SS_BRIDGE") != nullptr;
@@ -851,6 +853,17 @@ static void ss_write(const std::string &path, const std::vector<uint8_t> &d)
     fflush(stdout);
 }
 
+// RAMDUMP=<file>: the game's 8 MiB of RDRAM (SDRAM 0x4380_0000), the N64's bytes. RAMDUMP_AT=<pc>: when the game CPU first retires an
+// instruction at <pc> (the game's entry, 80000400: what the boot left for it) instead of as the run ends, and the run stops there
+// (the D-cache's dirty lines are not in the SDRAM: the runtime has written the game's memory back by the time it starts it).
+static void ram_dump(const char *f)
+{
+    if (FILE *pf = fopen(f, "wb")) {
+        std::vector<uint8_t> ram(8u << 20);
+        for (uint32_t a = 0; a < (8u << 20); a += 4) { uint32_t w = rd_word((0x03800000u + a) >> 2); ram[a] = w >> 24; ram[a + 1] = w >> 16; ram[a + 2] = w >> 8; ram[a + 3] = w; }
+        fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
+    }
+}
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
@@ -1006,6 +1019,7 @@ int main(int argc, char **argv)
             bool rise = (cpu_t / (2 * TB_CPU_M)) % 2 == 0;
             if (rise && cstat) cpu_stat_step(sys);
             if (rise && ctrace) cpu_trace_step();
+            if (rise && o_dump_pc && t->tr_retire && t->tr_pc == o_dump_pc) { ram_dump(getenv("RAMDUMP")); printf("[RAMDUMP_AT: the game CPU at %08x after %ld sys cycles]\n", t->tr_pc, sys); done = true; }
             if (rise && excstat) exc_stat_step();
             if (rise && o_cmodel) con_step();
             t->clk_cpu = rise;
@@ -1705,13 +1719,7 @@ int main(int argc, char **argv)
         }
     }
     // RAMDUMP=<file>: the game's 8 MiB of RDRAM (SDRAM 0x4380_0000) as the run ends, the N64's bytes
-    if (const char *f = getenv("RAMDUMP")) {
-        if (FILE *pf = fopen(f, "wb")) {
-            std::vector<uint8_t> ram(8u << 20);
-            for (uint32_t a = 0; a < (8u << 20); a += 4) { uint32_t w = rd_word((0x03800000u + a) >> 2); ram[a] = w >> 24; ram[a + 1] = w >> 16; ram[a + 2] = w >> 8; ram[a + 3] = w; }
-            fwrite(ram.data(), 1, ram.size(), pf); fclose(pf);
-        }
-    }
+    if (const char *f = getenv("RAMDUMP")) if (!o_dump_pc) ram_dump(f);
     // SHDUMP=<file>: the RDP's shadow plane (docs/video_options.md; SDRAM 0x0320_0000, 2 MiB) as the run ends, its words as they are
     if (const char *f = getenv("SHDUMP")) {
         if (FILE *pf = fopen(f, "wb")) {
