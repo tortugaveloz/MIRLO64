@@ -118,6 +118,7 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x4311_0000` - `0x431F_FFFF` | up to 960 KiB | The GameShark cheat database, `gameshark.gsdz` (about 0.7 MB), loaded by the Pocket with the core's files ([The picker](#the-picker)) |
 | `0x42C7_0000` - `0x42CF_FFFF` | 576 KiB | The tail of the save states' block, which a state never reaches (the largest is `0x97_0000` bytes): the picker's picture and the list of codes it hands to the engine |
 | `0x4380_0000` (RDRAM) | 448 KiB | The picker's buffers and tables while it runs, before the game boots; zeroed when it leaves |
+| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: a byte for each pixel of a 16-bit colour image, some of the low bits of its channels and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
@@ -1212,6 +1213,7 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
+| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit color (1), Deblur (2), 32-bit color + Deblur (3): [video_options.md](video_options.md) |
 | Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | Exp Pak and GameShark (2), **Exp Pak** (0, the default), GameShark (3), None (1). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller paks | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3), Transfer Pak SD P2 (4: SD in controller 2 alone), Transfer Pak SD P1P2 (5), TPak cart P1, SD P2 (6) |
 | Analogizer controllers | `0x1000_0148` | `interact2[14:10]` | **Dock: P1P2P3P4** (0), SNAC: P1P2P3P4 (15), Dock: P1 and SNAC: P2P3P4 (14), SNAC: P1 and Dock: P2P3P4 (1), SNAC: P1P2 and Dock: P3P4 (3), SNAC: P1P2P3 and Dock: P4 (7): a mask of the players that are the SNAC port's ([analogizer.md](analogizer.md)) |
@@ -1419,7 +1421,7 @@ stores and branches, cost in cycles (the table in "The FPU").
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
 - `sim/gb_cart`: `run.sh <rom.gb>` runs the cartridge port against the cartridge model, and then mutants of the port,
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
-- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model.
+- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Video settings" setting's choices).
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
 
 ### The runtime: `lang/n64rt/test`

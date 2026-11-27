@@ -137,7 +137,7 @@ each setting has an address of its own and needs no mask.
 | 15 | `0x1000_013C` | `INTERACT1[25]` | Gameshark codes (1: on; a variable of `interact.json` with an address the table gives to another setting writes that setting's field too: check that an address is not taken before giving it) |
 | 16 | `0x1000_0140` | `INTERACT2[4:0]` | Analogizer video (0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV, 7..9 RGBHV with the odd lines 25, 50, 75 % darker; the scan-out's pads read it) |
 | 18 | `0x1000_0148` | `INTERACT2[14:10]` | Analogizer controllers (a mask, bit n: player n + 1 is the SNAC port's: 0 Dock: P1P2P3P4, 15 SNAC: P1P2P3P4, 14 Dock: P1 and SNAC: P2P3P4, 1 SNAC: P1 and Dock: P2P3P4, 3 SNAC: P1P2, 7 SNAC: P1P2P3; the runtime reads it, `SNAC.CTRL` is on while it is not 0) |
-| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Free (it was the Video settings, the 32-bit output and Deblur, which the core no longer has) |
+| 17 | `0x1000_0144` | `INTERACT2[9:5]` | Video settings (bit 0: the 32-bit output, bit 1: Deblur; the scan-out and the RDP read them: [video_options.md](video_options.md)) |
 | 20 | `0x1000_0150` | `INTERACT1[25:24]` | Expansion Pak/Gameshark: one list writing fields 14 and 15 together (bit 0 is the Expansion Pak, 1 = out; bit 1 the Gameshark codes, 1 = on) |
 
 ## APF_VIDEO
