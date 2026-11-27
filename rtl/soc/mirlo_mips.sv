@@ -121,6 +121,12 @@ module mirlo_mips #(
     output wire    [7:0] gb_d_o,
     input  wire    [7:0] gb_d_i,
     output wire          gb_phi, gb_wr_n, gb_rd_n, gb_cs_n,
+    // the SNAC port's four Joybus wires (rtl/analogizer/an_snac_pif.sv): pin 30, pin 31, bank 0's bits 4 and 7, each pulled low or let go
+    output wire          sn_en,                         // the Joybus has the pins
+    output wire          sn_p30_dir, sn_p30_oe, sn_p31_dir, sn_p31_oe, sn_b0_dir, sn_b0_oe,
+    output wire   [3:0]  sn_b0_o,
+    input  wire   [3:0]  sn_dq,
+    output wire          an_own,                        // the adapter owns the cartridge port (the runtime's decision, docs/analogizer.md)
     input  wire          use_jtag,
     output logic   [7:0] vga_b,
     output logic         vga_de,
@@ -430,6 +436,9 @@ logic [11:0] fb_ys;                 // (2.10, up to 2.0: a serrated picture's fi
 logic        fb_gamma, fb_tall, fb_pal, tv_pal, vi_pal_rq;
 logic        fb_dma_enable, fb_vtg_enable, fb_mode, vblank;
 logic        gbc_on, gbc_trust, gbc_start, gbc_we, gbc_busy;
+wire         sn_wr, sn_rd;
+wire  [3:0]  sn_a;
+wire  [31:0] sn_wd, sn_q;
 logic [15:0] gbc_addr;
 logic [7:0]  gbc_wdata, gbc_rdata;
 mirlo_regs regs (.clk, .rst,
@@ -448,6 +457,7 @@ mirlo_regs regs (.clk, .rst,
     .ss_save_t(apf_ss_save_t), .ss_load_t(apf_ss_load_t), .ss_done_t(apf_ss_done_t), .ss_err(apf_ss_err), .ss_sup(apf_ss_sup),
     .pad_clk(apf_pad_clk), .pad_we(apf_pad_we), .pad_wa(apf_pad_wa), .pad_wd(apf_pad_wd),
     .ia_address(apf_interact_address), .ia_data(apf_interact_data), .ia_wr(apf_interact_wr), .ia_q(apf_interact_q),
+    .ia_an_own(an_own),
     .ia_crop_v(vid_crop_v), .ia_crop_r(vid_crop_r), .ia_crop_l(vid_crop_l), .ia_deblur(vid_deblur), .ia_out32(vid_out32),
     .vblank, .fb_base(fb_base_csr), .fb_width, .fb_y0, .fb_rows, .fb_px0, .fb_pw, .fb_xs, .fb_ys, .fb_nw, .fb_tall, .fb_gamma, .fb_pal, .tv_pal, .fb_dma_enable, .fb_vtg_enable, .fb_mode,
     .bus_errors, .geom_irq, .game_irq, .geom_run, .dbg_geom_msg,
@@ -461,7 +471,13 @@ mirlo_regs regs (.clk, .rst,
     .mon_vi, .vi_thr, .vi_irq, .vi_chg, .vi_clr,
     .mon_ai, .ai_irq, .ai_clr, .ai_chg, .ai_dac, .ai_step_we, .ai_step_wd,
     .si_irq, .si_clr, .si_ev, .si_done,
+    .sn_wr, .sn_rd, .sn_a, .sn_wd, .sn_q,
     .gbc_on, .gbc_trust, .gbc_start, .gbc_we, .gbc_addr, .gbc_wdata, .gbc_busy, .gbc_rdata);
+
+// ---------------------------------------------------------------- the SNAC port as the console's PIF
+an_snac_pif #(.CLK_HZ(62_500_000)) snac (.clk, .rst, .sel_wr(sn_wr), .sel_rd(sn_rd), .a(sn_a), .wd(sn_wd), .rd(sn_q), .own(an_own),
+    .en(sn_en), .p30_dir(sn_p30_dir), .p30_oe(sn_p30_oe), .p31_dir(sn_p31_dir), .p31_oe(sn_p31_oe), .b0_dir(sn_b0_dir), .b0_oe(sn_b0_oe),
+    .b0_o(sn_b0_o), .dq_in(sn_dq));
 
 // ---------------------------------------------------------------- the Game Boy cartridge slot
 gb_cart gbcart (.clk, .rst, .on(gbc_on), .trust(gbc_trust), .start(gbc_start), .we(gbc_we), .addr(gbc_addr),

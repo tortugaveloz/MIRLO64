@@ -243,19 +243,34 @@ module core_top (
   wire        gb_on, gb_a_dir, gb_a_oe, gb_d_dir, gb_d_oe, gb_phi, gb_wr_n, gb_rd_n, gb_cs_n;
   wire [15:0] gb_a;
   wire [7:0]  gb_d_o;
-  assign cart_tran_bank3         = gb_a_oe ? gb_a[7:0] : 8'hzz;
-  assign cart_tran_bank3_dir     = gb_a_dir;
-  assign cart_tran_bank2         = gb_a_oe ? gb_a[15:8] : 8'hzz;
-  assign cart_tran_bank2_dir     = gb_a_dir;
-  assign cart_tran_bank1         = gb_d_oe ? gb_d_o : 8'hzz;
-  assign cart_tran_bank1_dir     = gb_d_dir;
-  assign cart_tran_bank0         = {gb_phi, gb_wr_n, gb_rd_n, gb_cs_n};
-  assign cart_tran_bank0_dir     = 1'b1;
-  assign cart_tran_pin30         = 1'b0;
-  assign cart_tran_pin30_dir     = gb_on ? 1'b0 : 1'bz;   // (off: as the template leaves it)
-  assign cart_pin30_pwroff_reset = gb_on;
-  assign cart_tran_pin31         = 1'bz;
-  assign cart_tran_pin31_dir     = 1'b0;
+  //
+  // The Analogizer's adapter takes the port instead (docs/analogizer.md) when `an_own` says so (the runtime's decision, at the core's start: a
+  // Game Boy cartridge's header is there or it is not); banks 1-3 are then released. Bank 0 and the pins 30 and 31 are the SNAC port's: idle (high, the cartridge's lines) unless the runtime
+  // turns the Joybus on (`sn_en`, rtl/analogizer/an_snac_pif.sv: N64 controllers on the four ports), when the four data lines -- pin 30 (port 1),
+  // pin 31 (port 2), bank 0's bits 4 (port 3) and 7 (port 4) -- are each pulled low (driven 0) or let go (an input; the 1 kOhm pull-ups on the
+  // harness raise them). Nothing is ever driven high but the other bits of bank 0 during a low pulse of one of its lines (bank 0 has one
+  // direction for all its bits): docs/analogizer.md, "The SNAC port as the console's PIF".
+  wire        an_own;
+  wire        sn_en;                                  // the Joybus has the SNAC pins (it needs `an_own`)
+  wire        sn_p30_dir, sn_p30_oe, sn_p31_dir, sn_p31_oe, sn_b0_dir, sn_b0_oe;
+  wire  [3:0] sn_b0_o;
+  assign cart_tran_bank3         = an_own ? 8'hzz : gb_a_oe ? gb_a[7:0] : 8'hzz;
+  assign cart_tran_bank3_dir     = an_own ? 1'b0 : gb_a_dir;
+  assign cart_tran_bank2         = an_own ? 8'hzz : gb_a_oe ? gb_a[15:8] : 8'hzz;
+  assign cart_tran_bank2_dir     = an_own ? 1'b0 : gb_a_dir;
+  assign cart_tran_bank1         = an_own ? 8'hzz : gb_d_oe ? gb_d_o : 8'hzz;
+  assign cart_tran_bank1_dir     = an_own ? 1'b0 : gb_d_dir;
+  // bank 0: the cartridge's PHI, /WR, /RD and /CS (idle high), or the Joybus's: released (an input) but for a low pulse of port 3 or 4, when
+  // the bank is an output with the pulsed bit 0 and the others 1 (sn_b0_o)
+  assign cart_tran_bank0         = sn_en ? (sn_b0_oe ? sn_b0_o : 4'bzzzz) : {gb_phi, gb_wr_n, gb_rd_n, gb_cs_n};
+  assign cart_tran_bank0_dir     = sn_en ? sn_b0_dir : 1'b1;
+  // pin 30: /RES of a cartridge, or port 1 (its data pin is 0 and only its direction and driver come and go: open drain)
+  assign cart_tran_pin30         = sn_en ? (sn_p30_oe ? 1'b0 : 1'bz) : 1'b0;
+  assign cart_tran_pin30_dir     = sn_en ? sn_p30_dir : gb_on ? 1'b0 : 1'bz;   // (off: as the template leaves it)
+  assign cart_pin30_pwroff_reset = an_own ? sn_en : gb_on;           // (the clamp that holds pin 30 low is released for the Joybus)
+  // pin 31: VIN of a cartridge (never driven), or port 2
+  assign cart_tran_pin31         = sn_en && sn_p31_oe ? 1'b0 : 1'bz;
+  assign cart_tran_pin31_dir     = sn_en ? sn_p31_dir : 1'b0;
 
   // link port is input only
   assign port_tran_so            = 1'bz;
@@ -1051,6 +1066,8 @@ module core_top (
       .vga_de(de),
       .vga_skip(skip),
 
+      .an_own(an_own),
+
       .use_jtag(use_jtag_s),
 
       // Altera JTAG UART
@@ -1064,6 +1081,10 @@ module core_top (
       .serial_tx(uart_tx),
 
       // the Game Boy cartridge slot (MIRLO_GB_CART)
+      // the SNAC port's four Joybus wires: pin 30, pin 31, bank 0 bits 4 and 7
+      .sn_en(sn_en), .sn_p30_dir(sn_p30_dir), .sn_p30_oe(sn_p30_oe), .sn_p31_dir(sn_p31_dir), .sn_p31_oe(sn_p31_oe),
+      .sn_b0_dir(sn_b0_dir), .sn_b0_oe(sn_b0_oe), .sn_b0_o(sn_b0_o),
+      .sn_dq({cart_tran_bank0[7], cart_tran_bank0[4], cart_tran_pin31, cart_tran_pin30}),
       .gb_on(gb_on), .gb_a_dir(gb_a_dir), .gb_a_oe(gb_a_oe), .gb_a(gb_a), .gb_d_o(gb_d_o), .gb_d_dir(gb_d_dir),
       .gb_d_oe(gb_d_oe), .gb_d_i(cart_tran_bank1), .gb_phi(gb_phi), .gb_wr_n(gb_wr_n), .gb_rd_n(gb_rd_n), .gb_cs_n(gb_cs_n),
 

@@ -1,6 +1,6 @@
 /* The Transfer Pak (SD)'s cartridges: a Game Boy cartridge made of the ROM the Pocket loads (data.json's slots
- * LAYOUT_GBROM_SLOT, for the "Controller 1 pak" setting's Transfer Pak (SD) (n64rt_pak.c), and LAYOUT_GBROM2_SLOT for the "Controller 2 pak"
- * setting's) and a battery RAM that is the Game Boy game's own save file, read and written by its path. The two are instances (n = 0, 1)
+ * LAYOUT_GBROM_SLOT, for the "Controller paks" setting's Transfer Pak (SD) of controller 1 (n64rt_pak.c), and LAYOUT_GBROM2_SLOT for the Transfer Pak (SD) of controller 2)
+ * and a battery RAM that is the Game Boy game's own save file, read and written by its path. The two are instances (n = 0, 1)
  * of the same code, each with its own ROM, mapper, RAM and clock; one with no ROM in its slot is no cartridge
  * (the same for both). What a cartridge's bus does is done here: the mapper's registers at 0x0000-0x7FFF,
  * the ROM at 0x0000-0x7FFF, the RAM (or the clock) at 0xA000. The game's own osGbpak* code runs on top of it exactly as on

@@ -19,6 +19,7 @@
 //   UART          the JTAG UART
 //   GB_CART       (MIRLO_GB_CART) a Game Boy cartridge in the Pocket's slot:
 //                 the port on and trusted, one byte read or written at a time
+//   SNAC          the Analogizer's SNAC port as the console's PIF: a Joybus master with four ports (rtl/analogizer/an_snac_pif.sv)
 //   VIDEO_FRAMEBUFFER  the scan-out's base (latched by it at the frame
 //                 boundary), its enables and its mode
 // One access port: an access in the cycle of r_req, its read data the next.
@@ -65,6 +66,7 @@ module mirlo_regs (
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
+    output wire         ia_an_own,          // INTERACT2's bit 31, which the runtime sets: the adapter owns the cartridge port (docs/analogizer.md)
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
     output wire  [1:0]  ia_crop_l,
@@ -154,6 +156,11 @@ module mirlo_regs (
     // having commands to run (PEND bit 4), the runtime saying it is done (SIDONE)
     input  wire         si_irq, si_clr, si_ev,
     output wire         si_done,
+    // SNAC (rtl/analogizer/an_snac_pif.sv): the block's strobes and its words; a read is answered by sn_q from the address
+    output wire         sn_wr, sn_rd,
+    output wire  [3:0]  sn_a,
+    output wire  [31:0] sn_wd,
+    input  wire  [31:0] sn_q,
     output logic        gbc_on, gbc_trust, gbc_start, gbc_we,
     output logic [15:0] gbc_addr,
     output logic [7:0]  gbc_wdata,
@@ -226,16 +233,20 @@ end
 logic [31:0] ia0, ia1;
 logic        ia_o32, ia_dbl;               // the video settings (field 17): bit 0 the 32-bit output, bit 1 Deblur
 logic        ia_ch0, ia_ch1;
+logic        ia_own;                       // INTERACT2 [31]: the runtime's, the adapter owns the port
+logic [3:0]  ia_snp;                       // INTERACT2 [13:10]: "Analogizer controllers" (field 18), bit n: player n + 1 is the SNAC port's
+assign ia_an_own = ia_own;
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
 assign ia_out32  = ia_o32;
 assign ia_deblur = ia_dbl;
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_o32 <= 0; ia_dbl <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
+    if (rst) begin ia0 <= 0; ia1 <= 0; ia_o32 <= 0; ia_dbl <= 0; ia_own <= 0; ia_snp <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
+        if (wr && a == R_APF_INTERACT_INTERACT2) begin ia_own <= r_wdata[31]; ia_snp <= r_wdata[13:10]; end
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr) case (ia_address)
@@ -256,6 +267,7 @@ always_ff @(posedge clk) begin
             5'd14: ia1[24]    <= ia_data[0];
             5'd15: ia1[25]    <= ia_data[0];
             5'd17: begin ia_o32 <= ia_data[0]; ia_dbl <= ia_data[1]; end
+            5'd18: ia_snp     <= ia_data[3:0];
             default: ;
         endcase
     end
@@ -277,6 +289,7 @@ always_ff @(posedge clk) begin
     5'd14: ia_q <= {31'd0, ia1[24]};
     5'd15: ia_q <= {31'd0, ia1[25]};
     5'd17: ia_q <= {30'd0, ia_dbl, ia_o32};
+    5'd18: ia_q <= {28'd0, ia_snp};
     default: ia_q <= 32'd0;
     endcase
 end
@@ -376,6 +389,13 @@ assign ai_step_we = wr && a == R_MONITOR_AIRATE;     // (MIRLO_AI: the runtime's
 assign ai_step_wd = r_wdata[19:0];
 assign si_done = wr && a == R_MONITOR_SIDONE;       // (MIRLO_SI: the runtime has run the PIF's commands, rcp_si.sv)
 
+// ---- SNAC: the block at 0x0E00; the module keeps its own registers
+wire sn_sel = a[15:12] == 4'd0 && a[11:8] == 4'd14 && a[7:6] == 2'd0;
+assign sn_wr = wr && sn_sel;
+assign sn_rd = rd && sn_sel;
+assign sn_a  = a[5:2];
+assign sn_wd = r_wdata;
+
 // ---- GB_CART
 always_ff @(posedge clk) begin
     gbc_start <= wr && a == R_GB_CART_ACCESS;
@@ -474,6 +494,7 @@ always_comb begin
     R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1[5:2]:         rb[3] = ia1;
     R_APF_INTERACT_INTERACT_CHANGED1[5:2]: rb[3] = {31'd0, ia_ch1};
+    R_APF_INTERACT_INTERACT2[5:2]:         rb[3] = {ia_own, 17'd0, ia_snp, 10'd0};
     default: ;
     endcase
     case (a[5:2])                                               // APF_VIDEO
@@ -520,6 +541,7 @@ always_comb begin
     R_GB_CART_ACCESS[5:2]:                 rb[12] = {gbc_busy || gbc_start, 23'd0, gbc_rdata};
     default: ;
     endcase
+    rb[14] = sn_q;                                              // SNAC
     case (a[5:2])                                               // MONITOR
     R_MONITOR_ID[5:2]:                     rb[13] = 32'h4D4F_0000 | 32'(MON_PRESENT) | 32'(MI_PRESENT) << 1 | 32'(PI_PRESENT) << 2 | 32'(VI_PRESENT) << 3 | 32'(AI_PRESENT) << 4 | 32'(SI_PRESENT) << 5 | 32'(PI2_PRESENT) << 6 | 32'(ROM64_PRESENT) << 7 | 32'(ps_ready) << 8;
     R_MONITOR_AIRATE[5:2]:                 rb[13] = {18'd0, ai_dac};

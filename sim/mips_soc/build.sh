@@ -23,7 +23,7 @@ soc)
         "$S/sdr_phy.sv" "$S/sdr_ctrl.sv" "$S/sdr_arb.sv" "$S/rsp_gate.sv" "$S/rsp_clk.sv" "$S/rsp_xing.sv" "$S/rdp_xing.sv" "$S/psram.sv" "$S/afifo.sv" "$S/fifo_fwft.sv" "$S/n64_video.sv" \
         "$S/mirlo_regs.sv" "$S/rcp_mi.sv" "$S/rcp_vi.sv" "$S/rcp_dpc_view.sv" "$S/rcp_ai.sv" "$S/rcp_si.sv" "$S/n64_ports.sv" "$S/cpu_port.sv" "$S/n64_uart.sv" "$S/jtag_uart_bridge.v" \
         "$HERE/sim_cyclonev_jtag.v" "$S/mips_sys.sv" "$S/mirlo_mips.sv" "$S/gb_cart.sv" "$HERE/gb_cart_model.sv" \
-        "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" \
+        "$R/rtl/mips/fpu_n64.sv" "$R/rtl/mips/mips_core.sv" "$R/rtl/analogizer/an_joybus_m.sv" "$R/rtl/analogizer/an_snac_pif.sv" "$R/sim/analogizer/snac/jb_dev.sv" \
         "$R/rtl/rsp/rsp_lutram.v" "$R/rtl/rsp/rsp_su.sv" "$R/rtl/rsp/rsp_vu.sv" "$R/rtl/rsp/rsp_dpram.sv" "$R/rtl/rsp/rsp_top.sv" \
         "$R/rtl/rsp_oc/rsp_lutram_oc.v" "$R/rtl/rsp_oc/rsp_su_oc.sv" "$R/rtl/rsp_oc/rsp_vu_oc.sv" "$R/rtl/rsp_oc/rsp_dpram_oc.sv" "$R/rtl/rsp_oc/rsp_top_oc.sv" \
         "$R/rtl/rdp/rdp_sdpram.v" "$R/rtl/rdp/rdp_rcp_rom.v" "$R"/rtl/rdp/rdp_*.v "$R/rtl/rdp/rdp_dpc.sv" \
