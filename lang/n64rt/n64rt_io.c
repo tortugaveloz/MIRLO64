@@ -1574,6 +1574,23 @@ static void rcp_hist_log(void)
         }
 }
 #endif
+/* PI_DRAM_ADDR as a read gives it: the address the DMA has got to. On the console it advances as the PI writes, and an open-source libdragon's
+ * in-place decompressor of a file it is still loading (decompress_*_full_inplace, run beside the DMA) reads it, and PI_STATUS, to know how much of
+ * the compressed stream is there. A DMA by the engine is over later than the write that starts it, so while it runs the register is the end of the
+ * DMA less the words the engine has still to move (rounded down to 8 bytes, as the PI's blocks), not the end the bookkeeping (pi_advance) leaves
+ * at once: that told such a decoder the whole stream was in, and it read what was not yet there. */
+static u32 s_pi_dma_end;                    /* the RDRAM address the engine's DMA ends at (a write into the RDRAM), while it runs */
+static u32 pi_dram_addr_now(void)
+{
+    if (s_pi_hw) {
+        const u32 pl = monitor_pilen_read();
+        if (pl >> 31) {
+            const u32 left = (pl & 0x1FFFFFu) << 2, end = s_pi_dma_end;
+            return (end - left) & ~7u;
+        }
+    }
+    return n64rt_pi_regs[0];
+}
 static int rcp_read_(u32 pa, u32 *v);
 static int rcp_read(u32 pa, u32 *v)
 {
@@ -1638,7 +1655,7 @@ static int rcp_read_(u32 pa, u32 *v)
     case 0x046:
         if (o == 0x10u && s_pi_hw) *v = hw_rd(pa);                    /* PI_STATUS: the engine's */
         else if (o == 0x10u) *v = (s_mi_sw & MI_PI) ? 0u : 0u;        /* PI_STATUS: never busy */
-        else if (o == 0x00u) *v = n64rt_pi_regs[0] & 0x00FFFFFEu;     /* PI_DRAM_ADDR: 24 bits, even */
+        else if (o == 0x00u) *v = pi_dram_addr_now() & 0x00FFFFFEu;    /* PI_DRAM_ADDR: 24 bits, even */
         else if (o == 0x04u) *v = n64rt_pi_regs[1] & 0xFFFFFFFEu;     /* PI_CART_ADDR: even */
         else if (o == 0x08u) *v = 0x7Fu;                              /* PI_RD_LEN reads 0x7F */
         else if (o == 0x0Cu) *v = s_pi_wr_len;                        /* PI_WR_LEN: the last block's residual */
@@ -1771,7 +1788,7 @@ static void pi_start(int rd, u32 len)
 #ifdef N64RT_OWN
     if (!rd) n64rt_tlb_frames_loaded(pa, size);
 #endif
-    if (s_pi_hw && pi_hw_dma(rd, dev, pa, size)) return;
+    if (s_pi_hw && pi_hw_dma(rd, dev, pa, size)) { s_pi_dma_end = pa + ((size + 3u) & ~3u); return; }
     if (!rd) (void)pi_copy(dev, K0P(pa), size, OS_READ);
     else if (is_flash(dev)) d2_copy(dev, K0P(pa), size, OS_WRITE);
     else n64rt_log("n64rt: PI_RD_LEN %08lx -> cartridge %08lx: not done\n", (unsigned long)len, (unsigned long)dev);
