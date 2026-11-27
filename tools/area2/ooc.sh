@@ -46,7 +46,7 @@ SV
 ;;
 video) cat > top.sv <<SV
 module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:0] vi_origin, input wire vi_il, output wire vblank, input wire [11:0] vi_width, input wire vi_px32,
-    input wire vi_black, vi_pal, output wire tv_pal, input wire gamma, vi_aa, vi_divot, vi_dedither, input wire [4:0] crop_v, input wire [1:0] crop_l, crop_r,
+    input wire vi_black, vi_pal, output wire tv_pal, input wire gamma, vi_aa, vi_divot, vi_dedither, vi_deblur, vi_out32, input wire [4:0] crop_v, input wire [1:0] crop_l, crop_r,
     input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, input wire [11:0] vi_ys, input wire [10:0] vi_nw,
     output wire m_valid, output wire [23:0] m_addr, output wire m_urgent, input wire m_ready, m_rvalid, input wire [31:0] m_rdata, output wire vi_line, vi_frame, vi_latch,
     output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip, vga_woven);
@@ -56,12 +56,12 @@ SV
 ;;
 rdp)  top=rdp_top ;;
 rdpw) cat > top.sv <<SV
-module ooc_rdpw (input wire clk, rst, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
+module ooc_rdpw (input wire clk, rst, dither_off, shadow_en, input wire cmd_valid, output wire cmd_ready, input wire [31:0] cmd_data,
     output wire m_cmd_valid, input wire m_cmd_ready, output wire m_cmd_we, output wire [31:0] m_cmd_addr,
     output wire m_wdata_valid, input wire m_wdata_ready, output wire [31:0] m_wdata, output wire [3:0] m_wdata_we,
     input wire m_rdata_valid, input wire [31:0] m_rdata, output wire [31:0] rdp_sync, output wire mon_dp, output wire rdp_idle, output wire rdp_tmem_busy);
     wire [31:0] rdp_addr;
-    rdp_top rdp (.clk, .rst, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
+    rdp_top rdp (.clk, .rst, .dither_off, .shadow_en, .cmd_valid, .cmd_ready, .cmd_data, .m_cmd_valid, .m_cmd_ready, .m_cmd_we, .m_cmd_addr(rdp_addr),
         .m_wdata_valid, .m_wdata_ready, .m_wdata, .m_wdata_we, .m_rdata_valid, .m_rdata,
         .sync_count(rdp_sync), .sync_ev(mon_dp), .load_count(), .unknown_ops(), .idle(rdp_idle), .tmem_busy(rdp_tmem_busy));
     // (rtl/soc/mirlo_mips.sv: the address bits it reads, the hidden plane's remap; the load and unknown counters are not read)
