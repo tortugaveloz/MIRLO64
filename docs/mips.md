@@ -200,6 +200,7 @@ integer ones included (but `lld`, `scd` and the traps on a 64-bit operand, below
 | `W64`, `W64_ALU`, `W64_SH`, `W64_MD`, `W64_UA` / `W64_DIV` | 1 / 1 | The 64-bit levels (the SoC has all of them) |
 | `FAST`, `XWB` | 1 | The shortened paths for the 93.75 MHz clock; the write buffer outside the core |
 | `IC_LOG2`, `DC_LOG2` | 9, 9 (10, 10 with `MIRLO_RSP_OC`) | Cache lines as powers of two (`MIRLO_CPU_IC_LOG2`, `MIRLO_CPU_DC_LOG2`) |
+| `DHALF` | 0 (1 with `MIRLO_RSP_OC`) | A D-cache miss reads its own 16-byte line, 4 words, not the 32-byte block it sits in with 4 words thrown away (`MIRLO_CPU_DHALF`; the I-cache's read is the 8 words it was) |
 | `SNOOP` | 0 | Experimental software-managed D-cache coherence; see `dcache-no-snoop-design.md` |
 
 Memory is word-native: a 32-bit word is its value, and byte *k* of a word is lane 3 - *k*.
@@ -1296,6 +1297,7 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
 | `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
+| `MISSLAT=<file>`, `MISSLAT_EVERY=n`, `MISSTRACE=<file>` | what each game-CPU line fill waits for (to its first and its last word, by I or D and by the RDP busy or idle, sorted by cause), the arbiter's grants by port and the controller's requests by the state of their bank, a line of sums and histograms every n fields; the trace of every request |
 | `RAMDUMP=<file>`, `RAMDUMP_AT=<pc>` | the RDRAM written out when the game CPU first retires at `<pc>` (an ELF's entry), and the run stops: `sim/mips_soc/elf_unpack_check.sh OBJ_DIR ROM...` compares it with the image the host reference (`lang/n64rt/test/unpack_ref.py`) makes of a libdragon ELF ROM, compressed or not |
 | `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
 | `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |

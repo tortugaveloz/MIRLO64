@@ -130,7 +130,7 @@ design at 99 %: against the halfword plane, the same seeds give 18,209, 18,219, 
 spreading a design this full by some 60), and the whole design 70 more on average, which is about 0.4 %. Six seeds were fitted, one closes timing (seed 6,
 worst slack +0.014 ns; the others fail in the CPU's paths, by up to 0.56 ns, and one in a hold path by 0.03 ns): `projects/fits.json` has it.
 
-In the Enhanced build as it is now (the RSP alone at 93.75 MHz, the CPU's caches twice the VR4300's), the option's plane makes it 295 of 308 block RAMs (259 without it) and about 18.0 k ALMs. With the RSP's and the CPU's paths of the 93.75 MHz domain shortened (13 changes that leave every cycle as it was, bar the CPU's reset phase), seeds 6, 9 and 10 of ten close timing (worst slack +0.007, +0.005 and +0.069 ns), and none of twelve did before them; the file `projects/mirlo_oc.qsf` pins seed 10.
+In the Enhanced build as it is now (the RSP alone at 93.75 MHz, the CPU's caches twice the VR4300's), the option's plane makes it 295 of 308 block RAMs (259 without it) and about 18.0 k ALMs. With the RSP's and the CPU's paths of the 93.75 MHz domain shortened (13 changes that leave every cycle as it was, bar the CPU's reset phase), seeds 6, 9 and 10 of ten close timing (worst slack +0.007, +0.005 and +0.069 ns), and none of twelve did before them. With the arbiter's grants and the D-cache's 16-byte line read below (`rdp.md`, `mips.md`) the fitted design is 17,752 ALMs, and seed 13 of nine closes (+0.061 ns; seeds 15 and 2 fail by 0.005 and 0.028 ns in a hold path, the others by 0.035 to 0.62 ns, in the RSP's scalar unit); the file `projects/mirlo_oc.qsf` pins seed 13.
 
 What it cannot do:
 

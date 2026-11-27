@@ -536,6 +536,7 @@ whenever a stream leaves its row. Four things in the tree take less of it, none 
 * The RDP's request queue (`port_rdp`) holds 16 requests, and the controller opens, ahead of the request at the head, the
   row of the one four places behind it (`sdr_arb`'s and `sdr_ctrl`'s look-ahead). The RDP's idle state and the SYNC FULL
   interrupt wait for the queue to empty.
+* The arbiter (`sdr_arb`) lets a port that is not urgent (the RDP's spans, the scan-out's batches, the RDP's command fetch) have a grant of up to 48 words (`MAXB`), and an urgent port that asks (the CPU's line fill, the RSP's DMA) takes the bus from it after 4 words (`PRE`); an urgent port's own grant stays at 16 (`MAXBU`), so the CPU does not wait behind 48 words of the RSP's DMA. A CPU line fill that started while the RDP was busy took 41 CPU cycles to its last word against 29 with the RDP idle; with the arbiter 34.
 * The scan-out (`n64_video`) asks for its words in batches: it tops its FIFO up when 512 words are free, in grants of 16 (it
   took them a word at a time, each a grant of its own with the bus turned for it and the rows of the RDP's streams closed
   behind it).
