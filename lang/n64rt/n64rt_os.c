@@ -733,6 +733,7 @@ static int emulate_hw(n64rt_ctx_t *x, u32 cause)
 /* An access to the RCP's side of the bus is a 32-bit one, whatever the instruction. What the hardware does with the others
  * (n64-systemtest's spmem / pifram / cart_memory groups; the same for every RCP register):
  *   lb lbu lh lhu   the aligned word is read and the byte or half taken out of it (as it always was here; the cartridge's: n64rt_cart.h)
+ *   lwu             the word, zero-extended
  *   lwl lwr         the aligned word, merged into the register
  *   sb sh           the WHOLE word is written, the register shifted to the byte's or half's lane and zeros below it -- the other
  *                   lanes are not left alone: sb of 0x12345678 at offsets 0, 1, 2, 3 writes 0x78000000, 0x56780000, 0x34567800,
@@ -766,6 +767,10 @@ static int emulate_hw_at(n64rt_ctx_t *x, u32 insn, u32 op, u32 rt, u32 badv)
     case 0x26:                                                          /* lwr: from the word's start to the address, at the bottom */
         if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
         if (rt) gset(x, rt, (x->g[rt].l & ~(0xFFFFFFFFu >> (8u * (3u - k)))) | (v >> (8u * (3u - k))));
+        return 1;
+    case 0x27:                                                          /* lwu: the word, zero-extended (the 64-bit register's upper word 0) */
+        if (!n64rt_hw_read(badv & ~3u, &v)) return 0;
+        if (rt) gset64(x, rt, (u64)v);
         return 1;
     case 0x37: {                                                        /* ld */
         u32 lo;

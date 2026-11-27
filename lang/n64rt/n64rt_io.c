@@ -1591,6 +1591,10 @@ static int rcp_read_(u32 pa, u32 *v)
      * A 0 read here is a drive that is there to a game that looks for one: it starts the drive's manager and waits for it for
      * ever (LeoCJCreateLeoManager's `while (status == 8)`), after reading its font from the drive's ROM -- a black screen. */
     if (pa >= 0x05000000u && pa < 0x08000000u) { *v = (pa & 0xFFFFu) << 16 | (pa & 0xFFFFu); return 1; }
+    /* The RDRAM chips' registers (0x03F0_0000 - 0x03FF_FFFF: the broadcast and each chip's block): the IPL3 set them up, and a game that
+     * looks reads 0 (libdragon's entropy pool reads two of each chip's, 0x03F0_0200 and 0x03F0_0600, at its start-up: an address error there
+     * was a crash screen before the game's main). */
+    if (pa >= 0x03F00000u && pa < 0x04000000u) { *v = 0; return 1; }
     /* what is not there (the bus's other addresses, the PIF's ROM): a read is told 0 */
     if ((pa >= 0x04900000u && pa < 0x10000000u) || (pa >= 0x1FC00000u && !(pa >= 0x1FC007C0u && pa < 0x1FC00800u))) { *v = 0; return 1; }
     if (pa < 0x04000000u || pa >= 0x04900000u) return 0;
@@ -1788,6 +1792,7 @@ static int rcp_write_(u32 pa, u32 v)
 #ifdef N64RT_TLBPROF
     if (pa == 0x04900004u) { ctrl_scratch_write(v); return 1; }       /* (tlb_bench's marks: the simulation's CPUSTAT marks, 0xA5 / 0xA6) */
 #endif
+    if (pa >= 0x03F00000u && pa < 0x04000000u) return 1;             /* (the RDRAM chips' registers: a write is taken, a read tells 0) */
     if ((pa >= 0x04900000u && pa < 0x10000000u) || (pa >= 0x1FC00000u && !(pa >= 0x1FC007C0u && pa < 0x1FC00800u))) return 1;
     if (pa < 0x04000000u || pa >= 0x04900000u) return 0;
     u32 blk = pa >> 20, o = pa & 0xFFFFFu;
