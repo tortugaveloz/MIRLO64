@@ -1,5 +1,6 @@
 // N requesters onto one sdr_ctrl. Round-robin; a grant is kept while its
-// port goes on asking, up to MAXB words (a line read, a burst: row hits), and
+// port goes on asking (a line read, a burst: row hits), up to MAXB words, or MAXBU if the port is urgent -- and an urgent port that
+// asks takes the grant from one that is not after PRE of its words --, and
 // an `urgent` port (the SoC's: the CPU and the RSP's DMA, which wait for each
 // word they ask for, and the scan-out while its FIFO is low) goes first,
 // round-robin among the urgent ones -- bounded
@@ -16,7 +17,9 @@
 
 module sdr_arb #(
     parameter int N    = 5,
-    parameter int MAXB = 16,
+    parameter int MAXB = 48,            // longest grant of a port that is not urgent (the RDP's spans, the scan-out's batches, the command fetch)
+    parameter int MAXBU = 16,           // ... of an urgent one (it keeps the others waiting)
+    parameter int PRE  = 4,             // words after which an urgent port asking takes the grant from one that is not urgent (0: never)
     parameter bit APF_PREEMPT = 0
 ) (
     input  wire              clk,
@@ -68,7 +71,7 @@ always_comb for (int i = 0; i < N; i++) p_phys[i] = hmap(p_addr[i]);
 localparam int IW = $clog2(N);
 logic [IW-1:0] cur;             // the port holding the grant
 logic          held;            // cur keeps it (it asked last cycle and got served)
-logic [4:0]    beats;
+logic [5:0]    beats;
 
 // the first port of v round the ring from cur + 1 (cur itself the last): {found, the port; cur when none}.
 // Prefer requesters after cur; if none are there, wrap to the start of the ring.
@@ -90,7 +93,8 @@ always_comb begin
     urgent_valid = p_valid & p_urgent;
     rn = ring((|urgent_valid) ? urgent_valid : p_valid, cur);
     if (APF_PREEMPT && p_valid[4] && apf_force) pick = IW'(4);
-    else if (held && p_valid[cur] && beats < 5'(MAXB)) pick = cur;
+    else if (held && p_valid[cur] && beats < (p_urgent[cur] ? 6'(MAXBU) : 6'(MAXB))
+             && !(PRE != 0 && beats >= 6'(PRE) && !p_urgent[cur] && |(p_valid & p_urgent))) pick = cur;
     else pick = rn[IW-1:0];
 end
 // the next other port: as above, cur left out
@@ -122,7 +126,7 @@ always_ff @(posedge clk) begin
         if (load) begin
             req_valid <= 1; req_we <= p_we[pick]; req_addr <= p_phys[pick];
             req_wdata <= p_wdata[pick]; req_be <= p_be[pick]; req_tag <= 3'(pick);
-            beats <= (held && pick == cur) ? beats + 5'd1 : 5'd1;
+            beats <= (held && pick == cur) ? beats + 6'd1 : 6'd1;
             cur <= pick; held <= 1;
         end else if (!p_valid[cur]) held <= 0;
     end

@@ -148,7 +148,7 @@ static void set_inputs()
         be |= port[i].be << (4 * i);
     }
     t->p_be = be;
-    t->p_valid = v; t->p_we = w; t->p_urgent = 0;
+    t->p_valid = v; t->p_we = w; t->p_urgent = getenv("TB_URG") ? 0xA : 0;       // TB_URG=1: ports 1 and 3 urgent, as the SoC's CPU and RSP DMA are
 }
 
 int main(int argc, char **argv)
