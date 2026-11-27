@@ -830,6 +830,7 @@ logic        e_valid, e_dly, e_fexc, e_serial;
 ctl_t        e_c;
 logic [31:0] e_pc, e_insn, e_ra, e_rb;     // operands as captured in D
 logic [31:0] e_ra_hx, e_rb_hx;
+logic        e_xku, e_xkc;      // (W64) the base register's upper word is the xkphys' uncached / cached one (0x9000_0000 / 0x9800_0000): see e_ea
 logic        e_aw, e_hxeq;                  // (FAST: a branch's) rs's hx is not zero; rs's and rt's are equal
 logic [4:0]  e_rs, e_rt, e_fexc_code;
 
@@ -1122,7 +1123,14 @@ always_comb begin
     endcase
 end
 
-wire [31:0] e_ea = e_a + sx16(e_insn[15:0]);
+wire [31:0] e_ea0 = e_a + sx16(e_insn[15:0]);
+// A 64-bit address in the xkphys, with Status.KX set (the open-source libdragon's io_read / io_write make theirs from a physical address, 0x9000_0000_0000_0000 |
+// it, uncached: the same access in the 32-bit view is KSEG1's): its physical address is the address's low 29 bits -- the RCP's and the cartridge's, the RDRAM's,
+// all below 0x2000_0000 -- and it is KSEG1's (CCA 2) or KSEG0's (CCA 3), which is how the rest of the core goes on from here. The base register's upper word is
+// read at D (e_xku / e_xkc: it is 0x9000_0000 / 0x9800_0000 and the register is no 32-bit value in flight), its low word is below 0x2000_0000. The
+// carry of the low word's sum into the upper is not looked at: an offset that leaves the physical 4 GiB is no address a game has.
+wire e_xk = W64 && c0_status[7] && (e_xku || e_xkc) && e_a[31:29] == 3'd0;
+wire [31:0] e_ea = e_xk ? {e_xku ? 3'b101 : 3'b100, e_ea0[28:0]} : e_ea0;
 // What the instruction's kind says about its memory access is known as it leaves D, and registered with it (e_c's):
 // the address's alignment requirement (halfword, word, doubleword), whether it is a memory access, a 64-bit FPU access,
 // and whether the instruction is an FPU one (Coprocessor Unusable) -- so E's exception cone starts from flops, not from a decode of e_insn.
@@ -2031,6 +2039,8 @@ end
 // D -> E: the registers' upper words, cleared when the register is in flight (rf_ah, rf_bh: the register file's word, or zero)
 wire e_ld_d = !rst && !flush && e_adv;
 mips_ldr #(32) e_rah (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah), .q(e_ra_hx));
+mips_ldr #(1) e_rxku (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah == 32'h9000_0000), .q(e_xku));
+mips_ldr #(1) e_rxkc (.clk, .en(e_ld_d), .clr(!W64 || d_rs == 0 || inflight_rs), .d(rfq_ah == 32'h9800_0000), .q(e_xkc));
 mips_ldr #(32) e_rbh (.clk, .en(e_ld_d), .clr(!W64 || d_rt == 0 || inflight_rt), .d(rfq_bh), .q(e_rb_hx));
 
 // =============================================================== COP0's registers that only take values (mips_c0r, below)
