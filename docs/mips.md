@@ -580,8 +580,17 @@ no matter to it) and loads the ROM as its two builds do, whatever the size of th
 * the ELF build finds an ELF file in the ROM (the first 256-byte boundary from ROM `0x1000` on that holds `\x7FELF`),
   puts every `PT_LOAD` segment's file bytes at its virtual address (32-bit or 64-bit, big endian; the RDRAM is cleared
   first, so the rest of a segment is zeros) and enters at the ELF's entry point. A segment that is not 8-byte aligned,
-  whose file offset is odd, that does not fit the RDRAM or is past the end of the ROM, and an ELF the boot code would
-  decompress with a function of its own (the compressed-segment format), stop the boot with a message. What it leaves:
+  whose file offset is odd, that does not fit the RDRAM or is past the end of the ROM stop the boot with a message.
+  A compressed ELF (libdragon's `n64elfcompress`: a `PT_N64_DECOMP` segment with the decompression code, and each
+  `PT_LOAD` it compresses marked `PF_N64_COMPRESSED`, `p_vaddr` the place of the raw stream, `p_paddr` the program's, `p_filesz`
+  the compressed size) is unpacked as the IPL3 does: the stream is copied to `p_vaddr`, decompressed in place to `p_paddr`
+  (`lang/n64rt/n64rt_unpack.c`, no allocation, never writing ahead of what it has not read) and what is left of the stream
+  outside the program is zeroed. The three levels are known: 1 LZ4, 2 aPLib, 3 Shrinkler, told apart by the constants of the
+  `PT_N64_DECOMP` segment's code (aPLib 32000 and 1280, Shrinkler 1026 and 1538, LZ4 255 and none of the others); an unknown
+  one, a damaged stream (the decoders never leave their buffers), and segments that do not fit the RDRAM stop the boot with a
+  message. A `PT_N64_DECOMP` with a virtual address other than 0 is loaded as a segment of its own. In the SoC's simulation a
+  600 KB program is unpacked in 74 ms with LZ4, 172 ms with aPLib and 0.98 s with Shrinkler (0.13, 0.30 and 1.7 s a MiB of output),
+  and the runtime grows by about 6 KiB. What it leaves:
   DMEM's first 16 bytes are the boot flags -- the RDRAM's size, a random word, then as one word the ROM type, TV type,
   reset type and console type as bytes (0, the header's region, 0, 0), then the ELF's offset in the ROM in 256-byte pages
   in the upper half -- and the rest of DMEM and all of IMEM are 0; the boot words at `0x8000_0300` are not written; the
@@ -1311,7 +1320,7 @@ synthesis at its fast effort, and a placement effort multiplier of 10. The fitte
   address pins kept their output registers.
 - `fails.sh` groups the failing endpoints of a finished fit; `entity_table.py`, `cmp_entities.py` and `map_table.py`
   tabulate area by entity from the fitter's and the synthesis reports; the `vqm_*.py` scripts inspect a post-fit
-  netlist; `rdp_regress.sh` and `soc_regress.sh` run the RDP's and the SoC's simulations.
+  netlist; `rdp_regress.sh` and `soc_regress.sh` run the RDP's and the SoC's simulations. The decompressors of the compressed ELF (`lang/n64rt/n64rt_unpack.c`) are checked on the host by `lang/n64rt/test/unpack_check.py` (the ROMs' streams, and with `--rawcomp` a program compressed again at the three levels and synthetic streams, with the address and undefined-behaviour sanitisers).
 
 ## Simulation and tests
 
@@ -1349,6 +1358,7 @@ switches, all environment variables (the first lines of `tb_soc.cpp` list them):
 | `RSPDUMP=<dir>` (`RSPDUMP_AUDIO=1`) | the graphics (and audio) tasks with the RDRAM, for `sim/rsp` and `rsp_replay` |
 | `CKPT=<dir>,<n>` | a copy of the run left waiting every n fields, to be run on from with other options |
 | `NOLOAD=1` | nothing loaded: the boot ROM's serial boot |
+| `RAMDUMP=<file>`, `RAMDUMP_AT=<pc>` | the RDRAM written out when the game CPU first retires at `<pc>` (an ELF's entry), and the run stops: `sim/mips_soc/elf_unpack_check.sh OBJ_DIR ROM...` compares it with the image the host reference (`lang/n64rt/test/unpack_ref.py`) makes of a libdragon ELF ROM, compressed or not |
 | `SS_SAVE=<field>`, `SS_OUT`, `SS_EXIT=1` | the Pocket asks for a save state at that field; the state is read out into the file (`<-o dir>/state.bin`) and the run ends, if asked |
 | `SS_LOAD=<file>`, `SS_LOAD_AT=<field>` | the Pocket copies a state in at that field (60) and asks for its load (`SS_BRIDGE=1`: through the bridge's port, a word at a time) |
 | `+gbcart=<rom.gb>` | a cartridge in the slot (a plus argument) |
