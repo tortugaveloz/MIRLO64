@@ -90,3 +90,11 @@ set_false_path -hold -from [get_registers {*cpu_port:pc|rq_addr[*]}]
 set_false_path -hold -from [get_registers {*cpu_port:pc|rq_dev}]
 set_false_path -hold -from [get_registers {*cpu_port:pc|rq_line}]
 set_false_path -hold -from [get_registers {*cpu_port:pc|rq_half}]
+
+# ==============================================================================
+# The reset's way into the game CPU's clock (rtl/soc/mirlo_mips.sv): rst_cpu_m is the first register of a synchroniser (rst_cpu_m, rst_cpu) on clk_cpu,
+# whose data is clk's reset_r -- a level that rises at power-up and holds for milliseconds, a case where the first register is allowed to go
+# metastable and the second takes what it settles to. The fitter's placement of that one pair -- the reset's flop by its source, rst_cpu_m by the
+# synchroniser's loads -- left the setup of the path between the two clocks at -0.06 to -0.09 ns in two seeds of 12 (reset_r -> rst_cpu_m).
+# ==============================================================================
+set_false_path -to [get_registers {*mirlo_mips:soc|rst_cpu_m}]
