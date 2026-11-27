@@ -341,17 +341,17 @@ function automatic logic lane_kc(input logic [5:0] f, input logic [15:0] s, inpu
 endfunction
 
 // EX1, a multiply: the product into the accumulator (all 48 bits)
-function automatic logic [47:0] lane_mac(input logic [5:0] f, input logic signed [33:0] p, input logic [47:0] accm);
+// (the function's part in the sum -- which shift of the product, the accumulator or the rounding constant -- as one-hot flags, registered with
+// the instruction: x_mc, not the decode of x_fn's bits in front of the term's choice and the 48-bit adder)
+function automatic logic [5:0] mac_dec(input logic [5:0] f);
+    return {f[2:0] == 3'd0 || f[2:0] == 3'd1, f[2:0] == 3'd4, f[2:0] == 3'd5 || f[2:0] == 3'd6, f[2:0] == 3'd7, f[3], !f[3] && f[2:1] == 2'b00};
+endfunction
+function automatic logic [47:0] lane_mac(input logic [5:0] mc, input logic signed [33:0] p, input logic [47:0] accm);
     logic signed [47:0] term;
     logic [47:0] pe;
-    logic s1, s4, s5, s7;
     pe = 48'(p);
-    s1 = f[2:0] == 3'd0 || f[2:0] == 3'd1;
-    s4 = f[2:0] == 3'd4;
-    s5 = f[2:0] == 3'd5 || f[2:0] == 3'd6;
-    s7 = f[2:0] == 3'd7;
-    term = ({48{s1}} & (pe << 1)) | ({48{s4}} & {32'd0, p[31:16]}) | ({48{s5}} & pe) | ({48{s7}} & (pe << 16));
-    return term + (f[3] ? $signed(accm) : (f[2:1] == 2'b00) ? 48'sh8000 : 48'sd0);
+    term = ({48{mc[5]}} & (pe << 1)) | ({48{mc[4]}} & {32'd0, p[31:16]}) | ({48{mc[3]}} & pe) | ({48{mc[2]}} & (pe << 16));
+    return term + (mc[1] ? $signed(accm) : mc[0] ? 48'sh8000 : 48'sd0);
 endfunction
 
 // What EX2 asks of the function, registered with the instruction (it is the start of the result's longest path)
@@ -538,6 +538,7 @@ always_ff @(posedge clk)
 logic               x_v /* verilator public_flat_rd */, x_wait /* verilator public_flat_rd */, x_sec, x_mul /* verilator public_flat_rd */, x_one, x_rcp;
 logic               x_st /* verilator public_flat_rd */;                     // EX1 holds a computation that uses s and t in EX2
 logic [5:0]         x_fn;
+logic [5:0]         x_mc;                     // (mac_dec of x_fn)
 logic [2:0]         x_am;                     // (amode of it)
 logic [3:0]         x_ve;
 logic [4:0]         x_vdn;
@@ -558,7 +559,7 @@ always_comb
         kc1[l] = lane_kc(x_fn, s_r[l], t_r[l], ad[l]);
         pk1[l] = lane_pk(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
         cfl1[l] = lane_cf(x_fn, s_r[l], t_r[l], ad[l].fl, vco[l], vco[4'd8 + l], vcc[l], vcc[4'd8 + l], vce[l]);
-        mac[l] = lane_mac(x_fn, p_r[l], {acc_h[l], acc_m[l], acc_l[l]});
+        mac[l] = lane_mac(x_mc, p_r[l], {acc_h[l], acc_m[l], acc_l[l]});
     end
 wire x_nm  = x_v && !x_mul;                   // a computation that is not a multiply is in EX1
 wire x_ex2 = x_v && !x_wait;                  // its last cycle: EX2 is the next
@@ -1005,7 +1006,7 @@ always_ff @(posedge clk) begin
             x_mul <= m_v;
             x_st <= !m_v && fn_cmp;
             x_wait <= !m_v && (fn_ch || (fn_rcp && !fn_fast));
-            x_fn <= m_v ? m_fn : fn; x_vdn <= m_v ? m_vdn : vdn;
+            x_fn <= m_v ? m_fn : fn; x_mc <= mac_dec(m_v ? m_fn : fn); x_vdn <= m_v ? m_vdn : vdn;
             x_am <= m_v ? 3'd0 : cd.am; x_ve <= m_v ? 4'd0 : ve; x_de <= m_v ? 3'd0 : de;
             x_one <= !m_v && fn_one; x_rcp <= !m_v && fn_rcp;
         end
