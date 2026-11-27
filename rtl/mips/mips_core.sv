@@ -1777,9 +1777,8 @@ always_comb begin
     else f_next = f_pc;
 end
 // FAST: the next fetch, when there is one -- F holds an instruction D cannot
-// take (f_hold) with the I-cache's read kept, so whether D's branch leaves
+// take (f_have, and D valid, without d_adv) with the I-cache's read kept, so whether D's branch leaves
 // now is not asked here: if it does not, nothing is fetched
-wire f_hold = f_have && !f_take;
 logic [31:0] f_nx;
 always_comb begin
     if (flush) f_nx = flush_pc;
@@ -1790,8 +1789,12 @@ always_comb begin
     else if (d_ok && d_k_cti) f_nx = d_k_pred ? d_ptarget : f_pc + 32'd4;
     else f_nx = f_pc + 32'd4;
 end
+// (ic_ren as D's advance, the last signal of the pipeline's stall chain, meets it: the read is kept when F holds an instruction that D cannot
+// take -- ic_ren0 is everything else, and f_pc is one choice by d_adv between f_nx and what ic_ren0 leaves, not by ic_ren, a level behind d_adv)
+wire ic_ren0 = !FAST || !f_have || !d_valid || flush || d_imiss || b_redir;
+wire [31:0] f_pc_h = ic_ren0 ? f_nx : f_pc;
 always_comb begin
-    ic_ren = !FAST || !f_hold || flush || d_imiss || b_redir;
+    ic_ren = ic_ren0 || d_adv;
     ic_raddr = FAST ? f_nx[IW+1:2] : f_next[IW+1:2];
 end
 
@@ -2394,7 +2397,7 @@ always_ff @(posedge clk) begin
 
         // ---------------------------------------------------- F
         if (!FAST) f_pc <= f_next;
-        else if (ic_ren) f_pc <= f_nx;
+        else f_pc <= d_adv ? f_nx : f_pc_h;
         f_ok <= fs == FS_RUN || fs == FS_READY;
         case (fs)
         FS_RUN: if (f_ok && !f_have && !f_kill) begin
