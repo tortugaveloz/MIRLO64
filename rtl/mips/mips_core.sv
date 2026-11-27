@@ -634,7 +634,7 @@ end
 // an entry's translation of va: {valid, dirty, pa}, and the page (for a micro-TLB)
 typedef struct packed {
     logic        v, d, c;                    // (c: the table's C bit; TLB_EN's entries: 0)
-    logic [19:0] vpage;                      // va[31:12] with the offset bits clear
+    logic [19:0] vpage;                      // va[31:12] (a micro-TLB's: the compare ignores the offset bits; the scanner's x has none: sc_va is it)
     logic [12:0] om;                         // the page offset's bits above 11 (va[24:12])
     logic [19:0] pfn;                        // pa[31:12], the offset bits clear
     logic        g;
@@ -649,7 +649,7 @@ function automatic tlbx_t tlb_xlat(input tlbe_t e, input logic [31:0] va);
     lo = (va[24:12] & pb) != 0 ? e.lo1 : e.lo0;
     x.v = lo[0]; x.d = lo[1]; x.c = lo[4:2] != 3'd2;         // EntryLo bits 1, 2, and the C field (5:3): 2 is uncached
     x.om = om;
-    x.vpage = va[31:12] & ~{7'd0, om};
+    x.vpage = '0;                                            // (the page of the search is sc_va, which the micro-TLB takes it from)
     x.pfn = lo[24:5] & ~{7'd0, om};                          // EntryLo[25:6]
     x.g = e.g; x.asid = e.asid;
     return x;
@@ -996,14 +996,14 @@ wire e_w_a = FAST ? e_fa_w : w_wr && w_c.rd == e_rs && e_rs != 0;
 wire e_w_b = FAST ? e_fb_w : w_wr && w_c.rd == e_rt && e_rt != 0;
 // (FAST: the forwarding, the adder, the compares, the shifter and E's result are mips_ealu, below the core, which holds the multiplexers
 // as they are written: the module's own attribute, where the core's restructures them. The code that follows is the other builds')
-wire [31:0] ea_a, ea_b, ea_res; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
+wire [31:0] ea_a, ea_b, ea_res, ea_pc8; wire [32:0] ea_cs; wire ea_lt, ea_ltu, ea_eq;
 logic       e_k_shv, e_k_sub; logic [1:0] e_k_grp; logic [2:0] e_k_op; logic e_k_f;
 wire e_sl = e_c.alu == A_SLL;
 mips_ealu ealu (
     .m_res, .w_res, .e_ra, .e_rb, .e_pc, .hi_r, .lo_r, .sa_m(e_fa_m), .sa_w(e_sa_w), .sa_r(e_sa_r), .sb_m(e_fb_m), .sb_w(e_sb_w), .sb_r(e_sb_r),
     .k_shv(e_k_shv), .k_sub(e_k_sub), .sl(e_sl), .sra(e_c.alu == A_SRA), .k_grp(e_k_grp), .k_op(e_k_op), .k_f(e_k_f),
     .imm(e_insn[15:0]), .shamt(e_insn[10:6]),
-    .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq)
+    .a(ea_a), .b(ea_b), .res(ea_res), .cs(ea_cs), .lt(ea_lt), .ltu(ea_ltu), .eq(ea_eq), .pc8(ea_pc8)
 );
 wire [31:0] e_a  = FAST ? ea_a : e_m_a ? m_res : e_w_a ? w_res : e_ra;
 wire [31:0] e_b  = FAST ? ea_b : e_m_b ? m_res : e_w_b ? w_res : e_rb;
@@ -1873,7 +1873,7 @@ always_ff @(posedge clk) begin
         pg_inv_r <= tr_we_i || tr_we_d || tlb_chg;
         if (f_mhit1) pg_mru <= 1'b1; else if (f_mhit0) pg_mru <= 1'b0;
         if (pg_ld) begin
-            pg[pg_vic] <= '{vp: sc_va[31:12] & ~{8'd0, sc_x.om[11:0]}, om: sc_x.om[11:0], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
+            pg[pg_vic] <= '{vp: sc_va[31:12], om: sc_x.om[11:0], g: sc_x.g, asid: sc_x.asid, pfn: sc_x.pfn[10:0]};
             pg_v[pg_vic] <= 1'b1; pg_mru <= pg_vic;
             if (sc_va[IW+1:12] != sc_ppg[IW-11:0]) ic_alias <= 1'b1;
         end
@@ -2321,7 +2321,7 @@ always_ff @(posedge clk) begin
         rd_res <= 1'b0; rd_fix <= 1'b0;
         if (FAST && !flush && e_adv && e_valid && e_cti) begin
             rd_res <= 1'b1; rd_fix <= (JT && e_c.br == B_JR && e_bp) ? !e_eq : e_taken != e_bp;
-            rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= e_pc + 32'd8;
+            rd_annul <= e_c.likely && !e_taken; rd_tk <= e_taken; rd_tt <= e_target; rd_tn <= FAST ? ea_pc8 : e_pc + 32'd8;
             rd_bi <= e_pc[BH+1:2]; rd_bs <= e_bs; rd_bc <= e_c.br != B_J && e_c.br != B_JR;
         end
         if (JT) begin
@@ -2400,7 +2400,7 @@ always_ff @(posedge clk) begin
                     fs <= FS_XLAT;
                     f_tlbq <= sc_hit ? utlb_res(sc_x, f_pc) : 35'd0;
                     f_tc <= sc_pgok;
-                    if (sc_hit) begin utlb_f.valid <= 1; utlb_f.x <= sc_x; end
+                    if (sc_hit) begin utlb_f.valid <= 1; utlb_f.x <= sc_x; utlb_f.x.vpage <= sc_va[31:12]; end
                 end
             end else if (!f_wq && !sc_start && (f_discard || f_kill)) fs <= FS_RUN;   // not started: just go
         end
@@ -2455,7 +2455,7 @@ always_ff @(posedge clk) begin
                     m_tlbq <= sc_hit ? utlb_res(sc_x, m_addr) : 35'd0;
                     {m_tq_bad, m_tq_hi, m_tq_22} <= tq_flags(sc_hit ? utlb_res(sc_x, m_addr) : 35'd0, m_st);
                     m_tlbc <= TLB_RAM && sc_hit && sc_x.c;
-                    if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; end
+                    if (sc_hit) begin utlb_m.valid <= 1; utlb_m.x <= sc_x; utlb_m.x.vpage <= sc_va[31:12]; end
                 end
             end
         end
@@ -2733,7 +2733,8 @@ module mips_ealu (
     input  wire        k_shv, k_sub, sl, sra,                  // the amount is rs's; subtract (and compare); sll; sra
     input  wire [1:0]  k_grp, input wire [2:0] k_op, input wire k_f,
     input  wire [15:0] imm, input wire [4:0] shamt,
-    output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq
+    output wire [31:0] a, b, res, output wire [32:0] cs, output wire lt, ltu, eq,
+    output wire [31:0] pc8                                  // the link address, pc + 8 (the branch's not-taken target too)
 );
 function automatic logic [31:0] rev32(input logic [31:0] v);
     for (int i = 0; i < 32; i++) rev32[i] = v[31 - i];
@@ -2744,6 +2745,7 @@ assign cs = {1'b0, a} + {1'b0, b ^ {32{k_sub}}} + 33'(k_sub);
 assign lt  = (a[31] != b[31]) ? a[31] : cs[31];
 assign ltu = !cs[32];
 assign eq  = a == b;
+assign pc8 = e_pc + 32'd8;
 wire [4:0]  sh  = k_shv ? a[4:0] : shamt;
 wire [32:0] shx = {sra && b[31], sl ? rev32(b) : b};
 wire [32:0] shr = $signed(shx) >>> sh;
@@ -2756,7 +2758,7 @@ always_comb begin
     3'd2: misc = a ^ b;
     3'd3: misc = ~(a | b);
     3'd4: misc = {imm, 16'd0};
-    3'd5: misc = e_pc + 32'd8;
+    3'd5: misc = pc8;
     3'd6: misc = hi_r;
     default: misc = lo_r;
     endcase

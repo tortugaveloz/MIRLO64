@@ -235,7 +235,7 @@ static int fp_denorm(float x) { fu_t u = { .f = x }; return (u.u & 0x7F800000u) 
  * every NaN result the default one, 0x7FBFFFFF; arithmetic rounds to nearest
  * even whatever FCR31.RM says (games keep the default). */
 extern int n64_no64;
-int n64_fpd64;      /* the CPU has FPD64: add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d are exact doubles (fpd64.h) */
+int n64_fpd64;      /* the CPU has FPD64: add.d, sub.d, mul.d, div.d, abs.d, neg.d and c.cond.d are exact doubles (fpd64.h) */
 static float ftz(float x) { fu_t u = { .f = x }; if (!(u.u & 0x7F800000u)) u.u &= 0x80000000u; return u.f; }
 static float canon(float x) { fu_t u = { .f = x }; if (x != x) u.u = 0x7FBFFFFFu; return u.f; }
 /* an arithmetic result: rounded to 24 bits with an unbounded exponent, then
@@ -270,8 +270,8 @@ int n64_cop1_exec(n64_cpu_t *c, uint32_t insn, uint64_t rt, uint64_t *gpr_out)
             if (dbl && n64_fpd64) {                                                 /* (the doubles fpd64.h does: raw pairs, no float) */
                 uint32_t fn = insn & 63;
                 uint64_t dx = (uint64_t)fl_get(c, fs), dy = (uint64_t)fl_get(c, ft), dr;
-                if (fn <= 2 || fn == 5 || fn == 7) {
-                    dr = fn == 0 ? fpd_add(dx, dy, 0) : fn == 1 ? fpd_add(dx, dy, 1) : fn == 2 ? fpd_mul(dx, dy) : fn == 5 ? fpd_abs(dx) : fpd_neg(dx);
+                if (fn <= 3 || fn == 5 || fn == 7) {
+                    dr = fn == 0 ? fpd_add(dx, dy, 0) : fn == 1 ? fpd_add(dx, dy, 1) : fn == 2 ? fpd_mul(dx, dy) : fn == 3 ? fpd_div(dx, dy) : fn == 5 ? fpd_abs(dx) : fpd_neg(dx);
                     fl_set(c, fd, (int64_t)dr);
                     break;
                 }

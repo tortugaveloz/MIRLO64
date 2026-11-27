@@ -119,7 +119,6 @@ The layout is the same for every game (`lang/mips/include/layout.h`):
 | `0x42C7_0000` - `0x42CF_FFFF` | 576 KiB | The tail of the save states' block, which a state never reaches (the largest is `0x97_0000` bytes): the picker's picture and the list of codes it hands to the engine |
 | `0x4380_0000` (RDRAM) | 448 KiB | The picker's buffers and tables while it runs, before the game boots; zeroed when it leaves |
 | `0x4340_0000` | up to 3 MiB | The Transfer Pak SD 1's Game Boy ROM |
-| `0x4320_0000` | 2 MiB | The RDP's shadow plane, with the core's "Video settings: 32-bit" setting: a byte for each pixel of a 16-bit colour image, some of the low bits of its channels and a check of the pixel's 5551 word ([video_options.md](video_options.md)) |
 | `0x4370_0000` | 1 MiB | The RDP's hidden coverage plane: the other two coverage bits of each 16-bit word of RDRAM ([rdp.md](rdp.md)) |
 | `0x4380_0000` | 8 MiB | The N64's RDRAM |
 
@@ -381,7 +380,7 @@ its operands and result; where the figure depends on the operands it is for the 
 | `cvt.w.d`, `trunc`, `round`, `ceil`, `floor` (`.w`, `.l`) of a double | 5 | 6 | 8 |
 | `add.d` / `sub.d` | 3 | 9 / 10 | 11 |
 | `mul.d` | 8 | 7 | 10 |
-| `div.d`, `sqrt.d` | 58 | 37, 36 | 37 |
+| `div.d`, `sqrt.d` | 58 | 37, 36 (with FPD64, `div.d` is 65, or 3 for a zero, infinite or NaN operand) | 37 |
 | `abs.d`, `neg.d`; `c.cond.d` | 1 | 4; 5 | 6 |
 | `lwc1`, `swc1` | 1 | 1 | 1 |
 | `ldc1`, `sdc1` | 1 | 2 (two words) | 2 |
@@ -398,18 +397,20 @@ conversions between S and D there, by the sum of operands of the same sign and t
 count of leading zeros, and by flushing the operands as they are read. Integer instruction cycles are unchanged.
 
 **FPD64** (`mips_core`'s parameter, `MIRLO_FPD64` in `mips_sys.sv`, off by default; with `FAST`; COP0 register 7's bit 26):
-`add.d`, `sub.d`, `mul.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
+`add.d`, `sub.d`, `mul.d`, `div.d`, `abs.d`, `neg.d` and `c.cond.d` are computed at 53 bits by `fpu_d64.sv` instead of as floats. The rules
 are the single-precision path's: an input below the normals is a zero of its sign, arithmetic rounds to nearest even with an
 unbounded exponent (whatever FCR31's rounding mode is) and then a result below the normals is a zero and one above them
 infinity, a NaN result is the default one (`0x7FF7FFFF_FFFFFFFF`, the single's `0x7FBFFFFF` in a double's fields), no
-exceptions and no cause or flag bits; a compare is exact on the flushed values. `div.d`, `sqrt.d` and every conversion
+exceptions and no cause or flag bits; a compare is exact on the flushed values. `sqrt.d` and every conversion
 (`cvt.s.d`, `cvt.d.w`, `cvt.d.l`, the round / trunc / ceil / floor and `cvt` to `.w` and `.l`) stay on the datapath above, a double
 taken to a float and back. The unit is a few small pieces used over and over: one 57-bit adder, a shifter on its accumulator
 (by 8 or 1 bits, right with the shifted-out bits jammed into a sticky bit, or left), and one 26 x 26 multiplier (a DSP block)
-for the product in four pieces. The cycles the instruction is in M: `add.d` and `sub.d` 8 + a step per 8 bits (and one per bit
+for the product in four pieces; `div.d` has a second 57-bit adder and a remainder register of its own, a restoring division that
+finds a bit of the quotient a cycle (56 steps, then the same normalisation and rounding), with the result's sign, a zero divisor (infinity), 0 / 0 and
+inf / inf (the default NaN) and x / inf (zero) as the rules above. The cycles the instruction is in M: `add.d` and `sub.d` 8 + a step per 8 bits (and one per bit
 of the remainder) of the exponents' difference + the same for the cancellation of a difference (a sum: none), `mul.d` 13,
-`abs.d` and `neg.d` 3, a compare 3 (6 when the exponents are equal); a special operand is the result at once (3). The VR4300's
-are 3 (add, sub) and 8 (mul). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
+`div.d` 65 at most, `abs.d` and `neg.d` 3, a compare 3 (6 when the exponents are equal); a special operand is the result at once (3). The VR4300's
+are 3 (add, sub), 8 (mul) and 58 (div). `sim/n64/fpd64.h` is the model of it (and the host's own doubles check the model: `sim/fpd64`).
 
 ### Address translation
 
@@ -1211,7 +1212,6 @@ scan-out instead.
 |---|---|---|---|
 | Crop Vertical | `0x1000_010C` | `interact0[9:5]` | None (0), **8 lines** (8), 12 lines (12) |
 | Crop Horizontal | `0x1000_0114` | `interact0[19:15]` | [1:0] columns at the right, [3:2] at the left, up to 3 each: None (0), 1 / 2 / 3 columns (5 / 10 / 15), 1 / 2 / 3 columns left (4 / 8 / 12), **1 column right** (1), 2 / 3 columns right (2 / 3) |
-| Video settings | `0x1000_0144` | `interact2[9:5]` | **Default** (0), 32-bit color (1), Deblur (2), 32-bit color + Deblur (3): [video_options.md](video_options.md) |
 | Expansion Pak/Gameshark | `0x1000_0150` | `interact1[25:24]` | Exp Pak and GameShark (2), **Exp Pak** (0, the default), GameShark (3), None (1). The Expansion Pak (bit 24, 0 = in; `0x1000_0138` writes it alone) is read when the game starts; the Gameshark codes (bit 25, `0x1000_013C` alone) are seen in every field ([GameShark codes](#gameshark-codes)) |
 | Controller paks | `0x1000_0108` | `interact0[4:0]` | **None** (0), Controller Pak (1), Transfer Pak cartridge (2), Transfer Pak SD (3), Transfer Pak SD P2 (4: SD in controller 2 alone), Transfer Pak SD P1P2 (5), TPak cart P1, SD P2 (6) |
 | Analogizer controllers | `0x1000_0148` | `interact2[14:10]` | **Dock: P1P2P3P4** (0), SNAC: P1P2P3P4 (15), Dock: P1 and SNAC: P2P3P4 (14), SNAC: P1 and Dock: P2P3P4 (1), SNAC: P1P2 and Dock: P3P4 (3), SNAC: P1P2P3 and Dock: P4 (7): a mask of the players that are the SNAC port's ([analogizer.md](analogizer.md)) |
@@ -1406,20 +1406,20 @@ that acknowledges it: the interrupts come in the middle of FPU operations, which
 each). `TB_RETLOG=1` prints the cycle, the address and the word of every retired instruction, and `fpu_cycles.py [--bench
 obj_dir/Vmips_core]` runs a ROM of blocks between markers and prints what every COP1 instruction, and the multiplies, divides, loads,
 stores and branches, cost in cycles (the table in "The FPU").
-`gen_rand_fpu_rom.py SEED out.z64 N d64` writes double programs for a core with FPD64 (`TB_FPD64=1`; the model does the doubles exactly), and
+`gen_rand_fpu_rom.py SEED out.z64 N d64` writes double programs, divisions included, for a core with FPD64 (`TB_FPD64=1`; the model does the doubles exactly), and
 `fpd64_rom.sh <out.z64>` builds `lang/mips/test/fpu_d64_test.c` for the same (the failures in `fails`).
 
 ### Single blocks
 
 - `sim/fpd64`: `build.sh`, then `obj_dir/Vfpu_d64 [millions of operands per operation] [seed]`: the double unit alone against its
   model (`sim/n64/fpd64.h`) and the model against the host's IEEE doubles, on a grid of the special values and random operands made to
-  cancel, tie and overflow, with the cycles each operation took.
+  cancel, tie and overflow (division with exact quotients and the smallest normal's boundary too), with the cycles each operation took.
 
 - `sim/ai`: `build.sh`, then `obj_ai/tb_ai [handler latency us]`: the AI's queue and interrupt, the third buffer
   dropped, the reader's lead, and a driver that queues its next buffer from the interrupt.
 - `sim/gb_cart`: `run.sh <rom.gb>` runs the cartridge port against the cartridge model, and then mutants of the port,
   each of which the model's checks must catch. `lang/n64rt/test/make_gb.py` makes a ROM for it.
-- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model (`TB_DEBLUR=1`, `TB_OUT32=1`: the "Video settings" setting's choices).
+- `sim/vi_filter`: `build.sh`, then `obj_vi/tb_vi <seed> <divot> <partial %>`: the scan-out's filters against a model.
 - `sim/rsp`, `sim/rdp`, `sim/rdp_dither`: see [rsp.md](rsp.md) and [rdp.md](rdp.md).
 
 ### The runtime: `lang/n64rt/test`

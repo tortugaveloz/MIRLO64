@@ -16,7 +16,7 @@
 static double D(uint64_t x) { double d; memcpy(&d, &x, 8); return d; }
 static uint64_t U(double d) { uint64_t x; memcpy(&x, &d, 8); return x; }
 
-static uint64_t host(uint64_t x, uint64_t y, int op)   // 0 add 1 sub 2 mul 3 abs 4 neg
+static uint64_t host(uint64_t x, uint64_t y, int op)   // 0 add 1 sub 2 mul 3 abs 4 neg 5 div
 {
     x = fpd_ftz(x); y = fpd_ftz(y);
     double a = D(x), b = D(y), r;
@@ -24,6 +24,7 @@ static uint64_t host(uint64_t x, uint64_t y, int op)   // 0 add 1 sub 2 mul 3 ab
     case 0: r = a + b; break;
     case 1: r = a - b; break;
     case 2: r = a * b; break;
+    case 5: r = a / b; break;
     case 3: return fpd_isnan(x) ? FPD_QNAN : x & 0x7FFFFFFFFFFFFFFFull;
     default: return fpd_isnan(x) ? FPD_QNAN : x ^ 0x8000000000000000ull;
     }
@@ -32,6 +33,13 @@ static uint64_t host(uint64_t x, uint64_t y, int op)   // 0 add 1 sub 2 mul 3 ab
     if (op == 2 && (u & 0x7FFFFFFFFFFFFFFFull) == 0x0010000000000000ull) {          // the smallest normal: exact below it?
         double a2 = fabs(a) * 0x1p600, bb = fabs(b), p2 = a2 * bb, r2 = fma(a2, bb, -p2), t2 = 0x1p-422;   // (the threshold 2^-422 - 2^-476 is 54 bits: its distance from t2 is added as a term)
         if (!(((p2 - t2) + 0x1p-476) + r2 >= 0.0)) return u & 0x8000000000000000ull;
+    }
+    if (op == 5 && (u & 0x7FFFFFFFFFFFFFFFull) == 0x0010000000000000ull) {          // the smallest normal: is the quotient at least 2^-1022 (1 - 2^-54)?
+        uint64_t xa = x & 0x7FFFFFFFFFFFFFFFull, ya = y & 0x7FFFFFFFFFFFFFFFull;
+        unsigned __int128 A = (xa & 0xFFFFFFFFFFFFFull) | 1ull << 52, B = (ya & 0xFFFFFFFFFFFFFull) | 1ull << 52;
+        int s = (int)(xa >> 52) - (int)(ya >> 52) + 1076;                            // A * 2^s >= B * (2^54 - 1)
+        bool ge = s >= 0 && s < 70 && (A << s) >= B * (((unsigned __int128)1 << 54) - 1);
+        if (!ge) return u & 0x8000000000000000ull;
     }
     if ((u >> 52 & 0x7FF) == 0) return u & 0x8000000000000000ull;
     return u;
@@ -88,7 +96,7 @@ int main(int argc, char **argv)
     double mill = argc > 1 ? atof(argv[1]) : 1.0;
     rng.seed(argc > 2 ? strtoull(argv[2], 0, 0) : 1);
     Vfpu_d64 *m = new Vfpu_d64;
-    uint64_t nhost = 0, nrtl = 0, bad_host = 0, bad_rtl = 0, cyc[5] = {0}, cmax[5] = {0}, cnt[5] = {0};
+    uint64_t nhost = 0, nrtl = 0, bad_host = 0, bad_rtl = 0, cyc[6] = {0}, cmax[6] = {0}, cnt[6] = {0};
     auto tick = [&] { m->clk = 0; m->eval(); m->clk = 1; m->eval(); };
     m->rst = 1; m->go = 0; m->live = 1; m->take = 0; tick(); tick(); m->rst = 0;
     auto run = [&](uint64_t x, uint64_t y, int fn, int cls) -> uint64_t {
@@ -97,14 +105,18 @@ int main(int argc, char **argv)
         do { tick(); n++; } while (m->busy && n < 400);
         if (n >= 400) { fprintf(stderr, "hang fn %d %016llx %016llx\n", fn, (unsigned long long)x, (unsigned long long)y); exit(2); }
         uint64_t r = m->res;
+        for (int w = rng() % 4 == 0 ? (int)(rng() % 4) : 0; w > 0; w--) {          // (the core takes the result some cycles later: it waits, the unit idle, go held)
+            tick();
+            if (m->busy || m->res != r) { fprintf(stderr, "result not held while waiting (fn %d %016llx %016llx)\n", fn, (unsigned long long)x, (unsigned long long)y); exit(2); }
+        }
         m->take = 1; tick(); m->take = 0; m->go = 0; tick();
         if (cls >= 0) { cyc[cls] += n; cnt[cls]++; if ((uint64_t)n > cmax[cls]) cmax[cls] = n; }
         return r;
     };
-    const char *nm[] = {"add", "sub", "mul", "abs", "neg"};
-    const int fns[] = {0, 1, 2, 5, 7};
+    const char *nm[] = {"add", "sub", "mul", "abs", "neg", "div"};
+    const int fns[] = {0, 1, 2, 5, 7, 3};
     auto one = [&](uint64_t x, uint64_t y, int op) {
-        uint64_t m_ = op == 0 ? fpd_add(x, y, 0) : op == 1 ? fpd_add(x, y, 1) : op == 2 ? fpd_mul(x, y) : op == 3 ? fpd_abs(x) : fpd_neg(x);
+        uint64_t m_ = op == 0 ? fpd_add(x, y, 0) : op == 1 ? fpd_add(x, y, 1) : op == 2 ? fpd_mul(x, y) : op == 5 ? fpd_div(x, y) : op == 3 ? fpd_abs(x) : fpd_neg(x);
         uint64_t h_ = host(x, y, op), r_ = run(x, y, fns[op], op);
         nhost++; nrtl++;
         if (m_ != h_) { if (bad_host++ < 10) fprintf(stderr, "MODEL %s %016llx %016llx: model %016llx host %016llx\n", nm[op], (unsigned long long)x, (unsigned long long)y, (unsigned long long)m_, (unsigned long long)h_); }
@@ -112,7 +124,7 @@ int main(int argc, char **argv)
     };
     // grid of specials, every pair, both signs
     for (int i = 0; i < NSP; i++) for (int j = 0; j < NSP; j++) for (int s = 0; s < 4; s++)
-        for (int op = 0; op < 5; op++) one(SP[i] ^ ((uint64_t)(s & 1) << 63), SP[j] ^ ((uint64_t)(s >> 1) << 63), op);
+        for (int op = 0; op < 6; op++) one(SP[i] ^ ((uint64_t)(s & 1) << 63), SP[j] ^ ((uint64_t)(s >> 1) << 63), op);
     uint64_t grid = nhost;
     // compares
     uint64_t ncmp = 0, bad_cmp = 0;
@@ -128,12 +140,13 @@ int main(int argc, char **argv)
     uint64_t n = (uint64_t)(mill * 1e6);
     for (uint64_t k = 0; k < n; k++) {
         uint64_t x = rnd_val(), y = rng() % 2 ? rnd_pair(x) : rnd_val();
-        one(x, y, k % 3);
+        one(x, y, k % 4 == 3 ? 5 : k % 3);
         if (k % 16 == 0) one(x, y, 3 + (k / 16) % 2);
+        if (k % 8 == 5) { uint64_t z = rnd_val(), w = rnd_val(); one(fpd_mul(z, w), w, 5); one(fpd_mul(z, w), z, 5); }   // (exact quotients)
         if (k % 4 == 0) cmpone(x, rng() % 2 ? rnd_pair(x) : y);
     }
     printf("grid %llu operations; %llu random; compares %llu\n", (unsigned long long)grid, (unsigned long long)(nhost - grid), (unsigned long long)ncmp);
-    for (int i = 0; i < 5; i++) printf("  %s: %llu ops, %.1f cycles on average, %llu at most (with the one that takes the result)\n", nm[i], (unsigned long long)cnt[i], cnt[i] ? (double)cyc[i] / cnt[i] : 0.0, (unsigned long long)cmax[i]);
+    for (int i = 0; i < 6; i++) printf("  %s: %llu ops, %.1f cycles on average, %llu at most (with the one that takes the result)\n", nm[i], (unsigned long long)cnt[i], cnt[i] ? (double)cyc[i] / cnt[i] : 0.0, (unsigned long long)cmax[i]);
     printf("model vs host: %llu mismatches / %llu\nrtl vs model: %llu mismatches / %llu\ncompare rtl vs host: %llu mismatches / %llu\n",
            (unsigned long long)bad_host, (unsigned long long)nhost, (unsigned long long)bad_rtl, (unsigned long long)nrtl, (unsigned long long)bad_cmp, (unsigned long long)ncmp);
     printf(bad_host || bad_rtl || bad_cmp ? "FAIL\n" : "PASS\n");

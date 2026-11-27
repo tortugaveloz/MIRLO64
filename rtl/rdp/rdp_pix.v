@@ -68,7 +68,6 @@ module rdp_pix (
     input  wire [15:0] prim_dz,     // SET_PRIM_DEPTH's delta
     input  wire        need_mem,    // the colour span is read (rdp_top): the memory's coverage is there
     input  wire        c8,          // the colour image is an 8-bit one (rdp_top cimg8): no depth, memory reads 0
-    input  wire        dither_off,  // the core's "Picture: 32-bit" option: the RGB dither is off whatever RGB_DITHER_SEL says (a quasi-static level)
     input  wire        c32,         // ... a 32-bit one (rdp_top cimg32): a pixel a word of the old colour buffer
     input  wire        p_aa,        // a triangle: Z moves to the first covered sample
     input  wire [31:0] z_dx, z_dy,  // its DzDx, DzDy
@@ -121,9 +120,6 @@ module rdp_pix (
     output reg  [9:0]  clb_raddr,         // the colour buffer's: a 32-bit image's {set, x[8:0]}, a 16-bit one's as lb_raddr
     input  wire [31:0] zlb_rdata,
     input  wire [31:0] clb_rdata,
-    output reg  [9:0]  slb_raddr,         // the old shadow buffer's: {set, the colour word's address over two}
-    input  wire [31:0] slb_rdata,         // ... its plane word, a byte a pixel (docs/video_options.md; read when sh_rd, for a 16-bit image): the pair's first colour word's pixels in the upper half
-    input  wire        sh_rd,             // the core's shadow plane is on: a 16-bit pixel's memory colour takes the shadow halfword's low bits where its check is the word's
     // the raw hidden-bit buffer (rdp_mem, lang/c/rdp/rdp.h: the N64's other two
     // coverage bits, a 32-bit word a 16-pixel group, by group mod 128), read
     // as the line buffers: its group's word; the rows' word base bits, by set
@@ -141,8 +137,6 @@ module rdp_pix (
     output reg  [7:0]  out_r8,         // an 8-bit image's byte: the red, not dithered (fill: the fill colour's byte)
     output wire [26:0] out_c27,        // a 32-bit image's pixel: {R8 G8 B8 cvg3}, the RGB dithered at 8 bits
     output reg  [1:0]  out_hid,        // the coverage's two hidden bits
-    output wire [7:0]  out_sh,         // the shadow plane's byte for a 16-bit image's pixel (docs/video_options.md): {R[2:1], G[2:1], B[2] of the low three bits, the 3-bit check of out_color}
-                                       // (with the dither off: out_color is {col_t, col_a}; a fill and a copy write the top bits of each channel again)
     output reg  [17:0] out_depth,         // {the depth word's 14 bits, the dz code}: the code's low two go to the depth image's hidden bits
     output reg         out_cpass,        // write the color
     output reg         out_zpass,        // write the depth
@@ -207,35 +201,6 @@ module rdp_pix (
     function automatic [31:0] un565;
         input [15:0] v;
         un565 = { v[15:11], 3'd0, v[10:6], 3'd0, v[5:1], 3'd0, 8'hFF };   // (the N64's: zeros below, not the top bits again -- lang/c/rdp/rdp.c unrgb565)
-    endfunction
-
-    // the shadow plane's check of a 16-bit colour word: CRC-3 (x^3 + x + 1), the top bit first (lang/c/rdp/rdp.c sh_crc)
-    function [2:0] sh_crc;
-        input [15:0] w;
-        integer i;
-        reg [2:0] c;
-        reg fb;
-        begin
-            c = 3'd0;
-            for (i = 15; i >= 0; i = i - 1) begin
-                fb = c[2] ^ w[i];
-                c = {c[1:0], 1'b0};
-                if (fb) c = c ^ 3'd3;
-            end
-            sh_crc = c;
-        end
-    endfunction
-
-    // the memory colour of a 16-bit image with a shadow plane (lang/c/rdp/rdp.c): the low three bits of each channel from the shadow
-    // byte where its check is the colour word's CRC-3 (it keeps two of them for red and green, one for blue; the bit missing repeats the one above)
-    function automatic [31:0] un565sh;
-        input [15:0] v;
-        input [7:0] s;
-        reg [8:0] lo;
-        begin
-            lo = (sh_rd && s[2:0] == sh_crc(v)) ? {s[7], s[6], s[6], s[5], s[4], s[4], s[3], s[3], s[3]} : 9'd0;
-            un565sh = { v[15:11], lo[8:6], v[10:6], lo[5:3], v[5:1], lo[2:0], 8'hFF };
-        end
     endfunction
 
     // a 16-bit texel: RGBA5551, or IA 8 8
@@ -942,7 +907,6 @@ module rdp_pix (
         v9 <= v8b & ~rst & (!two_pass | ph8b); x9 <= x8b; hp9 <= hp8b; bs9 <= bs8b;
         lb_raddr <= {bs8b, x8b[9:1]};           // line buffers: data after the next edge, captured at P10b
         clb_raddr <= {bs8b, c32 ? x8b[8:0] : x8b[9:1]};
-        slb_raddr <= {bs8b, hw8b[9:1]};         // (the colour word's address over two: its pair's place)
         hl_raddr <= {bs8b, hw8b[9:3]};          // the hidden word of the pixel's group
         hk9 <= {hw8b[2:0], x8b[0]};
         hz_raddr <= {bs8b, hz8b[9:3]};
@@ -1225,7 +1189,7 @@ module rdp_pix (
         zold10 <= x10a[0] ? zlb_rdata[15:0] : zlb_rdata[31:16];     // the even pixel first
         // (a 32-bit image: the word's R G B at eight bits, and the coverage from the alpha byte's top three bits, where
         // a 16-bit one has its bit 0 and the hidden two; lang/c/rdp/rdp.c draw_pixel_cvg)
-        mem10 <= c32 ? {clb_rdata[31:8], 8'hFF} : un565sh(c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16], c8 ? 8'd0 : hk10a[1] ? (x10a[0] ? slb_rdata[7:0] : slb_rdata[15:8]) : (x10a[0] ? slb_rdata[23:16] : slb_rdata[31:24]));
+        mem10 <= c32 ? {clb_rdata[31:8], 8'hFF} : un565(c8 ? 16'd0 : x10a[0] ? clb_rdata[15:0] : clb_rdata[31:16]);
         memb10 <= c32 ? clb_rdata[7] : x10a[0] ? clb_rdata[0] : clb_rdata[16];
         hid10 <= c32 ? clb_rdata[6:5] : hl_rdata[{hk10a, 1'b0} +: 2];
         hidz10 <= hz_rdata[{hzk10a, 1'b0} +: 2];
@@ -1690,7 +1654,7 @@ module rdp_pix (
     // bits and the thresholds go on to the output (out_color is their sum, a
     // 5-bit step and a compare behind the registers: not on the blender's path).
     wire [2:0] dt13;
-    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1] || dither_off), .bayer(other_h[6]),
+    rdp_dither_tab dtab (.off(other_h[7:6] == 2'd3 || cyc[1]), .bayer(other_h[6]),
                          .y(dy13), .x(x13b[1:0] - {1'b0, hp13b}), .dt(dt13));
 `ifdef RDP_LFSR_PIXEL
     // the noise: the LFSR at the pixel's P11 (the sample before its step), five clocks to P13b
@@ -1703,10 +1667,9 @@ module rdp_pix (
 `else
     wire [8:0] nz5 = lfsr[8:0];
 `endif
-    wire dnoise = other_h[7:6] == 2'd2 && !cyc[1] && !dither_off;
+    wire dnoise = other_h[7:6] == 2'd2 && !cyc[1];
     reg [14:0] col_t;                           // R5 G5 B5, truncated
     reg [8:0]  col_lo;                          // the low three bits of R, G, B
-    reg        col_rep;                         // a copy or a fill: the plane's bits are the pixel's own top ones
     reg [2:0]  col_dt, col_dg, col_db;
     reg        col_a;
     wire [4:0] dr, dg, db;
@@ -1714,7 +1677,6 @@ module rdp_pix (
     rdp_dither_add dag (.c(col_t[9:5]),   .lo(col_lo[5:3]), .d(col_dg), .o(dg));
     rdp_dither_add dab (.c(col_t[4:0]),   .lo(col_lo[2:0]), .d(col_db), .o(db));
     assign out_color = { dr, dg, db, col_a };
-    assign out_sh = { col_rep ? {col_t[14:13], col_t[9:8], col_t[4]} : {col_lo[8:7], col_lo[5:4], col_lo[2]}, sh_crc({col_t, col_a}) };
     // A 32-bit image keeps the eight bits (docs/cimg32.md): the same compare, and where it takes the channel up, the
     // next multiple of 8 (255 from 248 up), else the eight bits as they were. The coverage goes whole, no hidden plane.
     function automatic [7:0] dith8;
@@ -1731,7 +1693,6 @@ module rdp_pix (
                                 : { fin[31:27], fin[23:19], fin[15:11] };
         col_a  <= (cyc == 2'd3) ? (x13b[0] ? fill[0] : fill[16]) : cv313b[2];
         out_hid <= (cyc == 2'd3) ? {2{x13b[0] ? fill[0] : fill[16]}} : cv313b[1:0];
-        col_rep <= cyc[1];
         col_lo <= (cyc == 2'd3) ? 9'd0 : { fin[26:24], fin[18:16], fin[10:8] };
         out_r8 <= (cyc == 2'd3) ? fill[{~x13b[1:0], 3'd0} +: 8] : fin[31:24];
         col_dt <= dnoise ? nz5[2:0] : dt13;

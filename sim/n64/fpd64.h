@@ -1,4 +1,4 @@
-/* Double-precision add, sub, mul, abs, neg and the compares as rtl/mips/fpu_d64.sv does them (the CPU's FPD64 level).
+/* Double-precision add, sub, mul, div, abs, neg and the compares as rtl/mips/fpu_d64.sv does them (the CPU's FPD64 level).
  *
  * The same rules as the single-precision path (fpu_n64.sv): an input below the normals is a zero of its sign (the
  * VR4300 with FCR31.FS set); arithmetic rounds to nearest even with an unbounded exponent, then a result below the
@@ -94,6 +94,20 @@ static inline uint64_t fpd_mul(uint64_t x, uint64_t y)
     }
     if (a.m == 0 || b.m == 0) return (uint64_t)s << 63;
     return fpd_round(s, (int64_t)a.e + b.e - 2150, (unsigned __int128)a.m * b.m, 0);
+}
+
+/* x / y: a zero (or a denormal) divisor is infinity of the signs' xor (0 / 0 is a NaN, as inf / inf), an infinite divisor a zero */
+static inline uint64_t fpd_div(uint64_t x, uint64_t y)
+{
+    if (fpd_isnan(x) || fpd_isnan(y)) return FPD_QNAN;
+    fpd_t a = fpd_unpack(x), b = fpd_unpack(y);
+    int s = a.s ^ b.s;
+    if (a.e == 0x7FF) return b.e == 0x7FF ? FPD_QNAN : (uint64_t)s << 63 | 0x7FF0000000000000ull;     /* inf / inf, inf / x */
+    if (b.e == 0x7FF) return (uint64_t)s << 63;                                                         /* x / inf */
+    if (b.m == 0) return a.m == 0 ? FPD_QNAN : (uint64_t)s << 63 | 0x7FF0000000000000ull;               /* x / 0, 0 / 0 */
+    if (a.m == 0) return (uint64_t)s << 63;
+    unsigned __int128 n = (unsigned __int128)a.m << 64, q = n / b.m;
+    return fpd_round(s, (int64_t)a.e - b.e - 64, q, n % b.m != 0);
 }
 
 static inline uint64_t fpd_abs(uint64_t x) { return fpd_isnan(x) ? FPD_QNAN : fpd_ftz(x) & 0x7FFFFFFFFFFFFFFFull; }
