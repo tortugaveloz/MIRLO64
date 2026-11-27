@@ -66,6 +66,7 @@ module mirlo_regs (
     input  wire  [31:0] ia_data,
     input  wire         ia_wr,
     output logic [31:0] ia_q,
+    output wire  [2:0]  ia_an_mode,         // interact: the Analogizer's video (field 16: 0 off, 1 RGBS, 2 RGsB, 3 YPbPr, 4 Y/C NTSC, 5 Y/C PAL, 6 RGBHV)
     output wire         ia_an_own,          // INTERACT2's bit 31, which the runtime sets: the adapter owns the cartridge port (docs/analogizer.md)
     output wire  [4:0]  ia_crop_v,          // interact: "Crop Vertical" (lines; field 3) and "Crop Right" (pixels; field 5)
     output wire  [1:0]  ia_crop_r,          // ("Crop Horizontal", field 5: [1:0] columns at the right, [3:2] at the left)
@@ -236,17 +237,19 @@ logic        ia_ch0, ia_ch1;
 logic        ia_own;                       // INTERACT2 [31]: the runtime's, the adapter owns the port
 logic [3:0]  ia_snp;                       // INTERACT2 [13:10]: "Analogizer controllers" (field 18), bit n: player n + 1 is the SNAC port's
 assign ia_an_own = ia_own;
+logic [3:0]  ia_anv;                       // "Analogizer video" (field 16); a value no entry has (7 or more) is the DAC as with Off
+assign ia_an_mode = ia_anv >= 4'd7 ? 3'd0 : ia_anv[2:0];
 assign ia_crop_v = ia0[9:5];
 assign ia_crop_r = ia0[16:15];
 assign ia_crop_l = ia0[18:17];
 assign ia_out32  = ia_o32;
 assign ia_deblur = ia_dbl;
 always_ff @(posedge clk) begin
-    if (rst) begin ia0 <= 0; ia1 <= 0; ia_o32 <= 0; ia_dbl <= 0; ia_own <= 0; ia_snp <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
+    if (rst) begin ia0 <= 0; ia1 <= 0; ia_o32 <= 0; ia_dbl <= 0; ia_own <= 0; ia_snp <= 0; ia_anv <= 0; ia_ch0 <= 0; ia_ch1 <= 0; end
     else begin
         if (wr && a == R_APF_INTERACT_INTERACT0) ia0 <= r_wdata;
         if (wr && a == R_APF_INTERACT_INTERACT1) ia1 <= r_wdata;
-        if (wr && a == R_APF_INTERACT_INTERACT2) begin ia_own <= r_wdata[31]; ia_snp <= r_wdata[13:10]; end
+        if (wr && a == R_APF_INTERACT_INTERACT2) begin ia_own <= r_wdata[31]; ia_snp <= r_wdata[13:10]; ia_anv <= r_wdata[3:0]; end
         if (rd && a == R_APF_INTERACT_INTERACT0) ia_ch0 <= 0;
         if (rd && a == R_APF_INTERACT_INTERACT1) ia_ch1 <= 0;
         if (ia_wr) case (ia_address)
@@ -266,6 +269,7 @@ always_ff @(posedge clk) begin
             5'd13: ia1[23:22] <= ia_data[1:0];
             5'd14: ia1[24]    <= ia_data[0];
             5'd15: ia1[25]    <= ia_data[0];
+            5'd16: ia_anv     <= ia_data[3:0];
             5'd17: begin ia_o32 <= ia_data[0]; ia_dbl <= ia_data[1]; end
             5'd18: ia_snp     <= ia_data[3:0];
             default: ;
@@ -288,6 +292,7 @@ always_ff @(posedge clk) begin
     5'd13: ia_q <= {30'd0, ia1[23:22]};
     5'd14: ia_q <= {31'd0, ia1[24]};
     5'd15: ia_q <= {31'd0, ia1[25]};
+    5'd16: ia_q <= {28'd0, ia_anv};
     5'd17: ia_q <= {30'd0, ia_dbl, ia_o32};
     5'd18: ia_q <= {28'd0, ia_snp};
     default: ia_q <= 32'd0;
@@ -494,7 +499,7 @@ always_comb begin
     R_APF_INTERACT_INTERACT_CHANGED0[5:2]: rb[3] = {31'd0, ia_ch0};
     R_APF_INTERACT_INTERACT1[5:2]:         rb[3] = ia1;
     R_APF_INTERACT_INTERACT_CHANGED1[5:2]: rb[3] = {31'd0, ia_ch1};
-    R_APF_INTERACT_INTERACT2[5:2]:         rb[3] = {ia_own, 17'd0, ia_snp, 10'd0};
+    R_APF_INTERACT_INTERACT2[5:2]:         rb[3] = {ia_own, 17'd0, ia_snp, 6'd0, ia_anv};
     default: ;
     endcase
     case (a[5:2])                                               // APF_VIDEO

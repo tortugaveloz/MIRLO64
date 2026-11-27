@@ -59,8 +59,8 @@ module ooc_video (input wire clk, rst, clk_vid, rst_vid, enable, input wire [25:
     input wire vi_black, vi_pal, output wire tv_pal, input wire gamma, vi_aa, vi_divot, vi_dedither, input wire [4:0] crop_v, input wire [1:0] crop_l, crop_r,
     input wire [8:0] vi_lines, input wire [9:0] vi_px0, vi_pw, input wire [7:0] vi_y0, input wire [8:0] vi_rows, input wire [10:0] vi_xs, input wire [11:0] vi_ys, input wire [10:0] vi_nw,
     output wire m_valid, output wire [23:0] m_addr, output wire m_urgent, input wire m_ready, m_rvalid, input wire [31:0] m_rdata, output wire vi_line, vi_frame, vi_latch,
-    output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip);
-    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .fps_en(1'b0), .osd_val('0), .*);
+    output wire [7:0] vga_r, vga_g, vga_b, output wire vga_hsync, vga_vsync, vga_de, vga_skip, vga_woven);
+    n64_video #(.ORIGIN_MASK(24'hFFFFFF), .N64FB(1'b1)) video (.osd_en(1'b0), .no_weave(1'b0), .fps_en(1'b0), .osd_val('0), .*);
 endmodule
 SV
 ;;
@@ -91,6 +91,7 @@ sdr)  top=sdr_ctrl ;;
 cport) top=cpu_port ;;
 psram) top=psram ;;
 gbc)  top=gb_cart ;;
+anout) top=an_out ;;          # (the Analogizer's video output with its modules)
 snac) top=an_snac_pif ;;      # (the SNAC port as the console's PIF, with an_joybus_m)
 dpc) cat > top.sv <<SV
 module ooc_dpc (input wire clk, rst, start_we0, end_we, status_we, input wire [31:0] wdata, output wire [23:0] start, end_, current, end_rd,
@@ -120,7 +121,7 @@ module ooc_ports (input wire clk, rst,
 endmodule
 SV
 ;;
-*) echo "unit: cpu rdp rdpt rdpx rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc snac"; exit 2 ;;
+*) echo "unit: cpu rdp rdpt rdpx rsp rspoc video regs soc ai si vi arb sdr dpc cport ports psram gbc snac anout"; exit 2 ;;
 esac
 { grep -E "^set_global_assignment -name (FAMILY|DEVICE|MUX_RESTRUCTURE|ALLOW_ANY_R[AO]M_SIZE_FOR_RECOGNITION|OPTIMIZATION_TECHNIQUE|PRE_MAPPING_RESYNTHESIS|SAFE_STATE_MACHINE|ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP|VERILOG_MACRO) " $W/projects/mirlo.qsf $W/platform/pocket/pocket.tcl | sed 's/^[^:]*://'
   echo "set_global_assignment -name TOP_LEVEL_ENTITY $top"
