@@ -12,18 +12,22 @@ project, so the tree stays under the Apache License.
 
 ## The Enhanced build
 
-The Enhanced build (`REV=mirlo_oc`) has the Analogizer's video and the SNAC port, with one difference from the Mirlo64 core: **no line
-doubler**. The Enhanced design fills the device (18,179 of 18,480 ALMs, 1,844 of 1,848 LABs), and with `an_scandbl` (65 ALMs, 66
-registers, two M10K blocks) most seeds needed more logic blocks than there are and the two that placed missed timing by 0.10 and 0.19 ns.
-So `an_scandbl` stays in the tree and in its bench but `an_out` does not instantiate it: the colour path of the RGB modes (a register
-behind the scan-out's pads, the colour 0 outside the picture, hs and vs inverted) is RGBHV's too. **RGBHV in Enhanced is the 240p
-signal as it is, 15.8 kHz with hs and vs active low**, and a woven 480-line frame (a serrated hi-res picture) goes out woven as in the
-Mirlo64 core; the 31.6 kHz doubled picture and the scanline entries ("RGBHV with scanlines") do not exist there. The menu has 14 entries
-and 72 options. The other modes (RGBS, RGsB, YPbPr, Y/C NTSC and PAL) and the SNAC port are as described below. The Enhanced build's
-closing fit is seed 14 (`projects/mirlo_oc.qsf`): worst setup +0.167 ns, worst hold +0.105 ns, `AUTO_RESOURCE_SHARING` on, with
-timing exceptions in `projects/mirlo.sdc` (hold from the values `rsp_xing` and `cpu_port` hold across two clocks of the same PLL, 1.2 ns
-apart, and no check to the first register of the CPU's reset synchroniser); of them, only the holds from `ds_wd` (-0.01 to -0.09 ns in the
-fast corners) and `hr_q` (-0.02 ns) are negative without the exceptions in this fit.
+The Enhanced build (`REV=mirlo_oc`) has the Analogizer's video, with its line doubler, and the SNAC port, as the Mirlo64 core does: RGBHV
+is the 240p picture doubled to 31.6 kHz. It differs in two things. The SoC instantiates the SNAC with its **background scan left out**
+(`an_snac_pif`'s parameter `SCAN`, 1 by default and 0 in `mirlo_mips.sv`: the scan table, PRESENT and CHANGED and the 2 ms timer, about 74 ALUTs
+and 40 registers of the unit): the runtime never sets `CTRL.SCAN` (see the policy below), so nothing a game or the menu does changes. The SNAC
+bench is built with `SCAN` 1 and 0. And the menu has 14 entries and 72 options.
+
+Fitting it is a matter of logic blocks, not of the logic: the design fills the device (1,848 LABs). With `PHYSICAL_SYNTHESIS_COMBO_LOGIC` on, as
+`mirlo.qsf` has it, the fitter made 1,175 LUTs and deleted 745 in this design, and sixteen seeds asked 1,851 to 1,869 LABs of the 1,848 there
+are (Quartus error 170012). `projects/mirlo_oc.qsf` turns it off for this revision, a setting of the fitter's netlist optimisation that does
+not change the function: the design is then 17,614 of 18,480 ALMs and places in 1,835 to 1,848 LABs. The closing fit is seed 1
+(`projects/mirlo_oc.qsf`): all 128 slack lines non-negative, worst setup +0.021 ns (the game CPU's clock), worst hold +0.089 ns, 300 of 308 M10K
+blocks, 54 of 66 DSP blocks, `AUTO_RESOURCE_SHARING` on; of the ten seeds fitted with the setting only seed 1 closes (the others miss the CPU's
+clock by 0.07 to 0.45 ns). `projects/mirlo.sdc` has timing exceptions: the holds from the values `rsp_xing` and `cpu_port` hold across two
+clocks of the same PLL, 1.2 ns apart, and no check to the first register of the CPU's reset synchroniser. Of them, the holds from `ds_wd`,
+`ds_k` and `hr_q` of `rsp_xing` are negative without the exceptions in this fit; the other nine would pass, but a fit without them does not
+close (worst setup -0.478 ns: the fitter works to the constraints it is given), so the twelve stay.
 
 ## The port
 
@@ -272,7 +276,7 @@ the harness must provide the controllers' supply and the pull-ups.
 
 ### Resources
 
-The SNAC block (`an_snac_pif` with `an_joybus_m`) is about 146 ALMs (the master 84, the sequencer, the scan and the pins 61), 159 registers and one M10K block (the 128-byte
+The SNAC block (`an_snac_pif` with `an_joybus_m`) is about 146 ALMs (the master 84, the sequencer, the scan and the pins 61; in the Enhanced build without the scan, about 74 ALUTs and 40 registers fewer), 159 registers and one M10K block (the 128-byte
 buffer), no DSP block; the register block and the runtime add nothing of note (the runtime grows by 1.3 KiB). Measured in the fit of the whole core (18,162
 ALMs, 98 %). The core is tight in LABs: a version of the block with a third more registers did not fit (1855 LABs of 1848), so the block is kept small.
 Timing closure is a seed lottery as for the rest of the core (the seed 10 closes with +0.025 ns).
