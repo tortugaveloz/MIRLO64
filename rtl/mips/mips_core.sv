@@ -1208,16 +1208,19 @@ wire e_n64dev = e_mem && e_n64c && (!n64win(e_ea) || (MON && mon_mem4 && e_ea[22
 wire e_cpu1 = !c0_status[29] && e_isfp;
 logic [4:0] e_exc_code; logic [31:0] e_badv;
 // (e_exc is one OR of the causes, not the end of the priority chain that picks the code)
-wire e_exc = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk || e_trap || e_misalign || e_n64dev;
+// (the causes known early, in their priority, are one code and one flag; the trap's compare and the address's -- the late ones, from the forwarded
+// operands through the adder -- come last, each one level: they exclude each other, a trap is no access)
+wire e_exc_early = e_fexc || e_cpu1 || e_c.ri || e_c.sys || e_c.brk;
+wire e_exc = e_exc_early || e_trap || e_misalign || e_n64dev;
+logic [4:0] e_exc_ec;
 always_comb begin
-    e_badv = e_ea; e_exc_code = 5'd0;
-    if (e_fexc) begin e_exc_code = e_fexc_code; e_badv = e_pc; end
-    else if (e_cpu1) e_exc_code = 5'd11;
-    else if (e_c.ri) e_exc_code = 5'd10;
-    else if (e_c.sys) e_exc_code = 5'd8;
-    else if (e_c.brk) e_exc_code = 5'd9;
-    else if (e_trap) e_exc_code = 5'd13;
-    else if (e_misalign || e_n64dev) e_exc_code = e_c.st != S_NONE ? 5'd5 : 5'd4;
+    e_badv = e_ea;
+    if (e_fexc) begin e_exc_ec = e_fexc_code; e_badv = e_pc; end
+    else if (e_cpu1) e_exc_ec = 5'd11;
+    else if (e_c.ri) e_exc_ec = 5'd10;
+    else if (e_c.sys) e_exc_ec = 5'd8;
+    else e_exc_ec = 5'd9;
+    e_exc_code = e_exc_early ? e_exc_ec : ({5{e_trap}} & 5'd13) | ({5{e_misalign || e_n64dev}} & (e_c.st != S_NONE ? 5'd5 : 5'd4));
 end
 
 // multiply / divide (runs in the background; HI/LO interlocked)
