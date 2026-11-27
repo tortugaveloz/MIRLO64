@@ -52,7 +52,7 @@ int main()
         if (mode != 3) CHECK(blk_ok == blk_n, "blanking colours/blank not zero");
         if (mode == 1 || mode == 4 || mode == 5) CHECK(hs_fall > 200 && vs_fall == 0, "sync on HS only");
         if (mode == 2 || mode == 3) CHECK(vs_fall > 200 && hs_fall == 0, "sync on VS only");
-        if (mode == 6) CHECK(hs_fall > 400 && vs_fall >= 1 && vs_fall <= 4, "RGBHV: hsync %ld vsync %ld", hs_fall, vs_fall);
+        if (mode == 6) CHECK(hs_fall > 200 && hs_fall < 300 && vs_fall >= 1 && vs_fall <= 4, "RGBHV (not doubled: a pulse a line of the field): hsync %ld vsync %ld", hs_fall, vs_fall);
         delete t;
     }
     printf(fails ? "FAILED (%d)\n" : "ALL PASS\n", fails);
