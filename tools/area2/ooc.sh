@@ -92,7 +92,7 @@ cport) top=cpu_port ;;
 psram) top=psram ;;
 gbc)  top=gb_cart ;;
 anout) top=an_out ;;          # (the Analogizer's video output with its modules)
-snac) top=an_snac_pif ;;      # (the SNAC port as the console's PIF, with an_joybus_m)
+snac) top=an_snac_pif ; params="SCAN=${SNAC_SCAN:-1}" ;;      # (the SNAC port as the console's PIF, with an_joybus_m; SNAC_SCAN=0 leaves the scan out)
 dpc) cat > top.sv <<SV
 module ooc_dpc (input wire clk, rst, start_we0, end_we, status_we, input wire [31:0] wdata, output wire [23:0] start, end_, current, end_rd,
     output wire [31:0] st, input wire rdp_busy, sync_full, output wire m_valid, output wire [20:0] m_addr, input wire m_ready, m_rvalid, input wire [31:0] m_rdata,

@@ -27,7 +27,8 @@
 // The translator's direction leads the FPGA's driver by a clock when they come on and trails it when they go off (gb_cart.sv's rule).
 `default_nettype none
 module an_snac_pif #(
-    parameter int CLK_HZ = 62_500_000
+    parameter int CLK_HZ = 62_500_000,
+    parameter bit SCAN   = 1'b1             // the background scan (CTRL's SCAN bit, STAT): 0 leaves it out -- the registers read 0 and the bit is ignored
 ) (
     input  wire         clk, rst,
     // the registers (mirlo_regs.sv): the strobes already decoded for this block
@@ -119,7 +120,7 @@ always_ff @(posedge clk) begin
         if (!m_busy && !m_start && !m_done && !scan_run) begin
             if (pend && x_tx != 6'd0) m_start <= 1'b1;
             else if (pend) begin pend <= 1'b0; x_to <= 1'b0; x_sh <= 1'b0; x_cnt <= '0; end      // (a transaction with no bytes: nothing to do)
-            else if (on && own && scan_en && scan_t[11]) begin m_start <= 1'b1; scan_run <= 1'b1; scan_t <= '0; end
+            else if (SCAN && on && own && scan_en && scan_t[11]) begin m_start <= 1'b1; scan_run <= 1'b1; scan_t <= '0; end
         end
         if (m_tk && !scan_t[11] && !(m_busy || scan_run)) scan_t <= scan_t + 12'd1;
         if (m_done) begin

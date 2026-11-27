@@ -477,7 +477,8 @@ mirlo_regs regs (.clk, .rst,
     .gbc_on, .gbc_trust, .gbc_start, .gbc_we, .gbc_addr, .gbc_wdata, .gbc_busy, .gbc_rdata);
 
 // ---------------------------------------------------------------- the SNAC port as the console's PIF
-an_snac_pif #(.CLK_HZ(62_500_000)) snac (.clk, .rst, .sel_wr(sn_wr), .sel_rd(sn_rd), .a(sn_a), .wd(sn_wd), .rd(sn_q), .own(an_own),
+// (SCAN 0: the hardware's background scan -- CTRL's SCAN bit, the PRESENT / CHANGED registers -- is left out: the runtime never sets the bit (n64rt_snac.c writes CTRL with the Joybus on and the scan off), and a Pocket build fills the chip: its ALUTs and registers go to the line doubler)
+an_snac_pif #(.CLK_HZ(62_500_000), .SCAN(1'b0)) snac (.clk, .rst, .sel_wr(sn_wr), .sel_rd(sn_rd), .a(sn_a), .wd(sn_wd), .rd(sn_q), .own(an_own),
     .en(sn_en), .p30_dir(sn_p30_dir), .p30_oe(sn_p30_oe), .p31_dir(sn_p31_dir), .p31_oe(sn_p31_oe), .b0_dir(sn_b0_dir), .b0_oe(sn_b0_oe),
     .b0_o(sn_b0_o), .dq_in(sn_dq));
 
