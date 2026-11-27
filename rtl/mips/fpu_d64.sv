@@ -15,15 +15,15 @@
 //  - one 26 x 26 multiplier (a 27 x 27 DSP block, with registers at its inputs and output): the 52-bit fractions' product in
 //    four pieces of 26 bits, the pieces accumulated in `acc` (the hidden bits' terms are two more additions):
 //    A * B = (2^52 + fa)(2^52 + fb) = 2^104 + 2^52 (fa + fb) + fa * fb.
-//  - div: the same adder, a bit a cycle (restoring), the quotient shifted into `ma` (S_DV; see there).
+//  - div: an adder and a remainder register of its own (`rr`), a bit a cycle (restoring), the quotient shifted into `ma` (S_DV; see there).
 //
 // add / sub: the smaller operand (by exponent) is loaded into acc and shifted right by the exponent difference (at most 60: all
 // of it is sticky beyond 56), the larger added to it or taken from it (both zero or equal exponents: the sum may be negative,
 // then it is negated and the sign changes), normalised (one right shift on a carry, or left until bit 55 is set), rounded.
 // A zero or a denormal operand is a significand of 0 with exponent 0: the same path gives the other operand, exactly.
 // mul: seven states for the product, then the same normalise and round.
-// div: the dividend into acc and inverted (S_DV0), 56 steps (S_DV: the quotient's integer bit, q0, to the bit below the round bit, q55), the
-// remainder's sticky bit (S_DVE, S_DVF), then the same normalise (the quotient is in [1/2, 2): at most one step left) and round: 66 cycles at
+// div: the dividend into rr, inverted (S_DV0), 56 steps (S_DV: the quotient's integer bit, q0, to the bit below the round bit, q55), the
+// remainder's sticky bit (S_DVF), then the same normalise (the quotient is in [1/2, 2): at most one step left) and round: 65 cycles at
 // most (a zero, infinite or NaN operand: 3). Zero divisor: infinity of the signs' xor, 0 / 0 and inf / inf the default NaN, x / inf zero.
 // Cycles in M (the core waits on `busy`; the result is
 // taken in the cycle after): add / sub 8 + the alignment steps (at most 7 by 8 and 7 by 1) + the normalisation's (a carry: 1,
@@ -54,7 +54,7 @@ module fpu_d64 (
 
 typedef enum logic [4:0] { S_IDLE, S_CLS, S_DEC, S_ALN, S_SUM, S_NEG, S_NRM, S_RND, S_PACK, S_DONE,
                            S_M2, S_M3, S_M4, S_M5, S_M6, S_M7, S_M8, S_CMP1, S_CMP2, S_CMPF,
-                           S_DV0, S_DV, S_DVE, S_DVF } st_t;
+                           S_DV0, S_DV, S_DVF } st_t;
 st_t st;
 
 wire f_mul = fn == 6'h02, f_div = fn == 6'h03, f_md = fn[5:1] == 5'd1, f_sub = fn == 6'h01, f_ab = fn == 6'h05 || fn == 6'h07, f_cmp = fn[5:4] == 2'b11;
@@ -89,7 +89,10 @@ y_t          ysel;
 logic        xz, xinv, cin, inc, mbm;
 logic [56:0] ys;
 wire         acc_z = acc == 57'd0;
-wire         dvs = st == S_DVF && !acc_z;             // (div's last step: the remainder, if any, is the quotient's sticky bit)
+// div's own datapath: rr is the remainder inverted (~r); rr + mb = ~(r - d) is negative when r >= d
+logic [56:0] rr;
+wire  [56:0] dsum = rr + {1'b0, mb};
+wire         dvs = st == S_DVF && !(&rr);              // (div's last step: the remainder -- rr is ~(2r) -- if any, is the quotient's sticky bit)
 always_comb begin
     case (ysel)
     Y_MA:    ys = {1'b0, ma[55:1], ma[0] | dvs};
@@ -128,8 +131,6 @@ always_comb begin
     S_M3, S_M4, S_M6: ysel = Y_PR;
     S_M7:   ysel = Y_MA;
     S_M8:   begin ysel = Y_MB; mbm = 1; end
-    S_DV0, S_DVE: xinv = 1;                         // (div: the remainder is kept inverted: acc + mb is the inverse of (remainder - divisor); the sign of the sum says the divisor goes)
-    S_DV:   ysel = Y_MB;
     S_DVF:  begin xz = 1; ysel = Y_MA; end
     S_CMP1: begin xz = 1; ysel = Y_MB; end
     S_CMP2: begin ysel = Y_MA; xinv = 1; cin = 1; end
@@ -174,7 +175,7 @@ always_ff @(posedge clk) begin
         dd = {1'b0, ea} - {1'b0, eb};
         em = {2'b00, ea} + {2'b00, f_div ? ~eb : eb} + {12'd0, !f_div};   // (mul: - 1023: + 1 on one carry chain, then - 1024; div: ea - eb + 1023, the same way with ~eb)
         em[12:10] = em[12:10] - 3'd1;
-        sw <= dd[11] || f_ab || f_div; ee <= dd == 12'd0;      // (abs, neg: acc takes ea's significand like the add's smaller operand, from the same state)
+        sw <= dd[11] || f_ab; ee <= dd == 12'd0;      // (abs, neg: acc takes ea's significand like the add's smaller operand, from the same state)
         dm = (dd ^ {12{dd[11]}}) + {11'd0, dd[11]};
         D <= dm >= 12'd60 ? 6'd60 : dm[5:0];
         E <= f_md ? em : (dd[11] && !f_ab) ? {2'b00, eb} : {2'b00, ea};
@@ -226,17 +227,16 @@ always_ff @(posedge clk) begin
         if (Efp[12] || Efp == 13'd0 || Efp >= 13'd2047) acc <= sum;
         st <= S_DONE;
     end
-    // the quotient, a bit a cycle (restoring): the remainder r in acc, inverted (c = ~r, from the dividend), the divisor in mb; acc + mb = ~(r - d) is
-    // negative when r >= d: the quotient bit is 1, and r - d is what is kept; the next step on the remainder doubled (a 1 shifted into c). 56 bits
-    // (q0, the integer bit, to q55) go into ma, a shift register from the dividend's, which acc has taken: the quotient is in [1/2, 2), and bit 55 is
-    // the one below the round bit: it and what is left of the remainder are the sticky bit
-    S_DV0: begin acc <= sum; D <= 6'd55; st <= S_DV; end
+    // the quotient, a bit a cycle (restoring): the remainder r in rr, inverted (rr = ~r, from the dividend), the divisor in mb; rr + mb = ~(r - d) is
+    // negative when r >= d: the quotient bit is 1, and r - d is what is kept; the next step on the remainder doubled (a 1 shifted into rr). 56 bits
+    // (q0, the integer bit, to q55) go into ma, a shift register from the dividend's, which rr has taken: the quotient is in [1/2, 2), and bit 55 is
+    // the one below the round bit: it and what is left of the remainder are the sticky bit (S_DVF takes ma into acc through the adder, with it)
+    S_DV0: begin rr <= ~{1'b0, ma}; D <= 6'd55; st <= S_DV; end
     S_DV: begin
-        acc <= {(sum[56] ? sum[55:0] : acc[55:0]), 1'b1};
-        ma <= {ma[54:0], sum[56]};
-        if (D == 6'd0) st <= S_DVE; else D <= D - 6'd1;
+        rr <= {(dsum[56] ? dsum[55:0] : rr[55:0]), 1'b1};
+        ma <= {ma[54:0], dsum[56]};
+        if (D == 6'd0) st <= S_DVF; else D <= D - 6'd1;
     end
-    S_DVE: begin acc <= sum; st <= S_DVF; end         // (the remainder doubled, back from the inverse)
     S_DVF: begin acc <= sum; st <= S_NRM; end         // (the quotient, with the remainder's sticky bit)
     // the product
     S_M2: begin acc <= sum; stk <= |mp[25:0]; st <= S_M3; end
