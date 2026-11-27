@@ -20,7 +20,7 @@ runtime (TB_NO64) cannot run them.
 model is told when the core takes it).
 "fr1" runs with Status.FR set: 32 registers of 64 bits (a double in any register, loaded by ldc1 or dmtc1, its halves not a pair
 of registers). Without it Status.FR is clear (the pairs), whatever the IPL left in it.
-"d64" is for the core's FPD64 level (add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d exact doubles; TB_FPD64=1): most of the
+"d64" is for the core's FPD64 level (add.d, sub.d, mul.d, div.d, abs.d, neg.d and c.cond.d exact doubles; TB_FPD64=1): most of the
 arithmetic and compares are on doubles that are loaded just before, a second operand made to cancel, tie, reach the first's exponent
 or its rounding boundary, with the exponents near the smallest and the largest normal as well as the middle.
 """
@@ -132,12 +132,12 @@ def main():
         a, b = dreg(), dreg()
         set_dv(a, x); set_dv(b, y)
         k = rnd.random()
-        if k < 0.85: fn = rnd.choice([0, 1, 2, 0, 1, 2, 5, 7])
+        if k < 0.85: fn = rnd.choice([0, 1, 2, 3, 0, 1, 2, 3, 3, 5, 7])
         else: fn = 0x30 + rnd.randrange(16)
         if fn >= 0x30:
             op(0x11, b, a, 0, fn)
             emit(C1 | 8 << 21 | rnd.randrange(4) << 16 | 1)              # bc1f / bc1t over the next instruction
-            op(0x11, dreg(), dreg(), dreg(), rnd.choice([0, 1, 2]))
+            op(0x11, dreg(), dreg(), dreg(), rnd.choice([0, 1, 2, 3]))
         else:
             op(0x11, b, a, dreg(), fn)
 

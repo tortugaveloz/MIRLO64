@@ -1,4 +1,4 @@
-/* The FPU's double precision (mips_core's FPD64, fpu_d64): add.d, sub.d, mul.d, abs.d, neg.d and c.cond.d on the pairs of
+/* The FPU's double precision (mips_core's FPD64, fpu_d64): add.d, sub.d, mul.d, div.d, abs.d, neg.d and c.cond.d on the pairs of
  * fpu_d64_vec.h (fpu_d64_vec.py, exact integers: the specials in every pair, ties, cancellation, carry-out, overflow to
  * infinity, results and inputs below the normals, signed zeros, NaNs, a product with 0 and with infinity), each result
  * compared with the table's. Without FPD64 the FPU computes doubles as floats, and this fails (COP0 register 7's bit 26 says).
@@ -29,7 +29,7 @@ static uint64_t run(unsigned fn, uint64_t *buf, uint32_t *c)
     switch (fn) {
 #define CASE(F) case F: __asm__ volatile(".set push\n.set noreorder\n.set noat\n.set mips3\n move $8, %1\n .word %2\n .word %3\n nop\n nop\n .word %4\n nop\n nop\n .word %5\n nop\n nop\n .set pop\n" \
         : "+m"(*(uint64_t (*)[3])buf) : "r"(buf), "i"(LDC1(4, 0)), "i"(LDC1(6, 8)), "i"(FOP(F, 8, 4, 6)), "i"(SDC1(8, 16)) : "$8", "memory"); break;
-    CASE(0x00) CASE(0x01) CASE(0x02) CASE(0x05) CASE(0x07)
+    CASE(0x00) CASE(0x01) CASE(0x02) CASE(0x03) CASE(0x05) CASE(0x07)
 #undef CASE
 #define CMP(F) case F: __asm__ volatile(".set push\n.set noreorder\n.set noat\n.set mips3\n move $8, %1\n .word %2\n .word %3\n nop\n nop\n .word %4\n nop\n nop\n .word %5\n nop\n nop\n move %0, $9\n .set pop\n" \
         : "=r"(cc) : "r"(buf), "i"(LDC1(4, 0)), "i"(LDC1(6, 8)), "i"(FOP(F, 0, 4, 6)), "i"(CFC1_31) : "$8", "$9", "memory"); break;

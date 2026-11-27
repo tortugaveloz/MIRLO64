@@ -152,7 +152,7 @@ wire to_l = (is_s || is_d) && ((fn >= 6'h08 && fn <= 6'h0B) || fn == 6'h25);
 wire is_mov = (is_s || is_d) && fn == 6'h06;
 // (D64: the double-precision unit's, not this datapath's)
 function automatic logic d64_of(input logic [31:0] i);
-    return D64 && i[31:26] == 6'h11 && i[25:21] == 5'h11 && (i[5:0] <= 6'h02 || i[5:0] == 6'h05 || i[5:0] == 6'h07 || i[5:0] >= 6'h30);
+    return D64 && i[31:26] == 6'h11 && i[25:21] == 5'h11 && (i[5:0] <= 6'h03 || i[5:0] == 6'h05 || i[5:0] == 6'h07 || i[5:0] >= 6'h30);
 endfunction
 wire is_d64 = d64_of(insn);
 wire is_arith = (((is_s || is_d || is_w) && !is_mov) || is_l) && !is_d64;      // through the datapath
