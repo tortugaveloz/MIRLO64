@@ -224,6 +224,9 @@ module mips_core #(
     // and a few address bits (the tags stay as wide: pa[28:14], pa[28:13])
     parameter int IC_LOG2 = 9,
     parameter int DC_LOG2 = 9,
+    // DHALF: a D-cache miss reads the 16 bytes of its own line (4 words, mem_half), not the 32-byte block it is in (8 words, of which the
+    // other 16 bytes were thrown away): the line is back 4 words sooner
+    parameter bit DHALF = 0,
     // the write buffer is outside (rtl/soc/cpu_port.sv, where the core's clock
     // is its own): every store leaves by st_* as it is done -- one for the
     // SDRAM as the write buffer would have taken it, or (st_dev) a device's,
@@ -257,7 +260,8 @@ module mips_core #(
     output logic        mem_we,
     output logic [31:0] mem_wdata,
     output logic [3:0]  mem_wstrb,
-    output logic        mem_line,           // an 8-word line read
+    output logic        mem_line,           // an 8-word line read (the I-cache's; the D-cache's with mem_half: its 4 words)
+    output logic        mem_half,           // (DHALF) mem_line is of the 4 words that start at mem_addr, a D-cache line
     output wire         mem_wrun,           // a write of the write buffer's run (the next may follow it at once)
     // XWB: the stores
     output wire         st_valid,
@@ -1325,6 +1329,7 @@ wire m_w0;
 
 logic [63:0] ms_data;                       // the slow path's read (high word = the lower address)
 logic [2:0]  ms_cnt;
+localparam logic [2:0] DLAST = DHALF ? 3'd3 : 3'd7;       // the last word of a D-cache fill
 
 wire [31:0] dc_qm = {sb_hit && sb_strb[3] ? sb_data[31:24] : dc_q[31:24],
                      sb_hit && sb_strb[2] ? sb_data[23:16] : dc_q[23:16],
@@ -1863,11 +1868,11 @@ always_comb begin
     end
 end
 always_comb begin
-    mem_req = 1'b0; mem_addr = 32'd0; mem_we = 1'b0; mem_wdata = 32'd0; mem_wstrb = 4'd0; mem_line = 1'b0;
+    mem_req = 1'b0; mem_addr = 32'd0; mem_we = 1'b0; mem_wdata = 32'd0; mem_wstrb = 4'd0; mem_line = 1'b0; mem_half = 1'b0;
     case (port)
     P_WB:    if (!XWB) begin mem_req = 1'b1; mem_we = 1'b1; mem_addr = wb_addr[wb_rp[2:0]]; mem_wdata = wb_data[wb_rp[2:0]]; mem_wstrb = wb_strb[wb_rp[2:0]]; end
     P_ILINE: begin mem_req = 1'b1; mem_line = 1'b1; mem_addr = {f_fill_pa[31:5], 5'd0}; end
-    P_DLINE: begin mem_req = 1'b1; mem_line = 1'b1; mem_addr = {m_fpa[31:5], 5'd0}; end
+    P_DLINE: begin mem_req = 1'b1; mem_line = 1'b1; mem_half = DHALF; mem_addr = DHALF ? {m_fpa[31:4], 4'd0} : {m_fpa[31:5], 5'd0}; end
     P_SLOW:  begin mem_req = 1'b1; mem_we = slow_we; mem_addr = slow_pa; mem_wdata = slow_wdata; mem_wstrb = slow_strb; end
     default: ;
     endcase
@@ -1906,8 +1911,8 @@ always_comb begin
         if (f_cnt == 3'd7) begin ict_we = 1; ict_waddr = PG ? {f_fill_col, f_fill_pa[11:5]} : f_fill_pa[IW+1:5]; ict_wdata = {1'b1, f_fill_pa[28:TLO]}; end
     end
     if (port == P_DLINE && mem_rvalid) begin
-        dc_we = ms_cnt[2] == m_fpa[4]; dc_wbe = 4'hF;
-        if (ms_cnt == 3'd7) begin dct_we = 1; dct_waddr = m_fpa[DW+1:4]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
+        dc_we = DHALF || ms_cnt[2] == m_fpa[4]; dc_wbe = 4'hF;
+        if (ms_cnt == DLAST) begin dct_we = 1; dct_waddr = m_fpa[DW+1:4]; dct_wdata = {!sn_kill, m_fpa[28:13]}; end
     end
     // a store's word: into the D-cache (hit), or drop the line an uncached store may shadow
     if (st_dc_we) begin
@@ -1966,7 +1971,7 @@ generate if (SNOOP) begin : g_sn
     logic [3:0]    q_n;
     wire           r_v = sn_ts != sn_seen;
     wire           r_fill = r_v && ms == MS_REFILL && sn_ls == m_fpa[25:4];
-    wire           sn_core = (port == P_DLINE && ms_cnt == 3'd7) || (m_valid && m_c.cache) ||
+    wire           sn_core = (port == P_DLINE && ms_cnt == DLAST) || (m_valid && m_c.cache) ||
                              (m_valid && m_st && !m_cached && pa_cached(m_pa));
     wire  [3:0]    q_nn = q_n + {3'd0, h_v} - {3'd0, sn_go};
     assign sn_go   = q_n != 4'd0 && !sn_core;
@@ -2480,7 +2485,7 @@ always_ff @(posedge clk) begin
         end
         MS_REFILL: if (port == P_DLINE && mem_rvalid) begin
             ms_cnt <= ms_cnt + 3'd1;
-            if (ms_cnt == 3'd7) ms <= MS_REREAD;
+            if (ms_cnt == DLAST) ms <= MS_REREAD;
         end
         MS_REREAD: ms <= MS_IDLE;
         MS_SLOW_A: if (m_sw) begin                   // (XWB) a store: out by st_*
@@ -2544,7 +2549,7 @@ always_ff @(posedge clk) begin
         P_WB: if (mem_ack) begin wb_rp <= wb_rp + 4'd1; if (wb_rp + 4'd1 == wb_wp) port <= P_IDLE; end
         P_ILINE, P_DLINE: if (mem_rvalid) begin
             port_cnt <= port_cnt + 3'd1;
-            if (port_cnt == 3'd7) port <= P_IDLE;
+            if (port_cnt == (port == P_DLINE ? DLAST : 3'd7)) port <= P_IDLE;
         end
         P_SLOW: if (port_done) port <= P_IDLE;
         default: port <= P_IDLE;

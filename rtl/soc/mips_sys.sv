@@ -27,6 +27,7 @@ module mips_sys #(
     output logic [31:0] s_wdata,
     output logic [3:0]  s_strb,
     output logic        s_line,
+    output logic        s_half,             // s_line is of the 4 words from s_addr (the D-cache's line)
     output logic        s_wrun,             // a write of a run: may be taken as the last one is granted
     input  wire         s_ack,
     input  wire         s_rvalid,
@@ -54,7 +55,7 @@ module mips_sys #(
     output logic [31:0] dbg_pc, dbg_cause, dbg_epc
 );
 
-logic        c_req, c_we, c_line, c_ack, c_rvalid;
+logic        c_req, c_we, c_line, c_half, c_ack, c_rvalid;
 logic [31:0] c_addr, c_wdata, c_rdata, dbg_status;
 logic [3:0]  c_strb;
 logic        hwx_on;
@@ -118,6 +119,15 @@ localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
 `else
 `define MIRLO_CPU_LOG2_DEF 9
 `endif
+// MIRLO_CPU_DHALF: mips_core's DHALF (a D-cache miss reads its own 16 bytes); default on in the Enhanced build
+`ifndef MIRLO_CPU_DHALF
+`ifdef MIRLO_RSP_OC
+`define MIRLO_CPU_DHALF 1
+`else
+`define MIRLO_CPU_DHALF 0
+`endif
+`endif
+localparam bit CPU_DHALF = `MIRLO_CPU_DHALF;
 `ifndef MIRLO_CPU_IC_LOG2
 `define MIRLO_CPU_IC_LOG2 `MIRLO_CPU_LOG2_DEF
 `endif
@@ -125,9 +135,9 @@ localparam bit CPU_SNOOP = `MIRLO_CPU_SNOOP;
 `define MIRLO_CPU_DC_LOG2 `MIRLO_CPU_LOG2_DEF
 `endif
 mips_core #(.TLB_EN(CPU_TLB), .TLB_RAM(CPU_TLB_RAM), .FLAT(1), .BIG(1), .N64WIN(1), .MON(CPU_MON), .MI(CPU_MI), .PIW(CPU_PIW), .VIW(CPU_VIW), .AIW(CPU_AIW), .SIW(CPU_SIW), .PI2W(CPU_PI2W), .ROM64W(CPU_ROM64W), .SPW(CPU_SPW), .JRP(0), .PGD(1), .EXC_BASE(32'h4000_0000), .W64(CPU_W64), .W64_ALU(CPU_W64_ALU), .W64_SH(CPU_W64_SH), .W64_MD(CPU_W64_MD), .W64_DIV(CPU_W64_DIV), .W64_UA(CPU_W64_UA), .FAST(CPU_FAST),
-            .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
+            .IC_LOG2(`MIRLO_CPU_IC_LOG2), .DC_LOG2(`MIRLO_CPU_DC_LOG2), .DHALF(CPU_DHALF), .XWB(XWB), .SNOOP(CPU_SNOOP)) cpu (
     .clk, .rst, .reset_pc(32'hBFC0_0000),
-    .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_wrun(s_wrun),
+    .mem_req(c_req), .mem_addr(c_addr), .mem_we(c_we), .mem_wdata(c_wdata), .mem_wstrb(c_strb), .mem_line(c_line), .mem_half(c_half), .mem_wrun(s_wrun),
     .mem_ack(c_ack), .mem_rvalid(c_rvalid), .mem_rdata(c_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .irq_rcp(irq), .irq_mon(irq_mon), .sn_t, .sn_line, .sn_hold,
@@ -155,7 +165,7 @@ logic k_boot, k_sd;
 always_ff @(posedge clk) begin k_boot <= is_boot; k_sd <= is_sd; end
 assign s_req = c_req && is_sd && (!FAST || !c_we || s_wrun || k_sd);
 assign s_we = c_we; assign s_addr = c_addr; assign s_wdata = c_wdata;
-assign s_strb = c_strb; assign s_line = c_line;
+assign s_strb = c_strb; assign s_line = c_line; assign s_half = c_half;
 // (a device access waits for the last SDRAM write before it: what it sets
 // off -- a DMA, a task -- may read that word)
 assign x_req = c_req && !is_sd && !is_boot && !s_busy; assign x_we = c_we; assign x_addr = c_addr;

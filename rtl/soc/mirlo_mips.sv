@@ -215,7 +215,7 @@ sdr_phy phy (.clk, .rst, .clk2x(clk_sys2x), .rst2x, .clk2x_90(clk_sys2x_90deg),
 assign apf_bridge_boot_ready = sdr_ready;           // the Pocket may write the slots
 
 // ---------------------------------------------------------------- the game CPU
-logic        s_req, s_we, s_line, s_ack, s_rvalid, s_busy, s_wrun;
+logic        s_req, s_we, s_line, s_half, s_ack, s_rvalid, s_busy, s_wrun;
 logic [31:0] s_addr, s_wdata, s_rdata;
 logic [3:0]  s_strb;
 logic        x_req, x_we, x_ack;
@@ -240,13 +240,13 @@ logic rst_cpu_m;
 always_ff @(posedge clk_cpu) begin rst_cpu_m <= reset; rst_cpu <= rst_cpu_m; end
 always_ff @(posedge clk) begin irq_s <= cpu_irq; irq_mon_s <= mon_irq; end
 mips_sys #(.BOOTROM(BOOTROM), .FAST(1'b1), .XWB(1'b1)) sys (.clk(clk_cpu), .rst(rst_cpu),
-    .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
+    .s_req, .s_we, .s_addr, .s_wdata, .s_strb, .s_line, .s_half, .s_wrun, .s_ack(1'b0), .s_rvalid, .s_rdata, .s_busy(1'b0),
     .x_req(c_x_req), .x_we(), .x_addr(c_x_addr), .x_wdata(), .x_strb(), .x_ack(c_x_ack), .x_rdata(c_x_rdata),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
     .irq(c_irq), .irq_mon(c_irq_mon), .sn_t, .sn_line(rq_addr[23:2]), .sn_hold, .dbg_pc(dbg_cpu_pc), .dbg_cause, .dbg_epc);
 cpu_port #(.PORT(1)) pc (.clk_c(clk_cpu), .rst_c(rst_cpu),
     .st_valid, .st_dev, .st_addr, .st_data, .st_strb, .st_full, .st_done,
-    .s_req, .s_line, .s_addr, .s_rvalid, .s_rdata,
+    .s_req, .s_line, .s_half, .s_addr, .s_rvalid, .s_rdata,
     .c_x_req, .c_x_addr, .c_x_ack, .c_x_rdata, .c_irq, .c_irq_mon,
     .clk, .rst,
     .p_valid(p_valid[1]), .p_we(p_we[1]), .p_addr(p_addr[1]), .p_wdata(p_wdata[1]), .p_be(p_be[1]),

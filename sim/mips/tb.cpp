@@ -145,7 +145,7 @@ static void mem_before_edge()
     if (top->mem_req) {
         top->mem_ack = 1;
         if (top->mem_we) do_write(top->mem_addr, top->mem_wdata, top->mem_wstrb);
-        else { rq.busy = 1; rq.addr = top->mem_addr; rq.words = rq.left = top->mem_line ? 8 : 1; rq.delay = lat; }
+        else { rq.busy = 1; rq.addr = top->mem_addr; rq.words = rq.left = top->mem_line ? (top->mem_half ? 4 : 8) : 1; rq.delay = lat; }
     }
 }
 

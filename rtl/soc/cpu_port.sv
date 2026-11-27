@@ -45,7 +45,7 @@ module cpu_port #(
     output wire         st_full,
     output wire         st_done,            // a device's store is done (the CPU waits for no other then)
     // SDRAM reads (mips_sys's s_*): byte addresses; a word, or the 8 of a line, back as s_rvalid
-    input  wire         s_req, s_line,
+    input  wire         s_req, s_line, s_half,   // (s_half: the line is the 4 words from s_addr, a D-cache line)
     input  wire  [31:0] s_addr,
     output wire         s_rvalid,
     output wire  [31:0] s_rdata,
@@ -98,7 +98,7 @@ end
 
 // ---------------------------------------------------------------- a read, of the SDRAM or of a device: clk_c
 logic        q_busy;                        // one is out
-logic        rq_t, rq_dev, rq_line;
+logic        rq_t, rq_dev, rq_line, rq_half;
 logic [31:0] rq_addr;
 logic [3:0]  q_got;                         // a read's words so far
 logic        r_rv, r_seq;                   // clk: a word for the CPU on p_rdata, its number's low bit
@@ -116,18 +116,18 @@ always_ff @(posedge clk_c) begin
         q_got <= 4'd0;                                  // (read only while a read is out: set to 0 whenever none is, not only on the request)
         if (s_req || c_x_req) begin
             q_busy <= 1'b1; rq_t <= !rq_t;
-            rq_dev <= c_x_req; rq_line <= s_line; rq_addr <= c_x_req ? c_x_addr : s_addr;
+            rq_dev <= c_x_req; rq_line <= s_line; rq_half <= s_half; rq_addr <= c_x_req ? c_x_addr : s_addr;
         end
     end else begin
         // (the answer is given in this cycle: the request it answers is gone in the next)
         if (c_x_ack) q_busy <= 1'b0;
-        if (s_rvalid) begin q_got <= q_got + 4'd1; if (q_got == (rq_line ? 4'd7 : 4'd0)) q_busy <= 1'b0; end
+        if (s_rvalid) begin q_got <= q_got + 4'd1; if (q_got == (rq_line ? (rq_half ? 4'd3 : 4'd7) : 4'd0)) q_busy <= 1'b0; end
     end
 end
 
 // ---------------------------------------------------------------- the SoC's side
 logic        t_s, seen;                     // rq_t as the last edge found it; that of the last read done
-logic        a_dev, a_line;                 // rq_*, likewise: they stay while a read is out
+logic        a_dev, a_line, a_half;               // rq_*, likewise: they stay while a read is out
 logic [31:0] a_addr;
 logic [3:0]  issued, got;
 logic        w_valid;                       // the FIFO's head is in w_head
@@ -140,7 +140,8 @@ wire         a_out = t_s != seen;           // a read is out
 wire  [FA:0] w_n = wp_s - rp;
 wire         w_pop = w_valid && (w_dev ? x_ack : w_run && p_ready);
 wire         a_go = a_out && !w_valid && rp == wp_s;            // and every store before it has gone
-wire         r_ask = a_go && !a_dev && issued != (a_line ? 4'd8 : 4'd1);
+wire  [3:0]  a_n = a_line ? (a_half ? 4'd4 : 4'd8) : 4'd1;       // a read's words
+wire         r_ask = a_go && !a_dev && issued != a_n;
 wire         r_mine = rd_next && rd_next_tag == 3'(PORT);
 assign p_valid = (w_valid && !w_dev && w_run) || r_ask;
 assign p_we    = w_valid;
@@ -156,7 +157,7 @@ assign x_wdata = w_head[61:30];
 assign x_strb  = w_head[65:62];
 always_ff @(posedge clk) begin
     r_rv <= r_mine;
-    t_s <= rq_t; a_dev <= rq_dev; a_line <= rq_line; a_addr <= rq_addr;
+    t_s <= rq_t; a_dev <= rq_dev; a_line <= rq_line; a_half <= rq_half; a_addr <= rq_addr;
     wp_s <= wp; dv_s <= dv_out;
     if (rst) begin
         rp <= '0; wp_s <= '0; w_valid <= 1'b0; t_s <= 1'b0; seen <= 1'b0; r_rv <= 1'b0; r_seq <= 1'b0;
@@ -175,7 +176,7 @@ always_ff @(posedge clk) begin
         if (!a_out) begin issued <= 4'd0; got <= 4'd0; r_seq <= 1'b0; end
         else begin
             if (r_ask && p_ready) issued <= issued + 4'd1;
-            if (r_rv) begin r_seq <= !r_seq; got <= got + 4'd1; if (got + 4'd1 == (a_line ? 4'd8 : 4'd1)) seen <= t_s; end
+            if (r_rv) begin r_seq <= !r_seq; got <= got + 4'd1; if (got + 4'd1 == a_n) seen <= t_s; end
             if (a_go && a_dev && x_ack) seen <= t_s;
         end
     end
