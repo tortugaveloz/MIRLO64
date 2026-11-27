@@ -8,6 +8,7 @@
 #include <layout.h>
 #include <notice.h>
 #include "n64rt.h"
+#include "n64rt_unpack.h"
 
 const n64rt_game_t *n64rt_game;
 u32 n64rt_tv = 1;                       /* osTvType: 1 NTSC until the ROM's region says otherwise */
@@ -84,8 +85,16 @@ u32 n64rt_boot_entropy;
  * segment's p_filesz bytes go from the file to its virtual address (the rest of its p_memsz is the RDRAM's zeros, which
  * were cleared before), a 32-bit or a 64-bit ELF (of which only the low 32 bits of the addresses count), big endian. It
  * refuses what it refuses: a segment whose address is not 8-byte aligned or whose file offset is odd, one that does not fit
- * the RDRAM, a little-endian file -- and a segment it would have to decompress with a function of the ELF's own, which is
- * game code the runtime does not run for it. Returns the entry address. */
+ * the RDRAM, a little-endian file.
+ * A compressed ELF (libdragon's n64elfcompress) has a segment of type PT_N64_DECOMP, first: a decompression function, MIPS code
+ * that the IPL3 puts on its own stack and calls for each PT_LOAD segment with PF_N64_COMPRESSED -- the segment's file bytes (p_filesz
+ * of them, in the file as in the RDRAM: the IPL3 makes the DMA one byte longer when p_filesz is odd) go to p_vaddr, which is where
+ * the compressor put them, a margin past the end of the program's room, and the function unpacks them in place to p_paddr (the
+ * address of the program), returning its size. What is left of the compressed bytes outside the program is cleared (the first of
+ * [p_vaddr, p_vaddr + p_filesz) before p_paddr, else the part after the program, as the IPL3 does it). The runtime does not run
+ * that function: it knows which of libdragon's three (LZ4, aPLib, Shrinkler: n64rt_unpack.c) it is from the constants in its code,
+ * and does the same in C, from the bytes in the RDRAM -- the memory a game sees afterwards is what the IPL3's leaves, byte for byte.
+ * A function that is none of the three is refused. Returns the entry address. */
 #define PT_LOAD          1u
 #define PT_N64_DECOMP    0x64E36341u
 #define PF_N64_COMPRESSED 0x1000u
@@ -93,6 +102,29 @@ static u32 rom_half(u32 off)
 {
     const u32 w = n64rt_rom_word(off & ~3u);
     return (off & 2u) ? (w & 0xFFFFu) : (w >> 16);
+}
+/* the bytes of [a, b) of the RDRAM (a game address's low bits) cleared */
+static void rd_zero(u32 a, u32 b)
+{
+    for (; a < b && (a & 3u); a++) *(volatile u8 *)(uintptr_t)N64RT_K0(a) = 0;
+    for (; a + 4u <= b; a += 4u) *rd32(a) = 0;
+    for (; a < b; a++) *(volatile u8 *)(uintptr_t)N64RT_K0(a) = 0;
+}
+/* n bytes of the ROM at off to the RDRAM at pa (the words of it when both are aligned) */
+static __attribute__((noinline)) void rom_to_rdram(u32 pa, u32 off, u32 n)
+{
+    u32 done = 0;
+    if (!(off & 3u) && !(pa & 3u))
+        for (; done + 4u <= n; done += 4u) *rd32(pa + done) = n64rt_rom_word(off + done);
+    if (done < n) n64rt_rom_copy(rd32(pa + done), off + done, n - done);
+}
+/* which decompressor an ELF's PT_N64_DECOMP segment is (its first 1 KiB of code: n64rt_unpack_kind) */
+static __attribute__((noinline)) int decomp_kind(u32 off, u32 size)
+{
+    u32 code[256];
+    const u32 nw = size / 4u < 256u ? size / 4u : 256u;
+    for (u32 k = 0; k < nw; k++) code[k] = n64rt_rom_word(off + 4u * k);
+    return n64rt_unpack_kind(code, nw);
 }
 static u32 load_elf(const n64rt_game_t *g)
 {
@@ -104,28 +136,53 @@ static u32 load_elf(const n64rt_game_t *g)
     const u32 phoff = n64rt_rom_word(e + (elf64 ? 0x20u + 4u : 0x1Cu));
     const u32 phnum = rom_half(e + (elf64 ? 0x38u : 0x2Cu));
     const u32 entry = n64rt_rom_word(e + (elf64 ? 0x18u + 4u : 0x18u));
+    int kind = 0;                                       /* the decompression function's (n64rt_unpack_kind), if there is one */
     for (u32 i = 0; i < phnum; i++) {
         const u32 ph = e + phoff + phsz * i;
         const u32 type = n64rt_rom_word(ph);
         const u32 off = n64rt_rom_word(ph + (elf64 ? 4u * 3u : 4u)), vaddr = n64rt_rom_word(ph + (elf64 ? 4u * 5u : 8u));
+        const u32 paddr = n64rt_rom_word(ph + (elf64 ? 4u * 7u : 12u));
         const u32 size = n64rt_rom_word(ph + (elf64 ? 4u * 9u : 16u)), memsz = n64rt_rom_word(ph + (elf64 ? 4u * 11u : 20u));
         const u32 flags = n64rt_rom_word(ph + (elf64 ? 4u : 24u));
         if (type != PT_LOAD && type != PT_N64_DECOMP) continue;
         if (!size) continue;
-        if (type == PT_N64_DECOMP || (flags & PF_N64_COMPRESSED))
-            n64rt_fatal("n64rt: the ROM's ELF is compressed (segment %lu): its own decompression function is not run\n", (unsigned long)i);
+        const int packed = type == PT_LOAD && (flags & PF_N64_COMPRESSED);
+        if (type == PT_N64_DECOMP) {
+            /* its code is not run: which of the three it is, from its instructions' constants (all of it is read: it is a few hundred bytes) */
+            if (e + off + size > g->rom_size) n64rt_fatal("n64rt: ELF segment %lu is beyond the end of the ROM\n", (unsigned long)i);
+            kind = decomp_kind(e + off, size);
+            if (!kind) n64rt_fatal("n64rt: the ROM's ELF is compressed with a decompression function (segment %lu, %lu bytes) that is not libdragon's LZ4, aPLib or Shrinkler\n",
+                                   (unsigned long)i, (unsigned long)size);
+            if (!vaddr) continue;                       /* (the IPL3 puts it on its stack: it is not in the game's memory) */
+        }
+        if (packed && !kind) n64rt_fatal("n64rt: ELF segment %lu is compressed and the ELF has no decompression function before it\n", (unsigned long)i);
         if (vaddr & 7u) n64rt_fatal("n64rt: ELF segment %lu: the address %08lx is not 8-byte aligned\n", (unsigned long)i, (unsigned long)vaddr);
         if (off & 1u) n64rt_fatal("n64rt: ELF segment %lu: the file offset %08lx is odd\n", (unsigned long)i, (unsigned long)off);
         if (vaddr + memsz > 0x80000000u + g->mem_size || vaddr < 0x80000000u)
             n64rt_fatal("n64rt: ELF segment %lu (%08lx, %lu bytes) does not fit the RDRAM\n", (unsigned long)i, (unsigned long)vaddr, (unsigned long)memsz);
+        if (packed && (paddr + memsz > 0x80000000u + g->mem_size || paddr < 0x80000000u || vaddr + size + (size & 1u) > 0x80000000u + g->mem_size))
+            n64rt_fatal("n64rt: ELF segment %lu (compressed: %08lx, %lu bytes, to %08lx, %lu) does not fit the RDRAM\n", (unsigned long)i,
+                        (unsigned long)vaddr, (unsigned long)size, (unsigned long)paddr, (unsigned long)memsz);
         if (e + off + size > g->rom_size) n64rt_fatal("n64rt: ELF segment %lu is beyond the end of the ROM\n", (unsigned long)i);
         printf("n64rt: ELF segment %lu: %lu bytes of ROM %08lx to %08lx (%lu in RDRAM)\n", (unsigned long)i, (unsigned long)size,
                (unsigned long)(e + off), (unsigned long)vaddr, (unsigned long)memsz);
         const u32 pa = vaddr & 0x1FFFFFFFu;
-        u32 done = 0;
-        if (!((e + off) & 3u) && !(pa & 3u))
-            for (; done + 4u <= size; done += 4u) *rd32(pa + done) = n64rt_rom_word(e + off + done);
-        if (done < size) n64rt_rom_copy(rd32(pa + done), e + off + done, size - done);
+        /* (the IPL3's DMA of a compressed segment of an odd size has one byte more, that the file has after it) */
+        const u32 n = packed && (size & 1u) && e + off + size + 1u <= g->rom_size ? size + 1u : size;
+        rom_to_rdram(pa, e + off, n);
+        if (packed) {
+            const u32 po = paddr & 0x1FFFFFFFu;
+            u32 c0; __asm__ volatile("mfc0 %0, $9" : "=r"(c0));
+            const int dec = n64rt_unpack(kind, (const u8 *)(uintptr_t)N64RT_K0(pa), size, (u8 *)(uintptr_t)N64RT_K0(po), memsz);
+            u32 c1; __asm__ volatile("mfc0 %0, $9" : "=r"(c1));
+            if (dec < 0) n64rt_fatal("n64rt: ELF segment %lu: the compressed stream (level %d) is damaged\n", (unsigned long)i, kind);
+            printf("n64rt: ELF segment %lu: level %d, unpacked to %08lx: %lu bytes (CP0 Count: %lu)\n", (unsigned long)i, kind, (unsigned long)paddr,
+                   (unsigned long)dec, (unsigned long)(c1 - c0));
+            /* what is left of the compressed bytes outside the program */
+            const u32 po_end = po + (u32)dec, pa_end = pa + size;
+            if (pa < po) rd_zero(pa, pa_end < po ? pa_end : po);
+            else if (pa_end > po_end) rd_zero(pa > po_end ? pa : po_end, pa_end);
+        }
     }
     return entry;
 }
