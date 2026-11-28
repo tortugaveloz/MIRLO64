@@ -119,6 +119,7 @@ module mirlo_regs (
     output logic        mon_own, mon_rcp,   // IP2 is mon_rcp, not the RSP's; the line
     output logic        mon_irq,            // the monitor's interrupt
     output wire         pi_eng_busy,        // the PI's engine is copying
+    output wire         up_b12,             // the uptime's bit 12: a tick every 4096 clocks (65 us)
     // MIRLO_MI / MIRLO_PI: the MI in hardware and the PI's DMA engine (rcp_mi.sv)
     output logic        mon_mi,             // IP2 is the MI's line
     output wire         mi_line,
@@ -387,6 +388,7 @@ always_ff @(posedge clk) begin
 end
 assign mon_irq = mon_own && ((mon_pend & mon_mask) != 0);
 assign pi_eng_busy = pi_busy;
+assign up_b12 = uptime[12];
 
 // the MI, and the PI's engine
 rcp_mi #(.PI(PI_PRESENT), .PI2(PI2_PRESENT), .ROM64(ROM64_PRESENT)) mi (.clk, .rst, .sp_lvl(mon_sp), .vi_pulse(mon_vi ? vi_irq : mon_field), .vi_clr(vi_clr), .ai_pulse(ai_irq), .ai_clr(ai_clr), .si_pulse(si_irq), .si_clr(si_clr), .dp_pulse(mon_dp),
