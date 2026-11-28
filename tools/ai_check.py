@@ -2,7 +2,7 @@
 """Checks the AI in hardware (rtl/soc/rcp_ai.sv) against the algorithm of the runtime's software AI (lang/n64rt/n64rt_rsp.c,
 ai_service / fetch_frame), from the bench's AILOG (sim/mips_soc/tb_soc.cpp, a SoC built with MIRLO_AI):
 
-    tools/ai_check.py AILOG [--lcg | --snap] [--tv ntsc|pal|mpal]
+    tools/ai_check.py AILOG [--lcg | --snap] [--lp] [--tv ntsc|pal|mpal]
 
 AILOG's lines: F <word> a frame the reader fetched (L high, R low), S <step> the resampler's step, O <word> <silence> a word
 written to the Pocket's FIFO, R the reader started over, I an interrupt, W ... a register write. The software's algorithm
@@ -10,7 +10,7 @@ is run over the frames in the order they were fetched, with the step as it was w
 are compared with the hardware's real (not silence) words, sample for sample: the count of words, the RMS and the largest
 error (of the 16-bit samples) are printed. With --snap the frames fetched must also be the buffers as they were when the game
 handed them over (the bench's B lines: a buffer changed after it was handed over would be read changed). The silence words must be zero. With --lcg the frames must also be the pattern of
-lang/mips/test/ai_test.c (its LCG from seed 1, a frame a word).  Exit status 0 if the stream is the same."""
+lang/mips/test/ai_test.c (its LCG from seed 1, a frame a word).  --lp: the SoC has the AI's output low-pass (rcp_ai.sv LP, the Pocket's core): the model filters its stream too. Exit status 0 if the stream is the same."""
 import math
 import sys
 
@@ -59,6 +59,28 @@ class Soft:
         r = self.pr + (((self.nr - self.pr) * ph) >> 15)
         self.phase += step
         return ((l & 0xFFFF) << 16) | (r & 0xFFFF)
+
+
+class LowPass:
+    """rcp_ai.sv's LP: two stages of y = (x0 + 2 x1 + x2 + 2) >> 2 a channel (the binomial 1-4-6-4-1 / 16): the interpolated frame goes
+    through the first, its output through the second; each keeps its last two inputs, from rest when nothing was played."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.s = [[0, 0, 0, 0], [0, 0, 0, 0]]            # per channel: x1, x2 (the first stage's), v1, v2 (the second's)
+
+    def word(self, w):
+        out = 0
+        for ch, sh in ((0, 16), (1, 0)):
+            x0 = s16(w >> sh)
+            x1, x2, v1, v2 = self.s[ch]
+            u = (x0 + 2 * x1 + x2 + 2) >> 2
+            y = (u + 2 * v1 + v2 + 2) >> 2
+            self.s[ch] = [x0, x1, u, v1]
+            out |= (y & 0xFFFF) << sh
+        return out
 
 
 # libultra's osViClock for each TV system: the AI's DAC divides it (rate = osViClock / (AI_DACRATE + 1))
@@ -123,6 +145,7 @@ def main():
         if n is not None or len(frames) > len(snaps):
             bad += 1
     soft = Soft(frames)
+    lp = LowPass() if "--lp" in sys.argv else None
     step = 43690
     real = silent = silent_bad = 0
     se = 0.0
@@ -137,6 +160,8 @@ def main():
             soft.have = False
         elif e[0] == "O":
             if e[2]:
+                if lp:
+                    lp.reset()
                 silent += 1
                 if e[1] != 0:
                     silent_bad += 1
@@ -147,6 +172,8 @@ def main():
                 print("the model wants a frame the hardware never fetched (sample %d)" % real)
                 bad += 1
                 break
+            if lp:
+                want = lp.word(want)
             got = e[1]
             real += 1
             for sh in (16, 0):

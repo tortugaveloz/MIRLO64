@@ -987,7 +987,7 @@ module core_top (
   end
 
   // the SoC (rtl/soc/mirlo_mips.sv)
-  mirlo_mips soc (
+  mirlo_mips #(.AI_LP(1'b1)) soc (
       .clk_sys(clk_sys),
       .clk_cpu(clk_cpu),
       .clk_sys2x(clk_mem),

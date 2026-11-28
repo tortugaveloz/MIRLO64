@@ -21,7 +21,9 @@
 // audio by that, and so do AI_LEN and the interrupts; 512 words, 10.7 ms, before 2026-10-09) by time, not by reading ahead -- an output sample is made whenever the FIFO is below it. A sample is made from the frame pair (previous, next)
 // of the game's 16-bit stereo frames (L high, R low) by a phase accumulator, linearly:
 //     out = prev + ((next - prev) * (phase >> 1) >> 15)        phase: Q16 frames, += step per output sample
-// where step = rate * 65536 / 48000 (the runtime's). The reader fetches a frame, a word at a time, from the RDRAM in the SDRAM,
+// where step = rate * 65536 / 48000 (the runtime's). With LP the sample then goes through a low-pass of the console's output
+// stage: two stages of (x0 + 2 x1 + x2 + 2) >> 2 (the binomial 1-4-6-4-1 / 16, a null at 24 kHz, 12 dB down at 12 kHz and 24 at 16), adders only. A game
+// at 22 kHz has its images above 11 kHz, which the linear interpolation lets through and the console's analog filter does not. The reader fetches a frame, a word at a time, from the RDRAM in the SDRAM,
 // as the PI's engine does (a master of the Pocket bridge's port, `req` held until `ack`). When the AI has nothing to play
 // (no buffer, or the DMA disabled) it writes silence to hold the FIFO's lead, for an eighth of a second (6000 words),
 // then nothing until the next buffer (and the FIFO is first primed with silence up to the target, as the software did).
@@ -32,7 +34,9 @@
 // buffers are the console's fillcount: a buffer is current from its LEN write to the fetch of its last word.
 `default_nettype none
 
-module rcp_ai (
+module rcp_ai #(
+    parameter bit LP = 1'b0                 // the output low-pass (above)
+) (
     input  wire         clk, rst,
     // the game's / the runtime's access (mirlo_mips.sv: one cycle for a write, the address held; the read is combinational)
     input  wire  [2:0]  a,                  // x_addr[4:2]
@@ -90,7 +94,8 @@ typedef enum logic [3:0] {
     S_MUL1,     // the product,
     S_MUL2,     // the sample (both channels in the FIFO's word)
     S_WR,       // written
-    S_DRY       // the AI is out of buffers: silence
+    S_DRY,      // the AI is out of buffers: silence
+    S_LP        // the low-pass: four stages, two clocks each
 } st_t;
 st_t         st;
 logic        have, fnext;               // the first pair has been fetched; the fetch under way is the first's
@@ -111,6 +116,27 @@ wire [20:0] fetch_adr = {c_adr[20:11] + {9'd0, dma_carry}, c_adr[10:0]};
 assign adr = {3'b111, fetch_adr};
 wire  [15:0] mix = (rch ? pr : pl) + mp[30:15];
 
+// ---------------------------------------------------------------- the output low-pass (LP)
+// Two stages of y = (x0 + 2 x1 + x2 + 2) >> 2 a channel: the interpolated frame goes through the first, its output through the second.
+// A stage's last two inputs are a word of a small memory (a block RAM: four words, (L, stage 1), (L, 2), (R, 1), (R, 2)); one adder makes
+// the four stages one after the other, two clocks each (the word read, then the sample made and the word written). A word that was
+// written since silence is valid; the others read as 0, so that the filter starts from rest.
+(* ramstyle = "M10K, no_rw_check" *) logic [31:0] lp_mem [0:3];
+logic [31:0]        lp_rd;
+logic [1:0]         lp_k;                       // the stage being made
+logic               lp_p;                       // its clock: 0 the word is read, 1 the sample is made
+logic [3:0]         lp_v;                       // the words written since silence
+logic signed [15:0] rawl, rawr, lp_cur;         // the interpolated frame (left, right), the stage's input
+wire  signed [15:0] lp_x1 = lp_v[lp_k] ? lp_rd[31:16] : 16'sd0;
+wire  signed [15:0] lp_x2 = lp_v[lp_k] ? lp_rd[15:0]  : 16'sd0;
+wire  signed [17:0] lp_t  = {{2{lp_cur[15]}}, lp_cur} + {{2{lp_x2[15]}}, lp_x2} + {lp_x1[15], lp_x1, 1'b0} + 18'sd2;
+wire  signed [15:0] lp_y  = lp_t[17:2];
+wire                lp_clr = st == S_OFF || st == S_DRY;     // (nothing played: the filter starts from rest)
+always_ff @(posedge clk) if (LP) begin
+    lp_rd <= lp_mem[lp_k];
+    if (st == S_LP && lp_p) lp_mem[lp_k] <= {lp_cur, lp_x1};
+end
+
 always_ff @(posedge clk) begin
     irq <= 1'b0; chg <= 1'b0; fw <= 1'b0;
     if (rst) begin
@@ -118,6 +144,7 @@ always_ff @(posedge clk) begin
         step <= 20'd43690; dac_r <= '0; dma_carry <= 1'b0;
     end else begin
         if (step_we) step <= step_wd;
+        if (LP && lp_clr) lp_v <= '0;
         if (wt != 3'd0) wt <= wt - 3'd1;
         case (st)
         S_OFF:   if (ena && (c_avail || n_v)) begin priming <= 1'b1; st <= S_PRIME; end
@@ -145,8 +172,25 @@ always_ff @(posedge clk) begin
         S_MUL0:  st <= S_MUL1;     // (the operands and the product: below)
         S_MUL1:  st <= S_MUL2;
         S_MUL2: begin
+            if (LP) begin
+                if (!rch) begin rawl <= mix; rch <= 1'b1; st <= S_MUL0; end
+                else begin rawr <= mix; phase <= phase + {1'b0, step}; dry <= '0; lp_cur <= rawl; lp_k <= 2'd0; lp_p <= 1'b0; st <= S_LP; end
+            end else
             if (!rch) begin fd[31:16] <= mix; rch <= 1'b1; st <= S_MUL0; end
             else begin fd[15:0] <= mix; sil <= 1'b0; phase <= phase + {1'b0, step}; dry <= '0; st <= S_WR; end
+        end
+        S_LP: begin
+            lp_p <= !lp_p;
+            if (lp_p) begin
+                lp_v[lp_k] <= 1'b1;
+                lp_k <= lp_k + 2'd1;
+                case (lp_k)
+                2'd0: lp_cur <= lp_y;                                            // the left, second stage
+                2'd1: begin fd[31:16] <= lp_y; lp_cur <= rawr; end               // the left is done; the right, first stage
+                2'd2: lp_cur <= lp_y;
+                2'd3: begin fd[15:0] <= lp_y; sil <= 1'b0; st <= S_WR; end
+                endcase
+            end
         end
         S_WR: begin fw <= 1'b1; wt <= 3'd4; st <= priming ? S_PRIME : S_TOP; end
         S_DRY: begin
@@ -176,6 +220,7 @@ always_ff @(posedge clk) begin
     mb <= $signed({1'b0, phase[15:1]});
     mp <= ma * mb;
 end
+
 
 endmodule
 `default_nettype wire
