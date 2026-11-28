@@ -75,6 +75,7 @@ module rsp_top #(
     output logic [31:0] dx_data,
 
     output logic        halted,
+    output logic        task_aud,           // the task in DMEM 0xFC0 is an audio task (OSTask.type 2): its microcode reads what the PI has just copied
     output logic        unimpl,             // an instruction the vector unit does not implement ran
 
     // (simulation) the instructions as they leave E, the register writes
@@ -209,6 +210,12 @@ always_comb begin
 end
 assign m_rdata   = x_rd[127:96];
 assign m_rdata16 = x_rd;
+
+// the OSTask's type, as libultra's osSpTaskLoad leaves it in DMEM 0xFC0 (a DMA of whole words)
+always_ff @(posedge clk) begin
+    if (rst) task_aud <= 1'b0;
+    else if (dm_valid && dm_we && dm_addr[11:2] == 10'h3F0) task_aud <= dm_wdata == 32'd2;
+end
 
 // ------------------------------------------------------------ registers --
 logic        st_halt, st_broke, st_sstep, st_intbrk;
