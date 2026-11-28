@@ -907,6 +907,14 @@ phase accumulator in Q16 source frames and one multiplier shared by the two chan
 `out = prev + ((next - prev) * (phase >> 1) >> 15)`. With nothing to play it writes silence for an eighth of a second to
 hold the FIFO's lead and then stops; the FIFO is primed with silence when the next sound starts.
 
+The Pocket's core (`AI_LP`, `mirlo_mips`'s parameter; the benches have it off unless `EXTRA_DEFS=+define+SIM_AI_LP=1`) then passes each
+sample through a low-pass for the console's output stage, which Nintendo's audio guide says is designed for 32 kHz: two stages of
+`y = (x0 + 2 x1 + x2 + 2) >> 2`, the binomial 1-4-6-4-1 / 16 (12 dB down at 12 kHz, 24 at 16, a null at 24), one adder, a block RAM for the
+memories and some ten clocks a sample (from rest after silence). A game at 22 kHz has its images above 11 kHz: the linear interpolation lets them through (in a
+recording of the Pocket against a reference of the same music, 12 dB above its level at 11 - 16 kHz and 30 above 20 kHz), and the sharp edge
+of a square-wave instrument is a click that the console's analog filter does not let through. With the filter the bands of the recording from 2 to
+16 kHz are the reference's within 3 dB (above it is lower), and the clicks (second-difference spikes of more than 6 times the local mean) fall from 113 to 10 a second.
+
 libultra's audio manager hands a buffer over once a retrace, when the audio task of the retrace before has ended -- after
 the graphics task under way has yielded to it -- and sizes the next by what AI_LEN says is left. A hand-over that comes
 some 4 ms late and is followed by one in time leaves the AI full two retraces on: `osAiSetNextBuffer` returns -1 and a
@@ -1411,7 +1419,7 @@ C library (`make -C lang/mips -f lib.mk VARIANT=game`) and are run as
 | `padtest` | The controllers on the screen (previous section) |
 
 `tools/ai_check.py` runs the resampler's algorithm over the frames the AI fetched (the bench's `AILOG=<file>`) and
-compares the output sample for sample.
+compares the output sample for sample (`--lp`: with the output low-pass of the Pocket's core, which the model applies too).
 
 ### The CPU alone: `sim/mips`
 

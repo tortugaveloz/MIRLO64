@@ -28,7 +28,8 @@
 
 module mirlo_mips #(
     parameter BOOTROM = `MIPS_INIT_BOOTROM,
-    parameter int SDR_T_INIT = 12600
+    parameter int SDR_T_INIT = 12600,
+    parameter bit AI_LP = 1'b0                // the AI's output low-pass (rcp_ai.sv)
 ) (
     input  wire          altera_reserved_tck,
     input  wire          altera_reserved_tdi,
@@ -705,7 +706,7 @@ rcp_vi vi (.clk, .rst, .sc_line(vi_line), .sc_latch(vi_latch), .tv_pal, .tv_def(
     .irq(vi_irq), .chg(vi_chg), .base(vi_base), .il(vi_il), .black(vi_blk), .gamma(vi_gm), .aa(vi_aa), .divot(vi_dv), .dedither(vi_dd));
 // ---------------------------------------------------------------- the AI (MIRLO_AI: rcp_ai.sv)
 // The Pocket's audio FIFO has two writers: the CSR's (the runtime's software AI, a program's) and the AI's
-rcp_ai ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(ai_rd), .clr(ai_clr), .irq(ai_irq), .chg(ai_chg),
+rcp_ai #(.LP(AI_LP)) ai (.clk, .rst, .a(x_addr[4:2]), .wd(x_wdata), .wr_s(ai_op && x_we), .rd(ai_rd), .clr(ai_clr), .irq(ai_irq), .chg(ai_chg),
     .step_we(ai_step_we), .step_wd(ai_step_wd), .dac(ai_dac), .fill(apf_audio_buffer_fill[9:0]), .fw(ai_fw), .fd(ai_fd),
     .req(ai_req), .adr(ai_adr), .ack(ai_ack), .rdata(pa_dat_r));
 // ---------------------------------------------------------------- the SI (MIRLO_SI: rcp_si.sv)

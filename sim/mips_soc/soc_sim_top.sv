@@ -171,7 +171,10 @@ always_comb case (pad_i[3:2])
     2'd1: pad_w = pad_i[1:0] == 2'd0 ? cont1_joy : pad_i[1:0] == 2'd1 ? cont2_joy : pad_i[1:0] == 2'd2 ? cont3_joy : cont4_joy;
     default: pad_w = 32'd0;
 endcase
-mirlo_mips #(.SDR_T_INIT(100)) soc (
+`ifndef SIM_AI_LP
+`define SIM_AI_LP 0          // (EXTRA_DEFS=+define+SIM_AI_LP=1: the AI's output low-pass, as the Pocket's core has it)
+`endif
+mirlo_mips #(.SDR_T_INIT(100), .AI_LP(`SIM_AI_LP)) soc (
     .altera_reserved_tck(1'b0), .altera_reserved_tdi(1'b0), .altera_reserved_tdo(), .altera_reserved_tms(1'b0),
     .apf_audio_buffer_fill(aud_fill), .apf_audio_bus_out(audio_out), .apf_audio_bus_wr(audio_wr), .apf_audio_flush(aud_flush),
     .apf_audio_playback_en(aud_play),
