@@ -349,6 +349,32 @@ logic [4:0]  rx_addr;                                // x_addr[6:2]
 logic        rx_we;
 logic        rsp_h_ready;
 wire         rsp_x_go = xs == X_RSP && (!rx_we || rsp_h_ready);
+// An audio task's microcode reads the sample data the PI's engine copies from the cartridge, and the game starts it believing the
+// copies done: on the console a PI copy of a few hundred bytes takes tens of microseconds, here it can take a millisecond behind the
+// RDP and the scan-out, and the microcode decoded what had not arrived yet (a burst of noise). The write of SP_STATUS that clears halt
+// is held, for such a task, while the engine copies or has copied within the last SP_QUIET clocks (0.5 ms: the game's PI queue starts its
+// next copy within that of the one before ending, the gaps in a chain of copies being a few hundred microseconds) -- or SP_HOLD_MAX clocks. The write is taken (the CPU goes on); a read of SP_STATUS meanwhile
+// finds the RSP halted; a write that sets halt drops the held one.
+localparam int SP_QUIET = 32768, SP_HOLD_MAX = 262144;
+logic        pi_eng_busy, rsp_task_aud;
+logic        sp_hold;
+logic [31:0] sp_hold_wd;
+logic [18:0] sp_hold_t;
+logic [15:0] pi_idle_t;                                              // clocks since the engine last copied (saturates at SP_QUIET)
+wire         pi_recent = pi_idle_t != 16'(SP_QUIET);
+wire         sp_st_w   = rsp_x_go && rx_we && !rx_addr[4] && rx_addr[3:0] == 4'd4;
+wire         sp_defer  = sp_st_w && rx_wdata[0] && !rx_wdata[1] && rsp_task_aud && (pi_recent || sp_hold);
+wire         sp_release = sp_hold && !rsp_x_go && xs != X_RSP && rsp_h_ready && (!pi_recent || sp_hold_t[18]);
+always_ff @(posedge clk) begin
+    if (rst) begin sp_hold <= 1'b0; sp_hold_t <= '0; pi_idle_t <= 16'(SP_QUIET); sp_hold_wd <= '0; end
+    else begin
+        if (pi_eng_busy) pi_idle_t <= '0; else if (pi_recent) pi_idle_t <= pi_idle_t + 16'd1;
+        if (sp_defer) begin sp_hold <= 1'b1; sp_hold_wd <= rx_wdata; sp_hold_t <= '0; end
+        else if (sp_st_w && rx_wdata[1]) sp_hold <= 1'b0;                    // halt set: the held start is void
+        else if (sp_release) sp_hold <= 1'b0;
+        if (sp_hold && !sp_hold_t[18]) sp_hold_t <= sp_hold_t + 19'd1;
+    end
+end
 always_ff @(posedge clk) begin
     x_ack <= 0;
     if (rst) begin xs <= X_IDLE; bus_errors <= 0; end
@@ -467,7 +493,7 @@ mirlo_regs regs (.clk, .rst,
     .su_valid, .su_ready, .su_data, .cmd_valid, .cmd_ready, .cmd_data,
     .rdp_sync_count(rdp_sync), .rdp_load_count(rdp_load), .rdp_unknown_ops(rdp_unknown), .rdp_idle,
     .uart_we(r_uart_we), .uart_byte(r_uart_byte), .uart_txfull, .uart_rx_pop, .uart_rx_byte, .uart_rxempty,
-    .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq,
+    .mon_sp, .mon_field, .mon_dp, .mon_own, .mon_rcp, .mon_irq, .pi_eng_busy,
     .mon_mi, .mi_line, .mi_w_mi(mi_op && x_mi), .mi_w_pi(mi_op && x_pi), .mi_w_we(x_we), .mi_w_a(x_addr[3:2]), .mi_w_wd(x_wdata), .mi_w_rd,
     .d_req, .d_we, .d_adr, .d_ps, .d_sel, .d_wdata, .d_rdata(pa_dat_r), .d_ack,
     .mi_rep_on, .mi_rep_cnt, .mi_rep_done,
@@ -526,14 +552,14 @@ logic        dpc_start_ok;
 // (MIRLO_RSP_MULW, with 4 lanes: the multiplies on eight)
 localparam bit RSP_MULW = 1'b1;
 rsp_top #(.LANES(`MIRLO_RSP_LANES), .MULW(RSP_MULW), .DIV_ROM(`MIPS_INIT_RSP_DIV)) rsp (.clk, .rst,
-    .h_we(rsp_x_go && rx_we && !rx_addr[4]), .h_rd(rsp_x_go && !rx_we && !rx_addr[4]), .h_addr(rx_addr[3:0]), .h_wdata(rx_wdata), .h_rdata(rsp_h_rdata),
+    .h_we((rsp_x_go && rx_we && !rx_addr[4] && !sp_defer) || sp_release), .h_rd(rsp_x_go && !rx_we && !rx_addr[4]), .h_addr(sp_release ? 4'd4 : rx_addr[3:0]), .h_wdata(sp_release ? sp_hold_wd : rx_wdata), .h_rdata(rsp_h_rdata),
     .h_ready(rsp_h_ready), .irq(rsp_irq),
     .r_valid(rsp_r_valid), .r_we(rsp_r_we), .r_addr(rsp_r_addr), .r_wdata(rsp_r_wdata),
     .r_ready(p_ready[3]), .r_rvalid(p_rvalid[3]), .r_rdata(p_rdata),
     .dpc_start_we(rsp_dpc_start_we), .dpc_end_we(rsp_dpc_end_we), .dpc_status_we(rsp_dpc_status_we), .dpc_wdata(rsp_dpc_wdata),
     .dpc_start({8'd0, dpc_start}), .dpc_end({8'd0, dpc_end_rd}), .dpc_current({8'd0, dpc_current}), .dpc_status,
     .dx_addr(dpc_dx_addr), .dx_data(dpc_dx_data),
-    .halted(rsp_halted), .unimpl(rsp_unimpl),
+    .halted(rsp_halted), .task_aud(rsp_task_aud), .unimpl(rsp_unimpl),
     .tr_e(), .tr_e_pc(), .tr_e2(), .tr_e_we(), .tr_e_wr(), .tr_we(), .tr_wr(), .tr_val(), .tr_mw(), .tr_v(), .tr_vp());
 assign cpu_irq     = mon_own ? (mon_mi ? mi_line : mon_rcp) : (game_irq | rsp_irq);       // (the monitor's: the game's own IP2 is the monitor's line)
 assign mon_sp      = rsp_irq;
