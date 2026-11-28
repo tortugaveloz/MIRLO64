@@ -1254,8 +1254,8 @@ int n64rt_hw_write(u32 addr, u32 v)
         return 1;
     }
 #endif
-    if (pa < 0x04000000u || pa >= 0x04900000u) return 0;
-    hw_note("writes (ignored)", addr);           /* the RCP's registers: the runtime's, not the game's */
+    if (pa < 0x04000000u || pa >= 0x1FC00000u) return 0;
+    hw_note("writes (ignored)", addr);           /* the RCP's registers: the runtime's, not the game's; the cartridge's bus: its ROM ignores a write */
     return 1;
 }
 
