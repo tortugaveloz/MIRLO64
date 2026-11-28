@@ -861,6 +861,17 @@ Between copies the engine also does the game's own word accesses to the cartridg
 1 MiB plus the offset), and a read or write of domain 2 at the save's memory plus the offset's low 17 bits. With
 `MONITOR.PI2` bit 0 set (a FlashRAM), a read of domain 2 is the status word and a write goes nowhere.
 
+**An audio task waits for the engine** (`mirlo_mips.sv`, `sp_hold`). A game's audio manager asks for the cartridge's sample data (a few
+hundred bytes to a kilobyte a voice) and starts the RSP's audio task without waiting for the copies: on the console they are over in tens of
+microseconds. Here the engine goes behind the RDP, the RSP and the scan-out for the SDRAM and a kilobyte can take a millisecond, so the
+task's microcode could decode what the copy had not yet brought -- the old samples with the new ones after them, a burst of full-scale noise
+(the crackle of a square-wave instrument). The write of SP_STATUS that clears halt is therefore held, for a task whose type (the OSTask word
+the RSP's DMA left at DMEM 0xFC0) is audio, while the engine copies or has copied in the last 0.5 ms (the copies of a game's PI queue follow
+one another within a few hundred microseconds), and for 4 ms at most; the timers count ticks of the uptime's bit 12 (65 us). The CPU is not
+stopped (the write is taken); a read of SP_STATUS meanwhile finds the RSP halted; a write that sets halt drops the held one. Graphics tasks are
+not held. In a Mega Man 64 market about half of the audio tasks started with copies under way; none does now (checked on two states, by
+replaying each task against the RDRAM as it was when the RSP read it).
+
 ### VI
 
 The registers at `0x00` - `0x34` are a block RAM of 16 words and read back what was written, except VI_CURRENT.
